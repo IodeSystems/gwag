@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/examples/auth/gen/user/v1;userv1";
+
+import "auth.proto";
+
+// UserService is a normal public service whose RPCs need authentication
+// context. The auth field is hidden from the external GraphQL schema
+// and populated at runtime by HideAndInject[*auth.v1.Context].
+service UserService {
+  rpc GetMe(GetMeRequest) returns (GetMeResponse);
+}
+
+message GetMeRequest {
+  // Hidden externally; injected by the gateway from auth.AuthService.
+  auth.v1.Context auth = 1;
+}
+
+message GetMeResponse {
+  string id = 1;
+  string name = 2;
+  string tenant_id = 3;
+}
