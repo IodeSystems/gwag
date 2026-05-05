@@ -1,7 +1,5 @@
-// Auth hide+inject example: the canonical case the library API is
-// shaped around.
-//
-// Two gRPC services run in-process over bufconn:
+// Auth hide+inject example: the canonical case the library is shaped
+// around. Two gRPC services run in-process over bufconn:
 //
 //   - auth.v1.AuthService — resolves an opaque token into a Context blob.
 //     Registered as INTERNAL: callable by hooks, not exposed externally.
@@ -12,24 +10,23 @@
 // external GraphQL surface and populates it at request time by calling
 // AuthService.Resolve once per request, cached on the request context.
 //
-// Status: this file compiles against the API sketch in ../../gateway.go
-// but the library impl that would actually serve traffic is pending.
-// The example exits at the dispatch line, intentionally — see the TODO.
-// It exists as the design pin: the API was built for this shape, and
-// any change to the API has to keep this code compiling and readable.
+//	go run .   # starts both services + gateway on :8080
+//	curl -H 'Authorization: Bearer alice' \
+//	     -H 'Content-Type: application/json' \
+//	     -d '{"query": "query { user { getMe { id name tenantId } } }"}' \
+//	     http://localhost:8080/graphql
 package main
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
 	gateway "github.com/iodesystems/go-api-gateway"
@@ -54,7 +51,7 @@ func main() {
 	// Internal: callable by hooks, not exposed in the public schema.
 	if err := gw.AddProto("./protos/auth.proto",
 		gateway.To(authConn),
-		// gateway.AsInternal(),  // TODO: planned, see README
+		gateway.AsInternal(),
 	); err != nil {
 		log.Fatalf("register auth: %v", err)
 	}
@@ -81,24 +78,9 @@ func main() {
 		return resp.GetContext(), nil
 	}))
 
-	handler := gw.Handler()
-	if handler == nil {
-		fmt.Println(`go-api-gateway: example wired correctly against the API sketch.
-
-The library impl that would dispatch traffic is pending — gw.Handler()
-returns nil today. To make this serve real GraphQL, implement:
-  - runtime .proto parsing → *graphql.Schema
-  - Pair pipeline assembly (schema rewrites + per-request middleware)
-  - dynamicpb dispatch through the registered grpc.ClientConn
-  - HideAndInject[T]: schema field strip + per-request memoised resolver
-
-See ../../gateway.go for the API surface this needs to satisfy.`)
-		return
-	}
-
 	addr := ":8080"
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := http.ListenAndServe(addr, gw.Handler()); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -129,17 +111,16 @@ func startInProcessServer(ctx context.Context, name string, register func(*grpc.
 }
 
 func bearerFromContext(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
+	r := gateway.HTTPRequestFromContext(ctx)
+	if r == nil {
 		return ""
 	}
-	for _, v := range md.Get("authorization") {
-		const prefix = "Bearer "
-		if len(v) > len(prefix) && v[:len(prefix)] == prefix {
-			return v[len(prefix):]
-		}
+	const prefix = "Bearer "
+	v := r.Header.Get("Authorization")
+	if !strings.HasPrefix(v, prefix) {
+		return ""
 	}
-	return ""
+	return v[len(prefix):]
 }
 
 // ---------------------------------------------------------------------

@@ -14,36 +14,55 @@ from the external schema.
 - `main.go` — wires both services in-process via bufconn, configures
   the gateway, declares `HideAndInject[*authv1.Context]`.
 
-## What works today
-
-`go build ./...` and `go vet ./...` pass: the example compiles against
-the API surface in [`../../gateway.go`](../../gateway.go).
-
-`go run .` exits early at the dispatch line with a TODO message,
-because the library implementation behind the API is pending. The
-example is the *design pin*: it locks the public API in place, and
-implementing the library means making this `main.go` actually serve
-GraphQL without changing a line above the `gw.Handler()` call.
-
-## What it would do once the library is implemented
+## Run it
 
 ```
-$ curl -H 'Authorization: Bearer alice' \
+$ cd examples/auth
+$ go run .
+2026/05/05 16:47:14 listening on :8080
+```
+
+In another terminal:
+
+```
+$ curl -sS -H 'Authorization: Bearer alice' \
+       -H 'Content-Type: application/json' \
        -d '{"query": "query { user { getMe { id name tenantId } } }"}' \
        http://localhost:8080/graphql
-
 {"data":{"user":{"getMe":{"id":"u_alice","name":"Demo User","tenantId":"t_demo"}}}}
 ```
 
-External schema introspection would *not* show:
+Without the bearer header, the auth resolver short-circuits with
+`Reject(CodeUnauthenticated, ...)`:
 
-- the `auth` namespace (registered as internal — planned via `AsInternal()`)
-- the `auth` field on `GetMeRequest` (stripped by `HideAndInject`'s schema half)
-- the `Context` type (no public fields reference it)
+```
+$ curl -sS -H 'Content-Type: application/json' \
+       -d '{"query": "query { user { getMe { id name tenantId } } }"}' \
+       http://localhost:8080/graphql
+{"data":{"user":{"getMe":null}},"errors":[{"message":"missing bearer token","extensions":{"code":"UNAUTHENTICATED"},...}]}
+```
 
-Every `GetMe` request would trigger one `AuthService.Resolve` call,
-cached on the request context. Multiple RPCs in one GraphQL query
-share the resolution.
+## What's hidden
+
+External schema introspection does *not* show:
+
+- the `auth` namespace (registered with `AsInternal()`)
+- the `auth` argument on `getMe` (stripped by `HideAndInject`)
+
+```
+$ curl -sS -H 'Content-Type: application/json' \
+       -d '{"query": "{ __schema { queryType { fields { name } } } }"}' \
+       http://localhost:8080/graphql
+{"data":{"__schema":{"queryType":{"fields":[{"name":"user"}]}}}}
+
+$ curl -sS -H 'Content-Type: application/json' \
+       -d '{"query": "{ __type(name: \"UserNamespace\") { fields { name args { name } } } }"}' \
+       http://localhost:8080/graphql
+{"data":{"__type":{"fields":[{"args":[],"name":"getMe"}]}}}
+```
+
+`AuthService.Resolve` is called once per HTTP request and cached on the
+request context — multiple RPCs in one GraphQL query share the result.
 
 ## Regenerating bindings
 

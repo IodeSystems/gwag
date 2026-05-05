@@ -6,10 +6,11 @@ Hand it a list of `.proto` files and gRPC destinations; it gives back an
 top to add auth, rate limiting, transforms, and field hiding without
 touching the underlying services.
 
-Status: **design sketch.** Public API in [`gateway.go`](./gateway.go) is
-the source of truth; bodies are stubbed. The auth example under
-[`examples/auth`](./examples/auth) is the canonical end-to-end case the
-API is shaped around.
+Status: **early v0.** Unary gRPC calls work end-to-end; `HideAndInject`
+strips fields from the public schema and injects them at runtime; the
+auth example under [`examples/auth`](./examples/auth) runs and serves
+real GraphQL. Streaming and the broader `SchemaMiddleware` story are
+stubbed; rough edges throughout.
 
 ## Why another gateway
 
