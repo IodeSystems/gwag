@@ -23,22 +23,12 @@ import (
 
 type Gateway struct {
 	mu       sync.Mutex
-	services []*registeredService
+	pools    map[poolKey]*pool
+	internal map[string]bool // namespaces hidden from the public schema
 	pairs    []Pair
 	schema   atomic.Pointer[graphql.Schema]
 	cfg      *config
 	cp       *controlPlane
-}
-
-type registeredService struct {
-	namespace string
-	internal  bool
-	file      protoreflect.FileDescriptor
-	conn      grpc.ClientConnInterface
-	// owner identifies which registration added this service, so a
-	// Deregister or heartbeat eviction can remove just its entries.
-	// Empty for services added via AddProto at boot.
-	owner string
 }
 
 type Option func(*config)
@@ -49,7 +39,11 @@ func New(opts ...Option) *Gateway {
 	for _, o := range opts {
 		o(cfg)
 	}
-	return &Gateway{cfg: cfg}
+	return &Gateway{
+		cfg:      cfg,
+		pools:    map[poolKey]*pool{},
+		internal: map[string]bool{},
+	}
 }
 
 type ServiceOption func(*serviceConfig)
@@ -89,9 +83,10 @@ func AsInternal() ServiceOption {
 	return func(c *serviceConfig) { c.internal = true }
 }
 
-// AddProto parses a .proto file and registers its services. Bodies of
-// services are routed to the destination set by To(). Namespace
-// defaults to the filename stem; override with As().
+// AddProto parses a .proto file and registers it as a single replica
+// under (namespace, version=v1). Bodies of services are routed to the
+// destination set by To(). Namespace defaults to the filename stem;
+// override with As().
 //
 // Safe to call after Handler() — the schema rebuilds and atomically
 // replaces the live one, so dynamic add at runtime works the same way
@@ -112,48 +107,110 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	if ns == "" {
 		ns = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
+	hash, err := hashFromFileDescriptor(fd)
+	if err != nil {
+		return fmt.Errorf("gateway: hash %s: %w", path, err)
+	}
+	addr := fmt.Sprintf("addproto:%s", path)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.addServiceLocked(&registeredService{
+	if sc.internal {
+		g.internal[ns] = true
+	}
+	return g.joinPoolLocked(poolEntry{
 		namespace: ns,
-		internal:  sc.internal,
+		version:   "v1",
+		hash:      hash,
 		file:      fd,
+		addr:      addr,
 		conn:      sc.conn,
+		owner:     "", // boot-time, never evicted
 	})
 }
 
-// addServiceLocked appends the service and (if the schema has been
-// built at least once) rebuilds it. Caller must hold g.mu.
-func (g *Gateway) addServiceLocked(svc *registeredService) error {
-	for _, existing := range g.services {
-		if existing.namespace == svc.namespace {
-			return fmt.Errorf("gateway: namespace %q already registered", svc.namespace)
+// poolEntry is the input to joinPoolLocked — what a single
+// service-binding registration provides.
+type poolEntry struct {
+	namespace string
+	version   string // canonical "vN"
+	hash      [32]byte
+	file      protoreflect.FileDescriptor
+	addr      string
+	conn      grpc.ClientConnInterface
+	owner     string
+}
+
+// joinPoolLocked finds or creates the pool for (namespace, version) and
+// adds a replica. Pool creation triggers a schema rebuild; replica
+// churn within an existing pool does not. Caller must hold g.mu.
+func (g *Gateway) joinPoolLocked(e poolEntry) error {
+	key := poolKey{namespace: e.namespace, version: e.version}
+	p, exists := g.pools[key]
+	if exists {
+		if p.hash != e.hash {
+			return fmt.Errorf("gateway: pool %s/%s exists with different proto hash", e.namespace, e.version)
 		}
+		p.addReplica(&replica{addr: e.addr, owner: e.owner, conn: e.conn})
+		return nil
 	}
-	g.services = append(g.services, svc)
+	_, n, err := parseVersion(e.version)
+	if err != nil {
+		return fmt.Errorf("gateway: %w", err)
+	}
+	prevLatest := g.latestVersionLocked(e.namespace)
+	p = &pool{
+		key:      key,
+		versionN: n,
+		file:     e.file,
+		hash:     e.hash,
+	}
+	p.addReplica(&replica{addr: e.addr, owner: e.owner, conn: e.conn})
+	g.pools[key] = p
 	if g.schema.Load() != nil {
-		// Live gateway: reassemble and atomically swap.
+		// Schema must rebuild: namespace appeared, OR a new version
+		// was introduced under an existing namespace, OR latest changed.
+		_ = prevLatest
 		return g.assembleLocked()
 	}
 	return nil
 }
 
-// removeServicesByOwnerLocked drops all services whose owner equals
-// `owner` and rebuilds the schema if any were removed. Caller holds mu.
-func (g *Gateway) removeServicesByOwnerLocked(owner string) (removed int, err error) {
-	out := g.services[:0]
-	for _, s := range g.services {
-		if s.owner == owner {
-			removed++
+// removeReplicasByOwnerLocked walks all pools removing replicas with
+// the given owner. If any pool empties, drop it. Rebuilds the schema
+// if any pool was created or destroyed (replica churn within a still-
+// populated pool doesn't change the schema).
+func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err error) {
+	rebuild := false
+	for key, p := range g.pools {
+		n := p.removeReplicasByOwner(owner)
+		if n == 0 {
 			continue
 		}
-		out = append(out, s)
+		removed += n
+		if p.replicaCount() == 0 {
+			delete(g.pools, key)
+			rebuild = true
+		}
 	}
-	g.services = out
-	if removed > 0 && g.schema.Load() != nil {
+	if rebuild && g.schema.Load() != nil {
 		return removed, g.assembleLocked()
 	}
 	return removed, nil
+}
+
+// latestVersionLocked returns the highest versionN currently live for
+// the given namespace, or -1 if none.
+func (g *Gateway) latestVersionLocked(ns string) int {
+	best := -1
+	for k, p := range g.pools {
+		if k.namespace != ns {
+			continue
+		}
+		if p.versionN > best {
+			best = p.versionN
+		}
+	}
+	return best
 }
 
 // Use appends middleware to both pipelines. Pair-shaped middleware

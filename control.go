@@ -93,10 +93,13 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 
 	type prepared struct {
 		namespace string
+		version   string
+		hash      [32]byte
 		fileDesc  protoreflect.FileDescriptor
 	}
 	prep := make([]prepared, 0, len(req.GetServices()))
-	usedNS := map[string]bool{}
+	type nsverKey struct{ ns, ver string }
+	used := map[nsverKey]bool{}
 	for _, b := range req.GetServices() {
 		fd, err := parseFileDescriptorSet(b.GetFileDescriptorSet(), b.GetFileName())
 		if err != nil {
@@ -110,17 +113,25 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			}
 			ns = strings.TrimSuffix(base, ".proto")
 		}
-		if usedNS[ns] {
-			return nil, fmt.Errorf("controlplane: duplicate namespace in request: %q", ns)
+		ver, _, err := parseVersion(b.GetVersion())
+		if err != nil {
+			return nil, fmt.Errorf("controlplane: %w", err)
 		}
-		usedNS[ns] = true
-		prep = append(prep, prepared{namespace: ns, fileDesc: fd})
+		k := nsverKey{ns, ver}
+		if used[k] {
+			return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
+		}
+		used[k] = true
+		prep = append(prep, prepared{
+			namespace: ns,
+			version:   ver,
+			hash:      hashDescriptorSet(b.GetFileDescriptorSet()),
+			fileDesc:  fd,
+		})
 	}
 
 	id := newRegID()
 
-	// Single critical section: acquire shared conn, add services,
-	// reassemble. On failure, roll back partial state.
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
@@ -132,23 +143,23 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
 	}
 
-	added := 0
 	for _, p := range prep {
-		err := cp.gw.addServiceLocked(&registeredService{
+		err := cp.gw.joinPoolLocked(poolEntry{
 			namespace: p.namespace,
+			version:   p.version,
+			hash:      p.hash,
 			file:      p.fileDesc,
+			addr:      req.GetAddr(),
 			conn:      sc.conn,
 			owner:     id,
 		})
 		if err != nil {
-			// Rollback: remove what we just added, release conn.
-			_, _ = cp.gw.removeServicesByOwnerLocked(id)
+			// Rollback: drop everything we added under this owner.
+			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
 			cp.releaseConnLocked(req.GetAddr())
 			return nil, err
 		}
-		added++
 	}
-	_ = added
 
 	reg := &registration{
 		id:       id,
@@ -158,7 +169,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		conn:     sc,
 	}
 	for _, p := range prep {
-		reg.namespaces = append(reg.namespaces, p.namespace)
+		reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
 	}
 	reg.lastBeatMs.Store(time.Now().UnixMilli())
 	cp.regs[id] = reg
@@ -190,7 +201,7 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	delete(cp.regs, reg.id)
 
 	cp.gw.mu.Lock()
-	_, _ = cp.gw.removeServicesByOwnerLocked(reg.id)
+	_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
 	cp.gw.mu.Unlock()
 
 	cp.releaseConnLocked(reg.addr)

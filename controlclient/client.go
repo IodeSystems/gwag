@@ -41,6 +41,12 @@ type Service struct {
 	// GraphQL surface. Empty falls back to the proto's filename stem.
 	Namespace string
 
+	// Version, e.g. "v1", "v2". Multiple versions of the same namespace
+	// coexist on the gateway; latest surfaces flat under the namespace,
+	// older versions appear as `vN` sub-objects with @deprecated.
+	// Empty defaults to "v1".
+	Version string
+
 	// FileDescriptor for the .proto file containing the service. The
 	// generated bindings expose this as `pb.File_<name>_proto`.
 	// Transitively-imported descriptors are walked automatically.
@@ -157,6 +163,7 @@ func (r *Registration) register(ctx context.Context) error {
 		}
 		req.Services = append(req.Services, &cpv1.ServiceBinding{
 			Namespace:         s.Namespace,
+			Version:           s.Version,
 			FileDescriptorSet: fdsBytes,
 			FileName:          fileName,
 		})

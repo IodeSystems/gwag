@@ -54,6 +54,13 @@ message ServiceBinding {
   // services should be mounted. Defaults to the LAST file in the set,
   // which is conventionally the dependent file rather than its imports.
   string file_name = 3;
+
+  // Service version, e.g. "v1", "v2", "v10" (the leading "v" is
+  // optional). Multiple versions of the same namespace coexist; the
+  // highest live version is "latest" and surfaces flat under the
+  // namespace. Older versions are addressable via vN sub-objects with
+  // GraphQL @deprecated. Defaults to "v1" if empty.
+  string version = 4;
 }
 
 message RegisterResponse {

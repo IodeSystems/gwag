@@ -34,6 +34,7 @@ func main() {
 	addr := flag.String("addr", ":50051", "gRPC listen address")
 	gatewayAddr := flag.String("gateway", "localhost:50090", "Gateway control plane address")
 	advertise := flag.String("advertise", "localhost:50051", "Address to advertise to the gateway")
+	version := flag.String("version", "v1", "Service version (v1, v2, ...)")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -54,7 +55,7 @@ func main() {
 		ServiceAddr: *advertise,
 		InstanceID:  "greeter@" + *addr,
 		Services: []controlclient.Service{
-			{Namespace: "greeter", FileDescriptor: greeterv1.File_greeter_proto},
+			{Namespace: "greeter", Version: *version, FileDescriptor: greeterv1.File_greeter_proto},
 		},
 	})
 	if err != nil {
