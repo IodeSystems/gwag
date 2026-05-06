@@ -71,8 +71,10 @@ ui/                      React + MUI + TanStack Router admin UI; consumes
 ## Conventions
 
 - `go vet ./...` after every edit.
-- **Zero automated tests today.** Tier-1 followup in plan.md. Manual
-  verification via the example binaries.
+- **Test coverage is a thin seed.** `auth_admin_test.go` covers
+  AdminMiddleware + header forwarding; everything else is still manual
+  via the example binaries. Growing this is tier-1 in plan.md — when
+  adding a feature, add tests in the same shape (httptest, no NATS).
 - Generated code: `controlplane/v1/control.pb.go`,
   `eventsauth/v1/eventsauth.pb.go`, `examples/multi/gen/**`. Never
   edit; regenerate with protoc (`PATH=".bin:$PATH" protoc --go_out=...`).

@@ -84,23 +84,28 @@ to a delegate or token-exchange model.
 
 ### Automated tests
 
-Zero unit + integration tests across the codebase. All verification has
-been by ad-hoc shell e2e during development. A regression in any of
-this — pool dispatch, registry KV, subscription HMAC, OpenAPI dispatch
-— would be silent.
+**Seed in place** (`auth_admin_test.go`): AdminMiddleware
+read/write split, token persistence, header forwarding allowlist
+behavior. Pattern is httptest + direct package-level access — no
+NATS, no full Gateway. Every new feature should add same-shape
+coverage.
 
-Prioritize integration tests over unit tests because the most
-load-bearing logic is glue (registration → schema rebuild → dispatch).
-Targets:
+**Still missing** (every entry is silent-regression risk):
 - Multi-replica + version e2e (`examples/multi`-style scripted).
 - Cluster mode 2-node with cross-gateway dispatch.
 - Subscription publish → WebSocket frame round-trip.
 - HMAC verify codes (OK, TOO_OLD, SIGNATURE_MISMATCH, etc.).
-- OpenAPI request/response round-trip.
+- OpenAPI request/response round-trip (httptest backend +
+  `dispatchOpenAPI` exercising the full GraphQL → HTTP path).
 - ForgetPeer happy path + alive-rejection.
+- Schema rebuild on pool create/destroy + pool-hash collision
+  rejection.
 
-Highest-leverage single thing in the entire codebase. Without this,
-every change requires manual verification.
+The integration tests are higher-leverage than unit tests — the
+load-bearing logic is glue (registration → schema rebuild →
+dispatch). Build them out in shape with the seed; they should not
+require live services or NATS for the unary-dispatch and OpenAPI
+cases.
 
 ---
 
@@ -381,12 +386,14 @@ Followups:
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* admin auth: boot token + `AdminMiddleware` gating
-  /admin/\*; OpenAPI dispatch forwards `Authorization` so admin\_\*
-  GraphQL mutations work end-to-end with one bearer. Token persists
-  to `<adminDataDir>/admin-token` (defaults to JetStream data dir in
-  the example) — restart reuses the same token. Reads are public,
-  writes require bearer. Verified end-to-end in examples/multi.
+- *(uncommitted)* `ForwardHeaders(...)` ServiceOption + tier-1 test
+  seed (`auth_admin_test.go`): AdminMiddleware coverage, custom-vs-
+  default header allowlist coverage. First package-level tests in the
+  repo; pattern future tier-1 tests should follow.
+- `5bf7cdf` admin boot-token auth + `Authorization` forwarding on
+  OpenAPI dispatch. Token persists to `<adminDataDir>/admin-token`;
+  restart reuses the same token. Reads are public, writes require
+  bearer. Verified end-to-end in examples/multi.
 - `df56e35` huma self-ingest of admin routes (the dogfood)
 - `f5cf789` AddProtoDescriptor + UI scaffold + CLAUDE.md
 - `4df3f80` decisions: proto/gRPC canonical for s2s

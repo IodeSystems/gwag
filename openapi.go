@@ -93,10 +93,11 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		return fmt.Errorf("gateway: AddOpenAPI: namespace %s already registered", ns)
 	}
 	g.openAPISources[ns] = &openAPISource{
-		namespace: ns,
-		baseURL:   addr,
-		doc:       doc,
-		hash:      sha256.Sum256(specBytes),
+		namespace:      ns,
+		baseURL:        addr,
+		doc:            doc,
+		hash:           sha256.Sum256(specBytes),
+		forwardHeaders: sc.forwardHeaders,
 	}
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
@@ -107,10 +108,11 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 // openAPISource is what AddOpenAPI stores. Hash supports schema-diff /
 // services-list parity checks alongside proto-based services.
 type openAPISource struct {
-	namespace string
-	baseURL   string
-	doc       *openapi3.T
-	hash      [32]byte
+	namespace      string
+	baseURL        string
+	doc            *openapi3.T
+	hash           [32]byte
+	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
 }
 
 // readOpenAPISpec fetches a spec from a URL or reads from disk.
@@ -314,12 +316,13 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	method := op.Method
 	pathTemplate := op.Path
 	baseURL := src.baseURL
+	forwardHeaders := src.forwardHeaders
 
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return dispatchOpenAPI(rp.Context, method, baseURL, pathTemplate, op.Op, rp.Args)
+			return dispatchOpenAPI(rp.Context, method, baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders)
 		},
 	}, nil
 }
@@ -331,6 +334,7 @@ func dispatchOpenAPI(
 	method, baseURL, pathTemplate string,
 	op *openapi3.Operation,
 	gqlArgs map[string]any,
+	forwardHeaders []string,
 ) (any, error) {
 	resolvedPath := pathTemplate
 	queryArgs := url.Values{}
@@ -374,7 +378,7 @@ func dispatchOpenAPI(
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	forwardOpenAPIHeaders(ctx, req)
+	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -401,19 +405,27 @@ func dispatchOpenAPI(
 // readFile is os.ReadFile in a function var so tests can swap it.
 var readFile = os.ReadFile
 
-// forwardedOpenAPIHeaders is the static set forwarded from the inbound
-// GraphQL request onto outbound OpenAPI dispatches. v1 is auth-only —
-// enough to make admin_* mutations work end-to-end with one bearer
-// token. Tier-2 follow-up: per-source configurable list (mTLS,
-// service-account tokens, etc. — see docs/plan.md).
-var forwardedOpenAPIHeaders = []string{"Authorization"}
+// defaultForwardedHeaders is the allowlist used when an OpenAPI source
+// hasn't called ForwardHeaders. Authorization is the dogfood case
+// (admin_* mutations forwarding the bearer to /admin/*). Other auth
+// schemes (X-Api-Key, mTLS, service-account tokens) opt in per source.
+var defaultForwardedHeaders = []string{"Authorization"}
 
-func forwardOpenAPIHeaders(ctx context.Context, out *http.Request) {
+// forwardOpenAPIHeaders copies the configured allowlist from the
+// inbound GraphQL request onto outbound OpenAPI dispatches. allow ==
+// nil → use defaultForwardedHeaders. allow == []{} → forward nothing.
+func forwardOpenAPIHeaders(ctx context.Context, out *http.Request, allow []string) {
+	if allow == nil {
+		allow = defaultForwardedHeaders
+	}
+	if len(allow) == 0 {
+		return
+	}
 	in := HTTPRequestFromContext(ctx)
 	if in == nil {
 		return
 	}
-	for _, h := range forwardedOpenAPIHeaders {
+	for _, h := range allow {
 		if v := in.Header.Get(h); v != "" {
 			out.Header.Set(h, v)
 		}
