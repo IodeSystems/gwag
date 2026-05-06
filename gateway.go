@@ -32,7 +32,17 @@ type Gateway struct {
 }
 
 type Option func(*config)
-type config struct{}
+type config struct {
+	cluster *Cluster
+}
+
+// WithCluster binds the gateway to an embedded NATS cluster. When set,
+// the gateway uses JetStream KV for the service registry and peer
+// tracking (replacing the in-memory map). Without it, the gateway falls
+// back to the single-node in-memory path.
+func WithCluster(c *Cluster) Option {
+	return func(cfg *config) { cfg.cluster = c }
+}
 
 func New(opts ...Option) *Gateway {
 	cfg := &config{}
@@ -44,6 +54,11 @@ func New(opts ...Option) *Gateway {
 		pools:    map[poolKey]*pool{},
 		internal: map[string]bool{},
 	}
+}
+
+// Cluster returns the bound cluster, or nil if running standalone.
+func (g *Gateway) Cluster() *Cluster {
+	return g.cfg.cluster
 }
 
 type ServiceOption func(*serviceConfig)
