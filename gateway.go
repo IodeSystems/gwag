@@ -271,6 +271,50 @@ func AsInternal() ServiceOption {
 	return func(c *serviceConfig) { c.internal = true }
 }
 
+// AddProtoDescriptor registers a service from a compiled-in
+// FileDescriptor (e.g. greeterv1.File_greeter_proto from generated
+// bindings). Same shape as AddProto but no disk I/O — useful when
+// the gateway hosts its own gRPC service and wants to expose it
+// through the GraphQL surface (dogfooding).
+//
+// Namespace defaults to the proto's file stem; override with As().
+func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...ServiceOption) error {
+	sc := &serviceConfig{}
+	for _, o := range opts {
+		o(sc)
+	}
+	if sc.conn == nil {
+		return fmt.Errorf("gateway: AddProtoDescriptor(%s): missing To(...)", fd.Path())
+	}
+	ns := sc.namespace
+	if ns == "" {
+		base := string(fd.Path())
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		ns = strings.TrimSuffix(base, ".proto")
+	}
+	hash, err := hashFromFileDescriptor(fd)
+	if err != nil {
+		return fmt.Errorf("gateway: hash %s: %w", fd.Path(), err)
+	}
+	addr := fmt.Sprintf("descriptor:%s", fd.Path())
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if sc.internal {
+		g.internal[ns] = true
+	}
+	return g.joinPoolLocked(poolEntry{
+		namespace: ns,
+		version:   "v1",
+		hash:      hash,
+		file:      fd,
+		addr:      addr,
+		conn:      sc.conn,
+		owner:     "",
+	})
+}
+
 // AddProto parses a .proto file and registers it as a single replica
 // under (namespace, version=v1). Bodies of services are routed to the
 // destination set by To(). Namespace defaults to the filename stem;
