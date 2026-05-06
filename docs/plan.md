@@ -57,19 +57,18 @@ Open design forks for richer cases:
   for a service-specific token via a configurable issuer. Heavier;
   same story — composable today, first-class when needed.
 
-### Dynamic OpenAPI registration over control plane
+### Dynamic OpenAPI registration over control plane — done
 
-`AddOpenAPI` is boot-time only. To register dynamically: extend
-`ServiceBinding` proto with an optional `openapi_spec` field;
-gateway detects which form was sent. Same registry KV story; spec
-hash gates collisions.
+`ServiceBinding.openapi_spec` lets services register OpenAPI specs
+dynamically through the same control plane proto bindings used.
+The gateway detects which form was sent, hashes the spec
+(SHA256 over raw bytes), writes the value to the registry KV, and
+each gateway's reconciler picks it up — local on the receiver,
+remote on the cluster peers.
 
-Implementation notes:
-- New proto field: `bytes openapi_spec = 5` on `ServiceBinding`.
-- Either `file_descriptor_set` OR `openapi_spec` set, not both.
-- Hash function: same canonical-marshal pattern (sort by path, etc.).
-- Multi-replica: each replica advertises its own HTTP base URL.
-- `controlclient` gains `RegisterOpenAPI(...)` helper.
+`controlclient.Service` accepts either `FileDescriptor` or
+`OpenAPISpec`. Single source per namespace in v1; multi-version /
+multi-replica OpenAPI is the next item below.
 
 ### Downstream GraphQL ingestion
 
@@ -379,15 +378,25 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* `WithOpenAPIClient(*http.Client)` gateway option
+- *(uncommitted)* dynamic OpenAPI registration through the
+  control plane. New `ServiceBinding.openapi_spec` (proto field 5)
+  alongside the existing `file_descriptor_set`; mutually exclusive.
+  `controlPlane.Register` routes by which form was sent —
+  proto-shaped goes through the existing pool / dial path, OpenAPI
+  goes through new `addOpenAPISourceLocked` (idempotent under hash
+  equality). Cluster mode: spec bytes ride in the registry KV
+  value alongside the FileDescriptorSet field; `reconciler.handlePut`
+  detects via the new `registryValue.IsOpenAPI()` and creates the
+  source on every peer. `controlclient.Service` gains an
+  `OpenAPISpec []byte` field so external services can self-register
+  OpenAPI bindings the same way they register proto. 5 new tests
+  (`dynamic_openapi_test.go`) covering standalone, hash-mismatch,
+  both-set + neither-set rejection, and cluster cross-gateway.
+- `cc57458` `WithOpenAPIClient(*http.Client)` gateway option
   + `OpenAPIClient(c)` per-source `ServiceOption`. Per-source beats
   gateway-wide; both fall back to `http.DefaultClient`. Threaded
-  through `dispatchOpenAPI`. Closes the cheapest tier-2 outbound-
-  auth fork — operators get full transport control (mTLS, custom
-  RoundTripper for service-account tokens, signed URLs, retry
-  policy) without the gateway committing to a specific auth model.
-  3 new tests in `openapi_test.go` (gateway-wide default, per-
-  source override, nil fall-back).
+  through `dispatchOpenAPI`. Closed the cheapest tier-2 outbound-
+  auth fork.
 - `58b6ff9` admin\_events end-to-end: `adminevents/v1` proto
   (`AdminEvents.WatchServices` server-streaming) + `gw.AddAdminEvents()`
   registers it under `admin_events/v1`. Registry hooks publish

@@ -13,21 +13,30 @@ import (
 )
 
 // registryValue is the JSON payload stored in the registry KV bucket
-// under each replica key. The descriptor bytes are the raw
-// FileDescriptorSet that was sent on Register — every gateway can
-// reconstruct the FileDescriptor and dial the replica from this alone.
+// under each replica key. Carries either a FileDescriptorSet (proto
+// gRPC service) or an OpenAPISpec (OpenAPI HTTP service). Reconciler
+// disambiguates by which of the two byte slices is non-empty.
 type registryValue struct {
-	RegID             string `json:"reg_id"`
-	Namespace         string `json:"namespace"`
-	Version           string `json:"version"`
-	ReplicaID         string `json:"replica_id"`
-	Addr              string `json:"addr"`
-	InstanceID        string `json:"instance_id,omitempty"`
+	RegID       string `json:"reg_id"`
+	Namespace   string `json:"namespace"`
+	Version     string `json:"version"`
+	ReplicaID   string `json:"replica_id"`
+	Addr        string `json:"addr"`
+	InstanceID  string `json:"instance_id,omitempty"`
+	OwnerNodeID string `json:"owner_node_id"`
+	Hash        []byte `json:"hash"`
+
+	// Proto path:
 	FileName          string `json:"file_name,omitempty"`
-	FileDescriptorSet []byte `json:"fd_set"`
-	Hash              []byte `json:"hash"`
-	OwnerNodeID       string `json:"owner_node_id"`
+	FileDescriptorSet []byte `json:"fd_set,omitempty"`
+
+	// OpenAPI path: raw spec bytes (JSON or YAML). Mutually exclusive
+	// with FileDescriptorSet — exactly one is set.
+	OpenAPISpec []byte `json:"openapi_spec,omitempty"`
 }
+
+// IsOpenAPI reports whether this entry represents an OpenAPI source.
+func (v *registryValue) IsOpenAPI() bool { return len(v.OpenAPISpec) > 0 }
 
 // replicaKey returns the KV key for a given (namespace, version, replica_id).
 // Format: "pool.<ns>.<ver>.<replica_id>". All three components must be

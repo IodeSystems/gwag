@@ -152,14 +152,53 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		namespace string
 		version   string
 		hash      [32]byte
-		fileDesc  protoreflect.FileDescriptor
-		fdBytes   []byte
-		fileName  string
+
+		// Proto path
+		fileDesc protoreflect.FileDescriptor
+		fdBytes  []byte
+		fileName string
+
+		// OpenAPI path
+		openAPISpec []byte
+
+		isOpenAPI bool
 	}
 	prep := make([]prepared, 0, len(req.GetServices()))
 	type nsverKey struct{ ns, ver string }
 	used := map[nsverKey]bool{}
 	for _, b := range req.GetServices() {
+		hasProto := len(b.GetFileDescriptorSet()) > 0
+		hasOpenAPI := len(b.GetOpenapiSpec()) > 0
+		if hasProto && hasOpenAPI {
+			return nil, fmt.Errorf("controlplane: ServiceBinding cannot set both file_descriptor_set and openapi_spec")
+		}
+		if !hasProto && !hasOpenAPI {
+			return nil, fmt.Errorf("controlplane: ServiceBinding must set file_descriptor_set OR openapi_spec")
+		}
+
+		if hasOpenAPI {
+			ns, hash, err := prepOpenAPIBinding(b)
+			if err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
+			// OpenAPI bindings are single-version (pinned to v1) for now;
+			// tier-2 multi-version is a follow-up.
+			ver := "v1"
+			k := nsverKey{ns, ver}
+			if used[k] {
+				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
+			}
+			used[k] = true
+			prep = append(prep, prepared{
+				namespace:   ns,
+				version:     ver,
+				hash:        hash,
+				openAPISpec: b.GetOpenapiSpec(),
+				isOpenAPI:   true,
+			})
+			continue
+		}
+
 		fd, err := parseFileDescriptorSet(b.GetFileDescriptorSet(), b.GetFileName())
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: descriptor: %w", err)
@@ -217,16 +256,20 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		for _, p := range prep {
 			replicaID := newReplicaID()
 			val := registryValue{
-				RegID:             id,
-				Namespace:         p.namespace,
-				Version:           p.version,
-				ReplicaID:         replicaID,
-				Addr:              req.GetAddr(),
-				InstanceID:        req.GetInstanceId(),
-				FileName:          p.fileName,
-				FileDescriptorSet: p.fdBytes,
-				Hash:              p.hash[:],
-				OwnerNodeID:       ownerNode,
+				RegID:       id,
+				Namespace:   p.namespace,
+				Version:     p.version,
+				ReplicaID:   replicaID,
+				Addr:        req.GetAddr(),
+				InstanceID:  req.GetInstanceId(),
+				Hash:        p.hash[:],
+				OwnerNodeID: ownerNode,
+			}
+			if p.isOpenAPI {
+				val.OpenAPISpec = p.openAPISpec
+			} else {
+				val.FileName = p.fileName
+				val.FileDescriptorSet = p.fdBytes
 			}
 			b, mErr := json.Marshal(val)
 			if mErr != nil {
@@ -265,16 +308,46 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		}, nil
 	}
 
-	// Standalone mode: directly populate the in-memory pool and conn pool.
+	// Standalone mode: directly populate the in-memory pool and conn
+	// pool. OpenAPI bindings don't need a gRPC dial — the addr is an
+	// HTTP base URL — so the conn pool is only entered when at least
+	// one binding is proto-shaped.
 	cp.gw.mu.Lock()
 	defer cp.gw.mu.Unlock()
 
-	sc, err := cp.acquireConnLocked(req.GetAddr())
-	if err != nil {
-		return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
+	hasProtoBinding := false
+	for _, p := range prep {
+		if !p.isOpenAPI {
+			hasProtoBinding = true
+			break
+		}
 	}
 
+	var sc *sharedConn
+	if hasProtoBinding {
+		var err error
+		sc, err = cp.acquireConnLocked(req.GetAddr())
+		if err != nil {
+			return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
+		}
+	}
+
+	openAPIAdded := []string{}
 	for _, p := range prep {
+		if p.isOpenAPI {
+			if err := cp.gw.addOpenAPISourceLocked(p.namespace, req.GetAddr(), p.openAPISpec, p.hash, id); err != nil {
+				for _, ns := range openAPIAdded {
+					cp.gw.removeOpenAPISourceLocked(ns)
+				}
+				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+				if sc != nil {
+					cp.releaseConnLocked(req.GetAddr())
+				}
+				return nil, err
+			}
+			openAPIAdded = append(openAPIAdded, p.namespace)
+			continue
+		}
 		err := cp.gw.joinPoolLocked(poolEntry{
 			namespace: p.namespace,
 			version:   p.version,
@@ -285,6 +358,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			owner:     id,
 		})
 		if err != nil {
+			for _, ns := range openAPIAdded {
+				cp.gw.removeOpenAPISourceLocked(ns)
+			}
 			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
 			cp.releaseConnLocked(req.GetAddr())
 			return nil, err
@@ -357,11 +433,15 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	}
 	delete(cp.regs, reg.id)
 
+	// Standalone mode: drop pool replicas + OpenAPI sources owned by
+	// this registration, and release the conn if one was acquired
+	// (proto-only registrations have a sharedConn; OpenAPI-only
+	// registrations don't).
+	cp.gw.mu.Lock()
+	_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
+	cp.gw.removeOpenAPISourcesByOwnerLocked(reg.id)
+	cp.gw.mu.Unlock()
 	if reg.conn != nil {
-		// Standalone mode: drop pool replicas and release the conn.
-		cp.gw.mu.Lock()
-		_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
-		cp.gw.mu.Unlock()
 		cp.releaseConnLocked(reg.addr)
 	}
 	kvRefs := reg.kvKeys

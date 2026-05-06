@@ -104,6 +104,11 @@ func (r *reconciler) watchLoop(ctx context.Context) {
 // handlePut is idempotent: if the replica is already in the pool
 // (matched by id), nothing to do. Otherwise, ensure the pool exists,
 // dial the addr (refcount bump), and add.
+//
+// OpenAPI-tagged values take a separate path: the gateway's openAPI
+// source map is keyed by namespace only (single source per ns in v1),
+// so we just call addOpenAPISourceLocked which is idempotent under
+// hash equality.
 func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, raw []byte) {
 	var v registryValue
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -112,6 +117,19 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 	}
 
 	g := r.gw
+
+	if v.IsOpenAPI() {
+		var hash [32]byte
+		copy(hash[:], v.Hash)
+		g.mu.Lock()
+		err := g.addOpenAPISourceLocked(ns, v.Addr, v.OpenAPISpec, hash, v.RegID)
+		g.mu.Unlock()
+		if err != nil {
+			g.cfg.cluster.Server.Warnf("reconciler: openapi %s: %v", ns, err)
+		}
+		return
+	}
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -155,6 +173,13 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
 	g.mu.Lock()
+	// Try the OpenAPI side first — sources are keyed by namespace.
+	// If we find one, the proto path won't apply.
+	if _, isOpenAPI := g.openAPISources[ns]; isOpenAPI {
+		g.removeOpenAPISourceLocked(ns)
+		g.mu.Unlock()
+		return
+	}
 	rep, err := g.removeReplicaByIDLocked(ns, ver, replicaID)
 	g.mu.Unlock()
 	if err != nil {

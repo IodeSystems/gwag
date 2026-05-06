@@ -38,19 +38,32 @@ import (
 
 type Service struct {
 	// Namespace under which to mount this service in the gateway's
-	// GraphQL surface. Empty falls back to the proto's filename stem.
+	// GraphQL surface. Empty falls back to the proto's filename stem
+	// (proto bindings) or the OpenAPI spec's Info.Title (OpenAPI
+	// bindings).
 	Namespace string
 
 	// Version, e.g. "v1", "v2". Multiple versions of the same namespace
 	// coexist on the gateway; latest surfaces flat under the namespace,
 	// older versions appear as `vN` sub-objects with @deprecated.
-	// Empty defaults to "v1".
+	// Empty defaults to "v1". Ignored for OpenAPI bindings (single
+	// version per ns in v1).
 	Version string
 
 	// FileDescriptor for the .proto file containing the service. The
 	// generated bindings expose this as `pb.File_<name>_proto`.
 	// Transitively-imported descriptors are walked automatically.
+	//
+	// Mutually exclusive with OpenAPISpec: a Service registers either
+	// a proto-described gRPC service OR an OpenAPI-described HTTP
+	// service.
 	FileDescriptor protoreflect.FileDescriptor
+
+	// OpenAPISpec is the raw bytes of an OpenAPI 3.x document (JSON
+	// or YAML; kin-openapi parses either). When set, ServiceAddr in
+	// the parent Options is the HTTP base URL the gateway dispatches
+	// to (e.g. "https://billing.internal").
+	OpenAPISpec []byte
 }
 
 type Options struct {
@@ -157,6 +170,21 @@ func (r *Registration) register(ctx context.Context) error {
 		TtlSeconds: uint32(r.opts.TTL / time.Second),
 	}
 	for _, s := range r.opts.Services {
+		hasProto := s.FileDescriptor != nil
+		hasOpenAPI := len(s.OpenAPISpec) > 0
+		if hasProto && hasOpenAPI {
+			return fmt.Errorf("service %q: cannot set both FileDescriptor and OpenAPISpec", s.Namespace)
+		}
+		if !hasProto && !hasOpenAPI {
+			return fmt.Errorf("service %q: must set FileDescriptor or OpenAPISpec", s.Namespace)
+		}
+		if hasOpenAPI {
+			req.Services = append(req.Services, &cpv1.ServiceBinding{
+				Namespace:   s.Namespace,
+				OpenapiSpec: s.OpenAPISpec,
+			})
+			continue
+		}
 		fdsBytes, fileName, err := descriptorSetBytes(s.FileDescriptor)
 		if err != nil {
 			return fmt.Errorf("descriptor for %s: %w", s.FileDescriptor.Path(), err)
