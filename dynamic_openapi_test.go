@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -232,6 +233,110 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 		`{"query":"{ billing_getInvoice(id:\"INV-1\") { id amount } }"}`)
 	if strings.Contains(got, "errors") || !strings.Contains(got, "INV-1") {
 		t.Fatalf("response via B: %s", got)
+	}
+}
+
+// TestDynamicOpenAPI_MultiReplica registers two distinct backends
+// under the same namespace + matching spec hash and confirms that
+// dispatch alternates between them via least-in-flight selection.
+// Removes one replica and confirms traffic shifts to the survivor.
+func TestDynamicOpenAPI_MultiReplica(t *testing.T) {
+	hits := func() (handler http.HandlerFunc, count func() int32) {
+		var n atomic.Int32
+		handler = func(w http.ResponseWriter, _ *http.Request) {
+			n.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"INV","amount":1}`))
+		}
+		return handler, n.Load
+	}
+	hA, countA := hits()
+	hB, countB := hits()
+	a := httptest.NewServer(hA)
+	t.Cleanup(a.Close)
+	b := httptest.NewServer(hB)
+	t.Cleanup(b.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	cp := gw.ControlPlane()
+
+	regA, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
+		Addr: a.URL,
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:   "billing",
+			OpenapiSpec: []byte(dynamicOpenAPISpec),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Register A: %v", err)
+	}
+	if _, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
+		Addr: b.URL,
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:   "billing",
+			OpenapiSpec: []byte(dynamicOpenAPISpec),
+		}},
+	}); err != nil {
+		t.Fatalf("Register B (same hash, different addr): %v", err)
+	}
+
+	// Two replicas now under "billing".
+	gw.mu.Lock()
+	src := gw.openAPISources["billing"]
+	gw.mu.Unlock()
+	if src == nil {
+		t.Fatal("no billing source")
+	}
+	if got := src.replicaCount(); got != 2 {
+		t.Fatalf("replicaCount = %d, want 2", got)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	// Fire several queries serially. With pickReplica picking the
+	// lowest in-flight, sequential requests alternate between A and B
+	// (each finishes before the next starts).
+	for i := 0; i < 10; i++ {
+		got := postGraphQLForDynamic(t, srv.URL,
+			`{"query":"{ billing_getInvoice(id:\"INV\") { id } }"}`)
+		if strings.Contains(got, "errors") {
+			t.Fatalf("dispatch errored: %s", got)
+		}
+	}
+	totalA, totalB := countA(), countB()
+	if totalA+totalB != 10 {
+		t.Fatalf("backend hits don't sum to 10: A=%d B=%d", totalA, totalB)
+	}
+	if totalA == 0 || totalB == 0 {
+		t.Fatalf("expected pickReplica to spread load, got A=%d B=%d", totalA, totalB)
+	}
+
+	// Drop A's registration → only B should serve subsequent calls.
+	if _, err := cp.Deregister(context.Background(), &cpv1.DeregisterRequest{
+		RegistrationId: regA.GetRegistrationId(),
+	}); err != nil {
+		t.Fatalf("Deregister A: %v", err)
+	}
+	gw.mu.Lock()
+	if got := gw.openAPISources["billing"].replicaCount(); got != 1 {
+		gw.mu.Unlock()
+		t.Fatalf("after deregister A: replicaCount = %d, want 1", got)
+	}
+	gw.mu.Unlock()
+
+	beforeB := countB()
+	for i := 0; i < 5; i++ {
+		_ = postGraphQLForDynamic(t, srv.URL,
+			`{"query":"{ billing_getInvoice(id:\"INV\") { id } }"}`)
+	}
+	afterA, afterB := countA(), countB()
+	if afterA != totalA {
+		t.Errorf("A still receiving traffic after deregister: was %d, now %d", totalA, afterA)
+	}
+	if afterB-beforeB != 5 {
+		t.Errorf("B should have caught all 5 post-deregister calls: was %d, now %d", beforeB, afterB)
 	}
 }
 
