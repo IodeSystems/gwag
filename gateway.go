@@ -279,6 +279,9 @@ func (g *Gateway) Use(pairs ...Pair) {
 // Handler returns the http.Handler that serves the GraphQL schema.
 // First call assembles the schema and starts hot-swap mode; subsequent
 // AddProto / control-plane registrations rebuild the schema in place.
+//
+// Mount it directly on the GraphQL path (e.g. "/graphql"); pair with
+// SchemaHandler at "/schema" if you want a codegen-friendly export.
 func (g *Gateway) Handler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
@@ -300,6 +303,58 @@ func (g *Gateway) Handler() http.Handler {
 		ctx = WithHTTPRequest(ctx, r)
 		gh.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// SchemaHandler returns an http.Handler that exports the current
+// GraphQL schema for client codegen pipelines:
+//
+//	GET /schema                  → SDL (text/plain; application/graphql)
+//	GET /schema?format=json      → introspection result (application/json)
+//
+// The X-Gateway-Environment header carries the cluster's environment
+// label so codegen pipelines can record what they grabbed.
+func (g *Gateway) SchemaHandler() http.Handler {
+	g.mu.Lock()
+	if g.schema.Load() == nil {
+		if err := g.assembleLocked(); err != nil {
+			g.mu.Unlock()
+			return errorHandler(err)
+		}
+	}
+	g.mu.Unlock()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		schema := g.schema.Load()
+		if schema == nil {
+			http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
+			return
+		}
+		if env := g.environmentLabel(); env != "" {
+			w.Header().Set("X-Gateway-Environment", env)
+		}
+		switch r.URL.Query().Get("format") {
+		case "json":
+			result := graphql.Do(graphql.Params{Schema: *schema, RequestString: introspectionQuery})
+			w.Header().Set("Content-Type", "application/json")
+			_ = writeJSON(w, result)
+		default:
+			w.Header().Set("Content-Type", "application/graphql; charset=utf-8")
+			_, _ = w.Write([]byte(printSchemaSDL(schema)))
+		}
+	})
+}
+
+// environmentLabel returns the cluster's environment label, or "" if
+// running standalone or no --environment was set.
+func (g *Gateway) environmentLabel() string {
+	if g.cfg.cluster == nil {
+		return ""
+	}
+	return g.cfg.cluster.Environment
 }
 
 type httpRequestCtxKey struct{}

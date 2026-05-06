@@ -31,6 +31,12 @@ service ControlPlane {
   // alive (its KV entry hasn't expired) — operators must wait for
   // the heartbeat-miss window before forgetting.
   rpc ForgetPeer(ForgetPeerRequest) returns (ForgetPeerResponse);
+
+  // ListServices returns the (namespace, version, hash, replica_count)
+  // tuples currently live in the cluster. The hash is the canonical
+  // FileDescriptorSet SHA256, suitable for cross-cluster parity
+  // checks (dev/prod promotion gating).
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
 }
 
 message RegisterRequest {
@@ -146,4 +152,23 @@ message ForgetPeerResponse {
   // Replica count after the forget. If unchanged, the cluster was
   // already at this size or below.
   uint32 new_replicas = 2;
+}
+
+message ListServicesRequest {}
+
+message ListServicesResponse {
+  repeated ServiceInfo services = 1;
+  // Environment label of the cluster this gateway runs in (the
+  // --environment flag). Empty for unlabelled clusters.
+  string environment = 2;
+}
+
+message ServiceInfo {
+  string namespace = 1;
+  string version = 2;
+  // SHA256 of the canonicalised FileDescriptorSet, hex-encoded.
+  // Identical bytes ⇒ identical hash across clusters/protoc versions.
+  string hash_hex = 3;
+  // Number of live replicas backing this (namespace, version) pool.
+  uint32 replica_count = 4;
 }

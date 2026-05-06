@@ -22,6 +22,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -66,8 +67,15 @@ func (p *protoFlag) Set(v string) error {
 }
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "peer" {
-		os.Exit(peerCmd(os.Args[2:]))
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "peer":
+			os.Exit(peerCmd(os.Args[2:]))
+		case "services":
+			os.Exit(servicesCmd(os.Args[2:]))
+		case "schema":
+			os.Exit(schemaCmd(os.Args[2:]))
+		}
 	}
 	runGateway()
 }
@@ -103,6 +111,170 @@ func runGateway() {
 	if err := http.ListenAndServe(*addr, gw.Handler()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func servicesCmd(args []string) int {
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway services list [--gateway HOST:PORT]")
+		return 2
+	}
+	flags, _ := splitFlagsAndPositionals(args[1:])
+	fs := flag.NewFlagSet("services list", flag.ContinueOnError)
+	gwAddr := fs.String("gateway", "localhost:50090", "Gateway control-plane address")
+	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dial %s: %v\n", *gwAddr, err)
+		return 1
+	}
+	defer conn.Close()
+	client := cpv1.NewControlPlaneClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.ListServices(ctx, &cpv1.ListServicesRequest{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ListServices: %v\n", err)
+		return 1
+	}
+	if env := resp.GetEnvironment(); env != "" {
+		fmt.Printf("# environment: %s\n", env)
+	}
+	if len(resp.GetServices()) == 0 {
+		fmt.Println("(no services registered)")
+		return 0
+	}
+	fmt.Printf("%-20s %-6s %-66s %s\n", "NAMESPACE", "VER", "HASH", "REPLICAS")
+	for _, s := range resp.GetServices() {
+		fmt.Printf("%-20s %-6s %-66s %d\n",
+			s.GetNamespace(), s.GetVersion(), s.GetHashHex(), s.GetReplicaCount())
+	}
+	return 0
+}
+
+func schemaCmd(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway schema (fetch|diff) ...")
+		return 2
+	}
+	switch args[0] {
+	case "fetch":
+		return schemaFetchCmd(args[1:])
+	case "diff":
+		return schemaDiffCmd(args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway schema (fetch|diff) ...")
+		return 2
+	}
+}
+
+func schemaFetchCmd(args []string) int {
+	flags, _ := splitFlagsAndPositionals(args)
+	fs := flag.NewFlagSet("schema fetch", flag.ContinueOnError)
+	endpoint := fs.String("endpoint", "http://localhost:8080/schema", "Gateway /schema endpoint URL")
+	jsonOut := fs.Bool("json", false, "Fetch introspection JSON instead of SDL")
+	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	url := *endpoint
+	if *jsonOut {
+		if strings.Contains(url, "?") {
+			url += "&format=json"
+		} else {
+			url += "?format=json"
+		}
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "GET %s: %v\n", url, err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		fmt.Fprintf(os.Stderr, "GET %s: %s\n", url, resp.Status)
+		return 1
+	}
+	if env := resp.Header.Get("X-Gateway-Environment"); env != "" {
+		fmt.Fprintf(os.Stderr, "# environment: %s\n", env)
+	}
+	_, _ = io.Copy(os.Stdout, resp.Body)
+	return 0
+}
+
+func schemaDiffCmd(args []string) int {
+	flags, _ := splitFlagsAndPositionals(args)
+	fs := flag.NewFlagSet("schema diff", flag.ContinueOnError)
+	from := fs.String("from", "", "Old schema source (URL or file path; required)")
+	to := fs.String("to", "", "New schema source (URL or file path; required)")
+	strict := fs.Bool("strict", false, "Exit non-zero if any breaking changes are reported")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway schema diff --from OLD --to NEW [--strict]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	if *from == "" || *to == "" {
+		fs.Usage()
+		return 2
+	}
+	oldSDL, err := loadSchemaSource(*from)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load --from %s: %v\n", *from, err)
+		return 1
+	}
+	newSDL, err := loadSchemaSource(*to)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load --to %s: %v\n", *to, err)
+		return 1
+	}
+	oldM, err := parseSchemaModel(oldSDL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse --from: %v\n", err)
+		return 1
+	}
+	newM, err := parseSchemaModel(newSDL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse --to: %v\n", err)
+		return 1
+	}
+	changes := diffModels(oldM, newM)
+	breaking := 0
+	for _, c := range changes {
+		fmt.Printf("[%s] %s\n", strings.ToUpper(c.severity), c.msg)
+		if c.severity == "breaking" {
+			breaking++
+		}
+	}
+	if len(changes) == 0 {
+		fmt.Println("(no differences)")
+	} else {
+		fmt.Printf("\n%d change(s); %d breaking\n", len(changes), breaking)
+	}
+	if *strict && breaking > 0 {
+		return 1
+	}
+	return 0
+}
+
+// loadSchemaSource fetches an SDL from either an HTTP(S) URL or a
+// local file path. URLs are detected by the http:// or https:// prefix.
+func loadSchemaSource(src string) (string, error) {
+	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		resp, err := http.Get(src)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return "", fmt.Errorf("status %s", resp.Status)
+		}
+		b, err := io.ReadAll(resp.Body)
+		return string(b), err
+	}
+	b, err := os.ReadFile(src)
+	return string(b), err
 }
 
 // splitFlagsAndPositionals walks a free-form argv tail and returns

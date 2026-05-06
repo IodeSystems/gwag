@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -479,6 +480,37 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 		resp.NewReplicas = uint32(desired)
 	}
 	return resp, nil
+}
+
+// ListServices returns one ServiceInfo per (namespace, version) pool
+// currently live on this gateway, with the canonical hash and replica
+// count. Cross-cluster parity check: dump from two gateways, diff.
+func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRequest) (*cpv1.ListServicesResponse, error) {
+	cp.gw.mu.Lock()
+	out := &cpv1.ListServicesResponse{
+		Environment: cp.gw.environmentLabel(),
+		Services:    make([]*cpv1.ServiceInfo, 0, len(cp.gw.pools)),
+	}
+	for k, p := range cp.gw.pools {
+		if cp.gw.internal[k.namespace] {
+			continue
+		}
+		out.Services = append(out.Services, &cpv1.ServiceInfo{
+			Namespace:    k.namespace,
+			Version:      k.version,
+			HashHex:      hex.EncodeToString(p.hash[:]),
+			ReplicaCount: uint32(p.replicaCount()),
+		})
+	}
+	cp.gw.mu.Unlock()
+	sort.Slice(out.Services, func(i, j int) bool {
+		a, b := out.Services[i], out.Services[j]
+		if a.GetNamespace() != b.GetNamespace() {
+			return a.GetNamespace() < b.GetNamespace()
+		}
+		return a.GetVersion() < b.GetVersion()
+	})
+	return out, nil
 }
 
 // janitor evicts registrations whose last heartbeat is older than TTL.

@@ -107,15 +107,50 @@ $ go-api-gateway \
 filename stem; default addr is `:8080`. Insecure dial — wrap in real
 TLS via the library API for production.
 
-For a running cluster, the same binary exposes operator subcommands:
+For a running cluster, the same binary exposes operator and codegen
+subcommands:
 
 ```
 $ go-api-gateway peer list   --gateway gw1.internal:50090
 $ go-api-gateway peer forget --gateway gw1.internal:50090 NODE_ID
+
+$ go-api-gateway services list --gateway gw1.internal:50090
+$ go-api-gateway schema fetch  --endpoint https://gw.internal/schema > schema.graphql
+$ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
+                                --to   https://staging-gw.internal/schema --strict
 ```
 
-`peer forget` only succeeds against a node whose KV entry has expired
-(safe shrink); `peer list` shows what entries are live.
+- `peer forget` only succeeds against a node whose KV entry has
+  expired (safe shrink); `peer list` shows live entries.
+- `services list` returns `(namespace, version, hash, replica_count)`
+  for cross-cluster parity checks — identical hashes across two
+  clusters mean identical proto bytes, the foundation for safe
+  promotion.
+- `schema fetch` GETs the gateway's `/schema` endpoint as SDL (or
+  introspection JSON via `--json`) for client codegen.
+- `schema diff --strict` fails CI when a candidate schema would break
+  existing consumers.
+
+## Promotion path
+
+Cross-cluster promotion is the combination of these tools:
+
+1. Each cluster carries an `--environment` label (`dev`, `staging`,
+   `prod`). The label becomes part of the NATS cluster name so two
+   environments cannot accidentally federate.
+2. `services list` exposes hashes; CI diffs the hash sets between two
+   environments to confirm the bytes match for every `(ns, ver)` you
+   intend to promote.
+3. `/schema` exposes the SDL; `schema diff --strict` is the
+   client-perspective gate — additions are fine, removals/required-arg
+   changes fail the build.
+4. The version system (multiple `vN` per namespace) lets you stage a
+   new version alongside the old one, migrate clients gradually, then
+   drain the old version.
+
+Single-cluster drift is already prevented by the canonical hash gate
+in the pool: a replica with a mismatched proto can't join an existing
+`(ns, ver)` pool.
 
 ## Why another gateway
 

@@ -27,6 +27,11 @@ type Cluster struct {
 	// NodeID is the NATS server's stable identifier within the cluster
 	// — used as the gateway's identity in the peers KV bucket.
 	NodeID string
+
+	// Environment is the deployment label this cluster runs under
+	// (empty string when no --environment was set). Surfaced in the
+	// schema endpoint headers and operator listings.
+	Environment string
 }
 
 // ClusterOptions configures the embedded NATS server. ClientListen is
@@ -40,6 +45,12 @@ type ClusterOptions struct {
 	ClusterListen string // e.g. ":14248"; default ":14248"
 	Peers         []string
 	DataDir       string // JetStream storage; required for persistence
+
+	// Environment is a deployment-time label (e.g. "dev", "prod"). It
+	// becomes part of the NATS cluster name so two clusters in the
+	// same network with different envs cannot federate. Empty keeps
+	// the legacy default cluster name "go-api-gateway".
+	Environment string
 
 	// StartTimeout caps how long we wait for the server to be ready.
 	StartTimeout time.Duration
@@ -104,8 +115,12 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cluster: Peers: %w", err)
 		}
+		clusterName := "go-api-gateway"
+		if opts.Environment != "" {
+			clusterName = clusterName + "-" + opts.Environment
+		}
 		srvOpts.Cluster = natsd.ClusterOpts{
-			Name: "go-api-gateway",
+			Name: clusterName,
 			Host: cHost,
 			Port: cPort,
 		}
@@ -140,10 +155,11 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 	}
 
 	return &Cluster{
-		Server: srv,
-		Conn:   conn,
-		JS:     js,
-		NodeID: srv.ID(),
+		Server:      srv,
+		Conn:        conn,
+		JS:          js,
+		NodeID:      srv.ID(),
+		Environment: opts.Environment,
 	}, nil
 }
 

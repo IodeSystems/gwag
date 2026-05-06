@@ -51,6 +51,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Server cert (PEM); enables mTLS on cluster routes + outbound gRPC")
 	tlsKey := flag.String("tls-key", "", "Server key (PEM); pair with --tls-cert")
 	tlsCA := flag.String("tls-ca", "", "CA bundle (PEM) used to verify peer certs")
+	environment := flag.String("environment", "", "Deployment environment label (e.g. dev, staging, prod); part of NATS cluster name")
 	flag.Parse()
 
 	var mtls *tls.Config
@@ -74,6 +75,7 @@ func main() {
 			ClusterListen: *natsCluster,
 			Peers:         natsPeers,
 			DataDir:       *natsData,
+			Environment:   *environment,
 			TLS:           mtls,
 		})
 		if err != nil {
@@ -110,9 +112,12 @@ func main() {
 		}
 	}()
 
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", gw.Handler())
+	mux.Handle("/schema", gw.SchemaHandler())
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
-		if err := http.ListenAndServe(*httpAddr, gw.Handler()); err != nil {
+		if err := http.ListenAndServe(*httpAddr, mux); err != nil {
 			log.Fatal(err)
 		}
 	}()
