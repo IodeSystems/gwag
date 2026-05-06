@@ -119,6 +119,129 @@ type openAPISource struct {
 	hash           [32]byte
 	forwardHeaders []string     // nil → use defaultForwardedHeaders; empty → forward nothing
 	httpClient     *http.Client // nil → use http.DefaultClient
+
+	// owner is the registration ID that created this source (or "" for
+	// boot-time AddOpenAPI / AddOpenAPIBytes). Set by the control-plane
+	// path so Deregister + reconciler.handleDelete can clean up.
+	owner string
+
+	// rawSpec is kept for /schema/openapi re-emit and (cluster mode)
+	// for the reconciler to write back into KV when shape changes.
+	rawSpec []byte
+}
+
+// addOpenAPISourceLocked is the internal hook the control-plane and
+// reconciler share. Idempotent under hash equality (a duplicate
+// register with matching bytes is a no-op); rejects mismatched hash.
+// Caller holds g.mu.
+func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, hash [32]byte, owner string) error {
+	if err := validateNS(ns); err != nil {
+		return fmt.Errorf("openapi: %w", err)
+	}
+	if g.openAPISources == nil {
+		g.openAPISources = map[string]*openAPISource{}
+	}
+	if existing, ok := g.openAPISources[ns]; ok {
+		if existing.hash != hash {
+			return fmt.Errorf("openapi: namespace %s already registered with different spec hash", ns)
+		}
+		// Same spec — accept as a no-op idempotent register.
+		return nil
+	}
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = false
+	doc, err := loader.LoadFromData(specBytes)
+	if err != nil {
+		return fmt.Errorf("openapi: parse %s: %w", ns, err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		return fmt.Errorf("openapi: validate %s: %w", ns, err)
+	}
+	addr := strings.TrimRight(baseURL, "/")
+	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
+		addr = "http://" + addr
+	}
+	g.openAPISources[ns] = &openAPISource{
+		namespace:  ns,
+		baseURL:    addr,
+		doc:        doc,
+		hash:       hash,
+		httpClient: g.cfg.openAPIHTTP,
+		owner:      owner,
+		rawSpec:    append([]byte(nil), specBytes...),
+	}
+	if g.schema.Load() != nil {
+		return g.assembleLocked()
+	}
+	return nil
+}
+
+// removeOpenAPISourceLocked drops the source for ns and rebuilds the
+// schema. No-op when not present. Caller holds g.mu.
+func (g *Gateway) removeOpenAPISourceLocked(ns string) {
+	if _, ok := g.openAPISources[ns]; !ok {
+		return
+	}
+	delete(g.openAPISources, ns)
+	if g.schema.Load() != nil {
+		_ = g.assembleLocked()
+	}
+}
+
+// removeOpenAPISourcesByOwnerLocked drops every openAPISource whose
+// owner matches. Returns the count removed. Rebuilds the schema
+// once if anything was removed.
+func (g *Gateway) removeOpenAPISourcesByOwnerLocked(owner string) int {
+	if owner == "" {
+		return 0 // boot-time sources aren't evictable
+	}
+	removed := 0
+	for ns, s := range g.openAPISources {
+		if s.owner == owner {
+			delete(g.openAPISources, ns)
+			removed++
+		}
+	}
+	if removed > 0 && g.schema.Load() != nil {
+		_ = g.assembleLocked()
+	}
+	return removed
+}
+
+// hashOpenAPISpec produces a stable hash for a registered OpenAPI
+// spec. v1 just SHA256s the raw bytes — round-tripping through
+// kin-openapi to canonicalise paths is a tier-2 follow-up if cluster
+// nodes ever fight over hash drift from formatting differences.
+func hashOpenAPISpec(specBytes []byte) [32]byte {
+	return sha256.Sum256(specBytes)
+}
+
+// prepOpenAPIBinding extracts (namespace, hash) from a ServiceBinding
+// whose openapi_spec field is set. Defaults the namespace to the
+// spec's Info.Title if not provided.
+func prepOpenAPIBinding(b interface {
+	GetNamespace() string
+	GetOpenapiSpec() []byte
+}) (string, [32]byte, error) {
+	specBytes := b.GetOpenapiSpec()
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = false
+	doc, err := loader.LoadFromData(specBytes)
+	if err != nil {
+		return "", [32]byte{}, fmt.Errorf("parse openapi spec: %w", err)
+	}
+	ns := b.GetNamespace()
+	if ns == "" {
+		if doc.Info != nil && doc.Info.Title != "" {
+			ns = sanitizeNamespace(doc.Info.Title)
+		} else {
+			ns = "openapi"
+		}
+	}
+	if err := validateNS(ns); err != nil {
+		return "", [32]byte{}, err
+	}
+	return ns, hashOpenAPISpec(specBytes), nil
 }
 
 // readOpenAPISpec fetches a spec from a URL or reads from disk.

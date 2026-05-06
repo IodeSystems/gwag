@@ -73,6 +73,10 @@ message ServiceBinding {
   // Standard FileDescriptorSet bytes (what `protoc -o` emits, or what
   // protodesc.ToFileDescriptorProto + Marshal produces). Must include
   // every transitive import the proto needs to type-check.
+  //
+  // Mutually exclusive with `openapi_spec`: a binding registers either
+  // a proto-described gRPC service or an OpenAPI-described HTTP
+  // service. Both unset / both set is an error.
   bytes file_descriptor_set = 2;
 
   // Optional: the specific file within file_descriptor_set whose
@@ -84,8 +88,16 @@ message ServiceBinding {
   // optional). Multiple versions of the same namespace coexist; the
   // highest live version is "latest" and surfaces flat under the
   // namespace. Older versions are addressable via vN sub-objects with
-  // GraphQL @deprecated. Defaults to "v1" if empty.
+  // GraphQL @deprecated. Defaults to "v1" if empty. Ignored for
+  // OpenAPI bindings (one source per namespace; multi-version OpenAPI
+  // is a tier-2 follow-up — see plan.md).
   string version = 4;
+
+  // Raw OpenAPI 3.x spec bytes (JSON or YAML; kin-openapi parses
+  // either). Mutually exclusive with `file_descriptor_set`. When set,
+  // RegisterRequest.addr is the HTTP base URL the gateway dispatches
+  // to (e.g. "https://billing.internal" or "http://localhost:8080").
+  bytes openapi_spec = 5;
 }
 
 message RegisterResponse {

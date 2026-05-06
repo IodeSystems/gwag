@@ -52,6 +52,25 @@ RPCs in one binary). Heartbeats every TTL/3; missed heartbeats past
 TTL evict. The control-plane API is in
 [`controlplane/v1/control.proto`](./controlplane/v1/control.proto).
 
+OpenAPI services register the same way — the `Service` struct takes
+either `FileDescriptor` (proto) or `OpenAPISpec` (raw OpenAPI 3.x
+bytes), not both:
+
+```go
+specBytes, _ := os.ReadFile("billing-openapi.json")
+reg, _ := controlclient.SelfRegister(ctx, controlclient.Options{
+    GatewayAddr: "gateway:50090",
+    ServiceAddr: "https://billing.internal",  // HTTP base URL for OpenAPI
+    Services: []controlclient.Service{
+        {Namespace: "billing", OpenAPISpec: specBytes},
+    },
+})
+```
+
+The gateway hashes the spec, writes to the registry KV, and every
+peer's reconciler picks it up. `billing_*` GraphQL fields appear
+cluster-wide.
+
 ## Cluster mode
 
 A gateway can embed a NATS server with JetStream and form a cluster
