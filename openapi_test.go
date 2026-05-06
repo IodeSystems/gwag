@@ -95,6 +95,14 @@ const minimalOpenAPISpec = `{
 }`
 
 func newOpenAPIE2EFixture(t *testing.T, opts ...ServiceOption) *openAPIE2EFixture {
+	return newOpenAPIE2EFixtureWithGatewayClient(t, nil, opts...)
+}
+
+// newOpenAPIE2EFixtureWithGatewayClient mirrors newOpenAPIE2EFixture
+// but lets the test pin the gateway-wide *http.Client used by every
+// OpenAPI dispatch (via WithOpenAPIClient). Per-source overrides
+// from `opts` still beat the gateway-wide default.
+func newOpenAPIE2EFixtureWithGatewayClient(t *testing.T, client *http.Client, opts ...ServiceOption) *openAPIE2EFixture {
 	t.Helper()
 	f := &openAPIE2EFixture{}
 	f.backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +122,11 @@ func newOpenAPIE2EFixture(t *testing.T, opts ...ServiceOption) *openAPIE2EFixtur
 	}))
 	t.Cleanup(f.backend.Close)
 
-	f.gw = New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test-token")))
+	gwOpts := []Option{WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test-token"))}
+	if client != nil {
+		gwOpts = append(gwOpts, WithOpenAPIClient(client))
+	}
+	f.gw = New(gwOpts...)
 	t.Cleanup(f.gw.Close)
 
 	allOpts := append([]ServiceOption{To(f.backend.URL), As("test")}, opts...)
@@ -227,6 +239,85 @@ func TestOpenAPIE2E_ForwardHeadersAllowlist(t *testing.T) {
 	}
 	if got := rec.Headers.Get("Authorization"); got != "" {
 		t.Errorf("custom allowlist must drop Authorization, got %q", got)
+	}
+}
+
+// markingTransport wraps an inner RoundTripper and stamps a header
+// onto every outbound request so tests can verify which transport
+// actually carried the dispatch.
+type markingTransport struct {
+	inner       http.RoundTripper
+	markHeader  string
+	markValue   string
+	roundTrips  *atomic.Int32
+	lastSubject *atomic.Pointer[capturedRequest]
+}
+
+func (m *markingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if m.roundTrips != nil {
+		m.roundTrips.Add(1)
+	}
+	if m.markHeader != "" {
+		req.Header.Set(m.markHeader, m.markValue)
+	}
+	inner := m.inner
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	return inner.RoundTrip(req)
+}
+
+func TestOpenAPIE2E_HTTPClient_GatewayWideDefault(t *testing.T) {
+	// WithOpenAPIClient sets the default client every OpenAPI source
+	// uses unless it overrides per-source. The marking transport
+	// stamps "X-Via: gw-default", which the test backend echoes back
+	// via lastReq.Headers.
+	f := newOpenAPIE2EFixtureWithGatewayClient(t, &http.Client{
+		Transport: &markingTransport{markHeader: "X-Via", markValue: "gw-default"},
+	})
+
+	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	_, _ = f.postGraphQL(t, q, nil)
+	rec := f.lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if got := rec.Headers.Get("X-Via"); got != "gw-default" {
+		t.Errorf("X-Via = %q, want gw-default (gateway-wide client should have run)", got)
+	}
+}
+
+func TestOpenAPIE2E_HTTPClient_PerSourceBeatsGatewayWide(t *testing.T) {
+	// Per-source OpenAPIClient overrides the gateway-wide default —
+	// confirm the stamp comes from the per-source client.
+	f := newOpenAPIE2EFixtureWithGatewayClient(t,
+		&http.Client{Transport: &markingTransport{markHeader: "X-Via", markValue: "gw-default"}},
+		OpenAPIClient(&http.Client{Transport: &markingTransport{markHeader: "X-Via", markValue: "per-source"}}),
+	)
+
+	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	_, _ = f.postGraphQL(t, q, nil)
+	rec := f.lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if got := rec.Headers.Get("X-Via"); got != "per-source" {
+		t.Errorf("X-Via = %q, want per-source", got)
+	}
+}
+
+func TestOpenAPIE2E_HTTPClient_NilFallsBackToDefault(t *testing.T) {
+	// No WithOpenAPIClient + no OpenAPIClient → http.DefaultClient.
+	// We can't easily probe the default client, but we can confirm
+	// the request reached the backend (no transport rewriting / drops).
+	f := newOpenAPIE2EFixture(t)
+	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	status, body := f.postGraphQL(t, q, nil)
+	if status != http.StatusOK || strings.Contains(body, "errors") {
+		t.Fatalf("default client path failed: status=%d body=%s", status, body)
+	}
+	if f.lastReq.Load() == nil {
+		t.Fatal("backend not called via http.DefaultClient")
 	}
 }
 

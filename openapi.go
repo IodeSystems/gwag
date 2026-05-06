@@ -92,12 +92,17 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if _, exists := g.openAPISources[ns]; exists {
 		return fmt.Errorf("gateway: AddOpenAPI: namespace %s already registered", ns)
 	}
+	httpClient := sc.httpClient
+	if httpClient == nil {
+		httpClient = g.cfg.openAPIHTTP
+	}
 	g.openAPISources[ns] = &openAPISource{
 		namespace:      ns,
 		baseURL:        addr,
 		doc:            doc,
 		hash:           sha256.Sum256(specBytes),
 		forwardHeaders: sc.forwardHeaders,
+		httpClient:     httpClient,
 	}
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
@@ -112,7 +117,8 @@ type openAPISource struct {
 	baseURL        string
 	doc            *openapi3.T
 	hash           [32]byte
-	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
+	forwardHeaders []string     // nil → use defaultForwardedHeaders; empty → forward nothing
+	httpClient     *http.Client // nil → use http.DefaultClient
 }
 
 // readOpenAPISpec fetches a spec from a URL or reads from disk.
@@ -317,24 +323,27 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	pathTemplate := op.Path
 	baseURL := src.baseURL
 	forwardHeaders := src.forwardHeaders
+	httpClient := src.httpClient
 
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return dispatchOpenAPI(rp.Context, method, baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders)
+			return dispatchOpenAPI(rp.Context, method, baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, httpClient)
 		},
 	}, nil
 }
 
 // dispatchOpenAPI substitutes path params, encodes query + body, sends
-// the HTTP request, and decodes the JSON response.
+// the HTTP request, and decodes the JSON response. httpClient nil
+// means http.DefaultClient.
 func dispatchOpenAPI(
 	ctx context.Context,
 	method, baseURL, pathTemplate string,
 	op *openapi3.Operation,
 	gqlArgs map[string]any,
 	forwardHeaders []string,
+	httpClient *http.Client,
 ) (any, error) {
 	resolvedPath := pathTemplate
 	queryArgs := url.Values{}
@@ -380,7 +389,11 @@ func dispatchOpenAPI(
 	req.Header.Set("Accept", "application/json")
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
 
-	resp, err := http.DefaultClient.Do(req)
+	client := httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

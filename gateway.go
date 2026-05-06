@@ -68,6 +68,7 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
+	openAPIHTTP  *http.Client
 }
 
 // SubscriptionAuthOptions configures HMAC verification for incoming
@@ -215,6 +216,17 @@ func WithAdminDataDir(dir string) Option {
 	return func(cfg *config) { cfg.adminDataDir = dir }
 }
 
+// WithOpenAPIClient sets the *http.Client every OpenAPI dispatch
+// uses by default. Use this to plug in a transport with mTLS, a
+// custom RoundTripper, signed-URL injection, retry policy, or any
+// out-of-band auth scheme. Per-source overrides via the
+// `OpenAPIClient(...)` ServiceOption beat this default.
+//
+// When unset, dispatches use http.DefaultClient.
+func WithOpenAPIClient(c *http.Client) Option {
+	return func(cfg *config) { cfg.openAPIHTTP = c }
+}
+
 func New(opts ...Option) *Gateway {
 	cfg := &config{
 		backpressure: DefaultBackpressure,
@@ -270,6 +282,7 @@ type serviceConfig struct {
 	conn           grpc.ClientConnInterface
 	internal       bool
 	forwardHeaders []string
+	httpClient     *http.Client
 }
 
 // As overrides the default namespace (filename stem) for a registered
@@ -313,6 +326,18 @@ func ForwardHeaders(headers ...string) ServiceOption {
 	return func(c *serviceConfig) {
 		c.forwardHeaders = append([]string(nil), headers...)
 	}
+}
+
+// OpenAPIClient overrides the *http.Client used for outbound
+// dispatches against this OpenAPI source. Beats the gateway-wide
+// default set by `WithOpenAPIClient(...)`.
+//
+// Use this when one backend needs a different transport (mTLS to a
+// specific service, a per-source RoundTripper that injects a
+// service-account token, etc.). No-op for AddProto /
+// AddProtoDescriptor.
+func OpenAPIClient(c *http.Client) ServiceOption {
+	return func(sc *serviceConfig) { sc.httpClient = c }
 }
 
 // AddProtoDescriptor registers a service from a compiled-in
