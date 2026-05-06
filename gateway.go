@@ -24,15 +24,16 @@ import (
 )
 
 type Gateway struct {
-	mu       sync.Mutex
-	pools    map[poolKey]*pool
-	internal map[string]bool // namespaces hidden from the public schema
-	pairs    []Pair
-	schema   atomic.Pointer[graphql.Schema]
-	cfg      *config
-	cp       *controlPlane
-	peers    *peerTracker
-	broker   *subBroker
+	mu             sync.Mutex
+	pools          map[poolKey]*pool
+	internal       map[string]bool // namespaces hidden from the public schema
+	pairs          []Pair
+	schema         atomic.Pointer[graphql.Schema]
+	cfg            *config
+	cp             *controlPlane
+	peers          *peerTracker
+	broker         *subBroker
+	openAPISources map[string]*openAPISource
 
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when

@@ -97,6 +97,19 @@ func (g *Gateway) assembleLocked() error {
 		}
 	}
 
+	// Merge OpenAPI fields into the Query and Mutation roots.
+	openTB := newOpenAPITypeBuilder()
+	openQueries, openMutations, err := g.buildOpenAPIFields(openTB)
+	if err != nil {
+		return err
+	}
+	for k, v := range openQueries {
+		if _, exists := rootFields[k]; exists {
+			return fmt.Errorf("openapi/proto field collision in Query: %s", k)
+		}
+		rootFields[k] = v
+	}
+
 	if len(rootFields) == 0 {
 		rootFields["_status"] = &graphql.Field{
 			Type: graphql.String,
@@ -112,6 +125,13 @@ func (g *Gateway) assembleLocked() error {
 	})
 
 	cfg := graphql.SchemaConfig{Query: queryObj}
+
+	if len(openMutations) > 0 {
+		cfg.Mutation = graphql.NewObject(graphql.ObjectConfig{
+			Name:   "Mutation",
+			Fields: openMutations,
+		})
+	}
 
 	// Subscription root: one flat field per (namespace, server-streaming
 	// method) across all pools. Args = request fields + injected hmac
