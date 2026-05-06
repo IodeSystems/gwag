@@ -19,8 +19,11 @@ import HubIcon from '@mui/icons-material/Hub';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import SchemaIcon from '@mui/icons-material/Schema';
 import SettingsIcon from '@mui/icons-material/Settings';
+import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
 import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
+import EventsTray from './EventsTray';
+import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 
 const drawerWidth = 220;
 
@@ -32,9 +35,27 @@ const nav = [
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
+  return (
+    <EventsProvider>
+      <LayoutInner>{children}</LayoutInner>
+    </EventsProvider>
+  );
+}
+
+function LayoutInner({ children }: { children: ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const token = useAdminToken();
-  const tooltip = token ? 'Settings — admin token set' : 'Settings — no admin token set';
+  const { unread, markRead } = useEvents();
+  const settingsTooltip = token
+    ? 'Settings — admin token set'
+    : 'Settings — no admin token set';
+  const eventsTooltip = unread > 0 ? `Events (${unread} new)` : 'Events';
+
+  const openEvents = () => {
+    markRead();
+    setEventsOpen(true);
+  };
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -43,7 +64,14 @@ export default function Layout({ children }: { children: ReactNode }) {
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             go-api-gateway
           </Typography>
-          <Tooltip title={tooltip}>
+          <Tooltip title={eventsTooltip}>
+            <IconButton color="inherit" onClick={openEvents} aria-label="events">
+              <Badge color="error" badgeContent={unread} max={99} overlap="circular">
+                <NotificationsIcon />
+              </Badge>
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={settingsTooltip}>
             <IconButton color="inherit" onClick={() => setSettingsOpen(true)} aria-label="settings">
               <Badge
                 color="warning"
@@ -84,6 +112,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         {children}
       </Box>
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <EventsTray open={eventsOpen} onClose={() => setEventsOpen(false)} />
     </Box>
   );
 }
