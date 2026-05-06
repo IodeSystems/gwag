@@ -11,26 +11,15 @@ intentionally; not currently planned to fix.
 
 ## Tier 1 — load-bearing (production-blocking)
 
-The only thing left here is test coverage on the load-bearing
-glue. Inbound admin auth and the v1 of outbound auth are both
-shipped; the remaining alternatives moved to tier 2.
+**Empty.** Inbound admin auth, outbound auth v1, and every
+load-bearing glue surface (admin / OpenAPI / gRPC unary /
+subscriptions / schema rebuild / ForgetPeer / cross-gateway
+dispatch) have e2e tests. Outbound-auth alternatives moved to
+tier 2; the test follow-ups (cosmetic log spam, broader cluster
+scenarios) are tracked under tier 3 / tier 2 as appropriate.
 
-### Test coverage gaps
-
-The load-bearing logic is glue (registration → schema rebuild →
-dispatch → cluster sync). Every gap below would let a regression
-land silently in master. The test seed (see *Reference → Test
-seed*) covers OpenAPI, subscriptions, admin auth; everything
-below is uncovered.
-
-| Surface | Smallest useful test | Notes |
-|---|---|---|
-| Cluster cross-gateway dispatch | Two `StartCluster` instances peering, register on A, dispatch from B | Validates KV reconciler + replica picking across nodes. |
-
-Cosmetic blocker: embedded-NATS log spam in tests grows linearly
-with test count. Picked up by the tier-3 *NATS server log noise
-control* item (proper `Logger` / `LogLevel` exposed on
-`ClusterOptions`).
+If a new production-blocking item shows up, file it here. Daily
+work draws from tier 2.
 
 ---
 
@@ -314,6 +303,20 @@ Where to crib from when adding tests:
   happy path (peer expired/deleted → Removed=true), no-op for
   never-registered peer, refuse-self, empty node_id, standalone
   gateway (no cluster) errors with "cluster not configured".
+- `cluster_dispatch_test.go` — two `StartCluster` instances peering
+  via NATS routes; A receives a Register call, B's reconciler
+  picks it up via the registry KV and dials the greeter. GraphQL
+  query through B's `gw.Handler()` reaches the greeter (registered
+  on A) and returns the right payload. The same query through A
+  also works.
+
+**Lifetime gotcha:** `startClusterTracking(ctx)` captures `ctx` as
+the parent of the long-running watch + reconciler goroutines. Test
+helpers must pass `context.Background()` (not a `WithTimeout`) so
+those goroutines outlive the helper return. Cleanup runs through
+`gw.Close → tracker.stop`. Burned ~30 minutes diagnosing this in
+the cross-gateway test — the symptom was "registry KV has the key
+on both nodes but B's reconciler never creates the pool".
 - `subscriptions_test.go` — full WebSocket round-trip via embedded
   NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
   publish → next frame; HMAC SIGNATURE_MISMATCH / TOO_OLD;
@@ -407,7 +410,16 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* ForgetPeer tests (`forget_peer_test.go`): 6
+- *(uncommitted)* cluster cross-gateway dispatch e2e
+  (`cluster_dispatch_test.go`): two `StartCluster` instances
+  peering on free TCP ports; A receives Register, B's reconciler
+  picks it up via the registry KV, and a GraphQL query through B
+  reaches the greeter registered on A. Closes the tier-1
+  test-coverage gap. Also: applied the lifetime-context fix to
+  `forget_peer_test.go` (helpers were passing 10s ctx into
+  `startClusterTracking`, which would have killed long-running
+  reconciler/watch goroutines mid-test).
+- `9f498eb` ForgetPeer tests (`forget_peer_test.go`): 6
   cases against a single-node cluster, manipulating the peers KV
   directly. Covers the alive-rejection / happy-path / refuse-self
   flow plus the standalone "no cluster configured" error.
