@@ -38,6 +38,8 @@ control.go               gRPC control plane: Register/Heartbeat/Deregister
                          + Sign/List/Forget admin RPCs
 controlplane/v1/         Control plane proto + generated bindings
 eventsauth/v1/           SubscriptionAuthorizer delegate proto
+admin_huma.go            huma admin routes; self-ingested via OpenAPI
+                         to surface as admin_* GraphQL fields (dogfood)
 peers.go                 Peers KV bucket + monotonic R bump
 reconciler.go            Watches registry KV, syncs local pool state
 broker.go                Sub-fanout: shared NATS subs across N WebSockets
@@ -50,7 +52,8 @@ health.go                /health endpoint + Drain method
 sdl.go                   Runtime graphql.Schema → SDL printer
 proto_export.go          /schema/proto + /schema/openapi
                          (transformed FDS + ingested OpenAPI re-emit)
-openapi.go               OpenAPI ingestion → GraphQL fields, HTTP dispatch
+openapi.go               OpenAPI ingestion (file/URL + AddOpenAPIBytes)
+                         → GraphQL fields, HTTP dispatch
 cluster.go               Embedded NATS server + JetStream
 hide_inject.go           HideAndInject middleware Pair
 convert.go               Proto descriptor → GraphQL type builder
@@ -60,7 +63,8 @@ cmd/go-api-gateway/      Binary: gateway runner + peer/services/schema/sign
                          subcommands + diff.go (SDL diff)
 examples/multi/          greeter + library + run.sh + run-cluster.sh
 docs/plan.md             Authoritative roadmap & decisions
-ui/                      React/MUI/TanStack-Router admin UI
+ui/                      React + MUI + TanStack Router admin UI; consumes
+                         GraphQL only via graphql-codegen-typed SDK
 ```
 
 ## Conventions
@@ -81,8 +85,18 @@ ui/                      React/MUI/TanStack-Router admin UI
 - **Proto/gRPC is canonical for service-to-service.** GraphQL is the
   client-facing surface; OpenAPI ingestion is a bridge for legacy
   HTTP services.
-- `ServiceOption` (`To`, `As`, `AsInternal`) applies to both
-  `AddProto` and `AddOpenAPI`.
+- **Admin auth ≠ service auth.** The boot-token model in plan.md is
+  *only* for the gateway's own admin endpoints. It does not
+  authenticate services calling each other through the gateway, and
+  it has nothing to do with outbound auth to OpenAPI services. Two
+  separate concerns; keep them separate.
+- **Dogfood the OpenAPI path.** Admin operations live in
+  `admin_huma.go`, defined via huma → OpenAPI → self-ingested by the
+  gateway → surfaced as `admin_*` GraphQL fields. Same path any
+  external huma service takes. Use this as the template when adding
+  new admin operations.
+- `ServiceOption` (`To`, `As`, `AsInternal`) applies to `AddProto`,
+  `AddProtoDescriptor`, `AddOpenAPI`, and `AddOpenAPIBytes`.
 
 ## How to build/run
 
@@ -110,14 +124,21 @@ go-api-gateway sign          --gateway gw:50090 --channel events.X --ttl 60
 
 ## HTTP surface
 
-| Path | What |
-|---|---|
-| `/graphql` | GraphQL (POST queries; WebSocket upgrade for subscriptions) |
-| `/schema`, `/schema/graphql` | SDL (or `?format=json` for introspection) |
-| `/schema/proto?service=ns:ver,...` | FileDescriptorSet (transformed) |
-| `/schema/openapi?service=ns,...` | Re-emit ingested OpenAPI specs |
-| `/health` | JSON status; 200 normally, 503 when `Drain()` is in flight |
-| `/metrics` | Prometheus scrape |
+| Path | Auth (planned) | What |
+|---|---|---|
+| `/graphql` (queries, subscriptions) | public | GraphQL queries + WebSocket upgrade for subscriptions |
+| `/graphql` (mutations) | token | mutations including `admin_*` fields |
+| `/schema`, `/schema/graphql` | public | SDL (or `?format=json` for introspection) |
+| `/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
+| `/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
+| `/admin/*` | token | huma admin routes (peers, services, sign, forget) |
+| `/health` | public | JSON status; 503 when `Drain()` is in flight |
+| `/metrics` | public | Prometheus scrape |
+
+Auth column reflects the **agreed v1 design** in `docs/plan.md`; not
+yet implemented. The boot-token model is for the gateway's own admin
+endpoints and `admin_*` GraphQL mutations only — separate concern
+from outbound auth to OpenAPI services (also tier-1 in plan.md).
 
 ## When in doubt
 
