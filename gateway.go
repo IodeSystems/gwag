@@ -358,6 +358,10 @@ func (g *Gateway) Handler() http.Handler {
 	g.mu.Unlock()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isWebSocketUpgrade(r) {
+			g.serveWebSocket(w, r)
+			return
+		}
 		schema := g.schema.Load()
 		gh := handler.New(&handler.Config{
 			Schema:   schema,

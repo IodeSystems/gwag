@@ -157,7 +157,7 @@ func (g *Gateway) buildSubscriptionFields(tb *typeBuilder) (graphql.Fields, erro
 				if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
 					continue
 				}
-				field, err := buildSubscriptionField(tb, sd, md)
+				field, err := g.buildSubscriptionField(tb, p, sd, md)
 				if err != nil {
 					return nil, err
 				}
@@ -172,8 +172,9 @@ func (g *Gateway) buildSubscriptionFields(tb *typeBuilder) (graphql.Fields, erro
 	return out, nil
 }
 
-func buildSubscriptionField(
+func (g *Gateway) buildSubscriptionField(
 	tb *typeBuilder,
+	p *pool,
 	sd protoreflect.ServiceDescriptor,
 	md protoreflect.MethodDescriptor,
 ) (*graphql.Field, error) {
@@ -191,11 +192,15 @@ func buildSubscriptionField(
 		return nil, err
 	}
 
+	outputDesc := md.Output()
+	ns, ver := p.key.namespace, p.key.version
+	methodName := string(md.Name())
+
 	return &graphql.Field{
 		Type: outputType,
 		Args: args,
 		Subscribe: func(rp graphql.ResolveParams) (any, error) {
-			return nil, fmt.Errorf("subscription transport not configured: mount the gateway WebSocket handler")
+			return g.subscribeNATS(rp.Context, ns, ver, methodName, rp.Args, outputDesc)
 		},
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
 			return rp.Source, nil
