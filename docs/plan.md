@@ -371,14 +371,22 @@ Pages: Dashboard, Services, Peers (with Forget mutation), Schema
 viewer. Vite proxies `/graphql`, `/schema`, `/health` to the gateway.
 
 UI-side tier-2 work is tracked under the Tier 2 heading: token
-entry/storage, dist embed, eventually an Events page.
+entry/storage, dist embed.
 
 ## Recently shipped
 
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* More huma admin routes: `GET /admin/channels`
+- *(uncommitted)* UI events provider. `<EventsProvider>` wraps the
+  Layout, holds a graphql-ws client (`ui/src/api/events.ts`) and a
+  global ring buffer (50 events). Pages opt in via
+  `useSubscribe({ id, query, variables, onData })`. Bell icon in
+  the AppBar with unread badge opens an `EventsTray` drawer that
+  renders the feed (subject, timestamp, JSON payload preview, error
+  framing). Lazy WS — connection opens on first subscribe, closes
+  after the last unsubscribe. graphql-ws@6 dependency added.
+- `3968c69` More huma admin routes: `GET /admin/channels`
   (active subscription subjects + per-subject consumer count via
   new `gw.ActiveSubjects()`), `POST /admin/drain` (operator-driven
   graceful drain with configurable timeout, requires bearer),
