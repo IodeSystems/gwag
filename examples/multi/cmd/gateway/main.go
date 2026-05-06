@@ -55,6 +55,7 @@ func main() {
 	environment := flag.String("environment", "", "Deployment environment label (e.g. dev, staging, prod); part of NATS cluster name")
 	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool unary dispatch concurrency cap; 0 disables")
 	maxStreams := flag.Int("max-streams", gateway.DefaultBackpressure.MaxStreams, "Per-pool subscription stream cap; 0 disables")
+	maxStreamsTotal := flag.Int("max-streams-total", gateway.DefaultBackpressure.MaxStreamsTotal, "Gateway-wide subscription stream cap; 0 disables")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
@@ -101,9 +102,10 @@ func main() {
 		gwOpts = append(gwOpts, gateway.WithTLS(mtls))
 	}
 	gwOpts = append(gwOpts, gateway.WithBackpressure(gateway.BackpressureOptions{
-		MaxInflight: *maxInflight,
-		MaxStreams:  *maxStreams,
-		MaxWaitTime: *maxWait,
+		MaxInflight:     *maxInflight,
+		MaxStreams:      *maxStreams,
+		MaxStreamsTotal: *maxStreamsTotal,
+		MaxWaitTime:     *maxWait,
 	}))
 
 	switch {

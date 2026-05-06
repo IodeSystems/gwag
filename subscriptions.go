@@ -73,7 +73,27 @@ func (g *Gateway) subscribeNATS(
 		return nil, gqlerrors.NewLocatedError(&subscribeAuthError{Code: code}, nil)
 	}
 
-	// Acquire a stream slot (separate from unary in-flight cap).
+	// Acquire stream slots: gateway-wide cap first, then per-pool.
+	// Both share the MaxWaitTime budget. Release order is reversed
+	// in the cleanup goroutine.
+	if g.streamGlobalSem != nil {
+		waitStart := time.Now()
+		select {
+		case g.streamGlobalSem <- struct{}{}:
+			g.cfg.metrics.RecordDwell(ns, ver, methodName, "stream_global", time.Since(waitStart))
+		default:
+			depth := int(g.streamGlobalQ.Add(1))
+			g.cfg.metrics.SetQueueDepth("", "", "stream_global", depth)
+			dwell, err := waitForSlot(ctx, g.streamGlobalSem, g.cfg.backpressure.MaxWaitTime)
+			now := int(g.streamGlobalQ.Add(-1))
+			g.cfg.metrics.SetQueueDepth("", "", "stream_global", now)
+			g.cfg.metrics.RecordDwell(ns, ver, methodName, "stream_global", dwell)
+			if err != nil {
+				g.cfg.metrics.RecordBackoff(ns, ver, methodName, "stream_global", "wait_timeout")
+				return nil, Reject(CodeResourceExhausted, fmt.Sprintf("gateway stream cap: %s", err.Error()))
+			}
+		}
+	}
 	if pool.streamSem != nil {
 		waitStart := time.Now()
 		select {
@@ -88,6 +108,9 @@ func (g *Gateway) subscribeNATS(
 			g.cfg.metrics.RecordDwell(ns, ver, methodName, "stream", dwell)
 			if err != nil {
 				g.cfg.metrics.RecordBackoff(ns, ver, methodName, "stream", "wait_timeout")
+				if g.streamGlobalSem != nil {
+					<-g.streamGlobalSem
+				}
 				return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
 			}
 		}
@@ -95,35 +118,38 @@ func (g *Gateway) subscribeNATS(
 
 	// Get the broker and join the per-subject fanout.
 	broker := g.subscriptionBroker()
-	if broker == nil {
+	rollbackSlots := func() {
 		if pool.streamSem != nil {
 			<-pool.streamSem
 		}
+		if g.streamGlobalSem != nil {
+			<-g.streamGlobalSem
+		}
+	}
+	if broker == nil {
+		rollbackSlots()
 		return nil, fmt.Errorf("gateway: subscription broker not available")
 	}
 	source, release, err := broker.acquire(subject, outputDesc)
 	if err != nil {
-		if pool.streamSem != nil {
-			<-pool.streamSem
-		}
+		rollbackSlots()
 		return nil, err
 	}
 
 	// Track active streams.
-	inflight := int(pool.streamInflight.Add(1))
-	g.cfg.metrics.SetStreamsInflight(ns, ver, inflight)
+	poolN := int(pool.streamInflight.Add(1))
+	g.cfg.metrics.SetStreamsInflight(ns, ver, poolN)
+	globalN := int(g.streamGlobal.Add(1))
+	g.cfg.metrics.SetStreamsInflightTotal(globalN)
 
-	// Cleanup runs once: release fanout, release stream slot, decrement
-	// gauge. graphql-go closes the source channel by cancelling ctx;
-	// we mirror that into the broker release.
 	go func() {
 		<-ctx.Done()
 		release()
-		if pool.streamSem != nil {
-			<-pool.streamSem
-		}
-		now := int(pool.streamInflight.Add(-1))
-		g.cfg.metrics.SetStreamsInflight(ns, ver, now)
+		rollbackSlots()
+		poolNow := int(pool.streamInflight.Add(-1))
+		g.cfg.metrics.SetStreamsInflight(ns, ver, poolNow)
+		globalNow := int(g.streamGlobal.Add(-1))
+		g.cfg.metrics.SetStreamsInflightTotal(globalNow)
 	}()
 	return source, nil
 }

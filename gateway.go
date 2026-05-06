@@ -34,6 +34,13 @@ type Gateway struct {
 	peers    *peerTracker
 	broker   *subBroker
 
+	// streamGlobalSem caps simultaneous subscription streams across
+	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
+	// disabled (0).
+	streamGlobalSem chan struct{}
+	streamGlobal    atomic.Int32 // active count
+	streamGlobalQ   atomic.Int32 // waiting count
+
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
@@ -79,48 +86,57 @@ func WithoutSubscriptionAuth() Option {
 	return func(cfg *config) { cfg.subAuth = SubscriptionAuthOptions{Insecure: true} }
 }
 
-// BackpressureOptions controls per-pool concurrency caps and the
-// global wait budget. The model is intentionally per-pool to keep one
-// slow service from blocking dispatches that don't depend on it: a
-// dispatch waiting on pool X never blocks a dispatch to pool Y. The
-// only gateway-wide knob is MaxWaitTime, which bounds how long ANY
-// single dispatch will wait for its internal pool slot before
-// short-circuiting with backoff.
+// BackpressureOptions controls concurrency caps and the wait budget.
 //
-// Subscriptions (server-streaming → graphql-ws) have a separate slot
-// pool from unary dispatches because streams are long-lived and would
-// otherwise crowd unary capacity. MaxStreams is the per-pool cap;
-// MaxWaitTime applies to both.
+// Unary dispatches use a per-pool cap (MaxInflight) because each pool
+// is one backend service with finite throughput — slow service X
+// shouldn't gate dispatches to service Y.
+//
+// Subscriptions are different: backed by NATS pub/sub, the per-message
+// cost on the backend is essentially zero (one NATS sub serves N
+// WebSockets via in-process fanout). The scarce resource is the
+// gateway itself (file descriptors, RAM, goroutines). MaxStreamsTotal
+// caps the gateway as a whole; MaxStreams stays per-pool for operators
+// who want fine-grained throttling.
+//
+// The MaxWaitTime budget applies to all three caps.
 type BackpressureOptions struct {
 	// MaxInflight is the per-pool ceiling on simultaneous unary
-	// dispatches. Once at the ceiling, additional requests for the
-	// same pool wait until a slot opens. 0 disables — dispatches go
-	// through unbounded.
+	// dispatches. 0 disables.
 	MaxInflight int
 
 	// MaxStreams is the per-pool ceiling on simultaneous active
-	// subscription streams. Independent of MaxInflight: long-lived
-	// streams don't crowd out queries. 0 disables — streams go
-	// through unbounded.
+	// subscription streams. 0 disables. Useful for fine-grained
+	// per-channel throttling. Most deployments leave this generous
+	// and rely on MaxStreamsTotal for resource protection.
 	MaxStreams int
 
+	// MaxStreamsTotal is the gateway-wide ceiling on simultaneous
+	// active subscription streams. 0 disables. Sized to the
+	// gateway's resource budget — file descriptors, RAM, goroutines.
+	// Beyond ~50-100k per node, scale horizontally with more
+	// gateways behind a load balancer.
+	MaxStreamsTotal int
+
 	// MaxWaitTime is the per-dispatch wait budget: a dispatch that
-	// cannot acquire its pool's slot within this window is rejected
-	// with Reject(ResourceExhausted, "wait timeout"). This is the
-	// "you cannot even get a slot in N seconds" backoff. Applies to
-	// both unary and stream slot acquisition. 0 disables the
-	// timeout (wait forever; only the request context cancels).
+	// cannot acquire its slot within this window is rejected with
+	// Reject(ResourceExhausted, "wait timeout"). Applies to unary
+	// and stream slot acquisition (per-pool and gateway-wide). 0
+	// disables the timeout.
 	MaxWaitTime time.Duration
 }
 
 // DefaultBackpressure is what gateway.New uses unless overridden.
-// 256 unary in-flight is sized for moderate-throughput services; 64
-// stream slots accommodate typical fan-out without unbounded growth;
-// 10s is the outer wait window before sustained-overload backoff.
+//
+// 256 unary in-flight per pool is sized for moderate-throughput
+// services. 10,000 streams per pool accommodates typical per-channel
+// fan-out without micro-throttling. 100,000 streams gateway-wide is
+// the per-node ceiling — beyond this, scale horizontally.
 var DefaultBackpressure = BackpressureOptions{
-	MaxInflight: 256,
-	MaxStreams:  64,
-	MaxWaitTime: 10 * time.Second,
+	MaxInflight:     256,
+	MaxStreams:      10_000,
+	MaxStreamsTotal: 100_000,
+	MaxWaitTime:     10 * time.Second,
 }
 
 // WithBackpressure overrides the default per-pool concurrency caps.
@@ -174,13 +190,17 @@ func New(opts ...Option) *Gateway {
 		cfg.metrics = newPrometheusMetrics()
 	}
 	life, cancel := context.WithCancel(context.Background())
-	return &Gateway{
+	g := &Gateway{
 		cfg:        cfg,
 		pools:      map[poolKey]*pool{},
 		internal:   map[string]bool{},
 		life:       life,
 		lifeCancel: cancel,
 	}
+	if cfg.backpressure.MaxStreamsTotal > 0 {
+		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)
+	}
+	return g
 }
 
 // Close stops background goroutines (peer tracker, janitor). Safe to
