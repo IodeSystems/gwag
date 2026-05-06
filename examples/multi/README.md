@@ -76,6 +76,45 @@ gateway). The gateway itself imports nothing service-specific — it
 parses the descriptor at registration time and dispatches via
 `dynamicpb`.
 
+## Cluster mode (3 gateways, KV-backed registry)
+
+`run-cluster.sh` boots three gateways with embedded NATS + JetStream.
+Each gateway joins the cluster via `--nats-peer`; the registry KV
+bucket replicates across nodes (R bumps monotonically as peers join).
+Two greeters at v1 and one at v2 register on different gateways:
+
+```
+$ ./run-cluster.sh
+Cluster up. GraphQL endpoints:
+  n1 → http://localhost:18080/graphql
+  n2 → http://localhost:18081/graphql
+  n3 → http://localhost:18082/graphql
+```
+
+Every gateway dispatches to every greeter, regardless of which gateway
+received the registration. The same query against any node returns the
+same response:
+
+```
+$ for p in 18080 18081 18082; do
+    curl -sS -X POST http://localhost:$p/graphql \
+      -H 'Content-Type: application/json' \
+      -d '{"query":"{ greeter { hello(name:\"world\") { greeting } v2{hello(name:\"v2\"){greeting}} } }"}'
+  done
+```
+
+Behind the scenes:
+- `Register` writes to the `go-api-gateway-registry` KV bucket; it does
+  not touch local pool state.
+- Every gateway watches that bucket and reconciles its pools on each
+  Put/Delete, dialing the advertised addr through its own conn pool.
+- Heartbeat re-Puts the entry, refreshing the bucket TTL. A service
+  that stops heartbeating without graceful Deregister has its key
+  auto-expired by JetStream after `peerTTL` (30s).
+- Stream replicas auto-bump 1→2→3 as peers join; `monotonic — never
+  shrinks automatically`. Operator-driven shrink is a separate path
+  (see `peer forget` once it lands).
+
 ## CLI alternative
 
 For static registration without writing Go, the [`go-api-gateway`
