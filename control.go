@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
@@ -111,6 +113,18 @@ type registration struct {
 	lastBeatMs atomic.Int64
 	namespaces []string
 	conn       *sharedConn
+
+	// kvKeys is the set of registry KV keys this registration owns.
+	// Heartbeat re-Puts each one to refresh the bucket TTL; Deregister
+	// deletes them. Empty in non-cluster mode.
+	kvKeys []registryKeyRef
+}
+
+type registryKeyRef struct {
+	namespace string
+	version   string
+	replicaID string
+	value     []byte // pre-marshalled JSON for cheap re-Put on heartbeat
 }
 
 type sharedConn struct {
@@ -136,6 +150,8 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		version   string
 		hash      [32]byte
 		fileDesc  protoreflect.FileDescriptor
+		fdBytes   []byte
+		fileName  string
 	}
 	prep := make([]prepared, 0, len(req.GetServices()))
 	type nsverKey struct{ ns, ver string }
@@ -153,6 +169,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			}
 			ns = strings.TrimSuffix(base, ".proto")
 		}
+		if err := validateNS(ns); err != nil {
+			return nil, fmt.Errorf("controlplane: %w", err)
+		}
 		ver, _, err := parseVersion(b.GetVersion())
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
@@ -167,10 +186,17 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			version:   ver,
 			hash:      hashDescriptorSet(b.GetFileDescriptorSet()),
 			fileDesc:  fd,
+			fdBytes:   b.GetFileDescriptorSet(),
+			fileName:  b.GetFileName(),
 		})
 	}
 
 	id := newRegID()
+
+	// Lookup the cluster KV BEFORE taking g.mu — registryKV takes g.mu
+	// internally, and we don't want a re-entrant lock deadlock.
+	clusterKV := cp.gw.registryKV()
+	ownerNode := cp.gw.nodeID()
 
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
@@ -183,6 +209,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
 	}
 
+	// Build kvKeys parallel to pool joins so a Register failure rolls
+	// back BOTH the in-memory pool state and any KV writes attempted.
+	var kvKeys []registryKeyRef
+
 	for _, p := range prep {
 		err := cp.gw.joinPoolLocked(poolEntry{
 			namespace: p.namespace,
@@ -194,10 +224,47 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			owner:     id,
 		})
 		if err != nil {
-			// Rollback: drop everything we added under this owner.
 			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
 			cp.releaseConnLocked(req.GetAddr())
+			cp.deleteKVKeys(ctx, clusterKV, kvKeys)
 			return nil, err
+		}
+		if clusterKV != nil {
+			replicaID := newReplicaID()
+			val := registryValue{
+				RegID:             id,
+				Namespace:         p.namespace,
+				Version:           p.version,
+				ReplicaID:         replicaID,
+				Addr:              req.GetAddr(),
+				InstanceID:        req.GetInstanceId(),
+				FileName:          p.fileName,
+				FileDescriptorSet: p.fdBytes,
+				Hash:              p.hash[:],
+				OwnerNodeID:       ownerNode,
+			}
+			b, mErr := json.Marshal(val)
+			if mErr != nil {
+				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+				cp.releaseConnLocked(req.GetAddr())
+				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
+				return nil, fmt.Errorf("controlplane: marshal kv value: %w", mErr)
+			}
+			kctx, kcancel := kvCtx(ctx)
+			_, pErr := clusterKV.Put(kctx, replicaKey(p.namespace, p.version, replicaID), b)
+			kcancel()
+			if pErr != nil {
+				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+				cp.releaseConnLocked(req.GetAddr())
+				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
+				return nil, fmt.Errorf("controlplane: kv put: %w", pErr)
+			}
+			kvKeys = append(kvKeys, registryKeyRef{
+				namespace: p.namespace,
+				version:   p.version,
+				replicaID: replicaID,
+				value:     b,
+			})
 		}
 	}
 
@@ -207,6 +274,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		instance: req.GetInstanceId(),
 		ttl:      ttl,
 		conn:     sc,
+		kvKeys:   kvKeys,
 	}
 	for _, p := range prep {
 		reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
@@ -220,6 +288,20 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	}, nil
 }
 
+// deleteKVKeys best-effort removes all of the given keys from the
+// registry KV. Caller passes the bucket explicitly so this is safe to
+// call while g.mu is held (registryKV takes g.mu).
+func (cp *controlPlane) deleteKVKeys(ctx context.Context, kv jetstream.KeyValue, refs []registryKeyRef) {
+	if kv == nil || len(refs) == 0 {
+		return
+	}
+	for _, r := range refs {
+		kctx, cancel := kvCtx(ctx)
+		_ = kv.Delete(kctx, replicaKey(r.namespace, r.version, r.replicaID))
+		cancel()
+	}
+}
+
 func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatRequest) (*cpv1.HeartbeatResponse, error) {
 	cp.mu.Lock()
 	reg, ok := cp.regs[req.GetRegistrationId()]
@@ -228,14 +310,27 @@ func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatReques
 		return &cpv1.HeartbeatResponse{Ok: false}, nil
 	}
 	reg.lastBeatMs.Store(time.Now().UnixMilli())
+
+	// Cluster mode: refresh each KV entry's TTL by re-Putting the same
+	// JSON value. Best-effort; transient KV errors are logged-and-go
+	// because the in-memory regs map still has the registration and
+	// the next heartbeat will retry.
+	if kv := cp.gw.registryKV(); kv != nil {
+		for _, r := range reg.kvKeys {
+			kctx, cancel := kvCtx(ctx)
+			_, _ = kv.Put(kctx, replicaKey(r.namespace, r.version, r.replicaID), r.value)
+			cancel()
+		}
+	}
+
 	return &cpv1.HeartbeatResponse{Ok: true}, nil
 }
 
 func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequest) (*cpv1.DeregisterResponse, error) {
 	cp.mu.Lock()
-	defer cp.mu.Unlock()
 	reg, ok := cp.regs[req.GetRegistrationId()]
 	if !ok {
+		cp.mu.Unlock()
 		return &cpv1.DeregisterResponse{}, nil
 	}
 	delete(cp.regs, reg.id)
@@ -245,6 +340,10 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	cp.gw.mu.Unlock()
 
 	cp.releaseConnLocked(reg.addr)
+	kvRefs := reg.kvKeys
+	cp.mu.Unlock()
+
+	cp.deleteKVKeys(ctx, cp.gw.registryKV(), kvRefs)
 	return &cpv1.DeregisterResponse{}, nil
 }
 

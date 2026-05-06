@@ -244,6 +244,25 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	return firstErr
 }
 
+// registryKV returns the registry bucket if cluster tracking is up, or
+// nil if the gateway is running standalone or tracking hasn't booted.
+func (g *Gateway) registryKV() jetstream.KeyValue {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.peers == nil {
+		return nil
+	}
+	return g.peers.reg
+}
+
+// nodeID returns the NATS server's ID, or empty string when standalone.
+func (g *Gateway) nodeID() string {
+	if g.cfg.cluster == nil {
+		return ""
+	}
+	return g.cfg.cluster.NodeID
+}
+
 // LivePeers returns a sorted snapshot of currently live peer NodeIDs.
 func (t *peerTracker) LivePeers() []string {
 	t.mu.Lock()
