@@ -37,6 +37,13 @@ service ControlPlane {
   // FileDescriptorSet SHA256, suitable for cross-cluster parity
   // checks (dev/prod promotion gating).
   rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+
+  // SignSubscriptionToken mints an HMAC token for a subscription
+  // channel. Callers are typically privileged services that have
+  // already authenticated the end user; the gateway optionally
+  // consults a registered SubscriptionAuthorizer delegate before
+  // signing.
+  rpc SignSubscriptionToken(SignSubscriptionTokenRequest) returns (SignSubscriptionTokenResponse);
 }
 
 message RegisterRequest {
@@ -192,4 +199,30 @@ enum SubscribeAuthCode {
   SUBSCRIBE_AUTH_CODE_DENIED             = 7;  // delegate said no
   SUBSCRIBE_AUTH_CODE_UNAVAILABLE        = 8;  // delegate didn't respond / errored
   SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED     = 9;  // mode requires config that isn't set
+}
+
+message SignSubscriptionTokenRequest {
+  // The exact NATS subject the token will sign — already-substituted,
+  // e.g. "events.greeter.Greetings.alice". Wildcards ("*", ">") are
+  // legal if the delegate authorizes them.
+  string channel = 1;
+
+  // How long the token should be considered valid (informational
+  // for the verifier, which uses a wall-clock skew window).
+  int64 ttl_seconds = 2;
+}
+
+message SignSubscriptionTokenResponse {
+  // OK on success; otherwise the failure code (NOT_CONFIGURED if the
+  // gateway has no secret, DENIED/UNAVAILABLE if the delegate refused).
+  SubscribeAuthCode code = 1;
+
+  // Base64-encoded HMAC. Empty when code != OK.
+  string hmac = 2;
+
+  // Unix timestamp embedded in the token. 0 when code != OK.
+  int64 timestamp_unix = 3;
+
+  // Operator-friendly explanation when code != OK.
+  string reason = 4;
 }

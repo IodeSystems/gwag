@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -514,6 +515,55 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 		resp.NewReplicas = uint32(desired)
 	}
 	return resp, nil
+}
+
+// authorizerNamespace is the reserved registration namespace for the
+// SubscriptionAuthorizer delegate. A service implementing the
+// AuthorizeSign RPC registers under "_events_auth/v1" and the gateway
+// auto-routes SignSubscriptionToken consultations to it.
+const authorizerNamespace = "_events_auth"
+
+// SignSubscriptionToken mints an HMAC token for a subscription
+// channel, optionally consulting a registered SubscriptionAuthorizer
+// delegate before signing. Refer to the proto comment for the policy.
+func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.SignSubscriptionTokenRequest) (*cpv1.SignSubscriptionTokenResponse, error) {
+	if req.GetChannel() == "" {
+		return nil, fmt.Errorf("controlplane: channel is required")
+	}
+	if cp.gw.cfg.subAuth.Insecure {
+		return &cpv1.SignSubscriptionTokenResponse{
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED,
+			Reason: "gateway is in insecure-subscribe mode; HMAC signing is disabled",
+		}, nil
+	}
+	if len(cp.gw.cfg.subAuth.Secret) == 0 {
+		return &cpv1.SignSubscriptionTokenResponse{
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED,
+			Reason: "subscription secret not configured",
+		}, nil
+	}
+
+	timestamp := time.Now().Unix()
+
+	// If a delegate is registered under _events_auth/v1, ask it first.
+	// Absence of a delegate means "sign whatever's requested" — callers
+	// of SignSubscriptionToken should themselves be authenticated and
+	// authorized; the delegate is the additional gate when needed.
+	if code, reason, err := cp.gw.consultSubscribeDelegate(ctx, req.GetChannel(), timestamp, req.GetTtlSeconds()); err != nil {
+		return &cpv1.SignSubscriptionTokenResponse{
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNAVAILABLE,
+			Reason: err.Error(),
+		}, nil
+	} else if code != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNSPECIFIED && code != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+		return &cpv1.SignSubscriptionTokenResponse{Code: code, Reason: reason}, nil
+	}
+
+	mac := computeSubscribeHMAC(cp.gw.cfg.subAuth.Secret, req.GetChannel(), timestamp)
+	return &cpv1.SignSubscriptionTokenResponse{
+		Code:          cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK,
+		Hmac:          base64.StdEncoding.EncodeToString(mac),
+		TimestampUnix: timestamp,
+	}, nil
 }
 
 // ListServices returns one ServiceInfo per (namespace, version) pool

@@ -1099,6 +1099,142 @@ func (x *ServiceInfo) GetReplicaCount() uint32 {
 	return 0
 }
 
+type SignSubscriptionTokenRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// The exact NATS subject the token will sign — already-substituted,
+	// e.g. "events.greeter.Greetings.alice". Wildcards ("*", ">") are
+	// legal if the delegate authorizes them.
+	Channel string `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	// How long the token should be considered valid (informational
+	// for the verifier, which uses a wall-clock skew window).
+	TtlSeconds int64 `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+}
+
+func (x *SignSubscriptionTokenRequest) Reset() {
+	*x = SignSubscriptionTokenRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_control_proto_msgTypes[18]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SignSubscriptionTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignSubscriptionTokenRequest) ProtoMessage() {}
+
+func (x *SignSubscriptionTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[18]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignSubscriptionTokenRequest.ProtoReflect.Descriptor instead.
+func (*SignSubscriptionTokenRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SignSubscriptionTokenRequest) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *SignSubscriptionTokenRequest) GetTtlSeconds() int64 {
+	if x != nil {
+		return x.TtlSeconds
+	}
+	return 0
+}
+
+type SignSubscriptionTokenResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// OK on success; otherwise the failure code (NOT_CONFIGURED if the
+	// gateway has no secret, DENIED/UNAVAILABLE if the delegate refused).
+	Code SubscribeAuthCode `protobuf:"varint,1,opt,name=code,proto3,enum=gateway.controlplane.v1.SubscribeAuthCode" json:"code,omitempty"`
+	// Base64-encoded HMAC. Empty when code != OK.
+	Hmac string `protobuf:"bytes,2,opt,name=hmac,proto3" json:"hmac,omitempty"`
+	// Unix timestamp embedded in the token. 0 when code != OK.
+	TimestampUnix int64 `protobuf:"varint,3,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	// Operator-friendly explanation when code != OK.
+	Reason string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+}
+
+func (x *SignSubscriptionTokenResponse) Reset() {
+	*x = SignSubscriptionTokenResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_control_proto_msgTypes[19]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SignSubscriptionTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignSubscriptionTokenResponse) ProtoMessage() {}
+
+func (x *SignSubscriptionTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[19]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignSubscriptionTokenResponse.ProtoReflect.Descriptor instead.
+func (*SignSubscriptionTokenResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SignSubscriptionTokenResponse) GetCode() SubscribeAuthCode {
+	if x != nil {
+		return x.Code
+	}
+	return SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNSPECIFIED
+}
+
+func (x *SignSubscriptionTokenResponse) GetHmac() string {
+	if x != nil {
+		return x.Hmac
+	}
+	return ""
+}
+
+func (x *SignSubscriptionTokenResponse) GetTimestampUnix() int64 {
+	if x != nil {
+		return x.TimestampUnix
+	}
+	return 0
+}
+
+func (x *SignSubscriptionTokenResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 var file_control_proto_rawDesc = []byte{
@@ -1202,7 +1338,24 @@ var file_control_proto_rawDesc = []byte{
 	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x68, 0x61, 0x73, 0x68, 0x48, 0x65, 0x78, 0x12, 0x23,
 	0x0a, 0x0d, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18,
 	0x04, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0c, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x43, 0x6f,
-	0x75, 0x6e, 0x74, 0x2a, 0xf7, 0x02, 0x0a, 0x11, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x62,
+	0x75, 0x6e, 0x74, 0x22, 0x59, 0x0a, 0x1c, 0x53, 0x69, 0x67, 0x6e, 0x53, 0x75, 0x62, 0x73, 0x63,
+	0x72, 0x69, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x12, 0x18, 0x0a, 0x07, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x12, 0x1f, 0x0a,
+	0x0b, 0x74, 0x74, 0x6c, 0x5f, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x0a, 0x74, 0x74, 0x6c, 0x53, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x22, 0xb2,
+	0x01, 0x0a, 0x1d, 0x53, 0x69, 0x67, 0x6e, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74,
+	0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x3e, 0x0a, 0x04, 0x63, 0x6f, 0x64, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x2a,
+	0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
+	0x70, 0x6c, 0x61, 0x6e, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69,
+	0x62, 0x65, 0x41, 0x75, 0x74, 0x68, 0x43, 0x6f, 0x64, 0x65, 0x52, 0x04, 0x63, 0x6f, 0x64, 0x65,
+	0x12, 0x12, 0x0a, 0x04, 0x68, 0x6d, 0x61, 0x63, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04,
+	0x68, 0x6d, 0x61, 0x63, 0x12, 0x25, 0x0a, 0x0e, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
+	0x70, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0d, 0x74, 0x69,
+	0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78, 0x12, 0x16, 0x0a, 0x06, 0x72,
+	0x65, 0x61, 0x73, 0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x72, 0x65, 0x61,
+	0x73, 0x6f, 0x6e, 0x2a, 0xf7, 0x02, 0x0a, 0x11, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x62,
 	0x65, 0x41, 0x75, 0x74, 0x68, 0x43, 0x6f, 0x64, 0x65, 0x12, 0x23, 0x0a, 0x1f, 0x53, 0x55, 0x42,
 	0x53, 0x43, 0x52, 0x49, 0x42, 0x45, 0x5f, 0x41, 0x55, 0x54, 0x48, 0x5f, 0x43, 0x4f, 0x44, 0x45,
 	0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x1a,
@@ -1225,7 +1378,7 @@ var file_control_proto_rawDesc = []byte{
 	0x54, 0x48, 0x5f, 0x43, 0x4f, 0x44, 0x45, 0x5f, 0x55, 0x4e, 0x41, 0x56, 0x41, 0x49, 0x4c, 0x41,
 	0x42, 0x4c, 0x45, 0x10, 0x08, 0x12, 0x26, 0x0a, 0x22, 0x53, 0x55, 0x42, 0x53, 0x43, 0x52, 0x49,
 	0x42, 0x45, 0x5f, 0x41, 0x55, 0x54, 0x48, 0x5f, 0x43, 0x4f, 0x44, 0x45, 0x5f, 0x4e, 0x4f, 0x54,
-	0x5f, 0x43, 0x4f, 0x4e, 0x46, 0x49, 0x47, 0x55, 0x52, 0x45, 0x44, 0x10, 0x09, 0x32, 0xee, 0x05,
+	0x5f, 0x43, 0x4f, 0x4e, 0x46, 0x49, 0x47, 0x55, 0x52, 0x45, 0x44, 0x10, 0x09, 0x32, 0xf7, 0x06,
 	0x0a, 0x0c, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x50, 0x6c, 0x61, 0x6e, 0x65, 0x12, 0x5f,
 	0x0a, 0x08, 0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x12, 0x28, 0x2e, 0x67, 0x61, 0x74,
 	0x65, 0x77, 0x61, 0x79, 0x2e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70, 0x6c, 0x61, 0x6e,
@@ -1272,12 +1425,21 @@ var file_control_proto_rawDesc = []byte{
 	0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
 	0x2d, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f,
 	0x6c, 0x70, 0x6c, 0x61, 0x6e, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x65,
-	0x72, 0x76, 0x69, 0x63, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x46,
-	0x5a, 0x44, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x69, 0x6f, 0x64,
-	0x65, 0x73, 0x79, 0x73, 0x74, 0x65, 0x6d, 0x73, 0x2f, 0x67, 0x6f, 0x2d, 0x61, 0x70, 0x69, 0x2d,
-	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2f, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70,
-	0x6c, 0x61, 0x6e, 0x65, 0x2f, 0x76, 0x31, 0x3b, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70,
-	0x6c, 0x61, 0x6e, 0x65, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x72, 0x76, 0x69, 0x63, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x86,
+	0x01, 0x0a, 0x15, 0x53, 0x69, 0x67, 0x6e, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74,
+	0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x35, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70, 0x6c, 0x61, 0x6e, 0x65, 0x2e,
+	0x76, 0x31, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74,
+	0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
+	0x36, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f,
+	0x6c, 0x70, 0x6c, 0x61, 0x6e, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x53, 0x75,
+	0x62, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x46, 0x5a, 0x44, 0x67, 0x69, 0x74, 0x68, 0x75,
+	0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x69, 0x6f, 0x64, 0x65, 0x73, 0x79, 0x73, 0x74, 0x65, 0x6d,
+	0x73, 0x2f, 0x67, 0x6f, 0x2d, 0x61, 0x70, 0x69, 0x2d, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
+	0x2f, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70, 0x6c, 0x61, 0x6e, 0x65, 0x2f, 0x76, 0x31,
+	0x3b, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x70, 0x6c, 0x61, 0x6e, 0x65, 0x76, 0x31, 0x62,
+	0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1293,52 +1455,57 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_control_proto_goTypes = []interface{}{
-	(SubscribeAuthCode)(0),            // 0: gateway.controlplane.v1.SubscribeAuthCode
-	(*RegisterRequest)(nil),           // 1: gateway.controlplane.v1.RegisterRequest
-	(*ServiceBinding)(nil),            // 2: gateway.controlplane.v1.ServiceBinding
-	(*RegisterResponse)(nil),          // 3: gateway.controlplane.v1.RegisterResponse
-	(*HeartbeatRequest)(nil),          // 4: gateway.controlplane.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),         // 5: gateway.controlplane.v1.HeartbeatResponse
-	(*DeregisterRequest)(nil),         // 6: gateway.controlplane.v1.DeregisterRequest
-	(*DeregisterResponse)(nil),        // 7: gateway.controlplane.v1.DeregisterResponse
-	(*ListRegistrationsRequest)(nil),  // 8: gateway.controlplane.v1.ListRegistrationsRequest
-	(*ListRegistrationsResponse)(nil), // 9: gateway.controlplane.v1.ListRegistrationsResponse
-	(*Registration)(nil),              // 10: gateway.controlplane.v1.Registration
-	(*ListPeersRequest)(nil),          // 11: gateway.controlplane.v1.ListPeersRequest
-	(*ListPeersResponse)(nil),         // 12: gateway.controlplane.v1.ListPeersResponse
-	(*Peer)(nil),                      // 13: gateway.controlplane.v1.Peer
-	(*ForgetPeerRequest)(nil),         // 14: gateway.controlplane.v1.ForgetPeerRequest
-	(*ForgetPeerResponse)(nil),        // 15: gateway.controlplane.v1.ForgetPeerResponse
-	(*ListServicesRequest)(nil),       // 16: gateway.controlplane.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),      // 17: gateway.controlplane.v1.ListServicesResponse
-	(*ServiceInfo)(nil),               // 18: gateway.controlplane.v1.ServiceInfo
+	(SubscribeAuthCode)(0),                // 0: gateway.controlplane.v1.SubscribeAuthCode
+	(*RegisterRequest)(nil),               // 1: gateway.controlplane.v1.RegisterRequest
+	(*ServiceBinding)(nil),                // 2: gateway.controlplane.v1.ServiceBinding
+	(*RegisterResponse)(nil),              // 3: gateway.controlplane.v1.RegisterResponse
+	(*HeartbeatRequest)(nil),              // 4: gateway.controlplane.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),             // 5: gateway.controlplane.v1.HeartbeatResponse
+	(*DeregisterRequest)(nil),             // 6: gateway.controlplane.v1.DeregisterRequest
+	(*DeregisterResponse)(nil),            // 7: gateway.controlplane.v1.DeregisterResponse
+	(*ListRegistrationsRequest)(nil),      // 8: gateway.controlplane.v1.ListRegistrationsRequest
+	(*ListRegistrationsResponse)(nil),     // 9: gateway.controlplane.v1.ListRegistrationsResponse
+	(*Registration)(nil),                  // 10: gateway.controlplane.v1.Registration
+	(*ListPeersRequest)(nil),              // 11: gateway.controlplane.v1.ListPeersRequest
+	(*ListPeersResponse)(nil),             // 12: gateway.controlplane.v1.ListPeersResponse
+	(*Peer)(nil),                          // 13: gateway.controlplane.v1.Peer
+	(*ForgetPeerRequest)(nil),             // 14: gateway.controlplane.v1.ForgetPeerRequest
+	(*ForgetPeerResponse)(nil),            // 15: gateway.controlplane.v1.ForgetPeerResponse
+	(*ListServicesRequest)(nil),           // 16: gateway.controlplane.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),          // 17: gateway.controlplane.v1.ListServicesResponse
+	(*ServiceInfo)(nil),                   // 18: gateway.controlplane.v1.ServiceInfo
+	(*SignSubscriptionTokenRequest)(nil),  // 19: gateway.controlplane.v1.SignSubscriptionTokenRequest
+	(*SignSubscriptionTokenResponse)(nil), // 20: gateway.controlplane.v1.SignSubscriptionTokenResponse
 }
 var file_control_proto_depIdxs = []int32{
 	2,  // 0: gateway.controlplane.v1.RegisterRequest.services:type_name -> gateway.controlplane.v1.ServiceBinding
 	10, // 1: gateway.controlplane.v1.ListRegistrationsResponse.registrations:type_name -> gateway.controlplane.v1.Registration
 	13, // 2: gateway.controlplane.v1.ListPeersResponse.peers:type_name -> gateway.controlplane.v1.Peer
 	18, // 3: gateway.controlplane.v1.ListServicesResponse.services:type_name -> gateway.controlplane.v1.ServiceInfo
-	1,  // 4: gateway.controlplane.v1.ControlPlane.Register:input_type -> gateway.controlplane.v1.RegisterRequest
-	4,  // 5: gateway.controlplane.v1.ControlPlane.Heartbeat:input_type -> gateway.controlplane.v1.HeartbeatRequest
-	6,  // 6: gateway.controlplane.v1.ControlPlane.Deregister:input_type -> gateway.controlplane.v1.DeregisterRequest
-	8,  // 7: gateway.controlplane.v1.ControlPlane.ListRegistrations:input_type -> gateway.controlplane.v1.ListRegistrationsRequest
-	11, // 8: gateway.controlplane.v1.ControlPlane.ListPeers:input_type -> gateway.controlplane.v1.ListPeersRequest
-	14, // 9: gateway.controlplane.v1.ControlPlane.ForgetPeer:input_type -> gateway.controlplane.v1.ForgetPeerRequest
-	16, // 10: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
-	3,  // 11: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
-	5,  // 12: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
-	7,  // 13: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
-	9,  // 14: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
-	12, // 15: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
-	15, // 16: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
-	17, // 17: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
-	11, // [11:18] is the sub-list for method output_type
-	4,  // [4:11] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	0,  // 4: gateway.controlplane.v1.SignSubscriptionTokenResponse.code:type_name -> gateway.controlplane.v1.SubscribeAuthCode
+	1,  // 5: gateway.controlplane.v1.ControlPlane.Register:input_type -> gateway.controlplane.v1.RegisterRequest
+	4,  // 6: gateway.controlplane.v1.ControlPlane.Heartbeat:input_type -> gateway.controlplane.v1.HeartbeatRequest
+	6,  // 7: gateway.controlplane.v1.ControlPlane.Deregister:input_type -> gateway.controlplane.v1.DeregisterRequest
+	8,  // 8: gateway.controlplane.v1.ControlPlane.ListRegistrations:input_type -> gateway.controlplane.v1.ListRegistrationsRequest
+	11, // 9: gateway.controlplane.v1.ControlPlane.ListPeers:input_type -> gateway.controlplane.v1.ListPeersRequest
+	14, // 10: gateway.controlplane.v1.ControlPlane.ForgetPeer:input_type -> gateway.controlplane.v1.ForgetPeerRequest
+	16, // 11: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
+	19, // 12: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:input_type -> gateway.controlplane.v1.SignSubscriptionTokenRequest
+	3,  // 13: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
+	5,  // 14: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
+	7,  // 15: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
+	9,  // 16: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
+	12, // 17: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
+	15, // 18: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
+	17, // 19: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
+	20, // 20: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:output_type -> gateway.controlplane.v1.SignSubscriptionTokenResponse
+	13, // [13:21] is the sub-list for method output_type
+	5,  // [5:13] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1563,6 +1730,30 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
+		file_control_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*SignSubscriptionTokenRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_control_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*SignSubscriptionTokenResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1570,7 +1761,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_control_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
