@@ -117,11 +117,11 @@ func dispatchGraphQL(
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("graphql: marshal: %w", err)
+		return nil, Reject(CodeInvalidArgument, fmt.Sprintf("graphql: marshal: %s", err.Error()))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(b))
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInvalidArgument, fmt.Sprintf("graphql: build request: %s", err.Error()))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -131,19 +131,20 @@ func dispatchGraphQL(
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()))
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("graphql: %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBytes)))
+		return nil, Reject(httpStatusToCode(resp.StatusCode),
+			fmt.Sprintf("graphql: %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
 	var out graphQLResponse
 	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, fmt.Errorf("graphql: decode: %w: %s", err, respBytes)
+		return nil, Reject(CodeInternal, fmt.Sprintf("graphql: decode: %s: %s", err.Error(), respBytes))
 	}
 	return &out, nil
 }
@@ -162,7 +163,7 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 		if !filter.matchNS(ns) {
 			continue
 		}
-		mb := newGraphQLMirror(src)
+		mb := newGraphQLMirror(src, g.cfg.metrics)
 		q, m, err := mb.build()
 		if err != nil {
 			return nil, nil, fmt.Errorf("graphql ingest %s: %w", ns, err)
