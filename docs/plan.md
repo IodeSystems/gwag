@@ -74,28 +74,33 @@ to a delegate or token-exchange model.
 **Seed in place:**
 - `auth_admin_test.go` — AdminMiddleware read/write split, token
   persistence, header-forwarding allowlist (unit-level helper).
+- `auth_admin_delegate_test.go` — AdminAuthorizer delegate
+  (no-delegate, OK, DENIED, UNAVAILABLE, transport error, public
+  reads bypass, request fields). Uses an in-process
+  grpc.ClientConnInterface fake — no real gRPC server.
 - `openapi_test.go` — full GraphQL → HTTP dispatch round-trip via
   httptest backend: GET path params, POST request body,
   Authorization forwarding default, `ForwardHeaders` override,
   backend error surfacing.
+- `subscriptions_test.go` — full WebSocket round-trip via embedded
+  NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
+  publish → next frame; HMAC SIGNATURE_MISMATCH and TOO_OLD;
+  NOT_CONFIGURED; client `complete` cleans up the broker entry.
 
-Pattern: httptest + `gw.Handler()` for OpenAPI; httptest + direct
-helper calls for unit-shape. No NATS, no live services. Every new
-feature should add same-shape coverage.
+Pattern: httptest + `gw.Handler()` for OpenAPI/subscription; fakes
+or direct helper calls for unit-shape. Every new feature should add
+same-shape coverage.
 
 **Still missing** (every entry is silent-regression risk):
 - Multi-replica + version e2e (`examples/multi`-style scripted)
-  exercising gRPC dispatch, not just OpenAPI.
+  exercising gRPC unary dispatch.
 - Cluster mode 2-node with cross-gateway dispatch.
-- Subscription publish → WebSocket frame round-trip.
-- HMAC verify codes (OK, TOO_OLD, SIGNATURE_MISMATCH, etc.).
 - ForgetPeer happy path + alive-rejection.
 - Schema rebuild on pool create/destroy + pool-hash collision
   rejection.
-
-Integration tests are higher-leverage than unit tests — the
-load-bearing logic is glue (registration → schema rebuild →
-dispatch). Build them out in shape with the seed.
+- Quiet the embedded-NATS log spam in tests — `ConfigureLogger`
+  uses defaults; either expose a `Logger` field on `ClusterOptions`
+  or capture stderr in `newSubFixture`. Cosmetic, not blocking.
 
 ---
 
@@ -377,7 +382,15 @@ Followups:
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* AdminAuthorizer delegate (`adminauth/v1`) + wiring
+- *(uncommitted)* Subscription e2e tests (`subscriptions_test.go`):
+  embedded NATS via `StartCluster` (ephemeral ports + tempdir),
+  greeter proto registered via `AddProtoDescriptor`, full WebSocket
+  round-trip through `gw.Handler()`. Covers happy path
+  (publish → next frame), HMAC SIGNATURE_MISMATCH, HMAC TOO_OLD,
+  NOT_CONFIGURED (no auth mode set), and client-`complete` broker
+  cleanup. First tests in the repo that exercise the embedded NATS
+  + WebSocket path together.
+- `4346c12` AdminAuthorizer delegate (`adminauth/v1`) + wiring
   in `AdminMiddleware`. Service registers under `_admin_auth/v1`;
   delegate consulted first, boot token is the fallback. Tests cover
   no-delegate, OK accept, DENIED short-circuit, UNAVAILABLE
