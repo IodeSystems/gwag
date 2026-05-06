@@ -10,7 +10,7 @@ function Schema() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['schema-sdl'],
     queryFn: async () => {
-      const r = await fetch('/schema/graphql');
+      const r = await fetch('/api/schema/graphql');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.text();
     },

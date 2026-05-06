@@ -49,6 +49,8 @@ auth_subscribe.go        HMAC verify + SubscribeAuthCode
 auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
 auth_admin.go            Boot-token gen/persist + AdminMiddleware
 auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
+ui_handler.go            UIHandler: fs.FS → http.Handler with SPA fallback
+ui/embed.go              Embeds ui/dist/* as embed.FS for the binary
 metrics.go               Prometheus dispatch + dwell + backoff + queue
                          + stream + auth gauges/histograms/counters
 health.go                /health endpoint + Drain method
@@ -129,17 +131,25 @@ go-api-gateway sign          --gateway gw:50090 --channel events.X --ttl 60
 
 ## HTTP surface
 
+The example gateway splits routes by prefix: `/api/*` is the
+gateway, everything else is the embedded UI bundle. Unmatched
+`/api/*` returns JSON 404 (so a typo doesn't render the SPA);
+non-API requests fall back to the SPA's `index.html` for client-
+side routing. Pattern lifted from zdx-go.
+
 | Path | Auth | What |
 |---|---|---|
-| `/graphql` (queries, subscriptions) | public | GraphQL queries + WebSocket upgrade for subscriptions |
-| `/graphql` (mutations) | bearer (transitive) | admin\_\* dispatch through /admin/\* — operator must send `Authorization: Bearer <token>` to /graphql; the gateway forwards it on outbound dispatch |
-| `/schema`, `/schema/graphql` | public | SDL (or `?format=json` for introspection) |
-| `/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
-| `/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
-| `/admin/*` reads (GET) | public | huma reads (peers, services list) |
-| `/admin/*` writes | bearer | huma mutations (forget, sign) |
-| `/health` | public | JSON status; 503 when `Drain()` is in flight |
-| `/metrics` | public (or behind reverse-proxy auth) | Prometheus scrape |
+| `/api/graphql` (queries, subscriptions) | public | GraphQL + WebSocket upgrade for subscriptions |
+| `/api/graphql` (mutations) | bearer (transitive) | admin\_\* dispatch through /api/admin/\* — operator sends `Authorization: Bearer <token>` to /api/graphql; the gateway forwards it on outbound dispatch |
+| `/api/schema`, `/api/schema/graphql` | public | SDL (or `?format=json` for introspection) |
+| `/api/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
+| `/api/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
+| `/api/admin/*` reads (GET) | public | huma reads (peers, services list) |
+| `/api/admin/*` writes | bearer | huma mutations (forget, sign) |
+| `/api/health` | public | JSON status; 503 when `Drain()` is in flight |
+| `/api/metrics` | public (or behind reverse-proxy auth) | Prometheus scrape |
+| `/api/...` (unmatched) | n/a | JSON 404 |
+| `/`, `/{anything}` | public | Embedded SPA bundle from `ui/dist/`; index.html SPA fallback for unknown paths |
 
 The bearer is the gateway's boot token (logged at startup, persisted
 to `<adminDataDir>/admin-token` if `WithAdminDataDir(...)` is set).
@@ -148,6 +158,13 @@ authenticate services calling each other through the gateway, and it
 has nothing to do with outbound auth to OpenAPI backends (which is a
 separate tier-1 in plan.md). The pluggable admin authorizer
 delegate is still tier-1; boot token is the always-works fallback.
+
+The `/api/*` split is an example wiring choice, not a library
+constraint. `gateway.UIHandler(fs.FS)` and the per-handler primitives
+(`gw.Handler()`, `gw.SchemaHandler()`, `gw.AdminMiddleware(...)`)
+let operators arrange the routes however they like. The
+`cmd/go-api-gateway` CLI mounts GraphQL at `/` directly when no UI
+is in play.
 
 ## When in doubt
 

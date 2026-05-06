@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "schema": "curl -fsSL ${GATEWAY_URL:-http://localhost:18080}/schema/graphql -o schema.graphql",
+    "schema": "curl -fsSL ${GATEWAY_URL:-http://localhost:18080}/api/schema/graphql -o schema.graphql",
     "codegen": "graphql-codegen --config codegen.ts",
     "gen": "pnpm run schema && pnpm run codegen"
   },
