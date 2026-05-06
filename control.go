@@ -187,6 +187,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
+		warnUnsupportedStreaming(cp.gw, ns, ver, fd)
 		prep = append(prep, prepared{
 			namespace: ns,
 			version:   ver,
@@ -386,6 +387,39 @@ func (cp *controlPlane) ListRegistrations(ctx context.Context, _ *cpv1.ListRegis
 		})
 	}
 	return out, nil
+}
+
+// warnUnsupportedStreaming logs every method in fd that the gateway
+// can't surface — client-streaming and bidi RPCs. Server-streaming is
+// promoted to a GraphQL subscription, so we don't warn for those.
+// Goes through the embedded NATS logger if cluster is configured,
+// fmt.Println otherwise.
+func warnUnsupportedStreaming(g *Gateway, ns, ver string, fd protoreflect.FileDescriptor) {
+	services := fd.Services()
+	for i := 0; i < services.Len(); i++ {
+		sd := services.Get(i)
+		methods := sd.Methods()
+		for j := 0; j < methods.Len(); j++ {
+			md := methods.Get(j)
+			cs, ss := md.IsStreamingClient(), md.IsStreamingServer()
+			var kind string
+			switch {
+			case cs && ss:
+				kind = "bidi"
+			case cs && !ss:
+				kind = "client-stream"
+			default:
+				continue
+			}
+			msg := fmt.Sprintf("gateway: filtering unsupported streaming method %s/%s: /%s/%s (kind=%s)",
+				ns, ver, sd.FullName(), md.Name(), kind)
+			if g.cfg.cluster != nil {
+				g.cfg.cluster.Server.Warnf("%s", msg)
+			} else {
+				fmt.Println(msg)
+			}
+		}
+	}
 }
 
 // ListPeers returns all live peers from the peers KV bucket. Empty

@@ -111,12 +111,96 @@ func (g *Gateway) assembleLocked() error {
 		Fields: rootFields,
 	})
 
-	schema, err := graphql.NewSchema(graphql.SchemaConfig{Query: queryObj})
+	cfg := graphql.SchemaConfig{Query: queryObj}
+
+	// Subscription root: one flat field per (namespace, server-streaming
+	// method) across all pools. Args = request fields + injected hmac
+	// (String!) + timestamp (Int!). Subscribe resolver is a no-op stub
+	// until the WebSocket transport lands; SDL still surfaces them so
+	// codegen pipelines can generate typed subscriptions today.
+	subFields, err := g.buildSubscriptionFields(tb)
+	if err != nil {
+		return err
+	}
+	if len(subFields) > 0 {
+		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{
+			Name:   "Subscription",
+			Fields: subFields,
+		})
+	}
+
+	schema, err := graphql.NewSchema(cfg)
 	if err != nil {
 		return fmt.Errorf("graphql.NewSchema: %w", err)
 	}
 	g.schema.Store(&schema)
 	return nil
+}
+
+// buildSubscriptionFields walks every non-internal pool, finds
+// server-streaming RPCs (one request → many responses), and returns
+// a graphql.Fields map keyed by "<namespace>_<lowerCamel(method)>".
+// Client-streaming and bidi are NOT promoted; they're filtered with a
+// warning at registration time (see control.go).
+func (g *Gateway) buildSubscriptionFields(tb *typeBuilder) (graphql.Fields, error) {
+	out := graphql.Fields{}
+	for _, p := range g.pools {
+		if g.internal[p.key.namespace] {
+			continue
+		}
+		services := p.file.Services()
+		for i := 0; i < services.Len(); i++ {
+			sd := services.Get(i)
+			methods := sd.Methods()
+			for j := 0; j < methods.Len(); j++ {
+				md := methods.Get(j)
+				if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
+					continue
+				}
+				field, err := buildSubscriptionField(tb, sd, md)
+				if err != nil {
+					return nil, err
+				}
+				name := p.key.namespace + "_" + lowerCamel(string(md.Name()))
+				if _, exists := out[name]; exists {
+					return nil, fmt.Errorf("subscription field name collision: %s", name)
+				}
+				out[name] = field
+			}
+		}
+	}
+	return out, nil
+}
+
+func buildSubscriptionField(
+	tb *typeBuilder,
+	sd protoreflect.ServiceDescriptor,
+	md protoreflect.MethodDescriptor,
+) (*graphql.Field, error) {
+	args, err := tb.argsFromMessage(md.Input())
+	if err != nil {
+		return nil, err
+	}
+	// Auto-injected auth args. Surface in SDL so codegen pipelines see
+	// them; gateway transport will populate/verify at subscribe time.
+	args["hmac"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)}
+	args["timestamp"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.Int)}
+
+	outputType, err := tb.objectFromMessage(md.Output())
+	if err != nil {
+		return nil, err
+	}
+
+	return &graphql.Field{
+		Type: outputType,
+		Args: args,
+		Subscribe: func(rp graphql.ResolveParams) (any, error) {
+			return nil, fmt.Errorf("subscription transport not configured: mount the gateway WebSocket handler")
+		},
+		Resolve: func(rp graphql.ResolveParams) (any, error) {
+			return rp.Source, nil
+		},
+	}, nil
 }
 
 // buildPoolRPCs returns one graphql.Field per RPC method declared in

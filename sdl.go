@@ -114,12 +114,29 @@ func printSchemaSDL(s *graphql.Schema) string {
 		first = false
 	}
 
-	// Schema declaration uses the Query root that graphql-go assembled.
-	if q := s.QueryType(); q != nil {
+	// Schema declaration includes whichever roots graphql-go assembled.
+	q := s.QueryType()
+	sub := s.SubscriptionType()
+	mut := s.MutationType()
+	if q != nil || sub != nil || mut != nil {
 		separate()
-		b.WriteString("schema {\n  query: ")
-		b.WriteString(q.Name())
-		b.WriteString("\n}\n")
+		b.WriteString("schema {\n")
+		if q != nil {
+			b.WriteString("  query: ")
+			b.WriteString(q.Name())
+			b.WriteString("\n")
+		}
+		if mut != nil {
+			b.WriteString("  mutation: ")
+			b.WriteString(mut.Name())
+			b.WriteString("\n")
+		}
+		if sub != nil {
+			b.WriteString("  subscription: ")
+			b.WriteString(sub.Name())
+			b.WriteString("\n")
+		}
+		b.WriteString("}\n")
 	}
 
 	for _, name := range names {

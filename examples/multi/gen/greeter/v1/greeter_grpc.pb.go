@@ -19,7 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GreeterService_Hello_FullMethodName = "/greeter.v1.GreeterService/Hello"
+	GreeterService_Hello_FullMethodName     = "/greeter.v1.GreeterService/Hello"
+	GreeterService_Greetings_FullMethodName = "/greeter.v1.GreeterService/Greetings"
+	GreeterService_Echo_FullMethodName      = "/greeter.v1.GreeterService/Echo"
 )
 
 // GreeterServiceClient is the client API for GreeterService service.
@@ -27,6 +29,12 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GreeterServiceClient interface {
 	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+	// Server-streaming → GraphQL subscription.
+	// The request fields become subscription arguments; the stream
+	// message becomes the event payload.
+	Greetings(ctx context.Context, in *GreetingsFilter, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Greeting], error)
+	// Client-streaming and bidi are filtered with a warning.
+	Echo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HelloRequest, HelloResponse], error)
 }
 
 type greeterServiceClient struct {
@@ -47,11 +55,49 @@ func (c *greeterServiceClient) Hello(ctx context.Context, in *HelloRequest, opts
 	return out, nil
 }
 
+func (c *greeterServiceClient) Greetings(ctx context.Context, in *GreetingsFilter, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Greeting], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GreeterService_ServiceDesc.Streams[0], GreeterService_Greetings_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GreetingsFilter, Greeting]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GreeterService_GreetingsClient = grpc.ServerStreamingClient[Greeting]
+
+func (c *greeterServiceClient) Echo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HelloRequest, HelloResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GreeterService_ServiceDesc.Streams[1], GreeterService_Echo_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[HelloRequest, HelloResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GreeterService_EchoClient = grpc.BidiStreamingClient[HelloRequest, HelloResponse]
+
 // GreeterServiceServer is the server API for GreeterService service.
 // All implementations must embed UnimplementedGreeterServiceServer
 // for forward compatibility.
 type GreeterServiceServer interface {
 	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	// Server-streaming → GraphQL subscription.
+	// The request fields become subscription arguments; the stream
+	// message becomes the event payload.
+	Greetings(*GreetingsFilter, grpc.ServerStreamingServer[Greeting]) error
+	// Client-streaming and bidi are filtered with a warning.
+	Echo(grpc.BidiStreamingServer[HelloRequest, HelloResponse]) error
 	mustEmbedUnimplementedGreeterServiceServer()
 }
 
@@ -64,6 +110,12 @@ type UnimplementedGreeterServiceServer struct{}
 
 func (UnimplementedGreeterServiceServer) Hello(context.Context, *HelloRequest) (*HelloResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Hello not implemented")
+}
+func (UnimplementedGreeterServiceServer) Greetings(*GreetingsFilter, grpc.ServerStreamingServer[Greeting]) error {
+	return status.Error(codes.Unimplemented, "method Greetings not implemented")
+}
+func (UnimplementedGreeterServiceServer) Echo(grpc.BidiStreamingServer[HelloRequest, HelloResponse]) error {
+	return status.Error(codes.Unimplemented, "method Echo not implemented")
 }
 func (UnimplementedGreeterServiceServer) mustEmbedUnimplementedGreeterServiceServer() {}
 func (UnimplementedGreeterServiceServer) testEmbeddedByValue()                        {}
@@ -104,6 +156,24 @@ func _GreeterService_Hello_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GreeterService_Greetings_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GreetingsFilter)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(GreeterServiceServer).Greetings(m, &grpc.GenericServerStream[GreetingsFilter, Greeting]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GreeterService_GreetingsServer = grpc.ServerStreamingServer[Greeting]
+
+func _GreeterService_Echo_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GreeterServiceServer).Echo(&grpc.GenericServerStream[HelloRequest, HelloResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GreeterService_EchoServer = grpc.BidiStreamingServer[HelloRequest, HelloResponse]
+
 // GreeterService_ServiceDesc is the grpc.ServiceDesc for GreeterService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -116,6 +186,18 @@ var GreeterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GreeterService_Hello_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Greetings",
+			Handler:       _GreeterService_Greetings_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Echo",
+			Handler:       _GreeterService_Echo_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "greeter.proto",
 }
