@@ -117,16 +117,19 @@ Recently Shipped). Remaining:
   a per-route flag rather than flipping the global GET policy.
   Parked until a real destructive read needs it.
 
-### OpenAPI multi-replica + load balancing
+### OpenAPI multi-replica + load balancing — done
 
-Each registered OpenAPI spec currently takes one base URL. For
-multi-replica: store N base URLs per pool entry, use the existing
-least-in-flight `pickReplica` mechanism for HTTP just as for gRPC.
+`openAPISource.replicas` is an atomic-pointer slice of `openAPIReplica`s
+mirroring the proto pool. Each replica has its own baseURL,
+in-flight counter, and (optional) per-replica `*http.Client`.
+`pickReplica` selects least-in-flight with a round-robin tiebreaker
+so serial low-traffic dispatch spreads. Reconciler delete is
+granular (per replicaID); the source dies when its last replica
+leaves.
 
-Implementation notes:
-- HTTP `pickReplica` analogue: track in-flight per URL, lowest wins.
-- Conn pool: `http.Client` per (pool, replica) — reuses keep-alive.
-- Backpressure: same MaxInflight/MaxWaitTime applies.
+Backpressure tier-2 follow-up: `MaxInflight` / `MaxWaitTime` are
+not yet wired through OpenAPI dispatch. Add when an operator wants
+the same per-source ceiling proto pools have.
 
 ### OpenAPI oneOf / anyOf → GraphQL Union
 
@@ -370,7 +373,19 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* admin-auth follow-ups pack: (1) auto-internal
+- *(uncommitted)* OpenAPI multi-replica + load balancing.
+  `openAPISource.baseURL` and `httpClient` collapse into a slice of
+  `openAPIReplica`s (atomic.Pointer like proto pools), each with its
+  own baseURL + in-flight counter + per-replica client.
+  `pickReplica` picks lowest in-flight with a round-robin tiebreaker
+  (serial low-traffic dispatch now spreads across replicas instead
+  of stacking on the first). Multi-replica registration: identical
+  spec hash + different addr appends a new replica; mismatched hash
+  still rejects. Granular reconciler delete (per replicaID); source
+  dies when last replica leaves. 1 new test
+  (`TestDynamicOpenAPI_MultiReplica`): two backends, alternating
+  dispatch, deregister-A → all traffic shifts to B.
+- `01b1a3a` admin-auth follow-ups pack: (1) auto-internal
   `_*` namespaces — anything starting with underscore is hidden
   from the public schema regardless of `AsInternal()`. Centralised
   via a new `g.isInternal(ns)` helper; the explicit map still

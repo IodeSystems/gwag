@@ -335,7 +335,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	openAPIAdded := []string{}
 	for _, p := range prep {
 		if p.isOpenAPI {
-			if err := cp.gw.addOpenAPISourceLocked(p.namespace, req.GetAddr(), p.openAPISpec, p.hash, id); err != nil {
+			// Standalone path: replicaID is unused (no KV-driven
+			// removal). Pass "" so addOpenAPISourceLocked treats this
+			// as a boot-time-style replica owned by the registration.
+			if err := cp.gw.addOpenAPISourceLocked(p.namespace, req.GetAddr(), p.openAPISpec, p.hash, id, ""); err != nil {
 				for _, ns := range openAPIAdded {
 					cp.gw.removeOpenAPISourceLocked(ns)
 				}

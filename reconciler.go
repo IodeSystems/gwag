@@ -122,7 +122,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addOpenAPISourceLocked(ns, v.Addr, v.OpenAPISpec, hash, v.RegID)
+		err := g.addOpenAPISourceLocked(ns, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID)
 		g.mu.Unlock()
 		if err != nil {
 			g.cfg.cluster.Server.Warnf("reconciler: openapi %s: %v", ns, err)
@@ -174,9 +174,10 @@ func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
 	g.mu.Lock()
 	// Try the OpenAPI side first — sources are keyed by namespace.
-	// If we find one, the proto path won't apply.
+	// If we find one, drop just this replica; the source dies when
+	// its last replica leaves.
 	if _, isOpenAPI := g.openAPISources[ns]; isOpenAPI {
-		g.removeOpenAPISourceLocked(ns)
+		g.removeOpenAPIReplicaByIDLocked(ns, replicaID)
 		g.mu.Unlock()
 		return
 	}

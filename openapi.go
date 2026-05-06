@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
@@ -89,63 +90,225 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if g.openAPISources == nil {
 		g.openAPISources = map[string]*openAPISource{}
 	}
-	if _, exists := g.openAPISources[ns]; exists {
-		return fmt.Errorf("gateway: AddOpenAPI: namespace %s already registered", ns)
-	}
+	hash := sha256.Sum256(specBytes)
 	httpClient := sc.httpClient
 	if httpClient == nil {
 		httpClient = g.cfg.openAPIHTTP
 	}
-	g.openAPISources[ns] = &openAPISource{
-		namespace:      ns,
-		baseURL:        addr,
-		doc:            doc,
-		hash:           sha256.Sum256(specBytes),
-		forwardHeaders: sc.forwardHeaders,
-		httpClient:     httpClient,
+	if existing, ok := g.openAPISources[ns]; ok {
+		// Same hash → idempotent multi-replica add. Different hash →
+		// configuration drift; reject.
+		if existing.hash != hash {
+			return fmt.Errorf("gateway: AddOpenAPI: namespace %s already registered with different spec hash", ns)
+		}
+		existing.addReplica(&openAPIReplica{
+			baseURL:    addr,
+			httpClient: httpClient,
+		})
+		return nil
 	}
+	src := &openAPISource{
+		namespace:      ns,
+		doc:            doc,
+		hash:           hash,
+		forwardHeaders: sc.forwardHeaders,
+		rawSpec:        append([]byte(nil), specBytes...),
+	}
+	src.addReplica(&openAPIReplica{
+		baseURL:    addr,
+		httpClient: httpClient,
+	})
+	g.openAPISources[ns] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
 	return nil
 }
 
-// openAPISource is what AddOpenAPI stores. Hash supports schema-diff /
-// services-list parity checks alongside proto-based services.
+// openAPISource is what AddOpenAPI stores. One source per (namespace),
+// pinned to a single hash. Multiple replicas can join a source so long
+// as they all carry the same spec bytes. Dispatch picks the
+// lowest-in-flight replica each call (HTTP analogue of pool.pickReplica).
 type openAPISource struct {
 	namespace      string
-	baseURL        string
 	doc            *openapi3.T
 	hash           [32]byte
-	forwardHeaders []string     // nil → use defaultForwardedHeaders; empty → forward nothing
-	httpClient     *http.Client // nil → use http.DefaultClient
-
-	// owner is the registration ID that created this source (or "" for
-	// boot-time AddOpenAPI / AddOpenAPIBytes). Set by the control-plane
-	// path so Deregister + reconciler.handleDelete can clean up.
-	owner string
+	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
 
 	// rawSpec is kept for /schema/openapi re-emit and (cluster mode)
 	// for the reconciler to write back into KV when shape changes.
 	rawSpec []byte
+
+	// replicas slice replaced (not mutated in place) on add/remove so
+	// dispatch closures snapshotting it never see partial mutation.
+	// Reads via Load() in pickReplica.
+	replicas atomic.Pointer[[]*openAPIReplica]
+
+	// pickHint round-robins between replicas tied at the same lowest
+	// in-flight count. Without it, a low-traffic source where every
+	// dispatch finishes before the next begins (in-flight always 0)
+	// would funnel 100% of traffic to replicas[0]. Atomic-incremented
+	// per pickReplica call.
+	pickHint atomic.Uint64
+}
+
+// openAPIReplica is one HTTP backend behind an openAPISource. Each
+// Register call against the same (namespace, hash) appends one of
+// these. baseURL is the http(s):// prefix that paths from the spec
+// get resolved against; inflight powers pickReplica's least-loaded
+// selection.
+type openAPIReplica struct {
+	id         string       // KV-side replica id; "" for boot-time AddOpenAPI entries
+	baseURL    string       // canonical http(s):// prefix, no trailing slash
+	owner      string       // registration ID; "" for boot-time
+	httpClient *http.Client // nil → fall back to gateway-wide default → http.DefaultClient
+	inflight   atomic.Int32
+}
+
+// pickReplica returns the replica with the lowest in-flight count,
+// breaking ties via round-robin so serial low-traffic dispatch still
+// spreads across replicas. Returns nil when the source is empty
+// (transient state during drain).
+func (s *openAPISource) pickReplica() *openAPIReplica {
+	rs := s.replicas.Load()
+	if rs == nil || len(*rs) == 0 {
+		return nil
+	}
+	// Find the minimum in-flight value.
+	minN := (*rs)[0].inflight.Load()
+	for _, r := range (*rs)[1:] {
+		if n := r.inflight.Load(); n < minN {
+			minN = n
+		}
+	}
+	// Among replicas tied at the minimum, round-robin via pickHint.
+	hint := s.pickHint.Add(1) - 1
+	n := uint64(len(*rs))
+	for i := uint64(0); i < n; i++ {
+		r := (*rs)[(hint+i)%n]
+		if r.inflight.Load() == minN {
+			return r
+		}
+	}
+	// Race: replica counters changed mid-walk. Fall back to first.
+	return (*rs)[0]
+}
+
+// addReplica appends r. Returns the new replica count.
+func (s *openAPISource) addReplica(r *openAPIReplica) int {
+	cur := s.replicas.Load()
+	var next []*openAPIReplica
+	if cur != nil {
+		next = make([]*openAPIReplica, 0, len(*cur)+1)
+		next = append(next, *cur...)
+	}
+	next = append(next, r)
+	s.replicas.Store(&next)
+	return len(next)
+}
+
+// removeReplicaByID drops the replica with the given KV id, returning
+// the removed *openAPIReplica or nil if not present.
+func (s *openAPISource) removeReplicaByID(id string) *openAPIReplica {
+	cur := s.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	next := make([]*openAPIReplica, 0, len(*cur))
+	var removed *openAPIReplica
+	for _, r := range *cur {
+		if removed == nil && r.id == id {
+			removed = r
+			continue
+		}
+		next = append(next, r)
+	}
+	if removed == nil {
+		return nil
+	}
+	s.replicas.Store(&next)
+	return removed
+}
+
+// removeReplicasByOwner returns the count removed.
+func (s *openAPISource) removeReplicasByOwner(owner string) int {
+	cur := s.replicas.Load()
+	if cur == nil || owner == "" {
+		return 0
+	}
+	next := make([]*openAPIReplica, 0, len(*cur))
+	removed := 0
+	for _, r := range *cur {
+		if r.owner == owner {
+			removed++
+			continue
+		}
+		next = append(next, r)
+	}
+	if removed == 0 {
+		return 0
+	}
+	s.replicas.Store(&next)
+	return removed
+}
+
+// findReplicaByID returns the replica with the given id, or nil.
+func (s *openAPISource) findReplicaByID(id string) *openAPIReplica {
+	cur := s.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	for _, r := range *cur {
+		if r.id == id {
+			return r
+		}
+	}
+	return nil
+}
+
+func (s *openAPISource) replicaCount() int {
+	cur := s.replicas.Load()
+	if cur == nil {
+		return 0
+	}
+	return len(*cur)
 }
 
 // addOpenAPISourceLocked is the internal hook the control-plane and
-// reconciler share. Idempotent under hash equality (a duplicate
-// register with matching bytes is a no-op); rejects mismatched hash.
+// reconciler share. Idempotent under hash equality: a duplicate
+// register with matching bytes appends a new replica to the existing
+// source (HTTP analogue of joinPoolLocked). Rejects mismatched hash.
 // Caller holds g.mu.
-func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, hash [32]byte, owner string) error {
+//
+// replicaID may be empty for boot-time / standalone control-plane
+// callers; cluster-driven callers pass the registry KV replica id so
+// reconciler.handleDelete can later remove the matching replica.
+func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
 	if g.openAPISources == nil {
 		g.openAPISources = map[string]*openAPISource{}
 	}
+	addr := strings.TrimRight(baseURL, "/")
+	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
+		addr = "http://" + addr
+	}
 	if existing, ok := g.openAPISources[ns]; ok {
 		if existing.hash != hash {
 			return fmt.Errorf("openapi: namespace %s already registered with different spec hash", ns)
 		}
-		// Same spec — accept as a no-op idempotent register.
+		// Idempotent: if a replica with the same id already lives
+		// here, treat as no-op (reconciler replays).
+		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
+			return nil
+		}
+		existing.addReplica(&openAPIReplica{
+			id:         replicaID,
+			baseURL:    addr,
+			owner:      owner,
+			httpClient: g.cfg.openAPIHTTP,
+		})
 		return nil
 	}
 	loader := openapi3.NewLoader()
@@ -157,27 +320,48 @@ func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, h
 	if err := doc.Validate(loader.Context); err != nil {
 		return fmt.Errorf("openapi: validate %s: %w", ns, err)
 	}
-	addr := strings.TrimRight(baseURL, "/")
-	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
-		addr = "http://" + addr
+	src := &openAPISource{
+		namespace: ns,
+		doc:       doc,
+		hash:      hash,
+		rawSpec:   append([]byte(nil), specBytes...),
 	}
-	g.openAPISources[ns] = &openAPISource{
-		namespace:  ns,
+	src.addReplica(&openAPIReplica{
+		id:         replicaID,
 		baseURL:    addr,
-		doc:        doc,
-		hash:       hash,
-		httpClient: g.cfg.openAPIHTTP,
 		owner:      owner,
-		rawSpec:    append([]byte(nil), specBytes...),
-	}
+		httpClient: g.cfg.openAPIHTTP,
+	})
+	g.openAPISources[ns] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
 	return nil
 }
 
-// removeOpenAPISourceLocked drops the source for ns and rebuilds the
-// schema. No-op when not present. Caller holds g.mu.
+// removeOpenAPIReplicaByIDLocked drops the single replica matching
+// (ns, replicaID). When the source's last replica leaves, the source
+// itself is deleted and the schema rebuilt. Caller holds g.mu.
+func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, replicaID string) {
+	src, ok := g.openAPISources[ns]
+	if !ok {
+		return
+	}
+	if src.removeReplicaByID(replicaID) == nil {
+		return
+	}
+	if src.replicaCount() == 0 {
+		delete(g.openAPISources, ns)
+		if g.schema.Load() != nil {
+			_ = g.assembleLocked()
+		}
+	}
+}
+
+// removeOpenAPISourceLocked drops the source for ns entirely (every
+// replica) and rebuilds the schema. No-op when not present. Used by
+// the standalone control-plane Deregister path which evicts owned
+// replicas en masse.
 func (g *Gateway) removeOpenAPISourceLocked(ns string) {
 	if _, ok := g.openAPISources[ns]; !ok {
 		return
@@ -188,21 +372,28 @@ func (g *Gateway) removeOpenAPISourceLocked(ns string) {
 	}
 }
 
-// removeOpenAPISourcesByOwnerLocked drops every openAPISource whose
-// owner matches. Returns the count removed. Rebuilds the schema
-// once if anything was removed.
+// removeOpenAPISourcesByOwnerLocked walks every source removing
+// replicas whose owner matches. Sources whose last replica leaves
+// are deleted. Schema rebuilt once if any source was destroyed.
+// Returns the count of replicas removed.
 func (g *Gateway) removeOpenAPISourcesByOwnerLocked(owner string) int {
 	if owner == "" {
-		return 0 // boot-time sources aren't evictable
+		return 0 // boot-time replicas aren't evictable
 	}
 	removed := 0
+	rebuild := false
 	for ns, s := range g.openAPISources {
-		if s.owner == owner {
+		n := s.removeReplicasByOwner(owner)
+		if n == 0 {
+			continue
+		}
+		removed += n
+		if s.replicaCount() == 0 {
 			delete(g.openAPISources, ns)
-			removed++
+			rebuild = true
 		}
 	}
-	if removed > 0 && g.schema.Load() != nil {
+	if rebuild && g.schema.Load() != nil {
 		_ = g.assembleLocked()
 	}
 	return removed
@@ -444,15 +635,19 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	}
 	method := op.Method
 	pathTemplate := op.Path
-	baseURL := src.baseURL
 	forwardHeaders := src.forwardHeaders
-	httpClient := src.httpClient
 
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return dispatchOpenAPI(rp.Context, method, baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, httpClient)
+			r := src.pickReplica()
+			if r == nil {
+				return nil, fmt.Errorf("openapi: no live replicas for %s", src.namespace)
+			}
+			r.inflight.Add(1)
+			defer r.inflight.Add(-1)
+			return dispatchOpenAPI(rp.Context, method, r.baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, r.httpClient)
 		},
 	}, nil
 }
