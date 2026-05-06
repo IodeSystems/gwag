@@ -328,9 +328,11 @@ func TestOpenAPIE2E_HTTPClient_NilFallsBackToDefault(t *testing.T) {
 // fired.
 type openAPIBackpressureMetrics struct {
 	noopMetrics
-	mu       sync.Mutex
-	backoff  int
-	dwellHit int
+	mu          sync.Mutex
+	backoff     int
+	dwellHit    int
+	dispatch    int
+	dispatchErr int
 }
 
 func (m *openAPIBackpressureMetrics) RecordDwell(_, _, _, kind string, _ time.Duration) {
@@ -346,6 +348,15 @@ func (m *openAPIBackpressureMetrics) RecordBackoff(_, _, _, _, _ string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.backoff++
+}
+
+func (m *openAPIBackpressureMetrics) RecordDispatch(_, _, _ string, _ time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dispatch++
+	if err != nil {
+		m.dispatchErr++
+	}
 }
 
 func (m *openAPIBackpressureMetrics) SetQueueDepth(_, _, _ string, _ int) {}
@@ -432,6 +443,84 @@ func TestOpenAPIE2E_BackpressureTimesOutAndRejects(t *testing.T) {
 	select {
 	case <-holder:
 	case <-time.After(time.Second):
+	}
+}
+
+// openAPIDispatchMetrics tallies just RecordDispatch calls, capturing
+// the labels so a single test can verify happy-path + error path
+// label parity with the proto pool path.
+type openAPIDispatchMetrics struct {
+	noopMetrics
+	mu      sync.Mutex
+	calls   []openAPIDispatchCall
+}
+
+type openAPIDispatchCall struct {
+	Namespace string
+	Version   string
+	Method    string
+	Err       error
+}
+
+func (m *openAPIDispatchMetrics) RecordDispatch(ns, ver, method string, _ time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, openAPIDispatchCall{ns, ver, method, err})
+}
+
+func TestOpenAPIE2E_RecordDispatchFires(t *testing.T) {
+	// Happy path + backend-error path: RecordDispatch must fire once
+	// per dispatch with (namespace, "v1", "<METHOD> <pathTemplate>"),
+	// matching the proto pool path's contract.
+	cm := &openAPIDispatchMetrics{}
+	gw := New(WithMetrics(cm), WithoutBackpressure(), WithAdminToken([]byte("test-token")))
+	t.Cleanup(gw.Close)
+
+	var fail atomic.Bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("boom"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(backend.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	h := gw.Handler()
+
+	post := func(q string) {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(q))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	post(`{"query":"{ test_getThing(id:\"1\") { id } }"}`)
+	fail.Store(true)
+	post(`{"query":"{ test_getThing(id:\"2\") { id } }"}`)
+
+	cm.mu.Lock()
+	calls := append([]openAPIDispatchCall(nil), cm.calls...)
+	cm.mu.Unlock()
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 RecordDispatch calls, got %d: %+v", len(calls), calls)
+	}
+	for i, c := range calls {
+		if c.Namespace != "test" || c.Version != "v1" || c.Method != "GET /things/{id}" {
+			t.Errorf("call[%d] labels = (%q, %q, %q), want (test, v1, GET /things/{id})",
+				i, c.Namespace, c.Version, c.Method)
+		}
+	}
+	if calls[0].Err != nil {
+		t.Errorf("call[0] err = %v, want nil (happy path)", calls[0].Err)
+	}
+	if calls[1].Err == nil {
+		t.Errorf("call[1] err = nil, want non-nil (backend 500)")
 	}
 }
 
