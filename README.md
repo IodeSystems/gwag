@@ -7,10 +7,33 @@ top to add auth, rate limiting, transforms, and field hiding without
 touching the underlying services.
 
 Status: **early v0.** Unary gRPC calls work end-to-end; `HideAndInject`
-strips fields from the public schema and injects them at runtime; the
-auth example under [`examples/auth`](./examples/auth) runs and serves
-real GraphQL. Streaming and the broader `SchemaMiddleware` story are
+strips fields from the public schema and injects them at runtime;
+multiple protos can be exposed under their own namespaces; the
+[`go-api-gateway` CLI](./cmd/go-api-gateway) ships as a no-Go-needed
+entry point. Streaming and the broader `SchemaMiddleware` story are
 stubbed; rough edges throughout.
+
+## Examples
+
+- [`examples/multi`](./examples/multi) — two unrelated services, one
+  gateway, no middleware. The thirty-second tour, runnable.
+- [`examples/auth`](./examples/auth) — `HideAndInject[*authpb.Context]`
+  hiding auth fields globally and filling them from a registered
+  internal service.
+
+## CLI
+
+```
+$ go install github.com/iodesystems/go-api-gateway/cmd/go-api-gateway@latest
+$ go-api-gateway \
+    --proto ./greeter.proto=greeter-svc:50051 \
+    --proto ./library.proto=commerce@library-svc:50052 \
+    --addr :8080
+```
+
+`--proto PATH=[NAMESPACE@]ADDR`, repeatable. Default namespace is the
+filename stem; default addr is `:8080`. Insecure dial — wrap in real
+TLS via the library API for production.
 
 ## Why another gateway
 

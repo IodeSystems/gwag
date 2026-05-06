@@ -17,6 +17,7 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/handler"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -282,7 +283,9 @@ func (l *lazyConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method 
 
 func (l *lazyConn) dial() (*grpc.ClientConn, error) {
 	l.once.Do(func() {
-		l.conn, l.err = grpc.NewClient(l.addr)
+		l.conn, l.err = grpc.NewClient(l.addr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
 	})
 	return l.conn, l.err
 }

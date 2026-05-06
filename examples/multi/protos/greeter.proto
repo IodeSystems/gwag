@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package greeter.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1;greeterv1";
+
+service GreeterService {
+  rpc Hello(HelloRequest) returns (HelloResponse);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string greeting = 1;
+}
