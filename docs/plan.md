@@ -70,31 +70,33 @@ remote on the cluster peers.
 `OpenAPISpec`. Single source per namespace in v1; multi-version /
 multi-replica OpenAPI is the next item below.
 
-### Downstream GraphQL ingestion
+### Downstream GraphQL ingestion — done (queries + mutations)
 
-Stitch existing GraphQL services into our schema:
+`gw.AddGraphQL(endpoint, opts...)` introspects the remote at boot,
+mirrors every type with a `<ns>_` prefix, and registers Query /
+Mutation fields at the top level (`pets_users`, `pets_user(id: ID!)`,
+etc.). Forwarding resolver reconstructs the operation by rewriting
+the field's Name back to the remote-side name and printing via
+`graphql-go/graphql/language/printer`. Auth pass-through follows
+the OpenAPI conventions (default `Authorization`; per-source via
+`ForwardHeaders`); `WithOpenAPIClient` / `OpenAPIClient(c)` wire the
+HTTP client used for both introspection and dispatch.
 
-```go
-gw.AddGraphQL("https://pets-svc/graphql", gateway.As("pets"))
-```
-
-Boot-time introspection → namespace-prefixed types (`pets_User`) →
-forward original sub-query string to downstream resolver. ~300 LoC.
-
-Subscriptions: forward via graphql-ws WebSocket dial to downstream.
-Multiplex one upstream WS per (gateway, downstream-service).
+Open follow-ups:
+- **Subscriptions:** forward via graphql-ws to downstream. Multiplex
+  one upstream WS per (gateway, downstream-service). Not in v1.
+- **Interface / Union types:** v1 falls back to a JSON scalar with a
+  registration-time log line. Lossy but the field still resolves.
+  Add proper Interface/Union mirroring when a real downstream uses
+  them.
+- **Dynamic registration over the control plane.** Currently
+  boot-time only. Same mechanism dynamic OpenAPI uses (`bytes
+  graphql_endpoint = N` on `ServiceBinding` plus a separate
+  reconciler path).
 
 **Not federation** — pure delegation. Federation v2 entity-merging
 deferred to never unless multiple services need to contribute fields
-to the same entity, which most teams don't actually have.
-
-Implementation notes:
-- Custom introspection client (small, focused) over
-  `graphql-go/graphql`.
-- Forwarding resolver captures `rp.Info.Operation` and reconstructs
-  query string (or just forwards the raw HTTP body).
-- Type prefixing: every introspected type renamed `<ns>_<TypeName>`.
-- Auth/header pass-through follows OpenAPI auth design.
+to the same entity.
 
 ### Token rotation (kid in tokens)
 
@@ -373,7 +375,19 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI multi-replica + load balancing.
+- *(uncommitted)* downstream GraphQL ingestion (boot-time, queries +
+  mutations). `gw.AddGraphQL(endpoint, opts...)` runs the canonical
+  introspection query, parses into a typed model, mirrors every
+  custom type with a `<ns>_` prefix (built-in scalars stay
+  unprefixed), and registers Query/Mutation fields. Forwarding
+  resolver rewrites the AST to drop the prefix from the top-level
+  field name, prints via graphql-go's printer, and POSTs to the
+  remote with the same auth/header pass-through OpenAPI uses.
+  Interfaces/Unions fall back to a JSON scalar (logged); subscriptions
+  not yet supported. New files: `graphql_ingest.go`,
+  `graphql_introspect.go`, `graphql_mirror.go`. 4 new tests
+  (`graphql_ingest_test.go`).
+- `dfae181` OpenAPI multi-replica + load balancing.
   `openAPISource.baseURL` and `httpClient` collapse into a slice of
   `openAPIReplica`s (atomic.Pointer like proto pools), each with its
   own baseURL + in-flight counter + per-replica client.

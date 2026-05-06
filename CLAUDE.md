@@ -63,6 +63,10 @@ proto_export.go          /schema/proto + /schema/openapi
                          (transformed FDS + ingested OpenAPI re-emit)
 openapi.go               OpenAPI ingestion (file/URL + AddOpenAPIBytes)
                          → GraphQL fields, HTTP dispatch
+graphql_ingest.go        Downstream GraphQL ingest API (AddGraphQL)
+graphql_introspect.go    Canonical introspection query + parser
+graphql_mirror.go        Type mirror with namespace prefix +
+                         forwarding resolver
 cluster.go               Embedded NATS server + JetStream
 hide_inject.go           HideAndInject middleware Pair
 convert.go               Proto descriptor → GraphQL type builder

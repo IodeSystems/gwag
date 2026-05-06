@@ -34,6 +34,7 @@ type Gateway struct {
 	peers          *peerTracker
 	broker         *subBroker
 	openAPISources map[string]*openAPISource
+	graphQLSources map[string]*graphQLSource
 
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
