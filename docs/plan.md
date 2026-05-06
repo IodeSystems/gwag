@@ -39,11 +39,11 @@ fresh session.
   classification parity. `graphql_ingest.go`'s forwarding resolver
   doesn't call `metrics.RecordDispatch`, doesn't have a per-source
   semaphore, and surfaces remote errors as plain `fmt.Errorf`. Same
-  shape as the OpenAPI work shipped in `e88d158` / `<this commit>`:
-  add `start := time.Now()`, call `RecordDispatch` on every exit,
-  wrap errors via `Reject(...)` so `code` is meaningful. Method
-  label is `query/mutation <fieldName>`; version pinned to `"v1"`
-  the same way OpenAPI sources are.
+  shape as the OpenAPI work shipped in `e88d158` / `cf115c1`: add
+  `start := time.Now()`, call `RecordDispatch` on every exit, wrap
+  errors via `Reject(...)` so `code` is meaningful. Method label is
+  `query/mutation <fieldName>`; version pinned to `"v1"` the same
+  way OpenAPI sources are.
 
 ### Token rotation (kid in tokens)
 
@@ -357,7 +357,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI dispatch error classification.
+- `cf115c1` OpenAPI dispatch error classification.
   `dispatchOpenAPI` and the resolver's no-live-replicas branch now
   return `Reject(Code, msg)` instead of plain `fmt.Errorf` so
   `classifyError` (used by both `RecordDispatch`'s `code` label and
