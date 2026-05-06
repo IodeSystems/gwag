@@ -30,8 +30,7 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Smallest:* `/schema/graphql` selector or *Token rotation* —
-  contained, well-specified.
+- *Smallest:* *Token rotation* — contained, well-specified.
 - *Architecturally interesting:* GraphQL **subscription forwarding**
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
@@ -123,13 +122,6 @@ otherwise keep the JSON scalar fallback.
 Edge cases:
 - Discriminator field → resolver picks the variant.
 - Inline objects without `$ref` → synthesise type names.
-
-### `/schema/graphql` selector support
-
-`/schema/proto` and `/schema/openapi` accept `?service=ns:ver,...`
-filters; `/schema/graphql` returns the whole schema regardless.
-Requires a filtered schema-build path. Not difficult, just hasn't
-been needed — codegen consumers always want the whole thing.
 
 ---
 
@@ -279,13 +271,13 @@ pool".
 
 ### Schema export family
 
-Three sibling endpoints under `/schema/*`, each accepting a
-`?service=ns[:ver][,...]` selector (selector applies to proto and
-openapi; graphql currently returns the whole schema — see Tier 2
-*`/schema/graphql` selector support*):
+Three sibling endpoints under `/schema/*`, each accepting the same
+`?service=ns[:ver][,...]` selector grammar:
 
 - `GET /schema/graphql` — SDL (default) or introspection JSON via
-  `?format=json`. Derived from registered protos + OpenAPI.
+  `?format=json`. Derived from registered protos + OpenAPI +
+  downstream-GraphQL ingest. Filtered requests build a fresh schema
+  per call; unfiltered uses the cached `g.schema`.
 - `GET /schema/proto` — FileDescriptorSet (binary
   `application/protobuf`) with **gateway transformations applied**:
   hidden fields stripped via the `Pair.Hides` set; internal
@@ -361,6 +353,21 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* `/schema/graphql` selector support. The endpoint
+  now accepts the same `?service=ns[:ver][,...]` grammar as
+  `/schema/proto` and `/schema/openapi`. Refactored
+  `assembleLocked` into `buildSchemaLocked(filter schemaFilter)` —
+  unfiltered builds populate `g.schema` (cached, atomic swap);
+  filtered requests build a fresh schema per call and discard.
+  `schemaFilter.matchPool(poolKey)` covers proto pools (ns + ver);
+  `schemaFilter.matchNS(ns)` covers OpenAPI / downstream-GraphQL
+  sources (no version axis). Filter threaded through
+  `buildOpenAPIFields`, `buildGraphQLFields`,
+  `buildSubscriptionFields`. 1 new test
+  (`TestSchemaHandler_ServiceSelectorFiltersSDL` in
+  `schema_rebuild_test.go`): two protos registered, unfiltered SDL
+  carries both, `?service=greeter` carries only greeter, malformed
+  selector → 400.
 - *(uncommitted)* OpenAPI HTTP backpressure. Per-source semaphore +
   queue gauge mirroring the proto pool path: `openAPISource` gains
   `sem chan struct{}` + `queueing atomic.Int32`, sized by

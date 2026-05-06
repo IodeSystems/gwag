@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -181,6 +184,74 @@ func TestSchemaRebuild_UnderscoreNamespaceAutoInternal(t *testing.T) {
 	gw.mu.Unlock()
 	if !ok {
 		t.Fatal("_secret_ns pool missing from registry")
+	}
+}
+
+func TestSchemaHandler_ServiceSelectorFiltersSDL(t *testing.T) {
+	// Two namespaces registered. /schema/graphql with no selector
+	// returns both; ?service=greeter returns only greeter; ?service=authd
+	// returns only authd. Mirrors the proto/openapi selector grammar.
+	gw := newSchemaTestGateway(t)
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("greeter"),
+	); err != nil {
+		t.Fatalf("greeter: %v", err)
+	}
+	if err := gw.AddProtoDescriptor(
+		aav1.File_adminauth_v1_adminauth_proto,
+		To(nopGRPCConn{}),
+		As("authd"),
+	); err != nil {
+		t.Fatalf("authd: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.SchemaHandler())
+	t.Cleanup(srv.Close)
+
+	get := func(t *testing.T, q string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + q)
+		if err != nil {
+			t.Fatalf("GET %s: %v", q, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		return resp.StatusCode, string(body)
+	}
+
+	// No selector → both namespaces present.
+	if code, body := get(t, ""); code != http.StatusOK {
+		t.Fatalf("unfiltered status=%d body=%s", code, body)
+	} else {
+		if !strings.Contains(body, "greeter:") {
+			t.Errorf("unfiltered SDL missing greeter")
+		}
+		if !strings.Contains(body, "authd:") {
+			t.Errorf("unfiltered SDL missing authd")
+		}
+	}
+
+	// Filtered to greeter only.
+	code, body := get(t, "?service=greeter")
+	if code != http.StatusOK {
+		t.Fatalf("filtered status=%d body=%s", code, body)
+	}
+	if !strings.Contains(body, "greeter:") {
+		t.Errorf("filtered SDL missing greeter: %s", body)
+	}
+	if strings.Contains(body, "authd:") {
+		t.Errorf("filtered SDL leaked authd:\n%s", body)
+	}
+
+	// Bad selector rejected.
+	code, _ = get(t, "?service=:::")
+	if code != http.StatusBadRequest {
+		t.Errorf("bad selector status=%d, want 400", code)
 	}
 }
 

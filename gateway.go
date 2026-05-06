@@ -604,17 +604,25 @@ func (g *Gateway) Handler() http.Handler {
 // for the canonical path; SchemaProtoHandler and SchemaOpenAPIHandler
 // are siblings:
 //
-//	GET /schema/graphql                → SDL (default)
-//	GET /schema/graphql?format=json    → introspection JSON
-//	GET /schema/proto?service=ns:ver   → FileDescriptorSet (binary)
-//	GET /schema/openapi?service=ns     → re-emit ingested OpenAPI specs
+//	GET /schema/graphql                          → SDL (default)
+//	GET /schema/graphql?format=json              → introspection JSON
+//	GET /schema/graphql?service=ns:ver           → SDL filtered to ns:ver
+//	GET /schema/proto?service=ns:ver             → FileDescriptorSet (binary)
+//	GET /schema/openapi?service=ns               → re-emit ingested OpenAPI specs
 //
 // The X-Gateway-Environment header carries the cluster's environment
 // label on every response so codegen pipelines can record what they
 // grabbed.
 //
-// Service selectors apply to /schema/proto and /schema/openapi only;
-// /schema/graphql currently returns the whole schema.
+// Selector grammar (shared across the /schema/* family):
+//   - ns        → all versions of ns
+//   - ns:vN     → just that version of ns (proto pools only; OpenAPI
+//                 / downstream-GraphQL sources have no version axis)
+//   - missing   → no filter, full schema
+//
+// Filtered requests build a fresh schema per call (cached g.schema is
+// the unfiltered one). Codegen pipelines that always want the whole
+// thing pay no extra cost.
 func (g *Gateway) SchemaHandler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
@@ -630,10 +638,27 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		schema := g.schema.Load()
-		if schema == nil {
-			http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
+		selectors, err := parseProtoSelectors(r.URL.Query().Get("service"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		var schema *graphql.Schema
+		if len(selectors) == 0 {
+			schema = g.schema.Load()
+			if schema == nil {
+				http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
+				return
+			}
+		} else {
+			g.mu.Lock()
+			built, err := g.buildSchemaLocked(schemaFilter{selectors: selectors})
+			g.mu.Unlock()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			schema = built
 		}
 		if env := g.environmentLabel(); env != "" {
 			w.Header().Set("X-Gateway-Environment", env)

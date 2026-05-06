@@ -506,7 +506,7 @@ func sanitizeNamespace(s string) string {
 // buildOpenAPIFields walks every registered OpenAPI source and builds
 // query and mutation fields. Returns (queries, mutations). Conflicting
 // field names within the same root error.
-func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder) (graphql.Fields, graphql.Fields, error) {
+func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
 	names := make([]string, 0, len(g.openAPISources))
@@ -517,6 +517,9 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder) (graphql.Fields, gr
 	for _, ns := range names {
 		src := g.openAPISources[ns]
 		if g.isInternal(ns) {
+			continue
+		}
+		if !filter.matchNS(ns) {
 			continue
 		}
 		paths := src.doc.Paths
