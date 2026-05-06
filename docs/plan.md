@@ -27,7 +27,6 @@ below is uncovered.
 |---|---|---|
 | Cluster cross-gateway dispatch | Two `StartCluster` instances peering, register on A, dispatch from B | Validates KV reconciler + replica picking across nodes. |
 | ForgetPeer | Happy path (TTL-expired peer drops); alive peer rejection | Exercises `controlPlane.ForgetPeer` + KV bucket. |
-| Schema rebuild | Pool create → schema gains field; destroy → loses it; hash mismatch on second registration → error | Pure package-level; no NATS. |
 
 Cosmetic blocker: embedded-NATS log spam in tests grows linearly
 with test count. Picked up by the tier-3 *NATS server log noise
@@ -305,6 +304,12 @@ Where to crib from when adding tests:
   GreeterService.Hello, registered via `AddProtoDescriptor`, queries
   through `gw.Handler()`. Covers happy path, v1 sub-object, backend
   error, no-live-replicas.
+- `schema_rebuild_test.go` — pool create rebuilds schema (greeter
+  field appears); pool destroy via `removeReplicasByOwnerLocked`
+  rebuilds (field disappears); hash mismatch on second registration
+  errors; same-hash second registration joins the pool (replica
+  count = 2); multiple namespaces coexist; `AsInternal()` hides
+  the namespace from Query but keeps the pool dispatchable.
 - `subscriptions_test.go` — full WebSocket round-trip via embedded
   NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
   publish → next frame; HMAC SIGNATURE_MISMATCH / TOO_OLD;
@@ -398,7 +403,10 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* gRPC unary dispatch e2e (`grpc_dispatch_test.go`):
+- *(uncommitted)* schema rebuild tests (`schema_rebuild_test.go`):
+  6 cases verifying that pool create/destroy/hash-collision flow
+  through `assembleLocked` correctly. Pure package-level; no NATS.
+- `aabdc21` gRPC unary dispatch e2e (`grpc_dispatch_test.go`):
   in-process `grpc.Server` on `127.0.0.1:0` implementing
   GreeterService.Hello, registered via `AddProtoDescriptor`, queries
   through `gw.Handler()`. Covers happy path, v1 sub-object dispatch,
