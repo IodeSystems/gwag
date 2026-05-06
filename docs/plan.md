@@ -34,17 +34,11 @@ fresh session.
 - *Architecturally interesting:* GraphQL **subscription forwarding**
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
-  in `784430a`).
-- *Next operational pick:* downstream-GraphQL **backpressure**.
-  Dispatch metric + classification shipped (see Recently Shipped);
-  what's missing is the per-source semaphore + queue-depth gauge
-  that proto pools and OpenAPI sources have. Same shape as
-  `cc44855` for OpenAPI: `graphQLSource` gains
-  `sem chan struct{}` + `queueing atomic.Int32` sized by
-  `BackpressureOptions.MaxInflight`; resolver acquires before the
-  dispatchGraphQL call; fast-rejects via `Reject(ResourceExhausted)`
-  on `MaxWaitTime`; dwell + queue-depth + backoff metrics fire
-  with `kind="unary"`, version `"v1"`.
+  in `784430a`). With dispatch metric + classification + backpressure
+  now shipped for `AddGraphQL`, dynamic registration is the natural
+  next leverage point — adds `bytes graphql_introspection`
+  (or `string graphql_endpoint`) to `ServiceBinding`, plumbs through
+  reconciler.handlePut, plus `controlclient.Service.GraphQLEndpoint`.
 
 ### Token rotation (kid in tokens)
 
@@ -358,6 +352,24 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL backpressure. Closes the
+  per-source semaphore parity with the proto and OpenAPI paths.
+  `graphQLSource` gains `sem chan struct{}` + `queueing
+  atomic.Int32`, sized at registration from
+  `BackpressureOptions.MaxInflight` (gateway-wide config — same
+  knob OpenAPI / proto pools use). Forwarding resolver acquires
+  before any AST work, observes dwell + queue-depth, fast-rejects
+  with `Reject(ResourceExhausted)` when `MaxWaitTime` expires
+  (back-stamped through the same `record` closure that fires
+  `RecordDispatch`). Dwell / queue-depth / backoff metrics fire
+  with `kind="unary"`, version `"v1"`. `BackpressureOptions` is
+  passed through from `Gateway.buildGraphQLFields` →
+  `newGraphQLMirror` so the resolver closure has it without
+  reaching back into the gateway. 1 new test
+  (`TestGraphQLIngest_BackpressureTimesOutAndRejects`): blocking
+  backend + `MaxInflight=1` + `MaxWaitTime=50ms` → second
+  concurrent dispatch rejects with RESOURCE_EXHAUSTED. Same shape
+  as `TestOpenAPIE2E_BackpressureTimesOutAndRejects`.
 - `448d86b` downstream-GraphQL dispatch metric + error
   classification. Mirrors the OpenAPI pair (`e88d158`/`cf115c1`):
   `graphQLMirror` now carries a `Metrics` reference (passed in via
