@@ -20,19 +20,21 @@ import (
 type graphQLMirror struct {
 	src     *graphQLSource
 	metrics Metrics
+	bp      BackpressureOptions
 	objects map[string]*graphql.Object
 	inputs  map[string]*graphql.InputObject
 	enums   map[string]*graphql.Enum
 	scalars map[string]*graphql.Scalar
 }
 
-func newGraphQLMirror(src *graphQLSource, metrics Metrics) *graphQLMirror {
+func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions) *graphQLMirror {
 	if metrics == nil {
 		metrics = noopMetrics{}
 	}
 	return &graphQLMirror{
 		src:     src,
 		metrics: metrics,
+		bp:      bp,
 		objects: map[string]*graphql.Object{},
 		inputs:  map[string]*graphql.InputObject{},
 		enums:   map[string]*graphql.Enum{},
@@ -335,6 +337,7 @@ func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldCo
 func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) graphql.FieldResolveFn {
 	src := m.src
 	metrics := m.metrics
+	bp := m.bp
 	ns := src.namespace
 	methodLabel := opLabel + " " + remoteFieldName
 	return func(rp graphql.ResolveParams) (any, error) {
@@ -342,6 +345,29 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 		record := func(err error) error {
 			metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
 			return err
+		}
+		// Acquire a slot. Fast path: src.sem nil (unbounded) or has
+		// immediate capacity. Slow path: queue, observe dwell, time out
+		// per MaxWaitTime. Mirrors the OpenAPI resolver so all three
+		// dispatch paths share the same backpressure surface.
+		if src.sem != nil {
+			waitStart := time.Now()
+			select {
+			case src.sem <- struct{}{}:
+				metrics.RecordDwell(ns, "v1", methodLabel, "unary", time.Since(waitStart))
+			default:
+				depth := int(src.queueing.Add(1))
+				metrics.SetQueueDepth(ns, "v1", "unary", depth)
+				dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
+				now := int(src.queueing.Add(-1))
+				metrics.SetQueueDepth(ns, "v1", "unary", now)
+				metrics.RecordDwell(ns, "v1", methodLabel, "unary", dwell)
+				if err != nil {
+					metrics.RecordBackoff(ns, "v1", methodLabel, "unary", "wait_timeout")
+					return nil, record(Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error())))
+				}
+			}
+			defer func() { <-src.sem }()
 		}
 		if len(rp.Info.FieldASTs) == 0 {
 			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", remoteFieldName)))

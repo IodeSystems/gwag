@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/graphql-go/graphql"
 )
@@ -71,13 +72,17 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if _, exists := g.graphQLSources[ns]; exists {
 		return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered", ns)
 	}
-	g.graphQLSources[ns] = &graphQLSource{
+	src := &graphQLSource{
 		namespace:      ns,
 		endpoint:       endpoint,
 		introspection:  intro,
 		forwardHeaders: sc.forwardHeaders,
 		httpClient:     httpClient,
 	}
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
+		src.sem = make(chan struct{}, mi)
+	}
+	g.graphQLSources[ns] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -93,6 +98,17 @@ type graphQLSource struct {
 	introspection  *introspectionSchema
 	forwardHeaders []string     // nil → defaultForwardedHeaders
 	httpClient     *http.Client // nil → http.DefaultClient
+
+	// sem caps simultaneous concurrent dispatches against this source.
+	// nil when MaxInflight is 0 (unbounded). Buffered channel; send to
+	// acquire, receive to release. Mirrors openAPISource.sem so HTTP
+	// and downstream-GraphQL dispatch share the same backpressure
+	// surface.
+	sem chan struct{}
+
+	// queueing tracks waiters on the semaphore for the queue-depth
+	// gauge.
+	queueing atomic.Int32
 }
 
 // graphQLResponse is the wire shape of a remote GraphQL response.
@@ -163,7 +179,7 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 		if !filter.matchNS(ns) {
 			continue
 		}
-		mb := newGraphQLMirror(src, g.cfg.metrics)
+		mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure)
 		q, m, err := mb.build()
 		if err != nil {
 			return nil, nil, fmt.Errorf("graphql ingest %s: %w", ns, err)

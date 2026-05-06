@@ -367,6 +367,133 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 	}
 }
 
+// graphQLIngestBackpressureMetrics tallies dwell + backoff calls so
+// the backpressure test can confirm the per-source semaphore actually
+// fired. Mirrors openAPIBackpressureMetrics.
+type graphQLIngestBackpressureMetrics struct {
+	noopMetrics
+	mu       sync.Mutex
+	backoff  int
+	dwellHit int
+}
+
+func (m *graphQLIngestBackpressureMetrics) RecordDwell(_, _, _, kind string, _ time.Duration) {
+	if kind != "unary" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dwellHit++
+}
+
+func (m *graphQLIngestBackpressureMetrics) RecordBackoff(_, _, _, _, _ string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backoff++
+}
+
+func (m *graphQLIngestBackpressureMetrics) SetQueueDepth(_, _, _ string, _ int) {}
+
+func TestGraphQLIngest_BackpressureTimesOutAndRejects(t *testing.T) {
+	// One backend slot held by a long-running request; with MaxInflight=1
+	// and MaxWaitTime=50ms a concurrent dispatch should reject with
+	// RESOURCE_EXHAUSTED rather than queueing forever. Same shape as
+	// TestOpenAPIE2E_BackpressureTimesOutAndRejects.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	requestArrived := make(chan struct{}, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &req)
+		// Always respond fast for the introspection probe; only the
+		// actual query holds the slot.
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(petsIntrospection))
+			return
+		}
+		select {
+		case requestArrived <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"users":[]}}`))
+	}))
+	t.Cleanup(backend.Close)
+	t.Cleanup(closeRelease)
+
+	cm := &graphQLIngestBackpressureMetrics{}
+	gw := New(
+		WithMetrics(cm),
+		WithBackpressure(BackpressureOptions{MaxInflight: 1, MaxWaitTime: 50 * time.Millisecond}),
+		WithAdminToken([]byte("test-token")),
+	)
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(backend.URL, As("pets")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	postQuery := func(q string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/graphql", strings.NewReader(q))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	q := `{"query":"{ pets_users { id } }"}`
+	holder := make(chan string, 1)
+	go func() {
+		_, body := postQuery(q)
+		holder <- body
+	}()
+
+	// Wait until the first request reached the backend (and is
+	// holding the slot) before firing the second.
+	select {
+	case <-requestArrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first request never reached backend")
+	}
+
+	status, body := postQuery(q)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if !strings.Contains(body, "RESOURCE_EXHAUSTED") {
+		t.Errorf("expected RESOURCE_EXHAUSTED, got %s", body)
+	}
+
+	cm.mu.Lock()
+	backoff := cm.backoff
+	dwell := cm.dwellHit
+	cm.mu.Unlock()
+	if backoff < 1 {
+		t.Errorf("backoff metric not recorded (got %d)", backoff)
+	}
+	if dwell < 1 {
+		t.Errorf("dwell metric not recorded (got %d)", dwell)
+	}
+
+	// Drain the held first request so cleanup is fast.
+	closeRelease()
+	select {
+	case <-holder:
+	case <-time.After(time.Second):
+	}
+}
+
 func TestGraphQLIngest_DuplicateNamespaceRejected(t *testing.T) {
 	rf := newRemoteFixture(t)
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
