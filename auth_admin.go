@@ -32,32 +32,42 @@ func (g *Gateway) AdminToken() []byte { return g.cfg.adminToken }
 // in `Authorization: Bearer <hex>` and what we persist on disk.
 func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.adminToken) }
 
-// AdminMiddleware wraps next in a bearer-token check intended for
+// AdminMiddleware wraps next in admin-auth verification intended for
 // /admin/* HTTP routes. Reads (GET/HEAD/OPTIONS) pass through
-// unauthenticated; non-read methods require Authorization: Bearer
-// matching the gateway's admin token.
+// unauthenticated; non-read methods are gated by:
+//
+//  1. Registered AdminAuthorizer delegate at "_admin_auth/v1", if any.
+//     OK accepts; DENIED rejects without falling through. Any other
+//     code (UNAVAILABLE, NOT_CONFIGURED, UNSPECIFIED, transport err)
+//     falls through to step 2.
+//  2. Boot-token Bearer check (the always-works emergency hatch).
 //
 // The split mirrors the documented surface in docs/plan.md: GraphQL
 // reads of admin_* fields (which dispatch GET to /admin/*) stay public
-// for the UI; mutations require the token end-to-end. Future
-// destructive reads will need explicit opt-in once they exist.
+// for the UI; mutations require auth end-to-end. Future destructive
+// reads will need explicit opt-in once they exist.
 //
 // Authenticated requests carry IsAdminAuth(ctx) == true on the way
 // through.
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	tok := g.cfg.adminToken
-	if len(tok) == 0 {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isAdminPublicMethod(r.Method) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			http.Error(w, "admin token not configured", http.StatusInternalServerError)
-		})
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAdminPublicMethod(r.Method) {
 			next.ServeHTTP(w, r)
+			return
+		}
+		switch outcome, _ := g.consultAdminDelegate(r.Context(), r); outcome {
+		case adminDelegateAccept:
+			next.ServeHTTP(w, r.WithContext(WithAdminAuth(r.Context())))
+			return
+		case adminDelegateReject:
+			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// Fall through to boot-token check.
+		if len(tok) == 0 {
+			http.Error(w, "admin token not configured", http.StatusInternalServerError)
 			return
 		}
 		if !checkBearerEqual(r, tok) {

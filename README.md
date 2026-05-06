@@ -253,10 +253,40 @@ gw.AddOpenAPIBytes(adminSpec,
     gateway.To("http://localhost:8080"))
 ```
 
-Boot-token-only is the v1 design — pluggable admin authorizer is the
-next step (see `docs/plan.md`). The token is the gateway's own
-emergency hatch and is unrelated to outbound auth to OpenAPI
-backends, which is a separate concern (also tracked in plan.md).
+### Pluggable AdminAuthorizer delegate
+
+For richer authz than a single static token, register an
+`AdminAuthorizer` service at `_admin_auth/v1` (proto in
+[`adminauth/v1`](./adminauth/v1)). The middleware consults it on
+every protected request:
+
+| Delegate response       | Middleware action                          |
+|-------------------------|--------------------------------------------|
+| `OK`                    | Accept                                     |
+| `DENIED`                | 401, no fall-through                       |
+| `UNAVAILABLE`           | Fall through to boot token                 |
+| `NOT_CONFIGURED`        | Fall through to boot token                 |
+| Transport error / panic | Fall through to boot token                 |
+
+The boot token is the always-works emergency hatch. A delegate that
+crashes, mis-deploys, or DOS's cannot lock operators out — only an
+explicit `DENIED` short-circuits. Service registration is the same
+shape any other internal service takes:
+
+```go
+// In your authz service:
+controlclient.SelfRegister(ctx, controlclient.Options{
+    GatewayAddr: "gateway:50090",
+    ServiceAddr: "myauth:50051",
+    Services: []controlclient.Service{{
+        Namespace:      "_admin_auth",
+        FileDescriptor: adminauthv1.File_adminauth_v1_adminauth_proto,
+    }},
+})
+```
+
+Admin auth is unrelated to outbound auth to OpenAPI backends, which
+is a separate concern (also tracked in plan.md).
 
 ## Health & graceful drain
 
