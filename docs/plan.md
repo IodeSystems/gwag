@@ -35,13 +35,15 @@ fresh session.
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
   in `784430a`).
-- *Operational polish next:* OpenAPI dispatch error **classification**
-  — `dispatchOpenAPI` returns plain `fmt.Errorf` so the new
-  `code` label on `go_api_gateway_dispatch_duration_seconds` for
-  HTTP dispatch always reads `internal`. Map HTTP statuses (4xx →
-  `failed_precondition`/`not_found`/etc., 5xx → `unavailable`/
-  `internal`) via `Reject(...)` so OpenAPI metrics can be sliced by
-  outcome the way gRPC dispatch already can.
+- *Next operational pick:* downstream-GraphQL dispatch metric +
+  classification parity. `graphql_ingest.go`'s forwarding resolver
+  doesn't call `metrics.RecordDispatch`, doesn't have a per-source
+  semaphore, and surfaces remote errors as plain `fmt.Errorf`. Same
+  shape as the OpenAPI work shipped in `e88d158` / `<this commit>`:
+  add `start := time.Now()`, call `RecordDispatch` on every exit,
+  wrap errors via `Reject(...)` so `code` is meaningful. Method
+  label is `query/mutation <fieldName>`; version pinned to `"v1"`
+  the same way OpenAPI sources are.
 
 ### Token rotation (kid in tokens)
 
@@ -355,8 +357,22 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI dispatch RecordDispatch parity. Resolver
-  in `buildOpenAPIField` now records `start := time.Now()` and calls
+- *(uncommitted)* OpenAPI dispatch error classification.
+  `dispatchOpenAPI` and the resolver's no-live-replicas branch now
+  return `Reject(Code, msg)` instead of plain `fmt.Errorf` so
+  `classifyError` (used by both `RecordDispatch`'s `code` label and
+  GraphQL `extensions.code`) picks up a meaningful enum: HTTP 400 →
+  `INVALID_ARGUMENT`, 401 → `UNAUTHENTICATED`, 403 →
+  `PERMISSION_DENIED`, 404 → `NOT_FOUND`, 429 →
+  `RESOURCE_EXHAUSTED`, 5xx → `INTERNAL`, transport / decode /
+  no-live-replicas → `INTERNAL`, body-marshal / request-build →
+  `INVALID_ARGUMENT`. New `httpStatusToCode` helper lives in
+  `openapi.go` with a comment pointing at gRPC's HTTP-mapping
+  conventions. 2 new tests
+  (`TestOpenAPIE2E_ErrorClassification` table-test across 7 status
+  codes, `TestOpenAPIE2E_TransportErrorClassifiesAsInternal`).
+- `e88d158` OpenAPI dispatch RecordDispatch parity. Resolver
+  in `buildOpenAPIField` records `start := time.Now()` and calls
   `metrics.RecordDispatch(ns, "v1", "<METHOD> <pathTemplate>",
   elapsed, err)` on every exit path — backpressure rejection, no-
   live-replicas, and the dispatchOpenAPI return — so
@@ -366,9 +382,6 @@ older entries when they get stale.)
   (`TestOpenAPIE2E_RecordDispatchFires`): asserts label parity
   (namespace="test", version="v1", method="GET /things/{id}") and
   err nil/non-nil across happy + 500 paths.
-  Follow-up: HTTP errors all classify as `internal` because
-  `dispatchOpenAPI` returns `fmt.Errorf`; mapping to typed
-  `Reject(...)` codes is now its own tier-2 item.
 - `340f73b` `/schema/graphql` selector support. The endpoint
   now accepts the same `?service=ns[:ver][,...]` grammar as
   `/schema/proto` and `/schema/openapi`. Refactored

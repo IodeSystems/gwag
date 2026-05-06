@@ -524,6 +524,53 @@ func TestOpenAPIE2E_RecordDispatchFires(t *testing.T) {
 	}
 }
 
+func TestOpenAPIE2E_ErrorClassification(t *testing.T) {
+	// HTTP statuses from the backend should map to specific gateway
+	// Codes (carried via Reject) so the `code` label on
+	// go_api_gateway_dispatch_duration_seconds reflects the error
+	// shape rather than always reading "internal".
+	cases := []struct {
+		name     string
+		status   int
+		wantCode string
+	}{
+		{"bad-request", http.StatusBadRequest, "INVALID_ARGUMENT"},
+		{"unauthorized", http.StatusUnauthorized, "UNAUTHENTICATED"},
+		{"forbidden", http.StatusForbidden, "PERMISSION_DENIED"},
+		{"not-found", http.StatusNotFound, "NOT_FOUND"},
+		{"too-many-requests", http.StatusTooManyRequests, "RESOURCE_EXHAUSTED"},
+		{"server-error", http.StatusInternalServerError, "INTERNAL"},
+		{"bad-gateway", http.StatusBadGateway, "INTERNAL"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOpenAPIE2EFixture(t)
+			f.backendReply = func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte("err"))
+			}
+			q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+			_, body := f.postGraphQL(t, q, nil)
+			if !strings.Contains(body, tc.wantCode) {
+				t.Errorf("expected %s in graphql error body, got %s", tc.wantCode, body)
+			}
+		})
+	}
+}
+
+func TestOpenAPIE2E_TransportErrorClassifiesAsInternal(t *testing.T) {
+	// Backend that closes immediately produces a transport-layer
+	// error in client.Do — must classify as INTERNAL.
+	f := newOpenAPIE2EFixture(t)
+	f.backend.Close() // backend gone before dispatch
+	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	_, body := f.postGraphQL(t, q, nil)
+	if !strings.Contains(body, "INTERNAL") {
+		t.Errorf("expected INTERNAL code, got %s", body)
+	}
+}
+
 func TestOpenAPIE2E_BackendErrorSurfaces(t *testing.T) {
 	f := newOpenAPIE2EFixture(t)
 	f.backendReply = func(w http.ResponseWriter, r *http.Request) {
