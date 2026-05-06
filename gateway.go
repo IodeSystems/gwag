@@ -266,9 +266,10 @@ func (g *Gateway) Cluster() *Cluster {
 
 type ServiceOption func(*serviceConfig)
 type serviceConfig struct {
-	namespace string
-	conn      grpc.ClientConnInterface
-	internal  bool
+	namespace      string
+	conn           grpc.ClientConnInterface
+	internal       bool
+	forwardHeaders []string
 }
 
 // As overrides the default namespace (filename stem) for a registered
@@ -299,6 +300,19 @@ func To(dest any) ServiceOption {
 // should not see.
 func AsInternal() ServiceOption {
 	return func(c *serviceConfig) { c.internal = true }
+}
+
+// ForwardHeaders sets the per-source allowlist of HTTP headers
+// forwarded from the inbound GraphQL request to outbound OpenAPI
+// dispatches. Replaces the default ([]string{"Authorization"}) when
+// supplied. Pass an empty list to forward nothing.
+//
+// Currently a no-op for AddProto / AddProtoDescriptor — gRPC dispatch
+// uses ctx propagation, not HTTP headers.
+func ForwardHeaders(headers ...string) ServiceOption {
+	return func(c *serviceConfig) {
+		c.forwardHeaders = append([]string(nil), headers...)
+	}
 }
 
 // AddProtoDescriptor registers a service from a compiled-in
