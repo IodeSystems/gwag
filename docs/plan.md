@@ -29,24 +29,6 @@ Ordered by current leverage. The top three unblock real
 deployments; the rest fill in design-completing features the
 gateway claims to support.
 
-### Embed UI bundle into the gateway binary
-
-`ui/dist/` (after `pnpm run build`) should be served by the gateway
-itself so a single binary boots with everything. Recommended shape:
-`gw.UIHandler(fs.FS) http.Handler` that the operator passes via
-`embed.FS` (or a runtime `os.DirFS` for dev).
-
-```go
-//go:embed ui/dist/*
-var uiBundle embed.FS
-
-mux.Handle("/", gw.UIHandler(uiBundle))   // SPA fallback to index.html
-```
-
-Codegen prerequisite: the dist/ bundle is the output of
-`pnpm run gen && pnpm run build` against a running gateway, so the
-UI's typed SDK matches the gateway's actual SDL.
-
 ### More huma admin routes
 
 `admin_huma.go` covers `peers`, `services`, `forgetPeer`,
@@ -401,11 +383,21 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* UI admin token entry: `ui/src/api/auth.ts`
+- *(uncommitted)* `/api/*` split + embedded UI bundle. Library:
+  `gateway.UIHandler(fs.FS)` for SPA serving with index.html
+  fallback. New `ui` package embeds `ui/dist/` via `//go:embed
+  all:dist`. Example: all gateway routes moved under `/api/*`,
+  `/` serves the UI; unmatched `/api/*` returns JSON 404 so
+  client typos don't render the SPA. UI updated to use `/api/...`
+  everywhere (vite proxy, GraphQLClient endpoint, schema fetch,
+  pnpm schema curl). Pattern lifted from zdx-go. Closes both the
+  tier-2 *Embed UI bundle* and the implicit "single-binary
+  deploy" goal.
+- `813b055` UI admin token entry: `ui/src/api/auth.ts`
   (sessionStorage-backed store), `ui/src/components/SettingsDrawer.tsx`
   (paste/save/clear UI), `useAdminToken()` hook, lazy Authorization
   header in `client.ts`, gear icon + "no token" badge dot in the
-  AppBar. Closes the tier-2 "Forget button 401s" item.
+  AppBar. Closed the tier-2 "Forget button 401s" item.
 - `778559d` cluster cross-gateway dispatch e2e
   (`cluster_dispatch_test.go`): two `StartCluster` instances
   peering on free TCP ports; A receives Register, B's reconciler

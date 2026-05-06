@@ -59,11 +59,22 @@ src/
 
 ## Hosting
 
-In dev, Vite proxies `/graphql`, `/schema`, and `/health` to the
-gateway (default `http://localhost:18080`; override with `GATEWAY_URL`
-env). In production, `pnpm run build` produces a `dist/` bundle that
-the gateway can serve directly (TODO: a `gw.UIHandler(http.FS(dist))`
-mount in the example).
+All gateway endpoints live under `/api/*` so the SPA owns the
+root. In dev, Vite proxies `/api` to the gateway (default
+`http://localhost:18080`; override with `GATEWAY_URL` env). In
+production, `pnpm run build` populates `dist/`, and the
+`//go:embed all:dist` directive in `../ui/embed.go` bakes it into
+the gateway binary — `gateway.UIHandler(ui.FS())` mounts at `/`
+with SPA-style fallback to `index.html`.
+
+Single-binary boot:
+
+```
+cd ui && pnpm install && pnpm run build
+cd ..
+go run ./examples/multi/cmd/gateway --nats-data /tmp/gw1
+# UI at http://localhost:8080/, GraphQL at /api/graphql
+```
 
 ## Auth
 

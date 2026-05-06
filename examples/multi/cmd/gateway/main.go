@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,12 +36,37 @@ import (
 
 	gateway "github.com/iodesystems/go-api-gateway"
 	cpv1 "github.com/iodesystems/go-api-gateway/controlplane/v1"
+	gwui "github.com/iodesystems/go-api-gateway/ui"
 )
 
 type stringList []string
 
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+// apiOrUI is the catch-all for the example mux: unmatched /api/*
+// returns JSON 404 (so a typo in a client doesn't render the SPA);
+// everything else is the embedded UI bundle, with index.html
+// fallback for SPA routes.
+func apiOrUI(uiFS http.Handler) http.HandlerFunc {
+	ui := uiFS
+	if ui == nil {
+		ui = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "ui not embedded", http.StatusNotFound)
+		})
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			esc := strings.ReplaceAll(r.URL.Path, `\`, `\\`)
+			esc = strings.ReplaceAll(esc, `"`, `\"`)
+			fmt.Fprintf(w, `{"error":"not found","path":"%s"}`, esc)
+			return
+		}
+		ui.ServeHTTP(w, r)
+	}
+}
 
 func main() {
 	httpAddr := flag.String("http", ":8080", "GraphQL HTTP listen address")
@@ -157,17 +183,23 @@ func main() {
 		}
 	}()
 
+	// API routes live under /api/. The catch-all on / serves the
+	// embedded UI (and falls back to its index.html for unknown paths
+	// so client-side routing works), with an explicit JSON 404 for
+	// unmatched /api/* so misroutes don't masquerade as the SPA. This
+	// is the zdx-go convention.
 	mux := http.NewServeMux()
-	mux.Handle("/graphql", gw.Handler())
-	mux.Handle("/schema", gw.SchemaHandler()) // back-compat alias
-	mux.Handle("/schema/graphql", gw.SchemaHandler())
-	mux.Handle("/schema/proto", gw.SchemaProtoHandler())
-	mux.Handle("/schema/openapi", gw.SchemaOpenAPIHandler())
-	mux.Handle("/metrics", gw.MetricsHandler())
-	mux.Handle("/health", gw.HealthHandler())
+	mux.Handle("/api/graphql", gw.Handler())
+	mux.Handle("/api/schema", gw.SchemaHandler()) // back-compat alias
+	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
+	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())
+	mux.Handle("/api/schema/openapi", gw.SchemaOpenAPIHandler())
+	mux.Handle("/api/metrics", gw.MetricsHandler())
+	mux.Handle("/api/health", gw.HealthHandler())
 	// Bearer-gated: writes require the boot token; reads stay public so
 	// the UI's services-list/peer views work unauthenticated.
-	mux.Handle("/admin/", gw.AdminMiddleware(adminMux))
+	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
+	mux.Handle("/", apiOrUI(gateway.UIHandler(gwui.FS())))
 	if path := gw.AdminTokenPath(); path != "" {
 		log.Printf("admin token = %s  (persisted to %s)", gw.AdminTokenHex(), path)
 	} else {
@@ -175,10 +207,11 @@ func main() {
 	}
 
 	// Self-ingest the huma admin OpenAPI so its operations become
-	// GraphQL fields under namespace "admin".
+	// GraphQL fields under namespace "admin". Note the base URL points
+	// at /api so the OpenAPI dispatch path resolves to the gated mount.
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),
-		gateway.To("http://localhost"+*httpAddr)); err != nil {
+		gateway.To("http://localhost"+*httpAddr+"/api")); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
 	go func() {

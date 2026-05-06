@@ -235,22 +235,22 @@ admin token = ab9089b1...  (persisted to /var/lib/gateway/admin-token)
 ```
 
 Wire it as standard `Authorization: Bearer <hex>`. Reads (GETs on
-`/admin/*`, `admin_listPeers` / `admin_listServices` queries) are
-public so the UI works unauthenticated; writes require the token.
+`/api/admin/*`, `admin_listPeers` / `admin_listServices` queries)
+are public so the UI works unauthenticated; writes require the token.
 
 ```go
 gw := gateway.New(
     gateway.WithAdminDataDir("/var/lib/gateway"),
 )
 adminMux, adminSpec, _ := gw.AdminHumaRouter()
-mux.Handle("/admin/", gw.AdminMiddleware(adminMux))
+mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
 
-// admin_* GraphQL mutations dispatch through /admin/*; the inbound
-// Authorization header is forwarded automatically, so one bearer
-// covers both surfaces.
+// admin_* GraphQL mutations dispatch through /api/admin/*; the
+// inbound Authorization header is forwarded automatically, so one
+// bearer covers both surfaces.
 gw.AddOpenAPIBytes(adminSpec,
     gateway.As("admin"),
-    gateway.To("http://localhost:8080"))
+    gateway.To("http://localhost:8080/api"))
 ```
 
 ### Pluggable AdminAuthorizer delegate

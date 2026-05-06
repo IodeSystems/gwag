@@ -18,9 +18,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/graphql': { target: GATEWAY_URL, changeOrigin: true, ws: true },
-      '/schema': { target: GATEWAY_URL, changeOrigin: true },
-      '/health': { target: GATEWAY_URL, changeOrigin: true },
+      // Single /api/* prefix — graphql, schema, admin, metrics,
+      // health all live under it. ws: true upgrades subscriptions.
+      '/api': { target: GATEWAY_URL, changeOrigin: true, ws: true },
     },
   },
 });
