@@ -48,6 +48,17 @@ func (tb *typeBuilder) objectFromMessage(md protoreflect.MessageDescriptor) (*gr
 				}
 				fields[lowerCamel(string(fd.Name()))] = &graphql.Field{Type: t}
 			}
+			// GraphQL forbids empty object types; proto allows them
+			// (e.g. DeregisterResponse {}). Synthesise a placeholder
+			// so the schema validates.
+			if len(fields) == 0 {
+				fields["_void"] = &graphql.Field{
+					Type: graphql.String,
+					Resolve: func(graphql.ResolveParams) (any, error) {
+						return "", nil
+					},
+				}
+			}
 			return fields
 		}),
 	})
@@ -74,6 +85,9 @@ func (tb *typeBuilder) inputFromMessage(md protoreflect.MessageDescriptor) (*gra
 					continue
 				}
 				fields[lowerCamel(string(fd.Name()))] = &graphql.InputObjectFieldConfig{Type: t}
+			}
+			if len(fields) == 0 {
+				fields["_void"] = &graphql.InputObjectFieldConfig{Type: graphql.String}
 			}
 			return fields
 		}),

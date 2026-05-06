@@ -135,6 +135,13 @@ func main() {
 	}
 	srv := grpc.NewServer(grpcOpts...)
 	cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
+
+	// Dogfood: expose the gateway's own ControlPlane service through
+	// the GraphQL surface so the admin UI can talk to /graphql only.
+	if err := gw.AddProtoDescriptor(cpv1.File_control_proto,
+		gateway.As("admin"), gateway.To("localhost"+*cpAddr)); err != nil {
+		log.Fatalf("self-register controlplane: %v", err)
+	}
 	go func() {
 		log.Printf("control plane listening on %s", *cpAddr)
 		if err := srv.Serve(cpLis); err != nil {

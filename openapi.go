@@ -19,6 +19,14 @@ import (
 	"github.com/graphql-go/graphql"
 )
 
+// AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape
+// as AddOpenAPI but skips the file/HTTP fetch — useful when the
+// gateway hosts its own huma-defined routes and self-ingests the
+// generated spec at boot.
+func (g *Gateway) AddOpenAPIBytes(specBytes []byte, opts ...ServiceOption) error {
+	return g.addOpenAPIFromBytes(specBytes, "<inline>", opts...)
+}
+
 // AddOpenAPI registers an OpenAPI 3.x specification so its operations
 // become GraphQL fields. GET operations land on Query; everything else
 // (POST/PUT/PATCH/DELETE) lands on Mutation. Each operation's path,
@@ -34,32 +42,34 @@ import (
 // sets the GraphQL namespace prefix; default is the spec's title or
 // the URL host.
 func (g *Gateway) AddOpenAPI(specSource string, opts ...ServiceOption) error {
+	specBytes, err := readOpenAPISpec(specSource)
+	if err != nil {
+		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", specSource, err)
+	}
+	return g.addOpenAPIFromBytes(specBytes, specSource, opts...)
+}
+
+func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...ServiceOption) error {
 	sc := &serviceConfig{}
 	for _, o := range opts {
 		o(sc)
 	}
 	if sc.conn == nil {
-		return fmt.Errorf("gateway: AddOpenAPI(%s): missing To(host:port or http url)", specSource)
+		return fmt.Errorf("gateway: AddOpenAPI(%s): missing To(host:port or http url)", label)
 	}
 	addr, err := openAPIBaseURL(sc.conn)
 	if err != nil {
 		return err
 	}
-
-	specBytes, err := readOpenAPISpec(specSource)
-	if err != nil {
-		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", specSource, err)
-	}
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = false
 	doc, err := loader.LoadFromData(specBytes)
 	if err != nil {
-		return fmt.Errorf("gateway: AddOpenAPI(%s): parse: %w", specSource, err)
+		return fmt.Errorf("gateway: AddOpenAPI(%s): parse: %w", label, err)
 	}
 	if err := doc.Validate(loader.Context); err != nil {
-		return fmt.Errorf("gateway: AddOpenAPI(%s): validate: %w", specSource, err)
+		return fmt.Errorf("gateway: AddOpenAPI(%s): validate: %w", label, err)
 	}
-
 	ns := sc.namespace
 	if ns == "" {
 		if doc.Info != nil && doc.Info.Title != "" {
@@ -71,7 +81,6 @@ func (g *Gateway) AddOpenAPI(specSource string, opts ...ServiceOption) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI: %w", err)
 	}
-
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {

@@ -1,0 +1,56 @@
+# Operations consumed by the React UI. graphql-codegen reads these
+# along with src/**/*.tsx and emits typed functions in
+# src/api/gateway.ts. Add new operations here, run `pnpm run codegen`,
+# then import sdk.<OperationName> from '@/api/client'.
+
+query Dashboard {
+  admin {
+    listPeers {
+      peers {
+        nodeId
+      }
+    }
+    listServices {
+      environment
+      services {
+        namespace
+        version
+      }
+    }
+  }
+}
+
+query Services {
+  admin {
+    listServices {
+      environment
+      services {
+        namespace
+        version
+        hashHex
+        replicaCount
+      }
+    }
+  }
+}
+
+query Peers {
+  admin {
+    listPeers {
+      peers {
+        nodeId
+        name
+        joinedUnixMs
+      }
+    }
+  }
+}
+
+mutation ForgetPeer($nodeId: String!) {
+  admin {
+    forgetPeer(nodeId: $nodeId) {
+      removed
+      newReplicas
+    }
+  }
+}

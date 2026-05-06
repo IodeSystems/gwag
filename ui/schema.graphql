@@ -1,0 +1,18 @@
+# PLACEHOLDER. Real content is fetched by `pnpm run schema` from the
+# running gateway's /schema/graphql endpoint. graphql-codegen reads
+# this file when generating src/api/gateway.ts.
+#
+# To populate:
+#   1. Start the gateway:   cd examples/multi && ./run.sh
+#   2. Run:                 pnpm run gen
+#
+# Or override the endpoint:
+#   GATEWAY_URL=http://prod-gw.internal pnpm run gen
+
+schema {
+  query: Query
+}
+
+type Query {
+  _placeholder: String
+}
