@@ -136,11 +136,12 @@ func main() {
 	srv := grpc.NewServer(grpcOpts...)
 	cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
 
-	// Dogfood: expose the gateway's own ControlPlane service through
-	// the GraphQL surface so the admin UI can talk to /graphql only.
-	if err := gw.AddProtoDescriptor(cpv1.File_control_proto,
-		gateway.As("admin"), gateway.To("localhost"+*cpAddr)); err != nil {
-		log.Fatalf("self-register controlplane: %v", err)
+	// Dogfood: define admin routes via huma → emit OpenAPI →
+	// self-ingest into the GraphQL surface. Same path any external
+	// huma-defined service takes; the UI talks to /graphql only.
+	adminMux, adminSpec, err := gw.AdminHumaRouter()
+	if err != nil {
+		log.Fatalf("admin huma router: %v", err)
 	}
 	go func() {
 		log.Printf("control plane listening on %s", *cpAddr)
@@ -157,6 +158,15 @@ func main() {
 	mux.Handle("/schema/openapi", gw.SchemaOpenAPIHandler())
 	mux.Handle("/metrics", gw.MetricsHandler())
 	mux.Handle("/health", gw.HealthHandler())
+	mux.Handle("/admin/", adminMux) // huma routes mounted; OpenAPI ingested below
+
+	// Self-ingest the huma admin OpenAPI so its operations become
+	// GraphQL fields under namespace "admin".
+	if err := gw.AddOpenAPIBytes(adminSpec,
+		gateway.As("admin"),
+		gateway.To("http://localhost"+*httpAddr)); err != nil {
+		log.Fatalf("self-ingest admin openapi: %v", err)
+	}
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
 		if err := http.ListenAndServe(*httpAddr, mux); err != nil {

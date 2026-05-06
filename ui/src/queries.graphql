@@ -4,53 +4,45 @@
 # then import sdk.<OperationName> from '@/api/client'.
 
 query Dashboard {
-  admin {
-    listPeers {
-      peers {
-        nodeId
-      }
+  admin_listPeers {
+    peers {
+      nodeId
     }
-    listServices {
-      environment
-      services {
-        namespace
-        version
-      }
+  }
+  admin_listServices {
+    environment
+    services {
+      namespace
+      version
     }
   }
 }
 
 query Services {
-  admin {
-    listServices {
-      environment
-      services {
-        namespace
-        version
-        hashHex
-        replicaCount
-      }
+  admin_listServices {
+    environment
+    services {
+      namespace
+      version
+      hashHex
+      replicaCount
     }
   }
 }
 
 query Peers {
-  admin {
-    listPeers {
-      peers {
-        nodeId
-        name
-        joinedUnixMs
-      }
+  admin_listPeers {
+    peers {
+      nodeId
+      name
+      joinedUnixMs
     }
   }
 }
 
 mutation ForgetPeer($nodeId: String!) {
-  admin {
-    forgetPeer(nodeId: $nodeId) {
-      removed
-      newReplicas
-    }
+  admin_forgetPeer(nodeId: $nodeId) {
+    removed
+    newReplicas
   }
 }

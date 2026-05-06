@@ -41,7 +41,7 @@ function Peers() {
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error) return <Typography color="error">{(error as Error).message}</Typography>;
 
-  const peers = data?.admin?.listPeers?.peers ?? [];
+  const peers = data?.admin_listPeers?.peers ?? [];
 
   return (
     <>

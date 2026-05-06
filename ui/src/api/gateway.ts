@@ -6,6 +6,9 @@
 
 import type { GraphQLClient } from 'graphql-request';
 
+// Shape after `pnpm run gen` runs against the gateway's actual SDL.
+// admin_* fields are flat because they're huma-generated OpenAPI
+// operations ingested into GraphQL (vs proto-style nested namespaces).
 export type Sdk = {
   Dashboard: () => Promise<any>;
   Services: () => Promise<any>;

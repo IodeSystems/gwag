@@ -19,9 +19,9 @@ function Dashboard() {
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error) return <Typography color="error">{(error as Error).message}</Typography>;
 
-  const peers = data?.admin?.listPeers?.peers ?? [];
-  const services = data?.admin?.listServices?.services ?? [];
-  const env = data?.admin?.listServices?.environment ?? '(unset)';
+  const peers = data?.admin_listPeers?.peers ?? [];
+  const services = data?.admin_listServices?.services ?? [];
+  const env = data?.admin_listServices?.environment ?? '(unset)';
 
   return (
     <Grid container spacing={2}>
