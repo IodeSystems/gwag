@@ -18,6 +18,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/hex"
 	"flag"
 	"log"
 	"net"
@@ -54,6 +55,9 @@ func main() {
 	environment := flag.String("environment", "", "Deployment environment label (e.g. dev, staging, prod); part of NATS cluster name")
 	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool dispatch concurrency cap; 0 disables")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
+	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
+	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
+	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
 	flag.Parse()
 
 	var mtls *tls.Config
@@ -99,6 +103,20 @@ func main() {
 		MaxInflight: *maxInflight,
 		MaxWaitTime: *maxWait,
 	}))
+
+	switch {
+	case *insecureSubscribe:
+		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())
+	case *subscribeSecret != "":
+		secret, err := hex.DecodeString(*subscribeSecret)
+		if err != nil {
+			log.Fatalf("subscribe-secret must be hex: %v", err)
+		}
+		gwOpts = append(gwOpts, gateway.WithSubscriptionAuth(gateway.SubscriptionAuthOptions{
+			Secret:     secret,
+			SkewWindow: *subscribeSkew,
+		}))
+	}
 	gw := gateway.New(gwOpts...)
 
 	cpLis, err := net.Listen("tcp", *cpAddr)

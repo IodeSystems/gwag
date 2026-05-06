@@ -15,7 +15,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"nhooyr.io/websocket"
+
+	cpv1 "github.com/iodesystems/go-api-gateway/controlplane/v1"
 )
+
+const cpv1Ok = cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK
 
 // subjectFor builds the NATS subject for a server-streaming RPC of
 // (namespace, methodName) given the resolved arg values from the
@@ -43,7 +47,8 @@ func subjectFor(ns, methodName string, inputDesc protoreflect.MessageDescriptor,
 
 // subscribeNATS opens a NATS subscription for the resolved subject and
 // returns a channel of map[string]any (the decoded events). Caller's
-// context cancellation closes the NATS sub and the channel.
+// context cancellation closes the NATS sub and the channel. Verifies
+// the HMAC auth args against SubscriptionAuthOptions before subscribing.
 func (g *Gateway) subscribeNATS(
 	ctx context.Context,
 	ns, ver, methodName string,
@@ -58,6 +63,15 @@ func (g *Gateway) subscribeNATS(
 		return nil, fmt.Errorf("gateway: pool %s/%s not registered", ns, ver)
 	}
 	subject := subjectFor(ns, methodName, pool.file.Services().Get(0).Methods().ByName(protoreflect.Name(methodName)).Input(), args)
+
+	// Verify HMAC before opening the NATS sub so unauthorized
+	// subscribes never touch the broker. Metric is recorded for
+	// every attempt.
+	code := g.verifySubscribe(subject, args)
+	g.cfg.metrics.RecordSubscribeAuth(ns, ver, methodName, code.String())
+	if code != cpv1Ok {
+		return nil, &subscribeAuthError{Code: code}
+	}
 
 	ch := make(chan any, 32)
 	sub, err := g.cfg.cluster.Conn.Subscribe(subject, func(msg *nats.Msg) {
@@ -261,15 +275,24 @@ func (g *Gateway) runSubscription(
 		if ctx.Err() != nil {
 			return
 		}
-		payload, err := json.Marshal(res)
+		// graphql-transport-ws spec:
+		//   error payload = Array<GraphQLError>
+		//   next  payload = ExecutionResult ({data, errors, extensions})
+		// Subscribe-time failures (no data) get an `error` frame; the
+		// subscription is then over.
+		if len(res.Errors) > 0 && res.Data == nil {
+			b, err := json.Marshal(res.Errors)
+			if err != nil {
+				continue
+			}
+			_ = writeMsg(wsMessage{ID: id, Type: msgError, Payload: b})
+			return
+		}
+		b, err := json.Marshal(res)
 		if err != nil {
 			continue
 		}
-		if len(res.Errors) > 0 && res.Data == nil {
-			_ = writeMsg(wsMessage{ID: id, Type: msgError, Payload: payload})
-			return
-		}
-		_ = writeMsg(wsMessage{ID: id, Type: msgNext, Payload: payload})
+		_ = writeMsg(wsMessage{ID: id, Type: msgNext, Payload: b})
 	}
 	_ = writeMsg(wsMessage{ID: id, Type: msgComplete})
 }

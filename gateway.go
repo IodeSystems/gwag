@@ -44,6 +44,38 @@ type config struct {
 	tls          *tls.Config
 	metrics      Metrics
 	backpressure BackpressureOptions
+	subAuth      SubscriptionAuthOptions
+}
+
+// SubscriptionAuthOptions configures HMAC verification for incoming
+// graphql-ws subscriptions. The auth args (hmac, timestamp) are
+// auto-injected on every subscription field's SDL; this controls how
+// the gateway verifies them at subscribe time.
+type SubscriptionAuthOptions struct {
+	// Insecure bypasses HMAC verification entirely. Auth args are
+	// accepted (for SDL compatibility) but not checked. Dev/local only.
+	// Mutually exclusive with Secret.
+	Insecure bool
+
+	// Secret is the shared HMAC key. Required when not Insecure. The
+	// signed payload is "<channel>\n<timestamp_unix>" with
+	// HMAC-SHA256, base64-encoded.
+	Secret []byte
+
+	// SkewWindow caps acceptable clock drift between the signer and
+	// the gateway. 0 → 5 minutes default.
+	SkewWindow time.Duration
+}
+
+// WithSubscriptionAuth enables HMAC verification on subscribes.
+func WithSubscriptionAuth(o SubscriptionAuthOptions) Option {
+	return func(cfg *config) { cfg.subAuth = o }
+}
+
+// WithoutSubscriptionAuth marks subscriptions insecure. Equivalent to
+// passing WithSubscriptionAuth(SubscriptionAuthOptions{Insecure: true}).
+func WithoutSubscriptionAuth() Option {
+	return func(cfg *config) { cfg.subAuth = SubscriptionAuthOptions{Insecure: true} }
 }
 
 // BackpressureOptions controls per-pool concurrency caps and the

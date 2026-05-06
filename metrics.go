@@ -33,6 +33,11 @@ type Metrics interface {
 	// SetQueueDepth reflects the current count of requests waiting
 	// for a dispatch slot, per pool. Called on enqueue/dequeue.
 	SetQueueDepth(namespace, version string, depth int)
+
+	// RecordSubscribeAuth records the outcome of a subscribe-auth
+	// attempt. code is the SubscribeAuthCode enum value's String()
+	// (e.g. "SUBSCRIBE_AUTH_CODE_OK", "..._SIGNATURE_MISMATCH").
+	RecordSubscribeAuth(namespace, version, method, code string)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
@@ -42,6 +47,7 @@ func (noopMetrics) RecordDispatch(string, string, string, time.Duration, error) 
 func (noopMetrics) RecordDwell(string, string, string, time.Duration)            {}
 func (noopMetrics) RecordBackoff(string, string, string, string)                 {}
 func (noopMetrics) SetQueueDepth(string, string, int)                            {}
+func (noopMetrics) RecordSubscribeAuth(string, string, string, string)           {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
 // Created by newPrometheusMetrics; the registry is exposed via
@@ -52,6 +58,7 @@ type prometheusMetrics struct {
 	dwell    *prometheus.HistogramVec
 	backoff  *prometheus.CounterVec
 	depth    *prometheus.GaugeVec
+	subAuth  *prometheus.CounterVec
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -75,13 +82,18 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_pool_queue_depth",
 		Help: "Current count of dispatches waiting for an in-flight slot.",
 	}, []string{"namespace", "version"})
-	reg.MustRegister(hist, dwell, backoff, depth)
+	subAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_subscribe_auth_total",
+		Help: "Outcomes of subscribe-auth checks (HMAC verify and delegate).",
+	}, []string{"namespace", "version", "method", "code"})
+	reg.MustRegister(hist, dwell, backoff, depth, subAuth)
 	return &prometheusMetrics{
 		registry: reg,
 		hist:     hist,
 		dwell:    dwell,
 		backoff:  backoff,
 		depth:    depth,
+		subAuth:  subAuth,
 	}
 }
 
@@ -103,6 +115,10 @@ func (m *prometheusMetrics) RecordBackoff(namespace, version, method, reason str
 
 func (m *prometheusMetrics) SetQueueDepth(namespace, version string, depth int) {
 	m.depth.WithLabelValues(namespace, version).Set(float64(depth))
+}
+
+func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code string) {
+	m.subAuth.WithLabelValues(namespace, version, method, code).Inc()
 }
 
 // classifyError maps an error to a stable label value. gRPC status

@@ -172,3 +172,24 @@ message ServiceInfo {
   // Number of live replicas backing this (namespace, version) pool.
   uint32 replica_count = 4;
 }
+
+// SubscribeAuthCode is the result of an attempted subscribe. Both the
+// gateway-side HMAC verification and the SubscriptionAuthorizer
+// delegate emit codes from this enum, so operators get consistent
+// error semantics across both paths.
+enum SubscribeAuthCode {
+  SUBSCRIBE_AUTH_CODE_UNSPECIFIED        = 0;
+  SUBSCRIBE_AUTH_CODE_OK                 = 1;
+
+  // HMAC verification failures (gateway-side):
+  SUBSCRIBE_AUTH_CODE_TOO_OLD            = 2;  // timestamp older than skew window
+  SUBSCRIBE_AUTH_CODE_TOO_NEW            = 3;  // timestamp from the future
+  SUBSCRIBE_AUTH_CODE_SIGNATURE_MISMATCH = 4;
+  SUBSCRIBE_AUTH_CODE_MALFORMED          = 5;  // missing/garbled hmac or timestamp args
+  SUBSCRIBE_AUTH_CODE_UNKNOWN_KID        = 6;  // key id not in active set (rotation)
+
+  // Delegate-side outcomes:
+  SUBSCRIBE_AUTH_CODE_DENIED             = 7;  // delegate said no
+  SUBSCRIBE_AUTH_CODE_UNAVAILABLE        = 8;  // delegate didn't respond / errored
+  SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED     = 9;  // mode requires config that isn't set
+}
