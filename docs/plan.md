@@ -358,7 +358,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL dispatch metric + error
+- `448d86b` downstream-GraphQL dispatch metric + error
   classification. Mirrors the OpenAPI pair (`e88d158`/`cf115c1`):
   `graphQLMirror` now carries a `Metrics` reference (passed in via
   `g.cfg.metrics`) and `forwardingResolver` records start time +
