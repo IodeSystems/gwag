@@ -26,7 +26,6 @@ below is uncovered.
 | Surface | Smallest useful test | Notes |
 |---|---|---|
 | Cluster cross-gateway dispatch | Two `StartCluster` instances peering, register on A, dispatch from B | Validates KV reconciler + replica picking across nodes. |
-| ForgetPeer | Happy path (TTL-expired peer drops); alive peer rejection | Exercises `controlPlane.ForgetPeer` + KV bucket. |
 
 Cosmetic blocker: embedded-NATS log spam in tests grows linearly
 with test count. Picked up by the tier-3 *NATS server log noise
@@ -310,6 +309,11 @@ Where to crib from when adding tests:
   errors; same-hash second registration joins the pool (replica
   count = 2); multiple namespaces coexist; `AsInternal()` hides
   the namespace from Query but keeps the pool dispatchable.
+- `forget_peer_test.go` — single-node cluster, manual peer KV
+  manipulation. Covers: alive-rejection (peer present in KV),
+  happy path (peer expired/deleted → Removed=true), no-op for
+  never-registered peer, refuse-self, empty node_id, standalone
+  gateway (no cluster) errors with "cluster not configured".
 - `subscriptions_test.go` — full WebSocket round-trip via embedded
   NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
   publish → next frame; HMAC SIGNATURE_MISMATCH / TOO_OLD;
@@ -403,7 +407,11 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* schema rebuild tests (`schema_rebuild_test.go`):
+- *(uncommitted)* ForgetPeer tests (`forget_peer_test.go`): 6
+  cases against a single-node cluster, manipulating the peers KV
+  directly. Covers the alive-rejection / happy-path / refuse-self
+  flow plus the standalone "no cluster configured" error.
+- `4a5b203` schema rebuild tests (`schema_rebuild_test.go`):
   6 cases verifying that pool create/destroy/hash-collision flow
   through `assembleLocked` correctly. Pure package-level; no NATS.
 - `aabdc21` gRPC unary dispatch e2e (`grpc_dispatch_test.go`):
