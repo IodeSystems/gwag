@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/gqlerrors"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"nhooyr.io/websocket"
 
@@ -66,7 +67,10 @@ func (g *Gateway) subscribeNATS(
 	code := g.verifySubscribe(subject, args)
 	g.cfg.metrics.RecordSubscribeAuth(ns, ver, methodName, code.String())
 	if code != cpv1Ok {
-		return nil, &subscribeAuthError{Code: code}
+		// Wrap so graphql-go's FormatError(*Error) path picks up our
+		// Extensions() method via OriginalError; otherwise the default
+		// branch loses the extensions and only the message survives.
+		return nil, gqlerrors.NewLocatedError(&subscribeAuthError{Code: code}, nil)
 	}
 
 	// Acquire a stream slot (separate from unary in-flight cap).

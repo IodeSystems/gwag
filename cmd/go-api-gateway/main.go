@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -75,6 +76,8 @@ func main() {
 			os.Exit(servicesCmd(os.Args[2:]))
 		case "schema":
 			os.Exit(schemaCmd(os.Args[2:]))
+		case "sign":
+			os.Exit(signCmd(os.Args[2:]))
 		}
 	}
 	runGateway()
@@ -275,6 +278,69 @@ func loadSchemaSource(src string) (string, error) {
 	}
 	b, err := os.ReadFile(src)
 	return string(b), err
+}
+
+// signCmd dispatches to the gateway's SignSubscriptionToken RPC. Two
+// modes: --gateway HOST:PORT consults the gateway (delegate-aware,
+// network round-trip); --secret HEX signs locally (pure crypto, no
+// gateway involvement, no delegate consultation).
+func signCmd(args []string) int {
+	flags, _ := splitFlagsAndPositionals(args)
+	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (e.g. localhost:50090); empty = sign locally with --secret")
+	channel := fs.String("channel", "", "Resolved subject the token will sign")
+	ttl := fs.Int64("ttl", 60, "Token TTL in seconds (informational)")
+	secretHex := fs.String("secret", "", "Hex-encoded shared secret (local sign mode)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway sign --channel SUBJECT [--ttl 60]")
+		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT")
+		fmt.Fprintln(fs.Output(), "  Local:  --secret HEX")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	if *channel == "" {
+		fs.Usage()
+		return 2
+	}
+	if *gwAddr != "" {
+		conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer conn.Close()
+		client := cpv1.NewControlPlaneClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, err := client.SignSubscriptionToken(ctx, &cpv1.SignSubscriptionTokenRequest{
+			Channel:    *channel,
+			TtlSeconds: *ttl,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "SignSubscriptionToken: %v\n", err)
+			return 1
+		}
+		if resp.GetCode() != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+			fmt.Fprintf(os.Stderr, "code=%s reason=%s\n", resp.GetCode(), resp.GetReason())
+			return 1
+		}
+		fmt.Printf("hmac=%s\nts=%d\n", resp.GetHmac(), resp.GetTimestampUnix())
+		return 0
+	}
+	if *secretHex == "" {
+		fmt.Fprintln(os.Stderr, "either --gateway or --secret is required")
+		return 2
+	}
+	secret, err := hex.DecodeString(*secretHex)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "decode --secret:", err)
+		return 1
+	}
+	mac, ts := gateway.SignSubscribeToken(secret, *channel, *ttl)
+	fmt.Printf("hmac=%s\nts=%d\n", mac, ts)
+	return 0
 }
 
 // splitFlagsAndPositionals walks a free-form argv tail and returns

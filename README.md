@@ -118,6 +118,8 @@ $ go-api-gateway services list --gateway gw1.internal:50090
 $ go-api-gateway schema fetch  --endpoint https://gw.internal/schema > schema.graphql
 $ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
                                 --to   https://staging-gw.internal/schema --strict
+$ go-api-gateway sign          --gateway gw1.internal:50090 \
+                                --channel events.UserEvents.UserCreated.42 --ttl 60
 ```
 
 - `peer forget` only succeeds against a node whose KV entry has
@@ -131,18 +133,109 @@ $ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
 - `schema diff --strict` fails CI when a candidate schema would break
   existing consumers.
 
+## Subscriptions (events)
+
+Server-streaming RPCs are auto-promoted to GraphQL subscriptions.
+Each `rpc Foo(Filter) returns (stream Event)` becomes a flat field
+`<namespace>_<lowerCamel(method)>` on the `Subscription` root, with
+the request type's fields as arguments. The gateway also injects
+`hmac: String!` and `timestamp: Int!` for HMAC verification.
+
+Transport is the standard `graphql-transport-ws` WebSocket
+subprotocol (Apollo, urql, graphql-codegen all speak it). Backing
+storage is **NATS pub/sub**, not gRPC streaming — services publish to
+NATS subjects derived from the (namespace, method, request fields);
+the gateway bridges WebSocket subscribes to NATS subscribes with
+in-process fan-out (one NATS sub shared across N WebSockets watching
+the same subject).
+
+```proto
+service UserEvents {
+  rpc UserCreated(UserCreatedFilter) returns (stream UserCreatedEvent);
+}
+message UserCreatedFilter { string user_id = 1; }
+message UserCreatedEvent  { string user_id = 1; string email = 2; }
+```
+
+becomes
+
+```graphql
+type Subscription {
+  userEvents_userCreated(userId: ID!, hmac: String!, timestamp: Int!): UserCreatedEvent
+}
+```
+
+The publisher service never implements server-streaming gRPC — it
+just `nats.Publish()`es to the resolved subject:
+
+```go
+event, _ := proto.Marshal(&UserCreatedEvent{UserId: u.ID, Email: u.Email})
+natsConn.Publish(fmt.Sprintf("events.UserEvents.UserCreated.%s", u.ID), event)
+```
+
+Clients use any graphql-ws library:
+
+```typescript
+const { data } = useSubscription(gql`
+  subscription($u: ID!, $h: String!, $t: Int!) {
+    userEvents_userCreated(userId: $u, hmac: $h, timestamp: $t) {
+      userId email
+    }
+  }
+`, { variables: { u, hmac, timestamp } });
+```
+
+### HMAC channel auth
+
+Three modes (operator picks at gateway boot):
+
+- `--insecure-subscribe` — bypass verification (dev only).
+- `--subscribe-secret <hex>` — gateway holds a shared secret;
+  verifies HMAC-SHA256(secret, "<channel>\n<timestamp>") base64 on
+  every subscribe. Default `--subscribe-skew 5m`.
+- Plus, optionally, a registered `SubscriptionAuthorizer` delegate
+  (gRPC service registered under namespace `_events_auth/v1`) that
+  the gateway consults at *sign* time. The delegate decides whether
+  to authorize signing a token for `(channel, timestamp, ttl)`.
+
+Tokens are minted via the gateway's gRPC `SignSubscriptionToken`:
+
+```
+$ go-api-gateway sign --gateway gw1.internal:50090 \
+                      --channel events.UserEvents.UserCreated.42 --ttl 60
+hmac=md6l2SVJ...
+ts=1778092482
+```
+
+Or signed locally if you hold the secret yourself:
+
+```
+$ go-api-gateway sign --secret <hex> --channel events.... --ttl 60
+```
+
+Verification outcomes are surfaced as `SubscribeAuthCode` (`OK`,
+`TOO_OLD`, `SIGNATURE_MISMATCH`, `MALFORMED`, `DENIED`, `UNAVAILABLE`,
+`NOT_CONFIGURED`, `UNKNOWN_KID`). The code lands in
+`go_api_gateway_subscribe_auth_total{code=...}` and in the WebSocket
+error frame's `extensions.subscribeAuthCode`.
+
+Client-streaming and bidi RPCs aren't promoted — they're filtered
+with a registration-time warning so operators can see what's hidden.
+
 ## Backpressure & metrics
 
-Each `(namespace, version)` pool has its own dispatch concurrency cap
+Each `(namespace, version)` pool has its own dispatch concurrency caps
 and per-dispatch wait budget. Slow services back up *their own* pool
 without blocking dispatches to other pools — a sluggish `auth`
-service does not gate `library` requests.
+service does not gate `library` requests. Subscriptions have a
+*separate* slot from unary so long-lived streams don't crowd queries.
 
 Defaults (override via `gateway.WithBackpressure(...)`):
 
 ```go
 DefaultBackpressure = BackpressureOptions{
-    MaxInflight: 256,             // per-pool concurrent dispatches
+    MaxInflight: 256,             // per-pool concurrent unary dispatches
+    MaxStreams:  64,              // per-pool active subscription streams
     MaxWaitTime: 10 * time.Second, // wait budget; exceeded → fast-reject
 }
 ```
@@ -158,15 +251,19 @@ Every dispatch is timed by default. `gw.MetricsHandler()` exposes:
 
 ```
 go_api_gateway_dispatch_duration_seconds{namespace,version,method,code}
-go_api_gateway_pool_queue_dwell_seconds{namespace,version,method}
-go_api_gateway_pool_backoff_total{namespace,version,method,reason}
-go_api_gateway_pool_queue_depth{namespace,version}                 (gauge)
+go_api_gateway_pool_queue_dwell_seconds{namespace,version,method,kind}
+go_api_gateway_pool_backoff_total{namespace,version,method,kind,reason}
+go_api_gateway_pool_queue_depth{namespace,version,kind}            (gauge)
+go_api_gateway_pool_streams_inflight{namespace,version}            (gauge)
+go_api_gateway_subscribe_auth_total{namespace,version,method,code}
 ```
 
-`code` is `ok` on success, the gRPC status string on failure (e.g.
-`Unavailable`, `Unauthenticated`), or one of the gateway's `Reject`
-codes when middleware short-circuits. `method` is the full gRPC path
-`/<service>/<rpc>`. `reason` is currently always `wait_timeout`.
+- `code` (dispatch) is `ok` on success, the gRPC status string on
+  failure, or a `Reject` code when middleware short-circuits.
+- `kind` is `unary` or `stream` — splits queries from subscriptions
+  on the same backpressure metrics.
+- `code` (subscribe_auth) is the `SubscribeAuthCode` enum
+  (`SUBSCRIBE_AUTH_CODE_OK`, `..._TOO_OLD`, etc.).
 
 Mount alongside the GraphQL endpoint:
 
