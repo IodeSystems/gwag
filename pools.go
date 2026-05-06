@@ -62,6 +62,7 @@ type pool struct {
 // replica is one backend behind a pool. inflight is incremented before
 // gRPC Invoke and decremented after; pickReplica picks the lowest.
 type replica struct {
+	id       string // KV-side replica id; "" for boot-time AddProto entries
 	addr     string
 	owner    string // registration ID
 	conn     grpc.ClientConnInterface
@@ -121,6 +122,43 @@ func (p *pool) removeReplicasByOwner(owner string) int {
 	}
 	p.replicas.Store(&next)
 	return removed
+}
+
+// removeReplicaByID drops the replica with the given KV id, returning
+// the removed *replica or nil if not present.
+func (p *pool) removeReplicaByID(id string) *replica {
+	cur := p.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	next := make([]*replica, 0, len(*cur))
+	var removed *replica
+	for _, r := range *cur {
+		if removed == nil && r.id == id {
+			removed = r
+			continue
+		}
+		next = append(next, r)
+	}
+	if removed == nil {
+		return nil
+	}
+	p.replicas.Store(&next)
+	return removed
+}
+
+// findReplicaByID returns the replica with the given id, or nil.
+func (p *pool) findReplicaByID(id string) *replica {
+	cur := p.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	for _, r := range *cur {
+		if r.id == id {
+			return r
+		}
+	}
+	return nil
 }
 
 func (p *pool) replicaCount() int {

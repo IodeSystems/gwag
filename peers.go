@@ -54,6 +54,8 @@ type peerTracker struct {
 	done   chan struct{}
 
 	currentR atomic.Int32
+
+	rec *reconciler
 }
 
 // startClusterTracking is idempotent — only the first invocation starts
@@ -137,6 +139,13 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		cancel()
 		return nil, fmt.Errorf("put self: %w", err)
 	}
+
+	rec, err := g.startReconciler(tctx, reg)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("start reconciler: %w", err)
+	}
+	t.rec = rec
 
 	go t.refreshLoop(tctx)
 	go t.watchLoop(tctx)
@@ -283,4 +292,5 @@ func (t *peerTracker) stop() {
 	}
 	t.cancel()
 	<-t.done
+	t.rec.stop()
 }

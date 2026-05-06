@@ -201,35 +201,12 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
-	cp.gw.mu.Lock()
-	defer cp.gw.mu.Unlock()
-
-	sc, err := cp.acquireConnLocked(req.GetAddr())
-	if err != nil {
-		return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
-	}
-
-	// Build kvKeys parallel to pool joins so a Register failure rolls
-	// back BOTH the in-memory pool state and any KV writes attempted.
-	var kvKeys []registryKeyRef
-
-	for _, p := range prep {
-		err := cp.gw.joinPoolLocked(poolEntry{
-			namespace: p.namespace,
-			version:   p.version,
-			hash:      p.hash,
-			file:      p.fileDesc,
-			addr:      req.GetAddr(),
-			conn:      sc.conn,
-			owner:     id,
-		})
-		if err != nil {
-			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
-			cp.releaseConnLocked(req.GetAddr())
-			cp.deleteKVKeys(ctx, clusterKV, kvKeys)
-			return nil, err
-		}
-		if clusterKV != nil {
+	// Cluster mode: KV is the source of truth. Don't dial or touch
+	// pools — the reconciler picks up our KV.Put and joins both the
+	// receiving gateway's pool and every other gateway's pool.
+	if clusterKV != nil {
+		var kvKeys []registryKeyRef
+		for _, p := range prep {
 			replicaID := newReplicaID()
 			val := registryValue{
 				RegID:             id,
@@ -245,8 +222,6 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			}
 			b, mErr := json.Marshal(val)
 			if mErr != nil {
-				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
-				cp.releaseConnLocked(req.GetAddr())
 				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
 				return nil, fmt.Errorf("controlplane: marshal kv value: %w", mErr)
 			}
@@ -254,8 +229,6 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			_, pErr := clusterKV.Put(kctx, replicaKey(p.namespace, p.version, replicaID), b)
 			kcancel()
 			if pErr != nil {
-				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
-				cp.releaseConnLocked(req.GetAddr())
 				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
 				return nil, fmt.Errorf("controlplane: kv put: %w", pErr)
 			}
@@ -266,6 +239,48 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				value:     b,
 			})
 		}
+		reg := &registration{
+			id:       id,
+			addr:     req.GetAddr(),
+			instance: req.GetInstanceId(),
+			ttl:      ttl,
+			kvKeys:   kvKeys,
+		}
+		for _, p := range prep {
+			reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
+		}
+		reg.lastBeatMs.Store(time.Now().UnixMilli())
+		cp.regs[id] = reg
+		return &cpv1.RegisterResponse{
+			RegistrationId: id,
+			TtlSeconds:     uint32(ttl / time.Second),
+		}, nil
+	}
+
+	// Standalone mode: directly populate the in-memory pool and conn pool.
+	cp.gw.mu.Lock()
+	defer cp.gw.mu.Unlock()
+
+	sc, err := cp.acquireConnLocked(req.GetAddr())
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: dial %s: %w", req.GetAddr(), err)
+	}
+
+	for _, p := range prep {
+		err := cp.gw.joinPoolLocked(poolEntry{
+			namespace: p.namespace,
+			version:   p.version,
+			hash:      p.hash,
+			file:      p.fileDesc,
+			addr:      req.GetAddr(),
+			conn:      sc.conn,
+			owner:     id,
+		})
+		if err != nil {
+			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+			cp.releaseConnLocked(req.GetAddr())
+			return nil, err
+		}
 	}
 
 	reg := &registration{
@@ -274,7 +289,6 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		instance: req.GetInstanceId(),
 		ttl:      ttl,
 		conn:     sc,
-		kvKeys:   kvKeys,
 	}
 	for _, p := range prep {
 		reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
@@ -335,14 +349,18 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	}
 	delete(cp.regs, reg.id)
 
-	cp.gw.mu.Lock()
-	_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
-	cp.gw.mu.Unlock()
-
-	cp.releaseConnLocked(reg.addr)
+	if reg.conn != nil {
+		// Standalone mode: drop pool replicas and release the conn.
+		cp.gw.mu.Lock()
+		_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
+		cp.gw.mu.Unlock()
+		cp.releaseConnLocked(reg.addr)
+	}
 	kvRefs := reg.kvKeys
 	cp.mu.Unlock()
 
+	// Cluster mode: KV.Delete fires watch events that drive every
+	// gateway's reconciler to drop the replica + release its conn.
 	cp.deleteKVKeys(ctx, cp.gw.registryKV(), kvRefs)
 	return &cpv1.DeregisterResponse{}, nil
 }

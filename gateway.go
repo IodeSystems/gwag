@@ -173,6 +173,7 @@ type poolEntry struct {
 	addr      string
 	conn      grpc.ClientConnInterface
 	owner     string
+	replicaID string // KV-side replica id, "" for boot-time AddProto
 }
 
 // joinPoolLocked finds or creates the pool for (namespace, version) and
@@ -185,7 +186,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		if p.hash != e.hash {
 			return fmt.Errorf("gateway: pool %s/%s exists with different proto hash", e.namespace, e.version)
 		}
-		p.addReplica(&replica{addr: e.addr, owner: e.owner, conn: e.conn})
+		p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 		return nil
 	}
 	_, n, err := parseVersion(e.version)
@@ -199,7 +200,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		file:     e.file,
 		hash:     e.hash,
 	}
-	p.addReplica(&replica{addr: e.addr, owner: e.owner, conn: e.conn})
+	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 	g.pools[key] = p
 	if g.schema.Load() != nil {
 		// Schema must rebuild: namespace appeared, OR a new version
@@ -208,6 +209,30 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		return g.assembleLocked()
 	}
 	return nil
+}
+
+// removeReplicaByIDLocked finds and drops the single replica matching
+// the given (ns,ver,replicaID). If the pool empties, it's deleted.
+// Rebuilds the schema if a pool was destroyed. Caller holds g.mu.
+// Returns the removed replica (for conn refcount cleanup) or nil if
+// not found.
+func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, error) {
+	key := poolKey{namespace: ns, version: ver}
+	p, ok := g.pools[key]
+	if !ok {
+		return nil, nil
+	}
+	r := p.removeReplicaByID(replicaID)
+	if r == nil {
+		return nil, nil
+	}
+	if p.replicaCount() == 0 {
+		delete(g.pools, key)
+		if g.schema.Load() != nil {
+			return r, g.assembleLocked()
+		}
+	}
+	return r, nil
 }
 
 // removeReplicasByOwnerLocked walks all pools removing replicas with
