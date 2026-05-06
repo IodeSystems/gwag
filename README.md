@@ -131,6 +131,36 @@ $ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
 - `schema diff --strict` fails CI when a candidate schema would break
   existing consumers.
 
+## Metrics
+
+Every dispatch is timed by default. The library exposes a Prometheus
+histogram on `gw.MetricsHandler()`:
+
+```
+go_api_gateway_dispatch_duration_seconds{namespace, version, method, code}
+```
+
+`code` is `ok` on success, the gRPC status string on failure (e.g.
+`Unavailable`, `Unauthenticated`), or one of the gateway's `Reject`
+codes when middleware short-circuits. `method` is the full gRPC path
+`/<service>/<rpc>`.
+
+Mount alongside the GraphQL endpoint:
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/graphql", gw.Handler())
+mux.Handle("/schema", gw.SchemaHandler())
+mux.Handle("/metrics", gw.MetricsHandler())
+```
+
+Override or disable:
+
+```go
+gw := gateway.New(gateway.WithoutMetrics())            // disable
+gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
+```
+
 ## Promotion path
 
 Cross-cluster promotion is the combination of these tools:

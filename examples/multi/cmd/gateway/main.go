@@ -115,6 +115,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", gw.Handler())
 	mux.Handle("/schema", gw.SchemaHandler())
+	mux.Handle("/metrics", gw.MetricsHandler())
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
 		if err := http.ListenAndServe(*httpAddr, mux); err != nil {

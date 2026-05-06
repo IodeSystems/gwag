@@ -41,6 +41,20 @@ type Option func(*config)
 type config struct {
 	cluster *Cluster
 	tls     *tls.Config
+	metrics Metrics
+}
+
+// WithMetrics swaps the default Prometheus-backed metrics sink for a
+// caller-supplied implementation. Pass nil or use WithoutMetrics to
+// disable metrics entirely.
+func WithMetrics(m Metrics) Option {
+	return func(cfg *config) { cfg.metrics = m }
+}
+
+// WithoutMetrics disables metrics. /metrics returns 404; dispatches
+// still run normally with no per-call instrumentation.
+func WithoutMetrics() Option {
+	return func(cfg *config) { cfg.metrics = noopMetrics{} }
 }
 
 // WithCluster binds the gateway to an embedded NATS cluster. When set,
@@ -63,6 +77,9 @@ func New(opts ...Option) *Gateway {
 	cfg := &config{}
 	for _, o := range opts {
 		o(cfg)
+	}
+	if cfg.metrics == nil {
+		cfg.metrics = newPrometheusMetrics()
 	}
 	life, cancel := context.WithCancel(context.Background())
 	return &Gateway{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/graphql-go/graphql"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -53,7 +54,7 @@ func (g *Gateway) assembleLocked() error {
 
 		// Latest version's RPCs flat under the namespace — what
 		// version-agnostic clients see.
-		latestRPCs, err := buildPoolRPCs(tb, latest, chain)
+		latestRPCs, err := buildPoolRPCs(tb, latest, chain, g.cfg.metrics)
 		if err != nil {
 			return err
 		}
@@ -63,7 +64,7 @@ func (g *Gateway) assembleLocked() error {
 
 		// Every version (including latest) addressable as a sub-object.
 		for _, p := range pools {
-			versionedRPCs, err := buildPoolRPCs(tb, p, chain)
+			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics)
 			if err != nil {
 				return err
 			}
@@ -121,7 +122,7 @@ func (g *Gateway) assembleLocked() error {
 // buildPoolRPCs returns one graphql.Field per RPC method declared in
 // the pool's proto. The dispatch closure picks a replica via
 // pool.pickReplica at invocation time.
-func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware) (graphql.Fields, error) {
+func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	services := p.file.Services()
 	for i := 0; i < services.Len(); i++ {
@@ -132,7 +133,7 @@ func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware) (graphql.Fields, 
 			if md.IsStreamingClient() || md.IsStreamingServer() {
 				continue
 			}
-			field, err := buildPoolMethodField(tb, p, sd, md, chain)
+			field, err := buildPoolMethodField(tb, p, sd, md, chain, metrics)
 			if err != nil {
 				return nil, err
 			}
@@ -148,6 +149,7 @@ func buildPoolMethodField(
 	sd protoreflect.ServiceDescriptor,
 	md protoreflect.MethodDescriptor,
 	chain Middleware,
+	metrics Metrics,
 ) (*graphql.Field, error) {
 	inputDesc := md.Input()
 	outputDesc := md.Output()
@@ -162,16 +164,22 @@ func buildPoolMethodField(
 	}
 
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+	ns, ver := p.key.namespace, p.key.version
 
 	dispatch := Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+		start := time.Now()
 		r := p.pickReplica()
 		if r == nil {
-			return nil, fmt.Errorf("gateway: no live replicas for %s/%s", p.key.namespace, p.key.version)
+			err := fmt.Errorf("gateway: no live replicas for %s/%s", ns, ver)
+			metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
+			return nil, err
 		}
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
 		resp := dynamicpb.NewMessage(outputDesc)
-		if err := r.conn.Invoke(ctx, method, req, resp); err != nil {
+		err := r.conn.Invoke(ctx, method, req, resp)
+		metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
+		if err != nil {
 			return nil, err
 		}
 		return resp, nil
