@@ -36,8 +36,11 @@ fresh session.
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
   in `784430a`).
-- *Operational depth:* OpenAPI **HTTP backpressure** (mirror
-  `MaxInflight` / `MaxWaitTime` for HTTP dispatch).
+- *Next operational pick:* OpenAPI dispatch **RecordDispatch
+  metric** parity with proto (per-source histogram so
+  `go_api_gateway_dispatch_duration_seconds` covers HTTP, not just
+  gRPC). The OpenAPI backpressure work landed without it because
+  the plan only called for backoff/dwell — surface as its own item.
 
 ### Token rotation (kid in tokens)
 
@@ -82,15 +85,6 @@ v1 falls back to a JSON scalar with a registration-time log line.
 Add proper Interface / Union mirroring once a real downstream uses
 them. Map possibleTypes to `graphql.NewUnion`; resolve `__typename`
 on each value to pick the variant.
-
-### OpenAPI HTTP backpressure
-
-Proto pools have `MaxInflight` / `MaxWaitTime` per-pool semaphores.
-OpenAPI dispatch doesn't — every replica accepts unlimited
-concurrent requests. Mirror the proto path:
-- Per-source semaphore sized by `BackpressureOptions.MaxInflight`.
-- Wait-and-reject with the same dwell metric + Reject(ResourceExhausted).
-- Slot acquisition wraps `dispatchOpenAPI`.
 
 ### Outbound auth pass-through alternatives
 
@@ -367,6 +361,22 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* OpenAPI HTTP backpressure. Per-source semaphore +
+  queue gauge mirroring the proto pool path: `openAPISource` gains
+  `sem chan struct{}` + `queueing atomic.Int32`, sized by
+  `BackpressureOptions.MaxInflight` (gateway-wide config — same knob
+  as proto pools). Resolver acquires before `pickReplica`,
+  fast-rejects with `Reject(ResourceExhausted)` when `MaxWaitTime`
+  expires. Dwell + queue-depth + backoff metrics fire under the
+  same labels as the proto path (`kind="unary"`, version pinned to
+  `v1` since OpenAPI sources have no version axis). Method label is
+  `<HTTP_METHOD> <pathTemplate>`. 1 new test
+  (`TestOpenAPIE2E_BackpressureTimesOutAndRejects` in
+  `openapi_test.go`): blocking backend + `MaxInflight=1` +
+  `MaxWaitTime=50ms` → second concurrent dispatch rejects with
+  RESOURCE_EXHAUSTED. RecordDispatch parity for OpenAPI dispatch is
+  intentionally not part of this change — tracked under tier-2
+  suggested pickups.
 - `3517273` downstream GraphQL ingestion (boot-time, queries +
   mutations). `gw.AddGraphQL(endpoint, opts...)` runs the canonical
   introspection query, parses into a typed model, mirrors every

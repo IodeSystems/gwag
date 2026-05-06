@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
@@ -114,6 +115,9 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		forwardHeaders: sc.forwardHeaders,
 		rawSpec:        append([]byte(nil), specBytes...),
 	}
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
+		src.sem = make(chan struct{}, mi)
+	}
 	src.addReplica(&openAPIReplica{
 		baseURL:    addr,
 		httpClient: httpClient,
@@ -150,6 +154,15 @@ type openAPISource struct {
 	// would funnel 100% of traffic to replicas[0]. Atomic-incremented
 	// per pickReplica call.
 	pickHint atomic.Uint64
+
+	// sem caps simultaneous concurrent dispatches against this source.
+	// nil when MaxInflight is 0 (unbounded). Buffered channel; send to
+	// acquire, receive to release. HTTP analogue of pool.sem.
+	sem chan struct{}
+
+	// queueing tracks waiters on the semaphore for the queue-depth
+	// gauge.
+	queueing atomic.Int32
 }
 
 // openAPIReplica is one HTTP backend behind an openAPISource. Each
@@ -325,6 +338,9 @@ func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, h
 		doc:       doc,
 		hash:      hash,
 		rawSpec:   append([]byte(nil), specBytes...),
+	}
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
+		src.sem = make(chan struct{}, mi)
 	}
 	src.addReplica(&openAPIReplica{
 		id:         replicaID,
@@ -637,10 +653,40 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	pathTemplate := op.Path
 	forwardHeaders := src.forwardHeaders
 
+	bp := g.cfg.backpressure
+	metrics := g.cfg.metrics
+	ns := src.namespace
+	methodLabel := method + " " + pathTemplate
+
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
+			// Acquire a slot. Fast path: src.sem nil (unbounded) or has
+			// immediate capacity. Slow path: queue, observe dwell, time
+			// out per MaxWaitTime. Mirrors the proto pool path in
+			// schema.go so HTTP dispatch shares the same backpressure
+			// surface as gRPC dispatch.
+			if src.sem != nil {
+				waitStart := time.Now()
+				select {
+				case src.sem <- struct{}{}:
+					metrics.RecordDwell(ns, "v1", methodLabel, "unary", time.Since(waitStart))
+				default:
+					depth := int(src.queueing.Add(1))
+					metrics.SetQueueDepth(ns, "v1", "unary", depth)
+					dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
+					now := int(src.queueing.Add(-1))
+					metrics.SetQueueDepth(ns, "v1", "unary", now)
+					metrics.RecordDwell(ns, "v1", methodLabel, "unary", dwell)
+					if err != nil {
+						metrics.RecordBackoff(ns, "v1", methodLabel, "unary", "wait_timeout")
+						return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error()))
+					}
+				}
+				defer func() { <-src.sem }()
+			}
+
 			r := src.pickReplica()
 			if r == nil {
 				return nil, fmt.Errorf("openapi: no live replicas for %s", src.namespace)
