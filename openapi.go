@@ -695,7 +695,7 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 
 			r := src.pickReplica()
 			if r == nil {
-				err := fmt.Errorf("openapi: no live replicas for %s", src.namespace)
+				err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s", src.namespace))
 				metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
 				return nil, err
 			}
@@ -751,14 +751,14 @@ func dispatchOpenAPI(
 	if bv, ok := gqlArgs["body"]; ok && bv != nil {
 		b, err := json.Marshal(bv)
 		if err != nil {
-			return nil, fmt.Errorf("openapi: marshal body: %w", err)
+			return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: marshal body: %s", err.Error()))
 		}
 		body = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: build request: %s", err.Error()))
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -772,24 +772,50 @@ func dispatchOpenAPI(
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes)))
+		return nil, Reject(httpStatusToCode(resp.StatusCode),
+			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
 	if len(respBytes) == 0 {
 		return nil, nil
 	}
 	var out any
 	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, fmt.Errorf("openapi: decode response: %w", err)
+		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", err.Error()))
 	}
 	return out, nil
+}
+
+// httpStatusToCode maps HTTP status codes onto the gateway's Code enum
+// so OpenAPI dispatch errors classify the same way gRPC dispatch
+// errors do (gRPC dispatch already maps via google.golang.org/grpc
+// status codes in classifyError). Status codes outside the listed
+// 4xx specifics fall back to INVALID_ARGUMENT for 4xx and INTERNAL
+// for 5xx — same families gRPC's HTTP-mapping conventions use.
+func httpStatusToCode(status int) Code {
+	switch status {
+	case http.StatusBadRequest:
+		return CodeInvalidArgument
+	case http.StatusUnauthorized:
+		return CodeUnauthenticated
+	case http.StatusForbidden:
+		return CodePermissionDenied
+	case http.StatusNotFound:
+		return CodeNotFound
+	case http.StatusTooManyRequests:
+		return CodeResourceExhausted
+	}
+	if status >= 500 {
+		return CodeInternal
+	}
+	return CodeInvalidArgument
 }
 
 // readFile is os.ReadFile in a function var so tests can swap it.
