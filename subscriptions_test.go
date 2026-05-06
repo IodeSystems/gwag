@@ -305,6 +305,86 @@ func TestSubscriptionE2E_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
+	// End-to-end test of the admin_events_watchServices Subscription
+	// field: register a service, observe a ServiceChange frame on the
+	// WS, including round-tripping the proto enum through graphql-go's
+	// JSON serialiser (action should land as "ACTION_REGISTERED", not
+	// the numeric enum value).
+	f := newSubFixture(t, WithoutSubscriptionAuth())
+	defer f.close()
+	if err := f.gw.AddAdminEvents(); err != nil {
+		t.Fatalf("AddAdminEvents: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	conn := dialWS(t, ctx, f.wsURL)
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	subPayload, _ := json.Marshal(subscribePayload{
+		Query: `subscription {
+			admin_events_watchServices(namespace: "watched", hmac: "x", timestamp: 0) {
+				action namespace version replicaCount
+			}
+		}`,
+	})
+	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// Wait for the broker to register the subject before triggering
+	// the publish — otherwise the first event slips past.
+	deadline := time.Now().Add(2 * time.Second)
+	for f.gw.subscriptionBroker().activeSubjectCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("broker never registered admin_events subject")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Trigger a register on the watched namespace → publishes a
+	// ServiceChange to events.admin_events.WatchServices.watched.
+	if err := f.gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("watched"),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor watched: %v", err)
+	}
+
+	msg, err := readWS(conn, ctx)
+	if err != nil {
+		t.Fatalf("read next: %v", err)
+	}
+	if msg.Type != "next" {
+		t.Fatalf("unexpected frame type %s payload=%s", msg.Type, msg.Payload)
+	}
+	var result struct {
+		Data struct {
+			AdminEvents map[string]any `json:"admin_events_watchServices"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(msg.Payload, &result); err != nil {
+		t.Fatalf("decode payload: %v: %s", err, msg.Payload)
+	}
+	change := result.Data.AdminEvents
+	if change["action"] != "ACTION_REGISTERED" {
+		t.Errorf("action = %v (%T), want %q (graphql-go should serialise the enum NAME, not the number)",
+			change["action"], change["action"], "ACTION_REGISTERED")
+	}
+	if change["namespace"] != "watched" {
+		t.Errorf("namespace = %v, want watched", change["namespace"])
+	}
+	if change["version"] != "v1" {
+		t.Errorf("version = %v, want v1", change["version"])
+	}
+	if n, ok := change["replicaCount"].(float64); !ok || int(n) != 1 {
+		t.Errorf("replicaCount = %v (%T), want 1", change["replicaCount"], change["replicaCount"])
+	}
+}
+
 func TestSubscriptionE2E_ClientCompleteCleansUp(t *testing.T) {
 	f := newSubFixture(t, WithoutSubscriptionAuth())
 	defer f.close()

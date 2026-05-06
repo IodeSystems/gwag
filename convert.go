@@ -226,10 +226,11 @@ func scalarToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 	case protoreflect.BytesKind:
 		return string(v.Bytes())
 	case protoreflect.EnumKind:
-		ev := fd.Enum().Values().ByNumber(v.Enum())
-		if ev != nil {
-			return string(ev.Name())
-		}
+		// Proto enums register with graphql-go as `Value: int32(number)`
+		// (see types.go:enumFromDescriptor). graphql-go's enum
+		// Serialize matches the resolver value against that config
+		// value by typed equality, so we MUST return int32 here —
+		// returning the name as a string yields null on the wire.
 		return int32(v.Enum())
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		sub, ok := v.Message().Interface().(*dynamicpb.Message)

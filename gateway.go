@@ -428,6 +428,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 			return fmt.Errorf("gateway: pool %s/%s exists with different proto hash", e.namespace, e.version)
 		}
 		p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
+		g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 		return nil
 	}
 	_, n, err := parseVersion(e.version)
@@ -448,6 +449,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	}
 	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 	g.pools[key] = p
+	g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 	if g.schema.Load() != nil {
 		// Pool creation always rebuilds — covers all three cases:
 		// namespace appeared, new version under existing namespace, or
@@ -472,6 +474,7 @@ func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, 
 	if r == nil {
 		return nil, nil
 	}
+	g.publishServiceChange(adminEventsActionDeregistered, ns, ver, r.addr, uint32(p.replicaCount()))
 	if p.replicaCount() == 0 {
 		delete(g.pools, key)
 		if g.schema.Load() != nil {
@@ -493,6 +496,10 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 			continue
 		}
 		removed += n
+		// One ServiceChange per removed pool — replica-level granularity
+		// here would spam during cluster reconciliation. Use addr=""
+		// because the replica list (and addrs) is already gone.
+		g.publishServiceChange(adminEventsActionDeregistered, key.namespace, key.version, "", uint32(p.replicaCount()))
 		if p.replicaCount() == 0 {
 			delete(g.pools, key)
 			rebuild = true

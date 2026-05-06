@@ -32,6 +32,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { Alert, Snackbar } from '@mui/material';
 import type { Client } from 'graphql-ws';
 import { wsClient } from '@/api/events';
 
@@ -48,6 +49,26 @@ export interface EventEntry {
   error?: boolean;
 }
 
+/**
+ * ServiceChange mirrors the shape of admin_events_watchServices in
+ * the GraphQL schema. Action values come from the proto enum
+ * (REGISTERED / DEREGISTERED).
+ */
+export interface ServiceChange {
+  action: string;
+  namespace: string;
+  version: string;
+  addr: string;
+  timestampUnixMs: string | number;
+  replicaCount: number;
+}
+
+interface ToastEntry {
+  key: number;
+  severity: 'success' | 'info' | 'warning' | 'error';
+  message: string;
+}
+
 interface EventsContextValue {
   client: Client;
   recent: EventEntry[];
@@ -61,6 +82,22 @@ const EventsContext = createContext<EventsContextValue | null>(null);
 export function EventsProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<EventEntry[]>([]);
   const [unread, setUnread] = useState(0);
+  const [toast, setToast] = useState<ToastEntry | null>(null);
+  const toastQueue = useRef<ToastEntry[]>([]);
+  const toastSeq = useRef(0);
+
+  const enqueueToast = useCallback((t: Omit<ToastEntry, 'key'>) => {
+    const entry = { ...t, key: ++toastSeq.current };
+    setToast((cur) => {
+      if (cur === null) return entry;
+      toastQueue.current.push(entry);
+      return cur;
+    });
+  }, []);
+
+  const dismissToast = () => {
+    setToast(toastQueue.current.shift() ?? null);
+  };
 
   const push = useCallback((entry: EventEntry) => {
     setRecent((prev) => {
@@ -70,6 +107,46 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     });
     setUnread((u) => u + 1);
   }, []);
+
+  // Auto-subscribe to the gateway's admin_events_watchServices stream
+  // so service registrations / deregistrations show up as toasts and
+  // in the events tray without per-page wiring. Errors are silenced
+  // (logged to console) so a deployment without the subscription
+  // field doesn't spam the UI buffer on every retry.
+  useEffect(() => {
+    let disposed = false;
+    const dispose = wsClient.subscribe<{ admin_events_watchServices: ServiceChange }>(
+      {
+        query: ADMIN_EVENTS_WATCH_QUERY,
+        // namespace="" → NATS wildcard match (all namespaces).
+        // hmac/timestamp placeholders work in --insecure-subscribe
+        // mode; production deployments should mint via
+        // admin_signSubscriptionToken first.
+        variables: { namespace: '', hmac: 'x', timestamp: 0 },
+      },
+      {
+        next: (msg) => {
+          if (disposed) return;
+          const change = msg.data?.admin_events_watchServices;
+          if (!change) return;
+          push({ id: 'admin_events', receivedAt: Date.now(), payload: change });
+          enqueueToast(toastForServiceChange(change));
+        },
+        error: (e) => {
+          // Silenced from the UI feed; log to console for diagnostics.
+          // Likely cause: deployment without AddAdminEvents, or a
+          // subscription auth misconfiguration.
+          // eslint-disable-next-line no-console
+          console.warn('admin_events subscription error:', e);
+        },
+        complete: () => {},
+      },
+    );
+    return () => {
+      disposed = true;
+      dispose();
+    };
+  }, [push, enqueueToast]);
 
   // Expose the push fn through context so useSubscribe can reach it
   // without prop-drilling, but keep the public surface narrow.
@@ -88,7 +165,58 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     [recent, unread, push],
   );
 
-  return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>;
+  return (
+    <EventsContext.Provider value={value}>
+      {children}
+      <Snackbar
+        key={toast?.key}
+        open={toast !== null}
+        autoHideDuration={4000}
+        onClose={dismissToast}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        {toast ? (
+          <Alert severity={toast.severity} variant="filled" onClose={dismissToast} sx={{ width: '100%' }}>
+            {toast.message}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
+    </EventsContext.Provider>
+  );
+}
+
+const ADMIN_EVENTS_WATCH_QUERY = `
+  subscription AdminEvents($namespace: String, $hmac: String!, $timestamp: Int!) {
+    admin_events_watchServices(namespace: $namespace, hmac: $hmac, timestamp: $timestamp) {
+      action
+      namespace
+      version
+      addr
+      timestampUnixMs
+      replicaCount
+    }
+  }
+`;
+
+function toastForServiceChange(c: ServiceChange): Omit<ToastEntry, 'key'> {
+  const what = `${c.namespace}/${c.version}`;
+  switch (c.action) {
+    case 'ACTION_REGISTERED':
+      return {
+        severity: 'success',
+        message: `Service registered: ${what} (${c.replicaCount} replica${c.replicaCount === 1 ? '' : 's'})`,
+      };
+    case 'ACTION_DEREGISTERED':
+      return {
+        severity: 'warning',
+        message:
+          c.replicaCount === 0
+            ? `Service deregistered: ${what}`
+            : `Replica removed: ${what} (${c.replicaCount} remaining)`,
+      };
+    default:
+      return { severity: 'info', message: `Service change: ${what} (${c.action})` };
+  }
 }
 
 export function useEvents(): EventsContextValue {

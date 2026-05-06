@@ -378,7 +378,21 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* UI events provider. `<EventsProvider>` wraps the
+- *(uncommitted)* admin\_events end-to-end: `adminevents/v1` proto
+  (`AdminEvents.WatchServices` server-streaming) + `gw.AddAdminEvents()`
+  registers it under `admin_events/v1`. Registry hooks publish
+  `ServiceChange` to `events.admin_events.WatchServices.<ns>` on
+  every join/leave; the existing NATS pub/sub fanout delivers it to
+  WebSocket subscribers as `admin_events_watchServices`. The UI's
+  `EventsProvider` auto-subscribes; new toasts pop bottom-right and
+  events also land in the tray. Fixed two pre-existing bugs uncovered
+  by this work: schema rebuild crashed when a namespace had only
+  streaming RPCs (now skips the empty Query sub-object), and proto
+  enums were serialised as strings but graphql-go matches enum
+  values by typed equality (now returns int32). 2 new tests
+  (`admin_events_test.go`) + 1 WS e2e
+  (`subscriptions_test.go::AdminEventsWatchServices`).
+- `70ebaf2` UI events provider. `<EventsProvider>` wraps the
   Layout, holds a graphql-ws client (`ui/src/api/events.ts`) and a
   global ring buffer (50 events). Pages opt in via
   `useSubscribe({ id, query, variables, onData })`. Bell icon in

@@ -62,11 +62,18 @@ func (g *Gateway) assembleLocked() error {
 			nsFields[name] = f
 		}
 
-		// Every version (including latest) addressable as a sub-object.
+		// Every version (including latest) addressable as a sub-object —
+		// unless it has zero unary RPCs, in which case the sub-object
+		// would be empty and graphql-go rejects empty Object types.
+		// (Subscription-only namespaces hit this; their fields land on
+		// the Subscription root instead.)
 		for _, p := range pools {
 			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics, g.cfg.backpressure)
 			if err != nil {
 				return err
+			}
+			if len(versionedRPCs) == 0 {
+				continue
 			}
 			vName := exportedName(ns) + "_" + exportedName(p.key.version)
 			vObj := graphql.NewObject(graphql.ObjectConfig{
@@ -83,6 +90,13 @@ func (g *Gateway) assembleLocked() error {
 				subField.DeprecationReason = latestReason
 			}
 			nsFields[p.key.version] = subField
+		}
+
+		// Namespace with only streaming RPCs (e.g. admin_events) has
+		// no Query-side surface; skip the top-level field. Subscription
+		// fields are still emitted by buildSubscriptionFields below.
+		if len(nsFields) == 0 {
+			continue
 		}
 
 		nsObj := graphql.NewObject(graphql.ObjectConfig{
