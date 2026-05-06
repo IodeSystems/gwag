@@ -17,6 +17,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"log"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	gateway "github.com/iodesystems/go-api-gateway"
 	cpv1 "github.com/iodesystems/go-api-gateway/controlplane/v1"
@@ -46,7 +48,19 @@ func main() {
 	nodeName := flag.String("node-name", "", "Cluster node name (defaults to control-plane addr)")
 	var natsPeers stringList
 	flag.Var(&natsPeers, "nats-peer", "Cluster peer route, repeatable (e.g. localhost:14248)")
+	tlsCert := flag.String("tls-cert", "", "Server cert (PEM); enables mTLS on cluster routes + outbound gRPC")
+	tlsKey := flag.String("tls-key", "", "Server key (PEM); pair with --tls-cert")
+	tlsCA := flag.String("tls-ca", "", "CA bundle (PEM) used to verify peer certs")
 	flag.Parse()
+
+	var mtls *tls.Config
+	if *tlsCert != "" || *tlsKey != "" || *tlsCA != "" {
+		c, err := gateway.LoadMTLSConfig(*tlsCert, *tlsKey, *tlsCA)
+		if err != nil {
+			log.Fatalf("tls: %v", err)
+		}
+		mtls = c
+	}
 
 	var cluster *gateway.Cluster
 	if *natsData != "" {
@@ -60,18 +74,22 @@ func main() {
 			ClusterListen: *natsCluster,
 			Peers:         natsPeers,
 			DataDir:       *natsData,
+			TLS:           mtls,
 		})
 		if err != nil {
 			log.Fatalf("start cluster: %v", err)
 		}
 		cluster = c
-		log.Printf("nats client=%s cluster=%s data=%s peers=%v node=%s",
-			*natsListen, *natsCluster, *natsData, []string(natsPeers), c.NodeID)
+		log.Printf("nats client=%s cluster=%s data=%s peers=%v node=%s tls=%v",
+			*natsListen, *natsCluster, *natsData, []string(natsPeers), c.NodeID, mtls != nil)
 	}
 
 	var gwOpts []gateway.Option
 	if cluster != nil {
 		gwOpts = append(gwOpts, gateway.WithCluster(cluster))
+	}
+	if mtls != nil {
+		gwOpts = append(gwOpts, gateway.WithTLS(mtls))
 	}
 	gw := gateway.New(gwOpts...)
 
@@ -79,7 +97,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen control plane: %v", err)
 	}
-	srv := grpc.NewServer()
+	var grpcOpts []grpc.ServerOption
+	if mtls != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(mtls)))
+	}
+	srv := grpc.NewServer(grpcOpts...)
 	cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
 	go func() {
 		log.Printf("control plane listening on %s", *cpAddr)

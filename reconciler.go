@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -171,7 +172,13 @@ func (r *reconciler) acquireConn(addr string) (grpc.ClientConnInterface, error) 
 		c.refs++
 		return c.conn, nil
 	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	var creds grpc.DialOption
+	if t := r.gw.cfg.tls; t != nil {
+		creds = grpc.WithTransportCredentials(credentials.NewTLS(t))
+	} else {
+		creds = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+	conn, err := grpc.NewClient(addr, creds)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

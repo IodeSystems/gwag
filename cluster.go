@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -43,6 +46,12 @@ type ClusterOptions struct {
 
 	Debug bool
 	Trace bool
+
+	// TLS, when non-nil, enables mTLS on cluster routes. Both the cert
+	// pool used for verifying peers and the server cert+key must be
+	// configured. ClientAuth=RequireAndVerifyClientCert is recommended
+	// for true mTLS; callers can lower it for one-way TLS.
+	TLS *tls.Config
 }
 
 // StartCluster boots an embedded NATS server with JetStream enabled and
@@ -99,6 +108,10 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 			Name: "go-api-gateway",
 			Host: cHost,
 			Port: cPort,
+		}
+		if opts.TLS != nil {
+			srvOpts.Cluster.TLSConfig = opts.TLS.Clone()
+			srvOpts.Cluster.TLSTimeout = 5
 		}
 		srvOpts.Routes = routes
 	}
@@ -165,6 +178,39 @@ func (c *Cluster) WaitForJetStream(ctx context.Context) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// LoadMTLSConfig builds a *tls.Config that requires and verifies a
+// client cert against caFile, presenting (certFile, keyFile) as the
+// server identity. The same config is suitable for both NATS cluster
+// routes and the gateway's gRPC control plane — for true mesh mTLS,
+// use a single CA across the deployment and issue one (cert,key) pair
+// per node.
+//
+// Pass nil paths to bail out — callers convert "" flags to nil.
+func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
+	if certFile == "" || keyFile == "" || caFile == "" {
+		return nil, errors.New("LoadMTLSConfig: certFile, keyFile, caFile all required")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load keypair: %w", err)
+	}
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read ca: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("ca %s contains no valid certs", caFile)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // parseRouteURLs accepts entries like "nats-route://host:port" or

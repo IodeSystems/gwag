@@ -115,6 +115,26 @@ Behind the scenes:
   shrinks automatically`. Operator-driven shrink is a separate path
   (see `peer forget` once it lands).
 
+## Optional mTLS
+
+Pass `--tls-cert`, `--tls-key`, and `--tls-ca` to enable mutual TLS on
+both the NATS cluster routes (gateway-to-gateway) and the gRPC control
+plane (service-to-gateway). The same cert pair covers both surfaces;
+issue one per node from a shared CA:
+
+```
+$ go run ./cmd/gateway \
+    --node-name n1 --nats-data /tmp/n1 --nats-peer 127.0.0.1:14249 \
+    --tls-cert n1.crt --tls-key n1.key --tls-ca shared-ca.crt
+```
+
+The library's `gateway.LoadMTLSConfig(cert, key, ca)` returns a
+`*tls.Config` with `RequireAndVerifyClientCert` for true mesh mTLS.
+Service binaries pass an equivalent TLS dial option to
+`controlclient.SelfRegister(... DialOptions: []grpc.DialOption{...})`.
+The gateway's outbound dial to registered services also uses the same
+cert when `WithTLS` is set.
+
 ## CLI alternative
 
 For static registration without writing Go, the [`go-api-gateway`

@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"iter"
 	"net/http"
@@ -39,6 +40,7 @@ type Gateway struct {
 type Option func(*config)
 type config struct {
 	cluster *Cluster
+	tls     *tls.Config
 }
 
 // WithCluster binds the gateway to an embedded NATS cluster. When set,
@@ -47,6 +49,14 @@ type config struct {
 // back to the single-node in-memory path.
 func WithCluster(c *Cluster) Option {
 	return func(cfg *config) { cfg.cluster = c }
+}
+
+// WithTLS configures mTLS for outbound gRPC dials made by the
+// reconciler when it talks to registered services. Pass the same
+// config used for the embedded NATS cluster routes (build it with
+// LoadMTLSConfig) so one cert covers both surfaces.
+func WithTLS(c *tls.Config) Option {
+	return func(cfg *config) { cfg.tls = c }
 }
 
 func New(opts ...Option) *Gateway {
