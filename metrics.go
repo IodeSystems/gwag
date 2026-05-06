@@ -15,9 +15,11 @@ import (
 // at MetricsHandler. Plug in a custom impl via WithMetrics for
 // integrating with other backends.
 type Metrics interface {
-	// RecordDispatch is called once per gRPC dispatch with the
-	// (namespace, version) of the pool, the gRPC method path, the
-	// elapsed duration, and the dispatch error (nil on success).
+	// RecordDispatch is called once per dispatch (gRPC pool or
+	// OpenAPI source) with the (namespace, version) — version is
+	// "v1" for OpenAPI sources which have no version axis — the
+	// method label (gRPC method path or "<HTTP_METHOD> <pathTemplate>"),
+	// the elapsed duration, and the dispatch error (nil on success).
 	RecordDispatch(namespace, version, method string, d time.Duration, err error)
 
 	// RecordDwell is called for every successful slot acquisition
@@ -88,7 +90,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 	reg := prometheus.NewRegistry()
 	hist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "go_api_gateway_dispatch_duration_seconds",
-		Help:    "Duration of gRPC dispatches from the GraphQL surface to a backing replica.",
+		Help:    "Duration of dispatches (gRPC pools and OpenAPI sources) from the GraphQL surface to a backing replica.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"namespace", "version", "method", "code"})
 	dwell := prometheus.NewHistogramVec(prometheus.HistogramOpts{

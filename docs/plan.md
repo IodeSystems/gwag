@@ -35,11 +35,13 @@ fresh session.
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
   in `784430a`).
-- *Next operational pick:* OpenAPI dispatch **RecordDispatch
-  metric** parity with proto (per-source histogram so
-  `go_api_gateway_dispatch_duration_seconds` covers HTTP, not just
-  gRPC). The OpenAPI backpressure work landed without it because
-  the plan only called for backoff/dwell — surface as its own item.
+- *Operational polish next:* OpenAPI dispatch error **classification**
+  — `dispatchOpenAPI` returns plain `fmt.Errorf` so the new
+  `code` label on `go_api_gateway_dispatch_duration_seconds` for
+  HTTP dispatch always reads `internal`. Map HTTP statuses (4xx →
+  `failed_precondition`/`not_found`/etc., 5xx → `unavailable`/
+  `internal`) via `Reject(...)` so OpenAPI metrics can be sliced by
+  outcome the way gRPC dispatch already can.
 
 ### Token rotation (kid in tokens)
 
@@ -353,7 +355,21 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* `/schema/graphql` selector support. The endpoint
+- *(uncommitted)* OpenAPI dispatch RecordDispatch parity. Resolver
+  in `buildOpenAPIField` now records `start := time.Now()` and calls
+  `metrics.RecordDispatch(ns, "v1", "<METHOD> <pathTemplate>",
+  elapsed, err)` on every exit path — backpressure rejection, no-
+  live-replicas, and the dispatchOpenAPI return — so
+  `go_api_gateway_dispatch_duration_seconds` covers HTTP sources, not
+  just gRPC pools. Histogram help text + `Metrics.RecordDispatch`
+  godoc updated to reflect dual-transport coverage. 1 new test
+  (`TestOpenAPIE2E_RecordDispatchFires`): asserts label parity
+  (namespace="test", version="v1", method="GET /things/{id}") and
+  err nil/non-nil across happy + 500 paths.
+  Follow-up: HTTP errors all classify as `internal` because
+  `dispatchOpenAPI` returns `fmt.Errorf`; mapping to typed
+  `Reject(...)` codes is now its own tier-2 item.
+- `340f73b` `/schema/graphql` selector support. The endpoint
   now accepts the same `?service=ns[:ver][,...]` grammar as
   `/schema/proto` and `/schema/openapi`. Refactored
   `assembleLocked` into `buildSchemaLocked(filter schemaFilter)` —
@@ -368,7 +384,7 @@ older entries when they get stale.)
   `schema_rebuild_test.go`): two protos registered, unfiltered SDL
   carries both, `?service=greeter` carries only greeter, malformed
   selector → 400.
-- *(uncommitted)* OpenAPI HTTP backpressure. Per-source semaphore +
+- `cc44855` OpenAPI HTTP backpressure. Per-source semaphore +
   queue gauge mirroring the proto pool path: `openAPISource` gains
   `sem chan struct{}` + `queueing atomic.Int32`, sized by
   `BackpressureOptions.MaxInflight` (gateway-wide config — same knob
@@ -381,9 +397,7 @@ older entries when they get stale.)
   (`TestOpenAPIE2E_BackpressureTimesOutAndRejects` in
   `openapi_test.go`): blocking backend + `MaxInflight=1` +
   `MaxWaitTime=50ms` → second concurrent dispatch rejects with
-  RESOURCE_EXHAUSTED. RecordDispatch parity for OpenAPI dispatch is
-  intentionally not part of this change — tracked under tier-2
-  suggested pickups.
+  RESOURCE_EXHAUSTED.
 - `3517273` downstream GraphQL ingestion (boot-time, queries +
   mutations). `gw.AddGraphQL(endpoint, opts...)` runs the canonical
   introspection query, parses into a typed model, mirrors every
@@ -467,45 +481,12 @@ older entries when they get stale.)
   /admin/ so it's reachable via the gateway's mount). All
   self-ingest as `admin_*` GraphQL fields automatically. 5 new
   tests in `admin_huma_test.go`.
-- `06b1fc2` `/api/*` split + embedded UI bundle. Library:
-  `gateway.UIHandler(fs.FS)` for SPA serving with index.html
-  fallback. New `ui` package embeds `ui/dist/` via `//go:embed
-  all:dist`. Example: all gateway routes moved under `/api/*`,
-  `/` serves the UI; unmatched `/api/*` returns JSON 404 so
-  client typos don't render the SPA. UI updated to use `/api/...`
-  everywhere (vite proxy, GraphQLClient endpoint, schema fetch,
-  pnpm schema curl). Pattern lifted from zdx-go. Closes both the
-  tier-2 *Embed UI bundle* and the implicit "single-binary
-  deploy" goal.
-- `813b055` UI admin token entry: `ui/src/api/auth.ts`
-  (sessionStorage-backed store), `ui/src/components/SettingsDrawer.tsx`
-  (paste/save/clear UI), `useAdminToken()` hook, lazy Authorization
-  header in `client.ts`, gear icon + "no token" badge dot in the
-  AppBar. Closed the tier-2 "Forget button 401s" item.
-- `778559d` cluster cross-gateway dispatch e2e
-  (`cluster_dispatch_test.go`): two `StartCluster` instances
-  peering on free TCP ports; A receives Register, B's reconciler
-  picks it up via the registry KV, and a GraphQL query through B
-  reaches the greeter registered on A. Closed the tier-1
-  test-coverage gap. Also: applied the lifetime-context fix to
-  `forget_peer_test.go` (helpers were passing 10s ctx into
-  `startClusterTracking`, which would have killed long-running
-  reconciler/watch goroutines mid-test).
-- `9f498eb` ForgetPeer tests (`forget_peer_test.go`): 6
-  cases against a single-node cluster, manipulating the peers KV
-  directly. Covers the alive-rejection / happy-path / refuse-self
-  flow plus the standalone "no cluster configured" error.
-- `4a5b203` schema rebuild tests (`schema_rebuild_test.go`):
-  6 cases verifying that pool create/destroy/hash-collision flow
-  through `assembleLocked` correctly. Pure package-level; no NATS.
-- `aabdc21` gRPC unary dispatch e2e (`grpc_dispatch_test.go`):
-  in-process `grpc.Server` on `127.0.0.1:0` implementing
-  GreeterService.Hello, registered via `AddProtoDescriptor`, queries
-  through `gw.Handler()`. Covers happy path, v1 sub-object dispatch,
-  backend error surfacing, drained-pool no-live-replicas error.
-Older commits (subscription e2e, OpenAPI dispatch e2e, AdminAuthorizer
-delegate, ForwardHeaders, admin boot-token, huma self-ingest, schema
-export family, AddOpenAPI ingestion, /health + Drain, graphql-ws
-transport + NATS bridge, cluster KV, peers KV, embedded NATS, mTLS,
-schema diff, Prometheus, etc.) are in the git log — they're not
-referenced by current decisions any more.
+Older commits (`/api/*` split + embedded UI bundle `06b1fc2`, UI admin
+token entry `813b055`, cluster cross-gateway dispatch e2e `778559d`,
+ForgetPeer tests `9f498eb`, schema rebuild tests `4a5b203`, gRPC
+unary dispatch e2e `aabdc21`, subscription e2e, OpenAPI dispatch e2e,
+AdminAuthorizer delegate, ForwardHeaders, admin boot-token, huma
+self-ingest, schema export family, AddOpenAPI ingestion, /health +
+Drain, graphql-ws transport + NATS bridge, cluster KV, peers KV,
+embedded NATS, mTLS, schema diff, Prometheus, etc.) are in the git
+log — they're not referenced by current decisions any more.

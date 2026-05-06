@@ -665,6 +665,7 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
+			start := time.Now()
 			// Acquire a slot. Fast path: src.sem nil (unbounded) or has
 			// immediate capacity. Slow path: queue, observe dwell, time
 			// out per MaxWaitTime. Mirrors the proto pool path in
@@ -684,7 +685,9 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 					metrics.RecordDwell(ns, "v1", methodLabel, "unary", dwell)
 					if err != nil {
 						metrics.RecordBackoff(ns, "v1", methodLabel, "unary", "wait_timeout")
-						return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error()))
+						rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error()))
+						metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), rejErr)
+						return nil, rejErr
 					}
 				}
 				defer func() { <-src.sem }()
@@ -692,11 +695,18 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 
 			r := src.pickReplica()
 			if r == nil {
-				return nil, fmt.Errorf("openapi: no live replicas for %s", src.namespace)
+				err := fmt.Errorf("openapi: no live replicas for %s", src.namespace)
+				metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+				return nil, err
 			}
 			r.inflight.Add(1)
 			defer r.inflight.Add(-1)
-			return dispatchOpenAPI(rp.Context, method, r.baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, r.httpClient)
+			resp, err := dispatchOpenAPI(rp.Context, method, r.baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, r.httpClient)
+			metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+			if err != nil {
+				return nil, err
+			}
+			return resp, nil
 		},
 	}, nil
 }
