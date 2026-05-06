@@ -11,13 +11,26 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// assembleLocked walks every pool and builds a single graphql.Schema.
-// One Query field per non-internal namespace; under each namespace, the
-// latest version's RPCs surface flat AND every version is addressable
-// via vN sub-objects (non-latest sub-objects marked @deprecated). The
-// dispatch closure picks a replica from the pool at invocation time.
-// Caller holds g.mu. Atomically replaces g.schema on success.
+// assembleLocked builds the gateway's canonical (unfiltered) GraphQL
+// schema and atomically swaps it into g.schema. Caller holds g.mu.
 func (g *Gateway) assembleLocked() error {
+	schema, err := g.buildSchemaLocked(schemaFilter{})
+	if err != nil {
+		return err
+	}
+	g.schema.Store(schema)
+	return nil
+}
+
+// buildSchemaLocked walks the registered pools / OpenAPI sources /
+// downstream-GraphQL sources matching `filter` and produces a fresh
+// graphql.Schema. An empty filter (zero value) matches everything —
+// that's what assembleLocked uses. /schema/graphql passes a populated
+// filter so codegen consumers can fetch a single namespace's slice
+// without rebuilding the gateway-wide schema.
+//
+// Caller holds g.mu. Returns the built schema; does NOT store it.
+func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
 	pol := &policy{hides: map[protoreflect.FullName]bool{}}
 	for _, p := range g.pairs {
 		for _, t := range p.Hides {
@@ -35,9 +48,12 @@ func (g *Gateway) assembleLocked() error {
 	chain := g.runtimeChain()
 	rootFields := graphql.Fields{}
 
-	// Group pools by namespace.
+	// Group pools by namespace, applying the selector filter.
 	byNS := map[string][]*pool{}
 	for _, p := range g.pools {
+		if !filter.matchPool(p.key) {
+			continue
+		}
 		byNS[p.key.namespace] = append(byNS[p.key.namespace], p)
 	}
 
@@ -56,7 +72,7 @@ func (g *Gateway) assembleLocked() error {
 		// version-agnostic clients see.
 		latestRPCs, err := buildPoolRPCs(tb, latest, chain, g.cfg.metrics, g.cfg.backpressure)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for name, f := range latestRPCs {
 			nsFields[name] = f
@@ -70,7 +86,7 @@ func (g *Gateway) assembleLocked() error {
 		for _, p := range pools {
 			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics, g.cfg.backpressure)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if len(versionedRPCs) == 0 {
 				continue
@@ -113,25 +129,25 @@ func (g *Gateway) assembleLocked() error {
 
 	// Merge OpenAPI fields into the Query and Mutation roots.
 	openTB := newOpenAPITypeBuilder()
-	openQueries, openMutations, err := g.buildOpenAPIFields(openTB)
+	openQueries, openMutations, err := g.buildOpenAPIFields(openTB, filter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for k, v := range openQueries {
 		if _, exists := rootFields[k]; exists {
-			return fmt.Errorf("openapi/proto field collision in Query: %s", k)
+			return nil, fmt.Errorf("openapi/proto field collision in Query: %s", k)
 		}
 		rootFields[k] = v
 	}
 
 	// Merge downstream-GraphQL ingest fields. Same collision rules.
-	gqlQueries, gqlMutations, err := g.buildGraphQLFields()
+	gqlQueries, gqlMutations, err := g.buildGraphQLFields(filter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for k, v := range gqlQueries {
 		if _, exists := rootFields[k]; exists {
-			return fmt.Errorf("graphql ingest field collision in Query: %s", k)
+			return nil, fmt.Errorf("graphql ingest field collision in Query: %s", k)
 		}
 		rootFields[k] = v
 	}
@@ -158,7 +174,7 @@ func (g *Gateway) assembleLocked() error {
 			mutationFields = graphql.Fields{}
 		}
 		if _, exists := mutationFields[k]; exists {
-			return fmt.Errorf("graphql ingest field collision in Mutation: %s", k)
+			return nil, fmt.Errorf("graphql ingest field collision in Mutation: %s", k)
 		}
 		mutationFields[k] = v
 	}
@@ -174,9 +190,9 @@ func (g *Gateway) assembleLocked() error {
 	// (String!) + timestamp (Int!). Subscribe resolver is a no-op stub
 	// until the WebSocket transport lands; SDL still surfaces them so
 	// codegen pipelines can generate typed subscriptions today.
-	subFields, err := g.buildSubscriptionFields(tb)
+	subFields, err := g.buildSubscriptionFields(tb, filter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(subFields) > 0 {
 		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{
@@ -187,10 +203,9 @@ func (g *Gateway) assembleLocked() error {
 
 	schema, err := graphql.NewSchema(cfg)
 	if err != nil {
-		return fmt.Errorf("graphql.NewSchema: %w", err)
+		return nil, fmt.Errorf("graphql.NewSchema: %w", err)
 	}
-	g.schema.Store(&schema)
-	return nil
+	return &schema, nil
 }
 
 // buildSubscriptionFields walks every non-internal pool, finds
@@ -198,10 +213,13 @@ func (g *Gateway) assembleLocked() error {
 // a graphql.Fields map keyed by "<namespace>_<lowerCamel(method)>".
 // Client-streaming and bidi are NOT promoted; they're filtered with a
 // warning at registration time (see control.go).
-func (g *Gateway) buildSubscriptionFields(tb *typeBuilder) (graphql.Fields, error) {
+func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	for _, p := range g.pools {
 		if g.isInternal(p.key.namespace) {
+			continue
+		}
+		if !filter.matchPool(p.key) {
 			continue
 		}
 		services := p.file.Services()

@@ -98,6 +98,19 @@ type serviceSelector struct {
 	version   string // "" = any version
 }
 
+// schemaFilter wraps a parsed selector list and exposes the per-source
+// match shapes the schema-build helpers need. An empty selector list
+// matches everything (no filter active). Used by /schema/graphql to
+// build a per-request filtered schema; the cached g.schema is built
+// with an empty filter (= everything).
+type schemaFilter struct {
+	selectors []serviceSelector
+}
+
+func (f schemaFilter) matchPool(k poolKey) bool { return matchSelectors(k, f.selectors) }
+
+func (f schemaFilter) matchNS(ns string) bool { return matchOpenAPISelectors(ns, f.selectors) }
+
 func parseProtoSelectors(raw string) ([]serviceSelector, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

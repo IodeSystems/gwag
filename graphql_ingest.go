@@ -152,11 +152,14 @@ func dispatchGraphQL(
 // and emits namespace-prefixed Query / Mutation field maps. Type
 // mirroring is done lazily inside graphql.NewObject thunks to handle
 // recursive type references without needing topological sort.
-func (g *Gateway) buildGraphQLFields() (graphql.Fields, graphql.Fields, error) {
+func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
 	for ns, src := range g.graphQLSources {
 		if g.isInternal(ns) {
+			continue
+		}
+		if !filter.matchNS(ns) {
 			continue
 		}
 		mb := newGraphQLMirror(src)
