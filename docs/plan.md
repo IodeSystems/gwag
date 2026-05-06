@@ -11,40 +11,27 @@ intentionally; not currently planned to fix.
 
 ## Tier 1 — load-bearing
 
-### Gateway admin auth: pluggable delegate (boot token shipped)
+### Gateway admin auth — done
 
-**Boot token shipped** (see Recently Shipped). What's left in tier 1:
+Boot token + pluggable delegate both shipped (see Recently Shipped).
+The fall-through priority is delegate → boot token; OK accepts,
+DENIED rejects without falling through, anything else (UNAVAILABLE,
+NOT_CONFIGURED, transport error) falls through so the always-works
+hatch keeps operators unlocked.
 
-**Pluggable admin authorizer.** Same delegate shape as
-`SubscriptionAuthorizer`: a service registered under a reserved
-namespace (e.g. `_admin_auth/v1`) implementing
-`AuthorizeAdmin(token, operation) → code`. The gateway consults it on
-every protected request and falls through to the boot token if the
-delegate denies, errors, or isn't registered. The always-works boot
-token is non-negotiable. **This delegate authorizes operators against
-the gateway, not services against each other.**
-
-Implementation when it lands:
-- `eventsauth/v1`-style proto: `AdminAuth` service,
-  `Authorize(token, method, path) → (code, reason)`.
-- `WithAdminAuthorizer(...)` library option mirrors
-  `WithSubscriptionAuth`. Boot token remains the fallback.
-- `AdminMiddleware` consults the delegate first, then boot token —
-  parallel to subscription HMAC verify falling back to insecure mode.
-
-**Optional follow-ups now that the boot path is in place:**
-- *Destructive read opt-in.* `AdminMiddleware` currently lets every
-  GET through for the UI. Once a destructive read shows up
-  (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via a
-  per-route flag rather than flipping the global GET policy.
-- *Token rotation for admin.* Tier-2 already covers HMAC kid for
-  subscriptions; same idea here would let operators rotate without
-  restart.
-- *Configurable header pass-through.* `forwardedOpenAPIHeaders` is a
-  static `[]string{"Authorization"}` for v1. Per-source allowlist
-  (set via `ServiceOption`) would unblock multi-tenant scenarios
-  where different OpenAPI backends want different forward sets — see
-  next section.
+**Optional follow-ups (tier-2-ish, no urgency):**
+- *Destructive read opt-in.* `AdminMiddleware` lets every GET
+  through for the UI. Once a destructive read shows up
+  (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via
+  a per-route flag rather than flipping the global GET policy.
+- *Auto-internal underscore namespaces.* `_events_auth` and
+  `_admin_auth` rely on operators passing `AsInternal()` at
+  registration. Auto-flagging any `_*` namespace as internal would
+  prevent accidental schema leaks.
+- *Admin auth metrics.* No `go_api_gateway_admin_auth_total{code,...}`
+  counter today; subscriptions already have one. Mirror it for
+  delegate decisions and bearer outcomes when an operator wants
+  visibility into who's getting denied.
 
 ### Outbound auth pass-through to OpenAPI services
 
@@ -293,6 +280,7 @@ future sessions.
 | **Server-streaming gRPC filtered with warning, not implemented** | Subscription path is NATS-backed. Lifting actual gRPC streams adds a transport story we'd rather not maintain. Files declaring server-streaming RPCs surface in the schema, but services must publish to the resolved NATS subject rather than implementing the gRPC stream method — README documents the subject derivation. |
 | **`AdminMiddleware` gates writes, lets reads through** | UI's services/peers views must work unauthenticated for the operator to find the token in the first place. Destructive reads will need explicit opt-in once any exist. Dispatch path forwards `Authorization` so a token presented at /graphql reaches /admin/\* automatically — the bearer middleware is the single gating point. |
 | **`Authorization` forwarded unconditionally on OpenAPI dispatch** | Cheapest design that makes admin\_\* GraphQL mutations work end-to-end with one bearer. External backends that need a different identity will need the per-source `ForwardHeaders(...)` follow-up; revisit when a real use case shows up. |
+| **AdminAuthorizer fall-through priority: delegate → boot token** | Boot token is the always-works emergency hatch. A delegate that crashes / DOS's / mis-deploys cannot lock operators out: UNAVAILABLE / transport error / NOT_CONFIGURED fall through. Only an explicit DENIED short-circuits. Operators can still get in with the on-disk token. |
 
 ---
 
@@ -389,11 +377,17 @@ Followups:
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI dispatch round-trip e2e tests
+- *(uncommitted)* AdminAuthorizer delegate (`adminauth/v1`) + wiring
+  in `AdminMiddleware`. Service registers under `_admin_auth/v1`;
+  delegate consulted first, boot token is the fallback. Tests cover
+  no-delegate, OK accept, DENIED short-circuit, UNAVAILABLE
+  fall-through, transport error → boot token still works, reads
+  remain public. Boot token is non-negotiable: a misbehaving
+  delegate cannot lock operators out.
+- `299c0ee` OpenAPI dispatch round-trip e2e tests
   (`openapi_test.go`): httptest backend + `gw.Handler()`; covers
   GET, POST-with-body, Authorization forwarding, ForwardHeaders
-  override, backend-error → graphql-error. Pattern for cluster /
-  subscription tests.
+  override, backend-error → graphql-error.
 - `f0cfe46` `ForwardHeaders(...)` ServiceOption + first
   package-level tests (`auth_admin_test.go`). Replaces the static
   global header allowlist with per-source allowlist.

@@ -38,6 +38,7 @@ control.go               gRPC control plane: Register/Heartbeat/Deregister
                          + Sign/List/Forget admin RPCs
 controlplane/v1/         Control plane proto + generated bindings
 eventsauth/v1/           SubscriptionAuthorizer delegate proto
+adminauth/v1/            AdminAuthorizer delegate proto
 admin_huma.go            huma admin routes; self-ingested via OpenAPI
                          to surface as admin_* GraphQL fields (dogfood)
 peers.go                 Peers KV bucket + monotonic R bump
@@ -46,7 +47,8 @@ broker.go                Sub-fanout: shared NATS subs across N WebSockets
 subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
 auth_subscribe.go        HMAC verify + SubscribeAuthCode
 auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
-auth_admin.go            Boot-token gen/persist + AdminMiddleware bearer
+auth_admin.go            Boot-token gen/persist + AdminMiddleware
+auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
 metrics.go               Prometheus dispatch + dwell + backoff + queue
                          + stream + auth gauges/histograms/counters
 health.go                /health endpoint + Drain method
