@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -25,7 +26,13 @@ import (
 // path any external service-defined OpenAPI takes.
 func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	mux := http.NewServeMux()
-	api := humago.New(mux, huma.DefaultConfig("Admin", "1.0.0"))
+	cfg := huma.DefaultConfig("Admin", "1.0.0")
+	// Huma defaults OpenAPIPath to "/openapi", which would serve at
+	// /api/admin/../openapi.json after StripPrefix("/api"). Move it
+	// under /admin/openapi so inbound /api/admin/openapi.json
+	// resolves cleanly.
+	cfg.OpenAPIPath = "/admin/openapi"
+	api := humago.New(mux, cfg)
 
 	cp, ok := g.ControlPlane().(*controlPlane)
 	if !ok {
@@ -115,6 +122,46 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return out, nil
 	})
 
+	huma.Register(api, huma.Operation{
+		OperationID: "listChannels",
+		Method:      http.MethodGet,
+		Path:        "/admin/channels",
+		Summary:     "List active subscription subjects with their in-process consumer counts.",
+	}, func(_ context.Context, _ *struct{}) (*channelsOut, error) {
+		out := &channelsOut{}
+		// Always emit a non-nil slice so JSON Subscription[] is never null.
+		out.Body.Channels = []channelInfo{}
+		for _, s := range g.ActiveSubjects() {
+			out.Body.Channels = append(out.Body.Channels, channelInfo{
+				Subject:   s.Subject,
+				Consumers: s.Consumers,
+			})
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "drain",
+		Method:      http.MethodPost,
+		Path:        "/admin/drain",
+		Summary:     "Trigger graceful drain. /health flips to 503 immediately; the call returns when active streams reach 0 (or the per-request timeout expires).",
+	}, func(ctx context.Context, in *drainIn) (*drainOut, error) {
+		ttl := time.Duration(in.Body.TimeoutSeconds) * time.Second
+		if ttl <= 0 {
+			ttl = 30 * time.Second
+		}
+		dctx, cancel := context.WithTimeout(ctx, ttl)
+		defer cancel()
+		err := g.Drain(dctx)
+		out := &drainOut{}
+		out.Body.Drained = err == nil
+		out.Body.ActiveStreams = int(g.streamGlobal.Load())
+		if err != nil {
+			out.Body.Reason = err.Error()
+		}
+		return out, nil
+	})
+
 	spec, err := json.Marshal(api.OpenAPI())
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal openapi: %w", err)
@@ -171,6 +218,33 @@ type signOut struct {
 		Code          string `json:"code"`
 		Hmac          string `json:"hmac,omitempty"`
 		TimestampUnix int64  `json:"timestampUnix,omitempty"`
+		Reason        string `json:"reason,omitempty"`
+	}
+}
+
+type channelInfo struct {
+	Subject   string `json:"subject"`
+	Consumers int    `json:"consumers"`
+}
+
+type channelsOut struct {
+	Body struct {
+		Channels []channelInfo `json:"channels"`
+	}
+}
+
+type drainIn struct {
+	Body struct {
+		// TimeoutSeconds caps how long Drain waits for active streams
+		// to reach zero before returning. 0 → 30s default.
+		TimeoutSeconds int64 `json:"timeoutSeconds,omitempty"`
+	}
+}
+
+type drainOut struct {
+	Body struct {
+		Drained       bool   `json:"drained"`
+		ActiveStreams int    `json:"activeStreams"`
 		Reason        string `json:"reason,omitempty"`
 	}
 }

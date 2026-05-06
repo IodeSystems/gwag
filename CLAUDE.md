@@ -39,8 +39,10 @@ control.go               gRPC control plane: Register/Heartbeat/Deregister
 controlplane/v1/         Control plane proto + generated bindings
 eventsauth/v1/           SubscriptionAuthorizer delegate proto
 adminauth/v1/            AdminAuthorizer delegate proto
-admin_huma.go            huma admin routes; self-ingested via OpenAPI
-                         to surface as admin_* GraphQL fields (dogfood)
+admin_huma.go            huma admin routes (peers, services, forget,
+                         sign, channels, drain, openapi.json);
+                         self-ingested via OpenAPI to surface as
+                         admin_* GraphQL fields (dogfood)
 peers.go                 Peers KV bucket + monotonic R bump
 reconciler.go            Watches registry KV, syncs local pool state
 broker.go                Sub-fanout: shared NATS subs across N WebSockets
