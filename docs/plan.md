@@ -25,7 +25,6 @@ below is uncovered.
 
 | Surface | Smallest useful test | Notes |
 |---|---|---|
-| gRPC unary dispatch | In-process `grpc.Server` + `AddProto` + GraphQL POST | Mirror the `openapi_test.go` shape; greeter proto already in `examples/multi/gen`. |
 | Cluster cross-gateway dispatch | Two `StartCluster` instances peering, register on A, dispatch from B | Validates KV reconciler + replica picking across nodes. |
 | ForgetPeer | Happy path (TTL-expired peer drops); alive peer rejection | Exercises `controlPlane.ForgetPeer` + KV bucket. |
 | Schema rebuild | Pool create → schema gains field; destroy → loses it; hash mismatch on second registration → error | Pure package-level; no NATS. |
@@ -301,12 +300,17 @@ Where to crib from when adding tests:
   httptest backend: GET path params, POST request body,
   Authorization forwarding default, `ForwardHeaders` override,
   backend error surfacing.
+- `grpc_dispatch_test.go` — full GraphQL → gRPC dispatch
+  round-trip: real `grpc.Server` on `127.0.0.1:0` implementing
+  GreeterService.Hello, registered via `AddProtoDescriptor`, queries
+  through `gw.Handler()`. Covers happy path, v1 sub-object, backend
+  error, no-live-replicas.
 - `subscriptions_test.go` — full WebSocket round-trip via embedded
   NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
   publish → next frame; HMAC SIGNATURE_MISMATCH / TOO_OLD;
   NOT_CONFIGURED; client `complete` cleans up the broker entry.
 
-Pattern: httptest + `gw.Handler()` for OpenAPI/subscription;
+Pattern: httptest + `gw.Handler()` for OpenAPI/subscription/gRPC;
 fakes or direct helper calls for unit-shape. Every new feature
 should add same-shape coverage.
 
@@ -394,6 +398,11 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* gRPC unary dispatch e2e (`grpc_dispatch_test.go`):
+  in-process `grpc.Server` on `127.0.0.1:0` implementing
+  GreeterService.Hello, registered via `AddProtoDescriptor`, queries
+  through `gw.Handler()`. Covers happy path, v1 sub-object dispatch,
+  backend error surfacing, drained-pool no-live-replicas error.
 - `1f85546` subscription e2e via embedded NATS + WebSocket.
   `StartCluster` on ephemeral ports + tempdir; greeter registered
   via `AddProtoDescriptor`; happy-path publish → next frame, HMAC

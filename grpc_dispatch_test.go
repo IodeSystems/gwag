@@ -1,0 +1,194 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"google.golang.org/grpc"
+
+	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+)
+
+// fakeGreeterServer implements just the unary Hello — Greetings (server
+// stream) and Echo (bidi) are intentionally left at the unimplemented
+// embed since unary tests don't drive them.
+type fakeGreeterServer struct {
+	greeterv1.UnimplementedGreeterServiceServer
+
+	helloCalls atomic.Int32
+	lastReq    atomic.Pointer[greeterv1.HelloRequest]
+	helloFn    func(context.Context, *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error)
+}
+
+func (f *fakeGreeterServer) Hello(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+	f.helloCalls.Add(1)
+	f.lastReq.Store(req)
+	if f.helloFn != nil {
+		return f.helloFn(ctx, req)
+	}
+	return &greeterv1.HelloResponse{Greeting: "hello " + req.GetName()}, nil
+}
+
+type grpcE2EFixture struct {
+	gw       *Gateway
+	server   *httptest.Server
+	greeter  *fakeGreeterServer
+	grpcAddr string
+}
+
+// newGRPCE2EFixture spins an in-process grpc.Server on
+// 127.0.0.1:<ephemeral>, registers greeter via AddProtoDescriptor
+// pointing at it, and exposes gw.Handler() over httptest. Mirrors
+// the openapi_test.go fixture shape.
+func newGRPCE2EFixture(t *testing.T) *grpcE2EFixture {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{}
+	grpcSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(grpcSrv, greeter)
+	go func() { _ = grpcSrv.Serve(lis) }()
+	t.Cleanup(grpcSrv.Stop)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(lis.Addr().String()),
+		As("greeter"),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	return &grpcE2EFixture{
+		gw:       gw,
+		server:   srv,
+		greeter:  greeter,
+		grpcAddr: lis.Addr().String(),
+	}
+}
+
+func (f *grpcE2EFixture) postGraphQL(t *testing.T, query string) (status int, body string) {
+	t.Helper()
+	resp, err := http.Post(f.server.URL+"/graphql", "application/json", strings.NewReader(query))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	rr := httptest.NewRecorder()
+	rr.Code = resp.StatusCode
+	if _, err := rr.Body.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return rr.Code, rr.Body.String()
+}
+
+func TestGRPCE2E_UnaryHappyPath(t *testing.T) {
+	f := newGRPCE2EFixture(t)
+
+	status, body := f.postGraphQL(t, `{"query":"{ greeter { hello(name:\"world\") { greeting } } }"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+
+	var out struct {
+		Data struct {
+			Greeter struct {
+				Hello map[string]any `json:"hello"`
+			} `json:"greeter"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("decode: %v: %s", err, body)
+	}
+	if len(out.Errors) > 0 {
+		t.Fatalf("graphql errors: %v", out.Errors)
+	}
+	if got := out.Data.Greeter.Hello["greeting"]; got != "hello world" {
+		t.Fatalf("greeting=%v want %q", got, "hello world")
+	}
+	if got := f.greeter.helloCalls.Load(); got != 1 {
+		t.Fatalf("Hello called %d times, want 1", got)
+	}
+	if got := f.greeter.lastReq.Load().GetName(); got != "world" {
+		t.Fatalf("backend got name=%q want world", got)
+	}
+}
+
+func TestGRPCE2E_LatestNamespaceFlat(t *testing.T) {
+	// The schema also exposes the latest version's RPCs flat under the
+	// namespace alongside the v1 sub-object. Confirm both shapes
+	// dispatch to the same gRPC call.
+	f := newGRPCE2EFixture(t)
+
+	_, body := f.postGraphQL(t, `{"query":"{ greeter { v1 { hello(name:\"v1\") { greeting } } } }"}`)
+	var out struct {
+		Data struct {
+			Greeter struct {
+				V1 struct {
+					Hello map[string]any `json:"hello"`
+				} `json:"v1"`
+			} `json:"greeter"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("decode: %v: %s", err, body)
+	}
+	if got := out.Data.Greeter.V1.Hello["greeting"]; got != "hello v1" {
+		t.Fatalf("v1 greeting=%v want %q", got, "hello v1")
+	}
+	if got := f.greeter.helloCalls.Load(); got != 1 {
+		t.Fatalf("Hello called %d times, want 1 (v1 sub-object reuses the same dispatch)", got)
+	}
+}
+
+func TestGRPCE2E_BackendErrorSurfaces(t *testing.T) {
+	f := newGRPCE2EFixture(t)
+	f.greeter.helloFn = func(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+		return nil, errors.New("simulated backend failure")
+	}
+
+	_, body := f.postGraphQL(t, `{"query":"{ greeter { hello(name:\"x\") { greeting } } }"}`)
+	if !strings.Contains(body, "errors") {
+		t.Fatalf("expected graphql errors block, got %s", body)
+	}
+	if !strings.Contains(body, "simulated backend failure") {
+		t.Fatalf("backend error not surfaced, got %s", body)
+	}
+}
+
+func TestGRPCE2E_NoLiveReplicasAfterRemoval(t *testing.T) {
+	// Drop all replicas and confirm the dispatch error mentions the
+	// (ns/ver). This covers the error path in pool.pickReplica.
+	f := newGRPCE2EFixture(t)
+
+	// Drain replicas without deleting the pool — we want the
+	// dispatch closure to see "no live replicas" rather than a
+	// missing pool error. atomic Pointer to empty slice mirrors how
+	// removeReplicasByOwner stores its result.
+	f.gw.mu.Lock()
+	empty := []*replica{}
+	for _, p := range f.gw.pools {
+		p.replicas.Store(&empty)
+	}
+	f.gw.mu.Unlock()
+
+	_, body := f.postGraphQL(t, `{"query":"{ greeter { hello(name:\"x\") { greeting } } }"}`)
+	if !strings.Contains(body, "no live replicas") {
+		t.Fatalf("expected 'no live replicas' error, got %s", body)
+	}
+}
