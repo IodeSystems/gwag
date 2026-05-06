@@ -6,13 +6,13 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"iter"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/handler"
@@ -25,8 +25,9 @@ type Gateway struct {
 	mu       sync.Mutex
 	services []*registeredService
 	pairs    []Pair
-	sealed   bool
-	schema   graphql.Schema
+	schema   atomic.Pointer[graphql.Schema]
+	cfg      *config
+	cp       *controlPlane
 }
 
 type registeredService struct {
@@ -34,6 +35,10 @@ type registeredService struct {
 	internal  bool
 	file      protoreflect.FileDescriptor
 	conn      grpc.ClientConnInterface
+	// owner identifies which registration added this service, so a
+	// Deregister or heartbeat eviction can remove just its entries.
+	// Empty for services added via AddProto at boot.
+	owner string
 }
 
 type Option func(*config)
@@ -44,7 +49,7 @@ func New(opts ...Option) *Gateway {
 	for _, o := range opts {
 		o(cfg)
 	}
-	return &Gateway{}
+	return &Gateway{cfg: cfg}
 }
 
 type ServiceOption func(*serviceConfig)
@@ -87,12 +92,11 @@ func AsInternal() ServiceOption {
 // AddProto parses a .proto file and registers its services. Bodies of
 // services are routed to the destination set by To(). Namespace
 // defaults to the filename stem; override with As().
+//
+// Safe to call after Handler() — the schema rebuilds and atomically
+// replaces the live one, so dynamic add at runtime works the same way
+// boot-time registration does.
 func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.sealed {
-		return errors.New("gateway: AddProto after Handler() is not supported")
-	}
 	sc := &serviceConfig{}
 	for _, o := range opts {
 		o(sc)
@@ -108,18 +112,48 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	if ns == "" {
 		ns = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
-	for _, existing := range g.services {
-		if existing.namespace == ns {
-			return fmt.Errorf("gateway: namespace %q already registered", ns)
-		}
-	}
-	g.services = append(g.services, &registeredService{
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.addServiceLocked(&registeredService{
 		namespace: ns,
 		internal:  sc.internal,
 		file:      fd,
 		conn:      sc.conn,
 	})
+}
+
+// addServiceLocked appends the service and (if the schema has been
+// built at least once) rebuilds it. Caller must hold g.mu.
+func (g *Gateway) addServiceLocked(svc *registeredService) error {
+	for _, existing := range g.services {
+		if existing.namespace == svc.namespace {
+			return fmt.Errorf("gateway: namespace %q already registered", svc.namespace)
+		}
+	}
+	g.services = append(g.services, svc)
+	if g.schema.Load() != nil {
+		// Live gateway: reassemble and atomically swap.
+		return g.assembleLocked()
+	}
 	return nil
+}
+
+// removeServicesByOwnerLocked drops all services whose owner equals
+// `owner` and rebuilds the schema if any were removed. Caller holds mu.
+func (g *Gateway) removeServicesByOwnerLocked(owner string) (removed int, err error) {
+	out := g.services[:0]
+	for _, s := range g.services {
+		if s.owner == owner {
+			removed++
+			continue
+		}
+		out = append(out, s)
+	}
+	g.services = out
+	if removed > 0 && g.schema.Load() != nil {
+		return removed, g.assembleLocked()
+	}
+	return removed, nil
 }
 
 // Use appends middleware to both pipelines. Pair-shaped middleware
@@ -131,23 +165,26 @@ func (g *Gateway) Use(pairs ...Pair) {
 	g.pairs = append(g.pairs, pairs...)
 }
 
-// Handler returns the http.Handler that serves the assembled GraphQL
-// schema. First call seals the gateway; subsequent AddProto calls error.
+// Handler returns the http.Handler that serves the GraphQL schema.
+// First call assembles the schema and starts hot-swap mode; subsequent
+// AddProto / control-plane registrations rebuild the schema in place.
 func (g *Gateway) Handler() http.Handler {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.sealed {
-		if err := g.assemble(); err != nil {
+	if g.schema.Load() == nil {
+		if err := g.assembleLocked(); err != nil {
+			g.mu.Unlock()
 			return errorHandler(err)
 		}
-		g.sealed = true
 	}
-	gh := handler.New(&handler.Config{
-		Schema:   &g.schema,
-		Pretty:   true,
-		GraphiQL: true,
-	})
+	g.mu.Unlock()
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		schema := g.schema.Load()
+		gh := handler.New(&handler.Config{
+			Schema:   schema,
+			Pretty:   true,
+			GraphiQL: true,
+		})
 		ctx := withInjectCache(r.Context())
 		ctx = WithHTTPRequest(ctx, r)
 		gh.ServeHTTP(w, r.WithContext(ctx))

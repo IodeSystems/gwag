@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/graphql-go/graphql"
@@ -11,11 +10,12 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// assemble walks every registered service and builds a single
+// assembleLocked walks every registered service and builds a single
 // graphql.Schema with one Query field per non-internal namespace. Each
 // namespace exposes one field per RPC method; the resolver bridges into
-// the runtime middleware chain and dispatches via dynamicpb.
-func (g *Gateway) assemble() error {
+// the runtime middleware chain and dispatches via dynamicpb. Caller
+// holds g.mu. Atomically replaces g.schema on success.
+func (g *Gateway) assembleLocked() error {
 	pol := &policy{hides: map[protoreflect.FullName]bool{}}
 	for _, p := range g.pairs {
 		for _, t := range p.Hides {
@@ -56,8 +56,17 @@ func (g *Gateway) assemble() error {
 		}
 	}
 
+	// graphql-go requires Query to have at least one field. When no
+	// public services are registered (boot pre-control-plane, or after
+	// the last service deregistered), expose an inert _status field so
+	// the schema is valid and clients see "ok, nothing routed yet".
 	if len(rootFields) == 0 {
-		return errors.New("gateway: no public services registered")
+		rootFields["_status"] = &graphql.Field{
+			Type: graphql.String,
+			Resolve: func(p graphql.ResolveParams) (any, error) {
+				return "no services registered", nil
+			},
+		}
 	}
 
 	queryObj := graphql.NewObject(graphql.ObjectConfig{
@@ -69,7 +78,7 @@ func (g *Gateway) assemble() error {
 	if err != nil {
 		return fmt.Errorf("graphql.NewSchema: %w", err)
 	}
-	g.schema = schema
+	g.schema.Store(&schema)
 	return nil
 }
 

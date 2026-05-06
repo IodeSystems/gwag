@@ -8,18 +8,46 @@ touching the underlying services.
 
 Status: **early v0.** Unary gRPC calls work end-to-end; `HideAndInject`
 strips fields from the public schema and injects them at runtime;
-multiple protos can be exposed under their own namespaces; the
-[`go-api-gateway` CLI](./cmd/go-api-gateway) ships as a no-Go-needed
-entry point. Streaming and the broader `SchemaMiddleware` story are
-stubbed; rough edges throughout.
+dynamic registration via the control plane lets services self-register
+at runtime with graceful deregister and heartbeat-failure eviction;
+the [`go-api-gateway` CLI](./cmd/go-api-gateway) ships as a no-Go-needed
+entry point for static configs. Streaming and the broader
+`SchemaMiddleware` story are stubbed; rough edges throughout.
 
 ## Examples
 
-- [`examples/multi`](./examples/multi) — two unrelated services, one
-  gateway, no middleware. The thirty-second tour, runnable.
+- [`examples/multi`](./examples/multi) — three separate processes
+  (gateway + greeter + library) wired via the control plane. The
+  schema rebuilds in place as services join and leave.
 - [`examples/auth`](./examples/auth) — `HideAndInject[*authpb.Context]`
   hiding auth fields globally and filling them from a registered
   internal service.
+
+## Dynamic registration
+
+Services self-register with the gateway over a gRPC control plane and
+heartbeat to stay alive:
+
+```go
+import (
+    "github.com/iodesystems/go-api-gateway/controlclient"
+    greeterv1 "yourrepo/gen/greeter/v1"
+)
+
+reg, _ := controlclient.SelfRegister(ctx, controlclient.Options{
+    GatewayAddr: "gateway:50090",
+    ServiceAddr: "greeter:50051",
+    Services: []controlclient.Service{
+        {Namespace: "greeter", FileDescriptor: greeterv1.File_greeter_proto},
+    },
+})
+defer reg.Close(ctx) // graceful deregister
+```
+
+One Register call can carry many services on one address (multiple
+RPCs in one binary). Heartbeats every TTL/3; missed heartbeats past
+TTL evict. The control-plane API is in
+[`controlplane/v1/control.proto`](./controlplane/v1/control.proto).
 
 ## CLI
 

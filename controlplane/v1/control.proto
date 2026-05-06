@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package gateway.controlplane.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/controlplane/v1;controlplanev1";
+
+// ControlPlane is the API services use to register themselves with a
+// running gateway. The flow:
+//
+//   1. Service starts its gRPC server on some addr.
+//   2. Service calls Register with that addr and the list of services
+//      it hosts (one address can host multiple services).
+//   3. Service holds a heartbeat loop that calls Heartbeat at TtlSeconds/3.
+//   4. On graceful shutdown, service calls Deregister.
+//   5. If heartbeats stop coming for >TtlSeconds, the gateway evicts
+//      the registration on its own.
+service ControlPlane {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+  rpc ListRegistrations(ListRegistrationsRequest) returns (ListRegistrationsResponse);
+}
+
+message RegisterRequest {
+  // gRPC destination where the registered services live; passed
+  // verbatim to grpc.NewClient on the gateway side.
+  string addr = 1;
+
+  // One or more services to mount at `addr`. The gateway exposes each
+  // under its requested namespace. Collisions across registrations are
+  // an error and reject the entire Register call.
+  repeated ServiceBinding services = 2;
+
+  // How long the gateway should retain the registration without seeing
+  // a Heartbeat. 0 means "use server default" (currently 30s).
+  uint32 ttl_seconds = 3;
+
+  // Free-form. Echoed in ListRegistrations for operator debugging
+  // (e.g. "greeter@gke-cluster-1@pod-abc"). Not used for routing.
+  string instance_id = 4;
+}
+
+message ServiceBinding {
+  // GraphQL namespace under which this service's RPCs appear. Defaults
+  // to the proto file's stem if empty.
+  string namespace = 1;
+
+  // Standard FileDescriptorSet bytes (what `protoc -o` emits, or what
+  // protodesc.ToFileDescriptorProto + Marshal produces). Must include
+  // every transitive import the proto needs to type-check.
+  bytes file_descriptor_set = 2;
+
+  // Optional: the specific file within file_descriptor_set whose
+  // services should be mounted. Defaults to the LAST file in the set,
+  // which is conventionally the dependent file rather than its imports.
+  string file_name = 3;
+}
+
+message RegisterResponse {
+  // Opaque token referenced by Heartbeat and Deregister. Treat as
+  // unique per Register call.
+  string registration_id = 1;
+
+  // The gateway's effective TTL, in case the request specified 0.
+  uint32 ttl_seconds = 2;
+}
+
+message HeartbeatRequest {
+  string registration_id = 1;
+}
+
+message HeartbeatResponse {
+  // True if the registration is still live. False means the gateway
+  // already evicted it (network partition, restart, etc.) and the
+  // service should re-Register from scratch.
+  bool ok = 1;
+}
+
+message DeregisterRequest {
+  string registration_id = 1;
+}
+
+message DeregisterResponse {}
+
+message ListRegistrationsRequest {}
+
+message ListRegistrationsResponse {
+  repeated Registration registrations = 1;
+}
+
+message Registration {
+  string registration_id = 1;
+  string addr = 2;
+  string instance_id = 3;
+  uint32 ttl_seconds = 4;
+  uint64 last_heartbeat_unix_ms = 5;
+  repeated string namespaces = 6;
+}
