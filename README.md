@@ -285,8 +285,36 @@ controlclient.SelfRegister(ctx, controlclient.Options{
 })
 ```
 
-Admin auth is unrelated to outbound auth to OpenAPI backends, which
-is a separate concern (also tracked in plan.md).
+Admin auth is unrelated to outbound auth to OpenAPI backends. For
+that, see the next section.
+
+## Outbound HTTP transport for OpenAPI dispatch
+
+By default, `Authorization` is forwarded from the inbound GraphQL
+request to the outbound OpenAPI dispatch. Override the allowlist
+per source with `gateway.ForwardHeaders(...)`.
+
+For anything beyond plain bearer pass-through — mTLS, a custom
+`http.RoundTripper` that injects a service-account token, signed-URL
+rewriting, retry/timeout policy — supply a `*http.Client`:
+
+```go
+// Gateway-wide default — used by every OpenAPI source unless
+// overridden per-source.
+gw := gateway.New(gateway.WithOpenAPIClient(&http.Client{
+    Transport: customRoundTripper,
+    Timeout:   10 * time.Second,
+}))
+
+// Per-source override — beats the gateway-wide default.
+gw.AddOpenAPI("https://billing.internal/openapi.json",
+    gateway.As("billing"),
+    gateway.To("https://billing.internal"),
+    gateway.OpenAPIClient(billingClient),  // custom mTLS to this one backend
+)
+```
+
+When neither is set, dispatches use `http.DefaultClient`.
 
 ## Health & graceful drain
 

@@ -41,20 +41,21 @@ OpenAPI ingestion path.
 ### Outbound auth pass-through alternatives
 
 `Authorization` is forwarded by default; `ForwardHeaders(...)`
-ServiceOption replaces the allowlist per source. That's enough
-for backends that share the inbound bearer or use a static API
-key. Beyond that, design forks are open:
-- **Service-account token**: gateway holds a credential per
-  registered service and presents it on every outbound. Doesn't
-  carry user identity; service does its own authz.
+ServiceOption replaces the allowlist per source.
+`WithOpenAPIClient(*http.Client)` (gateway-wide default) and
+`OpenAPIClient(c)` (per-source override) let operators plug in any
+transport — mTLS, custom RoundTripper for service-account token
+injection, signed-URL rewriting, retry/timeout policy. That covers
+the common cases without committing to a specific auth model.
+
+Open design forks for richer cases:
+- **Service-account token**: a built-in helper that wraps a
+  RoundTripper and refreshes a token on schedule. Today this is
+  achievable via a custom `*http.Client`; promote to first-class
+  when a real deployment wants it.
 - **OAuth/JWT translation**: gateway exchanges the inbound token
-  for a service-specific token via a configurable issuer. Heavier.
-- **mTLS client certs**: gateway dials with a configured client
-  cert per service. Reuse `LoadMTLSConfig` plumbing.
-- **`WithOpenAPIClient(*http.Client)`**: operator-supplied
-  transport for arbitrary out-of-band auth (signed URLs, custom
-  retry, etc.). Cheapest of the four; do this when a use case
-  shows up.
+  for a service-specific token via a configurable issuer. Heavier;
+  same story — composable today, first-class when needed.
 
 ### Dynamic OpenAPI registration over control plane
 
@@ -378,7 +379,16 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* admin\_events end-to-end: `adminevents/v1` proto
+- *(uncommitted)* `WithOpenAPIClient(*http.Client)` gateway option
+  + `OpenAPIClient(c)` per-source `ServiceOption`. Per-source beats
+  gateway-wide; both fall back to `http.DefaultClient`. Threaded
+  through `dispatchOpenAPI`. Closes the cheapest tier-2 outbound-
+  auth fork — operators get full transport control (mTLS, custom
+  RoundTripper for service-account tokens, signed URLs, retry
+  policy) without the gateway committing to a specific auth model.
+  3 new tests in `openapi_test.go` (gateway-wide default, per-
+  source override, nil fall-back).
+- `58b6ff9` admin\_events end-to-end: `adminevents/v1` proto
   (`AdminEvents.WatchServices` server-streaming) + `gw.AddAdminEvents()`
   registers it under `admin_events/v1`. Registry hooks publish
   `ServiceChange` to `events.admin_events.WatchServices.<ns>` on
