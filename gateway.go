@@ -29,6 +29,11 @@ type Gateway struct {
 	schema   atomic.Pointer[graphql.Schema]
 	cfg      *config
 	cp       *controlPlane
+	peers    *peerTracker
+
+	// life is cancelled by Close to stop background goroutines.
+	life       context.Context
+	lifeCancel context.CancelFunc
 }
 
 type Option func(*config)
@@ -49,11 +54,26 @@ func New(opts ...Option) *Gateway {
 	for _, o := range opts {
 		o(cfg)
 	}
+	life, cancel := context.WithCancel(context.Background())
 	return &Gateway{
-		cfg:      cfg,
-		pools:    map[poolKey]*pool{},
-		internal: map[string]bool{},
+		cfg:        cfg,
+		pools:      map[poolKey]*pool{},
+		internal:   map[string]bool{},
+		life:       life,
+		lifeCancel: cancel,
 	}
+}
+
+// Close stops background goroutines (peer tracker, janitor). Safe to
+// call multiple times. Does not close the bound *Cluster — owners of
+// the cluster shut it down themselves.
+func (g *Gateway) Close() {
+	g.mu.Lock()
+	tracker := g.peers
+	g.peers = nil
+	g.mu.Unlock()
+	tracker.stop()
+	g.lifeCancel()
 }
 
 // Cluster returns the bound cluster, or nil if running standalone.

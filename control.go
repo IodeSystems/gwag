@@ -38,7 +38,6 @@ const (
 // call multiple times — the same impl is returned.
 func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.cp == nil {
 		g.cp = &controlPlane{
 			gw:    g,
@@ -47,7 +46,48 @@ func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 		}
 		go g.cp.janitor()
 	}
-	return g.cp
+	cp := g.cp
+	g.mu.Unlock()
+
+	// Boot cluster tracking (peers KV + monotonic R) async on first
+	// ControlPlane access. It retries until JetStream meta is ready.
+	if g.cfg.cluster != nil {
+		go g.bootClusterTracking()
+	}
+	return cp
+}
+
+// bootClusterTracking retries startClusterTracking until success or
+// gateway shutdown. Necessary because JetStream meta leader election
+// races boot — the buckets can't be created until meta is up.
+func (g *Gateway) bootClusterTracking() {
+	backoff := 250 * time.Millisecond
+	const maxBackoff = 5 * time.Second
+	for {
+		if g.life.Err() != nil {
+			return
+		}
+		g.mu.Lock()
+		started := g.peers != nil
+		g.mu.Unlock()
+		if started {
+			return
+		}
+		if _, err := g.startClusterTracking(g.life); err == nil {
+			return
+		} else {
+			g.cfg.cluster.Server.Warnf("gateway: cluster tracking pending: %v", err)
+		}
+		select {
+		case <-g.life.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
 
 type controlPlane struct {
