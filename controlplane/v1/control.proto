@@ -19,6 +19,18 @@ service ControlPlane {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
   rpc ListRegistrations(ListRegistrationsRequest) returns (ListRegistrationsResponse);
+
+  // ListPeers returns all gateway peers known to the cluster (alive
+  // entries in the peers KV bucket). Useful for operators picking
+  // which peer to forget.
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+
+  // ForgetPeer removes a disconnected peer from the cluster's peer
+  // bucket and shrinks the registry stream's replica count if the
+  // remaining peer count is now lower. Refuses if the peer is still
+  // alive (its KV entry hasn't expired) — operators must wait for
+  // the heartbeat-miss window before forgetting.
+  rpc ForgetPeer(ForgetPeerRequest) returns (ForgetPeerResponse);
 }
 
 message RegisterRequest {
@@ -102,4 +114,36 @@ message Registration {
   uint32 ttl_seconds = 4;
   uint64 last_heartbeat_unix_ms = 5;
   repeated string namespaces = 6;
+}
+
+message ListPeersRequest {}
+
+message ListPeersResponse {
+  repeated Peer peers = 1;
+}
+
+message Peer {
+  // Stable cluster identifier — what ForgetPeer takes.
+  string node_id = 1;
+
+  // Operator-friendly name (--node-name flag), if set.
+  string name = 2;
+
+  // Unix milliseconds when the peer first registered (this generation).
+  // Used to detect re-joins after a forget.
+  int64 joined_unix_ms = 3;
+}
+
+message ForgetPeerRequest {
+  string node_id = 1;
+}
+
+message ForgetPeerResponse {
+  // True if a peer entry was found and removed, false if the peer
+  // was unknown (already forgotten or never seen).
+  bool removed = 1;
+
+  // Replica count after the forget. If unchanged, the cluster was
+  // already at this size or below.
+  uint32 new_replicas = 2;
 }

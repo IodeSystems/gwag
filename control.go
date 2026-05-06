@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -380,6 +381,100 @@ func (cp *controlPlane) ListRegistrations(ctx context.Context, _ *cpv1.ListRegis
 		})
 	}
 	return out, nil
+}
+
+// ListPeers returns all live peers from the peers KV bucket. Empty
+// when running standalone. Order is unspecified.
+func (cp *controlPlane) ListPeers(ctx context.Context, _ *cpv1.ListPeersRequest) (*cpv1.ListPeersResponse, error) {
+	cp.gw.mu.Lock()
+	t := cp.gw.peers
+	cp.gw.mu.Unlock()
+	if t == nil {
+		return &cpv1.ListPeersResponse{}, nil
+	}
+	out := &cpv1.ListPeersResponse{}
+	kctx, cancel := kvCtx(ctx)
+	defer cancel()
+	keys, err := t.peers.Keys(kctx)
+	if err != nil {
+		// "no keys" is normal when standalone — collapse to empty list.
+		if errors.Is(err, jetstream.ErrNoKeysFound) {
+			return out, nil
+		}
+		return nil, fmt.Errorf("controlplane: list peers: %w", err)
+	}
+	for _, k := range keys {
+		entry, err := t.peers.Get(kctx, k)
+		if err != nil {
+			continue
+		}
+		var pe peerEntry
+		if json.Unmarshal(entry.Value(), &pe) == nil {
+			out.Peers = append(out.Peers, &cpv1.Peer{
+				NodeId:       pe.NodeID,
+				Name:         pe.Name,
+				JoinedUnixMs: pe.JoinedM,
+			})
+		}
+	}
+	return out, nil
+}
+
+// ForgetPeer drops a disconnected peer from the peers KV and shrinks
+// the registry stream's replica count if appropriate. Refuses if:
+//   - the gateway isn't in cluster mode (nothing to forget)
+//   - the peer is the local node (forgetting yourself is nonsensical)
+//   - the peer is still alive (entry present in peers KV)
+func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequest) (*cpv1.ForgetPeerResponse, error) {
+	if req.GetNodeId() == "" {
+		return nil, fmt.Errorf("controlplane: node_id is required")
+	}
+	cp.gw.mu.Lock()
+	t := cp.gw.peers
+	cp.gw.mu.Unlock()
+	if t == nil {
+		return nil, fmt.Errorf("controlplane: cluster not configured")
+	}
+	if req.GetNodeId() == t.nodeID {
+		return nil, fmt.Errorf("controlplane: refuse to forget self (%s)", t.nodeID)
+	}
+
+	kctx, cancel := kvCtx(ctx)
+	defer cancel()
+
+	// Refuse if the peer is still alive — its KV entry would have been
+	// expired by JetStream once the TTL elapsed without a refresh, so
+	// presence implies a recent heartbeat.
+	if _, err := t.peers.Get(kctx, req.GetNodeId()); err == nil {
+		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), peerTTL)
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, fmt.Errorf("controlplane: peer lookup: %w", err)
+	}
+
+	// Bucket auto-expired the entry already. Drop it from our local
+	// live set just in case watch hasn't propagated yet, and reconcile.
+	t.mu.Lock()
+	_, wasLive := t.live[req.GetNodeId()]
+	delete(t.live, req.GetNodeId())
+	desired := len(t.live)
+	t.mu.Unlock()
+
+	if desired > maxReplicas {
+		desired = maxReplicas
+	}
+	if desired < 1 {
+		desired = 1
+	}
+	curR := int(t.currentR.Load())
+	resp := &cpv1.ForgetPeerResponse{Removed: wasLive, NewReplicas: uint32(curR)}
+	if desired < curR {
+		if err := t.setReplicas(ctx, desired); err != nil {
+			return nil, fmt.Errorf("controlplane: shrink replicas: %w", err)
+		}
+		t.currentR.Store(int32(desired))
+		resp.NewReplicas = uint32(desired)
+	}
+	return resp, nil
 }
 
 // janitor evicts registrations whose last heartbeat is older than TTL.

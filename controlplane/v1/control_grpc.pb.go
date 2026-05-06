@@ -23,6 +23,8 @@ const (
 	ControlPlane_Heartbeat_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/Heartbeat"
 	ControlPlane_Deregister_FullMethodName        = "/gateway.controlplane.v1.ControlPlane/Deregister"
 	ControlPlane_ListRegistrations_FullMethodName = "/gateway.controlplane.v1.ControlPlane/ListRegistrations"
+	ControlPlane_ListPeers_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/ListPeers"
+	ControlPlane_ForgetPeer_FullMethodName        = "/gateway.controlplane.v1.ControlPlane/ForgetPeer"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -44,6 +46,16 @@ type ControlPlaneClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	Deregister(ctx context.Context, in *DeregisterRequest, opts ...grpc.CallOption) (*DeregisterResponse, error)
 	ListRegistrations(ctx context.Context, in *ListRegistrationsRequest, opts ...grpc.CallOption) (*ListRegistrationsResponse, error)
+	// ListPeers returns all gateway peers known to the cluster (alive
+	// entries in the peers KV bucket). Useful for operators picking
+	// which peer to forget.
+	ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error)
+	// ForgetPeer removes a disconnected peer from the cluster's peer
+	// bucket and shrinks the registry stream's replica count if the
+	// remaining peer count is now lower. Refuses if the peer is still
+	// alive (its KV entry hasn't expired) — operators must wait for
+	// the heartbeat-miss window before forgetting.
+	ForgetPeer(ctx context.Context, in *ForgetPeerRequest, opts ...grpc.CallOption) (*ForgetPeerResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -94,6 +106,26 @@ func (c *controlPlaneClient) ListRegistrations(ctx context.Context, in *ListRegi
 	return out, nil
 }
 
+func (c *controlPlaneClient) ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPeersResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_ListPeers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) ForgetPeer(ctx context.Context, in *ForgetPeerRequest, opts ...grpc.CallOption) (*ForgetPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForgetPeerResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_ForgetPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -113,6 +145,16 @@ type ControlPlaneServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	Deregister(context.Context, *DeregisterRequest) (*DeregisterResponse, error)
 	ListRegistrations(context.Context, *ListRegistrationsRequest) (*ListRegistrationsResponse, error)
+	// ListPeers returns all gateway peers known to the cluster (alive
+	// entries in the peers KV bucket). Useful for operators picking
+	// which peer to forget.
+	ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error)
+	// ForgetPeer removes a disconnected peer from the cluster's peer
+	// bucket and shrinks the registry stream's replica count if the
+	// remaining peer count is now lower. Refuses if the peer is still
+	// alive (its KV entry hasn't expired) — operators must wait for
+	// the heartbeat-miss window before forgetting.
+	ForgetPeer(context.Context, *ForgetPeerRequest) (*ForgetPeerResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -134,6 +176,12 @@ func (UnimplementedControlPlaneServer) Deregister(context.Context, *DeregisterRe
 }
 func (UnimplementedControlPlaneServer) ListRegistrations(context.Context, *ListRegistrationsRequest) (*ListRegistrationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRegistrations not implemented")
+}
+func (UnimplementedControlPlaneServer) ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPeers not implemented")
+}
+func (UnimplementedControlPlaneServer) ForgetPeer(context.Context, *ForgetPeerRequest) (*ForgetPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForgetPeer not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -228,6 +276,42 @@ func _ControlPlane_ListRegistrations_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_ListPeers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPeersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).ListPeers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_ListPeers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).ListPeers(ctx, req.(*ListPeersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_ForgetPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForgetPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).ForgetPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_ForgetPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).ForgetPeer(ctx, req.(*ForgetPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -250,6 +334,14 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListRegistrations",
 			Handler:    _ControlPlane_ListRegistrations_Handler,
+		},
+		{
+			MethodName: "ListPeers",
+			Handler:    _ControlPlane_ListPeers_Handler,
+		},
+		{
+			MethodName: "ForgetPeer",
+			Handler:    _ControlPlane_ForgetPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
