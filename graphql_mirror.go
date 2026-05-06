@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
@@ -18,15 +19,20 @@ import (
 // with a registration-time log line so operators see what's missing.
 type graphQLMirror struct {
 	src     *graphQLSource
+	metrics Metrics
 	objects map[string]*graphql.Object
 	inputs  map[string]*graphql.InputObject
 	enums   map[string]*graphql.Enum
 	scalars map[string]*graphql.Scalar
 }
 
-func newGraphQLMirror(src *graphQLSource) *graphQLMirror {
+func newGraphQLMirror(src *graphQLSource, metrics Metrics) *graphQLMirror {
+	if metrics == nil {
+		metrics = noopMetrics{}
+	}
 	return &graphQLMirror{
 		src:     src,
+		metrics: metrics,
 		objects: map[string]*graphql.Object{},
 		inputs:  map[string]*graphql.InputObject{},
 		enums:   map[string]*graphql.Enum{},
@@ -42,18 +48,18 @@ func (m *graphQLMirror) build() (graphql.Fields, graphql.Fields, error) {
 		log.Printf("graphql ingest %s: skipping Subscription root (not yet supported)", m.src.namespace)
 	}
 
-	queries, err := m.buildRootFields(intro.QueryTypeName)
+	queries, err := m.buildRootFields(intro.QueryTypeName, "query")
 	if err != nil {
 		return nil, nil, err
 	}
-	mutations, err := m.buildRootFields(intro.MutationTypeName)
+	mutations, err := m.buildRootFields(intro.MutationTypeName, "mutation")
 	if err != nil {
 		return nil, nil, err
 	}
 	return queries, mutations, nil
 }
 
-func (m *graphQLMirror) buildRootFields(rootName string) (graphql.Fields, error) {
+func (m *graphQLMirror) buildRootFields(rootName, opType string) (graphql.Fields, error) {
 	if rootName == "" {
 		return graphql.Fields{}, nil
 	}
@@ -78,7 +84,7 @@ func (m *graphQLMirror) buildRootFields(rootName string) (graphql.Fields, error)
 		out[fieldName] = &graphql.Field{
 			Type:    typ,
 			Args:    args,
-			Resolve: m.forwardingResolver(remote),
+			Resolve: m.forwardingResolver(remote, opType),
 		}
 	}
 	return out, nil
@@ -320,11 +326,25 @@ func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldCo
 //  6. POSTing to the remote with rp.Info.VariableValues forwarded.
 //
 // The result for THIS field comes back in `data.<remoteName>`.
-func (m *graphQLMirror) forwardingResolver(remoteFieldName string) graphql.FieldResolveFn {
+//
+// opLabel is "query" or "mutation" — the GraphQL operation type this
+// field lives under. Combined with remoteFieldName it forms the
+// dispatch metric's `method` label so operators can slice by
+// downstream operation the same way OpenAPI dispatch slices by
+// `<HTTP_METHOD> <pathTemplate>`.
+func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) graphql.FieldResolveFn {
 	src := m.src
+	metrics := m.metrics
+	ns := src.namespace
+	methodLabel := opLabel + " " + remoteFieldName
 	return func(rp graphql.ResolveParams) (any, error) {
+		start := time.Now()
+		record := func(err error) error {
+			metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+			return err
+		}
 		if len(rp.Info.FieldASTs) == 0 {
-			return nil, fmt.Errorf("graphql ingest: no AST for %s", remoteFieldName)
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", remoteFieldName)))
 		}
 		field := rp.Info.FieldASTs[0]
 		rewritten := rewriteFieldForRemote(field, remoteFieldName)
@@ -347,25 +367,28 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName string) graphql.Field
 		raw := printer.Print(doc)
 		printed, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
 		}
 		query := printed
 
 		resp, err := dispatchGraphQL(rp.Context, src.httpClient, src.endpoint, query, rp.Info.VariableValues, src.forwardHeaders)
 		if err != nil {
-			return nil, err
+			return nil, record(err)
 		}
 		if len(resp.Errors) > 0 {
 			// Surface the first error back to the local client so they
-			// see what the remote complained about.
-			return nil, fmt.Errorf("graphql remote: %s", resp.Errors[0])
+			// see what the remote complained about. Application-level
+			// remote errors classify as INTERNAL — there's no portable
+			// status code in the GraphQL error envelope.
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql remote: %s", resp.Errors[0])))
 		}
 		var data map[string]any
 		if len(resp.Data) > 0 {
 			if err := jsonUnmarshalLoose(resp.Data, &data); err != nil {
-				return nil, fmt.Errorf("graphql decode data: %w", err)
+				return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql decode data: %s", err.Error())))
 			}
 		}
+		record(nil)
 		return data[remoteFieldName], nil
 	}
 }

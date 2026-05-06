@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // petsIntrospection is a minimal introspection JSON for a pets-svc:
@@ -218,6 +220,150 @@ func TestGraphQLIngest_ArgumentsPassThrough(t *testing.T) {
 	}
 	if !strings.Contains(last, "user(") {
 		t.Errorf("forwarded query missing user(...): %s", last)
+	}
+}
+
+// graphQLIngestDispatchMetrics tallies just RecordDispatch calls so
+// the test can verify label parity with the proto / OpenAPI paths.
+type graphQLIngestDispatchMetrics struct {
+	noopMetrics
+	mu    sync.Mutex
+	calls []graphQLIngestDispatchCall
+}
+
+type graphQLIngestDispatchCall struct {
+	Namespace string
+	Version   string
+	Method    string
+	Err       error
+}
+
+func (m *graphQLIngestDispatchMetrics) RecordDispatch(ns, ver, method string, _ time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, graphQLIngestDispatchCall{ns, ver, method, err})
+}
+
+func TestGraphQLIngest_RecordDispatchFires(t *testing.T) {
+	rf := newRemoteFixture(t)
+	rf.queryHandler = func(_ string, _ map[string]any) any {
+		return map[string]any{"users": []map[string]any{{"id": "1", "name": "a", "role": "ADMIN"}}}
+	}
+	cm := &graphQLIngestDispatchMetrics{}
+	gw := New(WithMetrics(cm), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Post(srv.URL+"/graphql", "application/json",
+		strings.NewReader(`{"query":"{ pets_users { id } }"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	cm.mu.Lock()
+	calls := append([]graphQLIngestDispatchCall(nil), cm.calls...)
+	cm.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 RecordDispatch call, got %d: %+v", len(calls), calls)
+	}
+	c := calls[0]
+	if c.Namespace != "pets" || c.Version != "v1" || c.Method != "query users" {
+		t.Errorf("labels = (%q, %q, %q), want (pets, v1, query users)",
+			c.Namespace, c.Version, c.Method)
+	}
+	if c.Err != nil {
+		t.Errorf("err = %v, want nil (happy path)", c.Err)
+	}
+}
+
+func TestGraphQLIngest_ErrorClassification(t *testing.T) {
+	// HTTP statuses + remote GraphQL errors must propagate as Reject
+	// codes so go_api_gateway_dispatch_duration_seconds slices by
+	// outcome the way the OpenAPI path does.
+	cases := []struct {
+		name     string
+		respond  func(w http.ResponseWriter)
+		wantCode string
+	}{
+		{
+			name: "http-401",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte("nope"))
+			},
+			wantCode: "UNAUTHENTICATED",
+		},
+		{
+			name: "http-404",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte("missing"))
+			},
+			wantCode: "NOT_FOUND",
+		},
+		{
+			name: "http-500",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("boom"))
+			},
+			wantCode: "INTERNAL",
+		},
+		{
+			name: "remote-graphql-error",
+			respond: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"errors":[{"message":"bad"}]}`))
+			},
+			wantCode: "INTERNAL",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// Custom backend: respond to the introspection probe with
+			// petsIntrospection so AddGraphQL succeeds, then apply the
+			// per-case responder for actual queries.
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var req struct {
+					Query string `json:"query"`
+				}
+				_ = json.Unmarshal(body, &req)
+				if strings.Contains(req.Query, "IntrospectionQuery") {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(petsIntrospection))
+					return
+				}
+				tc.respond(w)
+			}))
+			t.Cleanup(backend.Close)
+
+			gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+			t.Cleanup(gw.Close)
+			if err := gw.AddGraphQL(backend.URL, As("pets")); err != nil {
+				t.Fatalf("AddGraphQL: %v", err)
+			}
+			srv := httptest.NewServer(gw.Handler())
+			t.Cleanup(srv.Close)
+
+			resp, err := http.Post(srv.URL+"/graphql", "application/json",
+				strings.NewReader(`{"query":"{ pets_users { id } }"}`))
+			if err != nil {
+				t.Fatalf("post: %v", err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if !strings.Contains(string(body), tc.wantCode) {
+				t.Errorf("expected %s in response, got %s", tc.wantCode, body)
+			}
+		})
 	}
 }
 

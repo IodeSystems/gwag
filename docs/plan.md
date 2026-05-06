@@ -35,15 +35,16 @@ fresh session.
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
   in `784430a`).
-- *Next operational pick:* downstream-GraphQL dispatch metric +
-  classification parity. `graphql_ingest.go`'s forwarding resolver
-  doesn't call `metrics.RecordDispatch`, doesn't have a per-source
-  semaphore, and surfaces remote errors as plain `fmt.Errorf`. Same
-  shape as the OpenAPI work shipped in `e88d158` / `cf115c1`: add
-  `start := time.Now()`, call `RecordDispatch` on every exit, wrap
-  errors via `Reject(...)` so `code` is meaningful. Method label is
-  `query/mutation <fieldName>`; version pinned to `"v1"` the same
-  way OpenAPI sources are.
+- *Next operational pick:* downstream-GraphQL **backpressure**.
+  Dispatch metric + classification shipped (see Recently Shipped);
+  what's missing is the per-source semaphore + queue-depth gauge
+  that proto pools and OpenAPI sources have. Same shape as
+  `cc44855` for OpenAPI: `graphQLSource` gains
+  `sem chan struct{}` + `queueing atomic.Int32` sized by
+  `BackpressureOptions.MaxInflight`; resolver acquires before the
+  dispatchGraphQL call; fast-rejects via `Reject(ResourceExhausted)`
+  on `MaxWaitTime`; dwell + queue-depth + backoff metrics fire
+  with `kind="unary"`, version `"v1"`.
 
 ### Token rotation (kid in tokens)
 
@@ -357,6 +358,26 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL dispatch metric + error
+  classification. Mirrors the OpenAPI pair (`e88d158`/`cf115c1`):
+  `graphQLMirror` now carries a `Metrics` reference (passed in via
+  `g.cfg.metrics`) and `forwardingResolver` records start time +
+  calls `metrics.RecordDispatch(ns, "v1", "<query|mutation>
+  <remoteFieldName>", elapsed, err)` on every exit (no-AST,
+  printer error, dispatch return, remote-errors envelope, decode
+  failure). `dispatchGraphQL` and the no-FieldASTs / printer / no-
+  data branches now return `Reject(Code, msg)` so the `code` label
+  on the dispatch metric (and GraphQL `extensions.code`) reflects
+  the failure shape: HTTP statuses go through the same
+  `httpStatusToCode` helper added for OpenAPI; remote GraphQL
+  errors classify as `INTERNAL` (no portable status in the GraphQL
+  error envelope); transport / decode → `INTERNAL`; marshal /
+  request-build → `INVALID_ARGUMENT`. Histogram help text +
+  `Metrics.RecordDispatch` godoc updated to call out the third
+  dispatch path. 2 new tests in `graphql_ingest_test.go`:
+  `TestGraphQLIngest_RecordDispatchFires` (label parity) and
+  `TestGraphQLIngest_ErrorClassification` (HTTP 401 / 404 / 500 +
+  remote-errors envelope).
 - `cf115c1` OpenAPI dispatch error classification.
   `dispatchOpenAPI` and the resolver's no-live-replicas branch now
   return `Reject(Code, msg)` instead of plain `fmt.Errorf` so
