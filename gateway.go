@@ -285,6 +285,26 @@ type serviceConfig struct {
 	httpClient     *http.Client
 }
 
+// isInternal reports whether ns is hidden from the public GraphQL
+// schema. A namespace is internal if either:
+//   - the operator passed AsInternal() at registration (recorded in
+//     g.internal), or
+//   - the namespace starts with "_". This blanket convention covers
+//     reserved namespaces like _admin_auth / _events_auth /
+//     _admin_events without requiring every caller to remember
+//     AsInternal(). Internal namespaces still register in the
+//     dispatch registry (so hooks can call them); they just don't
+//     surface in the SDL.
+//
+// Callers must hold g.mu (or be in a path that doesn't race with
+// concurrent registrations).
+func (g *Gateway) isInternal(ns string) bool {
+	if g.internal[ns] {
+		return true
+	}
+	return len(ns) > 0 && ns[0] == '_'
+}
+
 // As overrides the default namespace (filename stem) for a registered
 // proto. Collisions across registered protos are an error.
 func As(namespace string) ServiceOption {

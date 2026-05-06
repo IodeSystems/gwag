@@ -42,7 +42,7 @@ func (g *Gateway) assembleLocked() error {
 	}
 
 	for ns, pools := range byNS {
-		if g.internal[ns] {
+		if g.isInternal(ns) {
 			continue
 		}
 		// Sort versions ascending for stable iteration; latest = last.
@@ -179,7 +179,7 @@ func (g *Gateway) assembleLocked() error {
 func (g *Gateway) buildSubscriptionFields(tb *typeBuilder) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	for _, p := range g.pools {
-		if g.internal[p.key.namespace] {
+		if g.isInternal(p.key.namespace) {
 			continue
 		}
 		services := p.file.Services()

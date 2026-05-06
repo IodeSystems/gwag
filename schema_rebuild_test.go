@@ -160,6 +160,30 @@ func TestSchemaRebuild_MultipleNamespaces(t *testing.T) {
 	}
 }
 
+func TestSchemaRebuild_UnderscoreNamespaceAutoInternal(t *testing.T) {
+	// Reserved-namespace convention: anything starting with "_" is
+	// auto-internal, even when AsInternal() isn't passed. Prevents
+	// accidental leak of _admin_auth / _events_auth / _admin_events.
+	gw := newSchemaTestGateway(t)
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("_secret_ns"), // no AsInternal()
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+	if hasQueryField(gw, "_secret_ns") {
+		t.Fatal("_-prefixed namespace leaked into Query (auto-internal failed)")
+	}
+	// Pool is still registered (dispatchable from hooks etc.).
+	gw.mu.Lock()
+	_, ok := gw.pools[poolKey{namespace: "_secret_ns", version: "v1"}]
+	gw.mu.Unlock()
+	if !ok {
+		t.Fatal("_secret_ns pool missing from registry")
+	}
+}
+
 func TestSchemaRebuild_AsInternalHidesFromQuery(t *testing.T) {
 	gw := newSchemaTestGateway(t)
 	if err := gw.AddProtoDescriptor(
