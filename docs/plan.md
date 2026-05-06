@@ -352,7 +352,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL backpressure. Closes the
+- `2c1f58d` downstream-GraphQL backpressure. Closes the
   per-source semaphore parity with the proto and OpenAPI paths.
   `graphQLSource` gains `sem chan struct{}` + `queueing
   atomic.Int32`, sized at registration from
