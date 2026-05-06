@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // openAPIE2EFixture spins a test backend + a Gateway that ingests a
@@ -318,6 +320,118 @@ func TestOpenAPIE2E_HTTPClient_NilFallsBackToDefault(t *testing.T) {
 	}
 	if f.lastReq.Load() == nil {
 		t.Fatal("backend not called via http.DefaultClient")
+	}
+}
+
+// openAPIBackpressureMetrics tallies dwell + backoff calls so the
+// backpressure test can confirm the per-source semaphore actually
+// fired.
+type openAPIBackpressureMetrics struct {
+	noopMetrics
+	mu       sync.Mutex
+	backoff  int
+	dwellHit int
+}
+
+func (m *openAPIBackpressureMetrics) RecordDwell(_, _, _, kind string, _ time.Duration) {
+	if kind != "unary" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dwellHit++
+}
+
+func (m *openAPIBackpressureMetrics) RecordBackoff(_, _, _, _, _ string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backoff++
+}
+
+func (m *openAPIBackpressureMetrics) SetQueueDepth(_, _, _ string, _ int) {}
+
+func TestOpenAPIE2E_BackpressureTimesOutAndRejects(t *testing.T) {
+	// One backend slot held by a long-running request; with MaxInflight=1
+	// and MaxWaitTime=50ms a concurrent dispatch should reject with
+	// RESOURCE_EXHAUSTED rather than queueing forever.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	requestArrived := make(chan struct{}, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case requestArrived <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	// Release before backend.Close so the still-blocked first request
+	// returns and httptest.Server.Close doesn't stall on the active
+	// connection.
+	t.Cleanup(backend.Close)
+	t.Cleanup(closeRelease)
+
+	cm := &openAPIBackpressureMetrics{}
+	gw := New(
+		WithMetrics(cm),
+		WithBackpressure(BackpressureOptions{MaxInflight: 1, MaxWaitTime: 50 * time.Millisecond}),
+		WithAdminToken([]byte("test-token")),
+	)
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(backend.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	h := gw.Handler()
+
+	postQuery := func(q string) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(q))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code, rr.Body.String()
+	}
+
+	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	holder := make(chan string, 1)
+	go func() {
+		_, body := postQuery(q)
+		holder <- body
+	}()
+
+	// Wait until the first request reached the backend (and is holding
+	// the slot) before firing the second.
+	select {
+	case <-requestArrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first request never reached backend")
+	}
+
+	status, body := postQuery(q)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if !strings.Contains(body, "RESOURCE_EXHAUSTED") {
+		t.Errorf("expected RESOURCE_EXHAUSTED, got %s", body)
+	}
+
+	cm.mu.Lock()
+	backoff := cm.backoff
+	dwell := cm.dwellHit
+	cm.mu.Unlock()
+	if backoff < 1 {
+		t.Errorf("backoff metric not recorded (got %d)", backoff)
+	}
+	if dwell < 1 {
+		t.Errorf("dwell metric not recorded (got %d)", dwell)
+	}
+
+	// Drain the held first request so cleanup is fast.
+	closeRelease()
+	select {
+	case <-holder:
+	case <-time.After(time.Second):
 	}
 }
 
