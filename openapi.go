@@ -426,6 +426,26 @@ func newOpenAPITypeBuilder() *openAPITypeBuilder {
 	}
 }
 
+// primaryType strips "null" from an OpenAPI 3.1 multi-type
+// declaration, returning the single non-null type. Returns "" if the
+// schema has zero or multiple non-null types (we treat those as
+// opaque JSON).
+func primaryType(s *openapi3.Schema) string {
+	if s == nil || s.Type == nil {
+		return ""
+	}
+	var primaries []string
+	for _, t := range *s.Type {
+		if t != "null" {
+			primaries = append(primaries, t)
+		}
+	}
+	if len(primaries) == 1 {
+		return primaries[0]
+	}
+	return ""
+}
+
 // outputTypeFromSchema returns a GraphQL output Type for the given
 // OpenAPI schema. Unsupported shapes (oneOf/anyOf/allOf, mixed types)
 // fall back to the JSON scalar.
@@ -437,8 +457,8 @@ func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (gra
 	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
 		return tb.jsonScalar, nil
 	}
-	if s.Type != nil && len(*s.Type) == 1 {
-		switch (*s.Type)[0] {
+	if pt := primaryType(s); pt != "" {
+		switch pt {
 		case "string":
 			if len(s.Enum) > 0 {
 				return tb.enumFor(ref, s)
@@ -471,8 +491,8 @@ func (tb *openAPITypeBuilder) inputTypeFromSchema(ref *openapi3.SchemaRef) (grap
 	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
 		return tb.jsonScalar, nil
 	}
-	if s.Type != nil && len(*s.Type) == 1 {
-		switch (*s.Type)[0] {
+	if pt := primaryType(s); pt != "" {
+		switch pt {
 		case "string":
 			if len(s.Enum) > 0 {
 				e, err := tb.enumFor(ref, s)
@@ -542,6 +562,9 @@ func (tb *openAPITypeBuilder) objectFor(ref *openapi3.SchemaRef, s *openapi3.Sch
 			}
 			sort.Strings(propNames)
 			for _, k := range propNames {
+				if !validGraphQLName(k) {
+					continue // e.g. $schema (JSON Schema metaschema)
+				}
 				p := s.Properties[k]
 				t, err := tb.outputTypeFromSchema(p)
 				if err != nil {
@@ -551,6 +574,9 @@ func (tb *openAPITypeBuilder) objectFor(ref *openapi3.SchemaRef, s *openapi3.Sch
 					t = graphql.NewNonNull(t)
 				}
 				fields[lowerCamel(k)] = &graphql.Field{Type: t}
+			}
+			if len(fields) == 0 {
+				fields["_void"] = &graphql.Field{Type: graphql.String}
 			}
 			return fields
 		}),
@@ -574,6 +600,9 @@ func (tb *openAPITypeBuilder) inputObjectFor(ref *openapi3.SchemaRef, s *openapi
 			}
 			sort.Strings(propNames)
 			for _, k := range propNames {
+				if !validGraphQLName(k) {
+					continue
+				}
 				p := s.Properties[k]
 				t, err := tb.inputTypeFromSchema(p)
 				if err != nil {
@@ -584,11 +613,35 @@ func (tb *openAPITypeBuilder) inputObjectFor(ref *openapi3.SchemaRef, s *openapi
 				}
 				fields[lowerCamel(k)] = &graphql.InputObjectFieldConfig{Type: t}
 			}
+			if len(fields) == 0 {
+				fields["_void"] = &graphql.InputObjectFieldConfig{Type: graphql.String}
+			}
 			return fields
 		}),
 	})
 	tb.inputs[name] = io
 	return io, nil
+}
+
+// validGraphQLName matches /^[_A-Za-z][_A-Za-z0-9]*$/. JSON Schema
+// allows things like "$schema" that GraphQL forbids; skip those at
+// type-build time.
+func validGraphQLName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+				return false
+			}
+			continue
+		}
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (tb *openAPITypeBuilder) enumFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (*graphql.Enum, error) {

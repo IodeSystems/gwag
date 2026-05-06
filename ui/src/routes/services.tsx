@@ -26,7 +26,7 @@ function Services() {
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error) return <Typography color="error">{(error as Error).message}</Typography>;
 
-  const services = data?.admin?.listServices?.services ?? [];
+  const services = data?.admin_listServices?.services ?? [];
 
   return (
     <TableContainer component={Paper}>

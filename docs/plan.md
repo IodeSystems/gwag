@@ -247,6 +247,33 @@ Selector grammar:
 Tier-2 follow-up: support selectors on `/schema/graphql` too. Requires
 a filtered schema-build path; not difficult, just hasn't been needed.
 
+## Dogfooding the OpenAPI ingest
+
+The gateway's own admin operations (peers, services, forget,
+sign-token) are defined via huma in `admin_huma.go`, mounted as plain
+HTTP at `/admin/*`, and **self-ingested** at boot:
+
+```go
+adminMux, adminSpec, _ := gw.AdminHumaRouter()
+mux.Handle("/admin/", adminMux)
+gw.AddOpenAPIBytes(adminSpec,
+    gateway.As("admin"),
+    gateway.To("http://localhost:18080"))
+```
+
+Result: the SDL gains `Query.admin_listPeers`, `Query.admin_listServices`,
+`Mutation.admin_forgetPeer`, `Mutation.admin_signSubscriptionToken`.
+Same path any external huma-defined service takes; the UI talks to
+`/graphql` only.
+
+Older (now removed): the gateway used to self-register the control
+plane proto via `AddProtoDescriptor(cpv1.File_control_proto, …)`,
+which produced a nested `Query.admin.listPeers` shape. We replaced
+it with the huma path so admin/operator routes flow through the
+same gateway → OpenAPI → GraphQL pipeline as any other registered
+service. The control plane gRPC service stays as the
+service-to-service registration API.
+
 ## Recently shipped
 
 (Last n commits worth knowing about for context. Update on commit; trim
