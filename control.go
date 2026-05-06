@@ -182,10 +182,14 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
 		}
 		used[k] = true
+		hash, err := hashDescriptorSet(b.GetFileDescriptorSet())
+		if err != nil {
+			return nil, fmt.Errorf("controlplane: %w", err)
+		}
 		prep = append(prep, prepared{
 			namespace: ns,
 			version:   ver,
-			hash:      hashDescriptorSet(b.GetFileDescriptorSet()),
+			hash:      hash,
 			fileDesc:  fd,
 			fdBytes:   b.GetFileDescriptorSet(),
 			fileName:  b.GetFileName(),

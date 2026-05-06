@@ -10,9 +10,12 @@ Status: **early v0.** Unary gRPC calls work end-to-end; `HideAndInject`
 strips fields from the public schema and injects them at runtime;
 dynamic registration via the control plane lets services self-register
 at runtime with graceful deregister and heartbeat-failure eviction;
-the [`go-api-gateway` CLI](./cmd/go-api-gateway) ships as a no-Go-needed
-entry point for static configs. Streaming and the broader
-`SchemaMiddleware` story are stubbed; rough edges throughout.
+multi-gateway clusters share a JetStream KV registry over embedded
+NATS so any node dispatches to any registered service, with optional
+mTLS on cluster routes; the [`go-api-gateway` CLI](./cmd/go-api-gateway)
+ships as a no-Go-needed entry point for static configs and operator
+peer management. Streaming and the broader `SchemaMiddleware` story
+are stubbed; rough edges throughout.
 
 ## Examples
 
@@ -49,6 +52,47 @@ RPCs in one binary). Heartbeats every TTL/3; missed heartbeats past
 TTL evict. The control-plane API is in
 [`controlplane/v1/control.proto`](./controlplane/v1/control.proto).
 
+## Cluster mode
+
+A gateway can embed a NATS server with JetStream and form a cluster
+with peer gateways. The service registry moves into a JetStream KV
+bucket so any gateway can dispatch to any service registered with any
+other gateway:
+
+```go
+cluster, _ := gateway.StartCluster(gateway.ClusterOptions{
+    NodeName:      "n1",
+    ClientListen:  ":14222",
+    ClusterListen: ":14248",
+    Peers:         []string{"127.0.0.1:14249"},
+    DataDir:       "/var/lib/go-api-gateway/n1",
+})
+defer cluster.Close()
+
+gw := gateway.New(gateway.WithCluster(cluster))
+```
+
+- **Bootstrap.** The first node in a fresh cluster runs in standalone
+  JetStream (R=1) when `Peers` is empty. To scale beyond one node,
+  every node — including the seed — must start with at least one
+  `Peers` entry; nodes route to each other via NATS gossip.
+- **Replicas auto-bump.** As peers join, the registry KV's replica
+  count rises monotonically toward `min(peers, 3)`. Killing a peer
+  does *not* shrink R automatically; that path is operator-driven via
+  `peer forget` (see CLI).
+- **Cross-gateway dispatch.** A reconciler on every gateway watches
+  the registry KV and dials services it sees, regardless of which
+  gateway received the registration.
+- **Optional mTLS.** Pass a `*tls.Config` from `gateway.LoadMTLSConfig`
+  via `ClusterOptions.TLS` and `gateway.WithTLS` to require mutual TLS
+  on both NATS cluster routes and the gateway's outbound gRPC dials.
+- **Forget disconnected peers.** `ForgetPeer` (RPC + CLI) drops a
+  peer that has TTL-expired and shrinks the registry replica count
+  if appropriate. Refuses to forget a still-alive peer.
+
+A runnable 3-gateway demo is in
+[`examples/multi/run-cluster.sh`](./examples/multi/run-cluster.sh).
+
 ## CLI
 
 ```
@@ -62,6 +106,16 @@ $ go-api-gateway \
 `--proto PATH=[NAMESPACE@]ADDR`, repeatable. Default namespace is the
 filename stem; default addr is `:8080`. Insecure dial — wrap in real
 TLS via the library API for production.
+
+For a running cluster, the same binary exposes operator subcommands:
+
+```
+$ go-api-gateway peer list   --gateway gw1.internal:50090
+$ go-api-gateway peer forget --gateway gw1.internal:50090 NODE_ID
+```
+
+`peer forget` only succeeds against a node whose KV entry has expired
+(safe shrink); `peer list` shows what entries are live.
 
 ## Why another gateway
 
@@ -227,14 +281,18 @@ per request.
 
 ## What's not in here
 
-- Service discovery / dynamic registration. (Library is composable with
-  whatever you already use.)
+- External service discovery (Consul, etcd, k8s service watching). The
+  built-in story is "services self-register over the gRPC control plane,
+  and gateways share a JetStream KV registry"; bridge to other systems
+  via the same control plane.
 - Rolling deploy / hot reload. (Out of scope; gateway can be run
-  blue/green like any other binary.)
+  blue/green like any other binary, or scaled by adding peers.)
 - Multi-protocol ingest (OpenAPI, gRPC-Web, etc.). On the roadmap, not
   on day one.
 - Observability backends. The middleware shape is the integration
   point; pick your tracer and write a five-line `Pair`.
+- Kubernetes / docker-compose example deployments. The cluster code
+  is the building block; packaging follows.
 
 ## License
 

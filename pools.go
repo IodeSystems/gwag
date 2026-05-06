@@ -3,6 +3,7 @@ package gateway
 import (
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,11 @@ import (
 // marshalFileDescriptorSet serializes fd plus its transitive imports
 // into a FileDescriptorSet — what `protoc -o` would emit and what the
 // control plane expects in ServiceBinding.file_descriptor_set.
+//
+// Output is canonical: files are sorted by path and the protobuf
+// encoding is deterministic, so two callers that built the same
+// descriptor with different protoc versions produce identical bytes
+// (and identical hashes) as long as the structural content matches.
 func marshalFileDescriptorSet(fd protoreflect.FileDescriptor) ([]byte, error) {
 	fds := &descriptorpb.FileDescriptorSet{}
 	seen := map[string]bool{}
@@ -32,7 +38,10 @@ func marshalFileDescriptorSet(fd protoreflect.FileDescriptor) ([]byte, error) {
 		fds.File = append(fds.File, protodesc.ToFileDescriptorProto(f))
 	}
 	walk(fd)
-	return proto.Marshal(fds)
+	sort.Slice(fds.File, func(i, j int) bool {
+		return fds.File[i].GetName() < fds.File[j].GetName()
+	})
+	return proto.MarshalOptions{Deterministic: true}.Marshal(fds)
 }
 
 // poolKey identifies a pool by namespace + version. Namespace defaults
@@ -187,21 +196,32 @@ func parseVersion(s string) (canonical string, n int, err error) {
 	return "v" + strconv.Itoa(n), n, nil
 }
 
-// hashDescriptorSet returns SHA256 of the raw FileDescriptorSet bytes.
-// v1 fragility note: re-marshalling the same proto with a different
-// protoc version may produce different bytes. Operators bumping their
-// protoc may need to bump version. v2 should canonicalise.
-func hashDescriptorSet(b []byte) [32]byte {
-	return sha256.Sum256(b)
+// hashDescriptorSet returns SHA256 of a canonicalised FileDescriptorSet.
+// b is the raw wire bytes a client sent; we unmarshal and re-marshal
+// via marshalFileDescriptorSet so the hash depends on structural
+// content, not on the client's protobuf marshalling.
+func hashDescriptorSet(b []byte) ([32]byte, error) {
+	fds := &descriptorpb.FileDescriptorSet{}
+	if err := proto.Unmarshal(b, fds); err != nil {
+		return [32]byte{}, fmt.Errorf("hash: unmarshal: %w", err)
+	}
+	sort.Slice(fds.File, func(i, j int) bool {
+		return fds.File[i].GetName() < fds.File[j].GetName()
+	})
+	canon, err := proto.MarshalOptions{Deterministic: true}.Marshal(fds)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("hash: marshal: %w", err)
+	}
+	return sha256.Sum256(canon), nil
 }
 
 // hashFromFileDescriptor builds a FileDescriptorSet from fd plus its
-// transitive imports, marshals it, and hashes that. Used by AddProto
-// (which loads from disk and never sees raw bytes).
+// transitive imports, canonicalises it, and hashes that. Used by
+// AddProto (which loads from disk and never sees wire bytes).
 func hashFromFileDescriptor(fd protoreflect.FileDescriptor) ([32]byte, error) {
 	b, err := marshalFileDescriptorSet(fd)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return hashDescriptorSet(b), nil
+	return sha256.Sum256(b), nil
 }

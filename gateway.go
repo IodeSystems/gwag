@@ -203,7 +203,6 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	if err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}
-	prevLatest := g.latestVersionLocked(e.namespace)
 	p = &pool{
 		key:      key,
 		versionN: n,
@@ -213,9 +212,9 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 	g.pools[key] = p
 	if g.schema.Load() != nil {
-		// Schema must rebuild: namespace appeared, OR a new version
-		// was introduced under an existing namespace, OR latest changed.
-		_ = prevLatest
+		// Pool creation always rebuilds — covers all three cases:
+		// namespace appeared, new version under existing namespace, or
+		// latest changed (highest versionN moved).
 		return g.assembleLocked()
 	}
 	return nil
@@ -266,21 +265,6 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 		return removed, g.assembleLocked()
 	}
 	return removed, nil
-}
-
-// latestVersionLocked returns the highest versionN currently live for
-// the given namespace, or -1 if none.
-func (g *Gateway) latestVersionLocked(ns string) int {
-	best := -1
-	for k, p := range g.pools {
-		if k.namespace != ns {
-			continue
-		}
-		if p.versionN > best {
-			best = p.versionN
-		}
-	}
-	return best
 }
 
 // Use appends middleware to both pipelines. Pair-shaped middleware
