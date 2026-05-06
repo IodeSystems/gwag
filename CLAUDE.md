@@ -1,9 +1,18 @@
 # go-api-gateway
 
-A Go library + binary fronting gRPC and OpenAPI services with a
-GraphQL surface. Drop in a `.proto` or OpenAPI spec, get a typed
-GraphQL endpoint. Multi-gateway clustering via embedded NATS;
-subscriptions via NATS pub/sub with HMAC channel auth.
+A Go library + binary that fronts three kinds of upstream services
+under a single typed GraphQL surface:
+
+- **gRPC services** described by `.proto`, registered via
+  `AddProto[Descriptor]` or the gRPC control plane.
+- **OpenAPI 3.x services** described by a JSON/YAML spec, registered
+  via `AddOpenAPI[Bytes]` or the same control plane (proto field
+  `ServiceBinding.openapi_spec`).
+- **Existing GraphQL services** stitched in via `AddGraphQL`
+  (boot-time introspection + namespace-prefixed type mirror).
+
+Multi-gateway clustering via embedded NATS; subscriptions via NATS
+pub/sub with HMAC channel auth.
 
 ## Read first
 
@@ -15,18 +24,24 @@ subscriptions via NATS pub/sub with HMAC channel auth.
 
 ## Architecture in five lines
 
-1. Services register `.proto` files (or OpenAPI specs) via control
-   plane gRPC at runtime, or boot-time via `AddProto`/`AddOpenAPI`.
-2. Each `(namespace, version)` is a *pool*. Multiple replicas can
-   join a pool only if proto hashes match (canonicalized SHA-256).
-3. The schema is rebuilt on every pool create/destroy. SDL +
+1. Services register at runtime via control plane gRPC (proto **or**
+   OpenAPI bindings) or boot-time via `AddProto` / `AddOpenAPI` /
+   `AddGraphQL`.
+2. Proto registrations populate per-`(namespace, version)` *pools*
+   with N replicas, hash-gated. OpenAPI registrations populate
+   per-namespace *sources* with N replicas (least-in-flight pick).
+   Downstream GraphQL = boot-time mirror, prefixed types, forwarding
+   resolver.
+3. The schema is rebuilt on every pool/source create/destroy. SDL +
    introspection + transformed FDS exposed at
    `/schema/{graphql,proto,openapi}`.
 4. Multi-gateway clusters share the registry via JetStream KV;
-   reconcilers on every node sync local pool state from KV watch.
+   reconcilers on every node sync local pool/source state from a KV
+   watch (proto and OpenAPI bindings ride in the same value shape).
 5. Server-streaming RPCs become GraphQL subscription fields backed
    by NATS pub/sub. HMAC verify on subscribe; delegate (registered
-   under `_events_auth/v1`) at sign time.
+   under `_events_auth/v1`) at sign time. The gateway also publishes
+   its own service-change events on `admin_events_watchServices`.
 
 ## Layout
 
@@ -78,17 +93,39 @@ examples/multi/          greeter + library + run.sh + run-cluster.sh
 docs/plan.md             Authoritative roadmap & decisions
 ui/                      React + MUI + TanStack Router admin UI; consumes
                          GraphQL only via graphql-codegen-typed SDK
+
+# Tests (~70 cases across these files; ~22s wall clock for the heavy
+# cluster ones)
+admin_events_test.go        admin_events publish path (NATS subscriber)
+admin_huma_test.go          channels / drain / openapi.json routes
+auth_admin_test.go          AdminMiddleware + token store + metrics
+auth_admin_delegate_test.go AdminAuthorizer delegate fall-through
+cluster_dispatch_test.go    Two-node cluster cross-gateway dispatch
+dynamic_openapi_test.go     ServiceBinding.openapi_spec path
+                            (standalone + cluster + multi-replica)
+forget_peer_test.go         peers KV manipulation; alive vs expired
+graphql_ingest_test.go      AddGraphQL: prefix mirror + forwarding
+grpc_dispatch_test.go       In-process grpc.Server + GraphQL → gRPC
+openapi_test.go             Httptest backend + GraphQL → HTTP/JSON
+schema_rebuild_test.go      Pool create/destroy + hash collision
+subscriptions_test.go       Embedded NATS + WebSocket round-trip
 ```
 
 ## Conventions
 
-- `go vet ./...` after every edit.
-- **Test coverage is a thin seed.** `auth_admin_test.go` covers
-  AdminMiddleware + header forwarding; everything else is still manual
-  via the example binaries. Growing this is tier-1 in plan.md — when
-  adding a feature, add tests in the same shape (httptest, no NATS).
+- `go vet ./...` after every edit. `go test ./.` after touching
+  load-bearing code (cluster tests run ~10s each, suite ~22s).
+- **Tests follow a fixture pattern.** Httptest for OpenAPI/GraphQL
+  forwarding; in-process `grpc.Server` for gRPC; `StartCluster`
+  with `127.0.0.1:0` for cluster/subscription tests; in-process
+  `grpc.ClientConnInterface` fakes for delegate testing. Lifetime
+  gotcha: `startClusterTracking` captures its ctx as the parent of
+  the watch + reconciler goroutines — pass `context.Background()`
+  in test helpers, not a `WithTimeout`, or the goroutines die mid-
+  test. (See `cluster_dispatch_test.go` comment.)
 - Generated code: `controlplane/v1/control.pb.go`,
-  `eventsauth/v1/eventsauth.pb.go`, `examples/multi/gen/**`. Never
+  `eventsauth/v1/eventsauth.pb.go`, `adminauth/v1/adminauth.pb.go`,
+  `adminevents/v1/adminevents.pb.go`, `examples/multi/gen/**`. Never
   edit; regenerate with protoc (`PATH=".bin:$PATH" protoc --go_out=...`).
 - **Per-pool isolation is sacred.** Anything that introduces a
   gateway-wide cap on unary dispatches (beyond per-pool `MaxInflight`)
@@ -98,20 +135,28 @@ ui/                      React + MUI + TanStack Router admin UI; consumes
 - **AsyncAPI export was considered and dropped.** GraphQL SDL +
   Subscription types is the client-facing schema for events.
 - **Proto/gRPC is canonical for service-to-service.** GraphQL is the
-  client-facing surface; OpenAPI ingestion is a bridge for legacy
-  HTTP services.
-- **Admin auth ≠ service auth.** The boot-token model in plan.md is
-  *only* for the gateway's own admin endpoints. It does not
-  authenticate services calling each other through the gateway, and
-  it has nothing to do with outbound auth to OpenAPI services. Two
-  separate concerns; keep them separate.
+  client-facing surface; OpenAPI and downstream-GraphQL ingestion are
+  bridges for legacy / external services that don't speak gRPC.
+- **Admin auth ≠ service auth.** The boot-token + AdminAuthorizer
+  delegate model is *only* for the gateway's own admin endpoints. It
+  does not authenticate services calling each other through the
+  gateway, and it has nothing to do with outbound auth to upstream
+  services (which is `WithOpenAPIClient` / `OpenAPIClient(c)` /
+  `ForwardHeaders`). Three separate concerns; keep them separate.
+- **Auto-internal `_*` namespaces.** Any namespace starting with `_`
+  is hidden from the public schema regardless of whether
+  `AsInternal()` was passed. `_events_auth`, `_admin_auth`,
+  `_admin_events`, etc. — operators don't have to remember the flag.
 - **Dogfood the OpenAPI path.** Admin operations live in
   `admin_huma.go`, defined via huma → OpenAPI → self-ingested by the
   gateway → surfaced as `admin_*` GraphQL fields. Same path any
   external huma service takes. Use this as the template when adding
   new admin operations.
-- `ServiceOption` (`To`, `As`, `AsInternal`) applies to `AddProto`,
-  `AddProtoDescriptor`, `AddOpenAPI`, and `AddOpenAPIBytes`.
+- **`ServiceOption`** applies to every registration entry point
+  (`AddProto`, `AddProtoDescriptor`, `AddOpenAPI`, `AddOpenAPIBytes`,
+  `AddGraphQL`). Available options: `To`, `As`, `AsInternal`,
+  `ForwardHeaders` (HTTP header allowlist), `OpenAPIClient`
+  (per-source `*http.Client`).
 
 ## How to build/run
 
@@ -161,11 +206,11 @@ side routing. Pattern lifted from zdx-go.
 
 The bearer is the gateway's boot token (logged at startup, persisted
 to `<adminDataDir>/admin-token` if `WithAdminDataDir(...)` is set).
-Boot-token model is the gateway's own emergency hatch — it does not
-authenticate services calling each other through the gateway, and it
-has nothing to do with outbound auth to OpenAPI backends (which is a
-separate tier-1 in plan.md). The pluggable admin authorizer
-delegate is still tier-1; boot token is the always-works fallback.
+The pluggable AdminAuthorizer delegate (registered under
+`_admin_auth/v1`) is consulted first; the boot token is the
+always-works emergency hatch underneath. Outbound auth to upstream
+services is a separate concern: `WithOpenAPIClient` /
+`OpenAPIClient(c)` / `ForwardHeaders`.
 
 The `/api/*` split is an example wiring choice, not a library
 constraint. `gateway.UIHandler(fs.FS)` and the per-handler primitives

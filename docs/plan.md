@@ -25,82 +25,23 @@ work draws from tier 2.
 
 ## Tier 2 — design-completing
 
-Ordered by current leverage. The top three unblock real
-deployments; the rest fill in design-completing features the
-gateway claims to support.
+Open items only — completed work is in *Recently Shipped*. Ordered
+by current leverage; the top items are realistic next picks for a
+fresh session.
 
-### More huma admin routes — done
-
-`admin_huma.go` now covers `peers`, `services`, `forgetPeer`,
-`signSubscriptionToken`, `listChannels`, `drain`, and exposes the
-huma OpenAPI spec at `/admin/openapi.json`. The latter three landed
-in this round (see Recently Shipped). All operations self-ingest
-into GraphQL automatically as `admin_*` fields via the same
-OpenAPI ingestion path.
-
-### Outbound auth pass-through alternatives
-
-`Authorization` is forwarded by default; `ForwardHeaders(...)`
-ServiceOption replaces the allowlist per source.
-`WithOpenAPIClient(*http.Client)` (gateway-wide default) and
-`OpenAPIClient(c)` (per-source override) let operators plug in any
-transport — mTLS, custom RoundTripper for service-account token
-injection, signed-URL rewriting, retry/timeout policy. That covers
-the common cases without committing to a specific auth model.
-
-Open design forks for richer cases:
-- **Service-account token**: a built-in helper that wraps a
-  RoundTripper and refreshes a token on schedule. Today this is
-  achievable via a custom `*http.Client`; promote to first-class
-  when a real deployment wants it.
-- **OAuth/JWT translation**: gateway exchanges the inbound token
-  for a service-specific token via a configurable issuer. Heavier;
-  same story — composable today, first-class when needed.
-
-### Dynamic OpenAPI registration over control plane — done
-
-`ServiceBinding.openapi_spec` lets services register OpenAPI specs
-dynamically through the same control plane proto bindings used.
-The gateway detects which form was sent, hashes the spec
-(SHA256 over raw bytes), writes the value to the registry KV, and
-each gateway's reconciler picks it up — local on the receiver,
-remote on the cluster peers.
-
-`controlclient.Service` accepts either `FileDescriptor` or
-`OpenAPISpec`. Single source per namespace in v1; multi-version /
-multi-replica OpenAPI is the next item below.
-
-### Downstream GraphQL ingestion — done (queries + mutations)
-
-`gw.AddGraphQL(endpoint, opts...)` introspects the remote at boot,
-mirrors every type with a `<ns>_` prefix, and registers Query /
-Mutation fields at the top level (`pets_users`, `pets_user(id: ID!)`,
-etc.). Forwarding resolver reconstructs the operation by rewriting
-the field's Name back to the remote-side name and printing via
-`graphql-go/graphql/language/printer`. Auth pass-through follows
-the OpenAPI conventions (default `Authorization`; per-source via
-`ForwardHeaders`); `WithOpenAPIClient` / `OpenAPIClient(c)` wire the
-HTTP client used for both introspection and dispatch.
-
-Open follow-ups:
-- **Subscriptions:** forward via graphql-ws to downstream. Multiplex
-  one upstream WS per (gateway, downstream-service). Not in v1.
-- **Interface / Union types:** v1 falls back to a JSON scalar with a
-  registration-time log line. Lossy but the field still resolves.
-  Add proper Interface/Union mirroring when a real downstream uses
-  them.
-- **Dynamic registration over the control plane.** Currently
-  boot-time only. Same mechanism dynamic OpenAPI uses (`bytes
-  graphql_endpoint = N` on `ServiceBinding` plus a separate
-  reconciler path).
-
-**Not federation** — pure delegation. Federation v2 entity-merging
-deferred to never unless multiple services need to contribute fields
-to the same entity.
+**Suggested pickups:**
+- *Smallest:* `/schema/graphql` selector or *Token rotation* —
+  contained, well-specified.
+- *Architecturally interesting:* GraphQL **subscription forwarding**
+  (graphql-ws upstream multiplexer); GraphQL **dynamic registration
+  over the control plane** (mirrors the OpenAPI pattern shipped
+  in `784430a`).
+- *Operational depth:* OpenAPI **HTTP backpressure** (mirror
+  `MaxInflight` / `MaxWaitTime` for HTTP dispatch).
 
 ### Token rotation (kid in tokens)
 
-Gateway accepts N secrets keyed by id. Token format becomes
+Gateway accepts N HMAC secrets keyed by id. Token format becomes
 `base64(kid || hmac)` or carries `kid` as a separate arg. Operator
 adds a new key, old keys remain valid until their lifetime expires.
 
@@ -108,30 +49,75 @@ Implementation notes:
 - New `SubscriptionAuthOptions.Secrets map[string][]byte`.
 - HMAC computation: include kid in the signed payload so swapping kid
   doesn't allow token replay across keys.
+- Both the verifier (`auth_subscribe.go`) and signer
+  (`SignSubscriptionToken`) need to learn about kid. The
+  `SubscribeAuthCode` enum already has `UNKNOWN_KID`.
+
+### Downstream GraphQL ingestion: subscriptions
+
+The boot-time mirror handles queries + mutations (see commit
+`3517273`). To complete the story, forward subscriptions:
+- Multiplex one upstream graphql-ws WebSocket per (gateway,
+  downstream-service) — same shape as the existing local sub
+  fanout in `broker.go`.
+- The local Subscription type gains a `<ns>_<remoteSubField>`
+  entry per remote subscription field. Resolver dials the upstream
+  WS, subscribes, fans incoming `next` frames to the local client.
+- Auth: respect `ForwardHeaders` for connection_init and HMAC
+  args for subscribes (same convention as queries).
+
+### Downstream GraphQL ingestion: dynamic registration
+
+`AddGraphQL` is boot-time only today. Mirror the dynamic OpenAPI
+path (`784430a`):
+- Add `bytes graphql_introspection = N` (or `string graphql_endpoint = N`
+  + on-server fetch) on `ServiceBinding`.
+- Reconciler.handlePut detects the GraphQL form and fetches /
+  parses introspection, then calls into the same mirror.
+- `controlclient.Service` gains a `GraphQLEndpoint string` field.
+
+### Downstream GraphQL ingestion: Interface / Union typed mirror
+
+v1 falls back to a JSON scalar with a registration-time log line.
+Add proper Interface / Union mirroring once a real downstream uses
+them. Map possibleTypes to `graphql.NewUnion`; resolve `__typename`
+on each value to pick the variant.
+
+### OpenAPI HTTP backpressure
+
+Proto pools have `MaxInflight` / `MaxWaitTime` per-pool semaphores.
+OpenAPI dispatch doesn't — every replica accepts unlimited
+concurrent requests. Mirror the proto path:
+- Per-source semaphore sized by `BackpressureOptions.MaxInflight`.
+- Wait-and-reject with the same dwell metric + Reject(ResourceExhausted).
+- Slot acquisition wraps `dispatchOpenAPI`.
+
+### Outbound auth pass-through alternatives
+
+`Authorization` is forwarded by default; `ForwardHeaders(...)`
+overrides per-source. `WithOpenAPIClient(*http.Client)` (gateway-
+wide default) and `OpenAPIClient(c)` (per-source override) let
+operators plug in any transport — mTLS, custom RoundTripper, signed
+URLs, retry/timeout policy. That covers the common cases.
+
+Open design forks for richer scenarios:
+- **Service-account token**: a built-in helper that wraps a
+  RoundTripper and refreshes a token on schedule. Today this is
+  achievable via a custom `*http.Client`; promote to first-class
+  when a real deployment wants it.
+- **OAuth/JWT translation**: gateway exchanges the inbound token
+  for a service-specific token via a configurable issuer. Heavier;
+  composable today, first-class when needed.
 
 ### Admin auth follow-ups
 
-Auto-internal `_*` namespaces and admin auth metrics shipped (see
-Recently Shipped). Remaining:
+Auto-internal `_*` namespaces and admin auth metrics shipped
+(commit `01b1a3a`). Remaining:
 - *Destructive read opt-in.* `AdminMiddleware` lets every GET
   through for the UI. Once a destructive read shows up
   (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via
   a per-route flag rather than flipping the global GET policy.
   Parked until a real destructive read needs it.
-
-### OpenAPI multi-replica + load balancing — done
-
-`openAPISource.replicas` is an atomic-pointer slice of `openAPIReplica`s
-mirroring the proto pool. Each replica has its own baseURL,
-in-flight counter, and (optional) per-replica `*http.Client`.
-`pickReplica` selects least-in-flight with a round-robin tiebreaker
-so serial low-traffic dispatch spreads. Reconciler delete is
-granular (per replicaID); the source dies when its last replica
-leaves.
-
-Backpressure tier-2 follow-up: `MaxInflight` / `MaxWaitTime` are
-not yet wired through OpenAPI dispatch. Add when an operator wants
-the same per-source ceiling proto pools have.
 
 ### OpenAPI oneOf / anyOf → GraphQL Union
 
@@ -164,8 +150,7 @@ been needed — codegen consumers always want the whole thing.
 - **NATS server log noise control.** Currently routes log everything
   at INFO (tests pile up server-banner output too). Expose a
   `Logger`/`LogLevel` field on `ClusterOptions` and a corresponding
-  `--nats-log-level` CLI flag. Subsumes the tier-1 test-side
-  cosmetic blocker.
+  `--nats-log-level` CLI flag.
 - **Metrics / tracing example middleware.** Concrete `Pair` showing
   OpenTelemetry / Prometheus-app-level integration on top of what
   the gateway already emits.
@@ -240,56 +225,63 @@ Background context for orienting a new session. Not work items.
 
 ### Test seed
 
-Where to crib from when adding tests:
+~70 cases across 12 files. The fixture patterns to crib from:
 
+**Unit-shape (httptest + helper-level):**
 - `auth_admin_test.go` — AdminMiddleware read/write split, token
-  persistence, header-forwarding allowlist (unit-level helper).
+  store + persistence, header-forwarding allowlist, admin auth
+  metrics (countingMetrics fixture).
 - `auth_admin_delegate_test.go` — AdminAuthorizer delegate
   (no-delegate, OK, DENIED, UNAVAILABLE, transport error, public
   reads bypass, request fields). Uses an in-process
   `grpc.ClientConnInterface` fake — no real gRPC server.
-- `openapi_test.go` — full GraphQL → HTTP dispatch round-trip via
-  httptest backend: GET path params, POST request body,
-  Authorization forwarding default, `ForwardHeaders` override,
-  backend error surfacing.
-- `grpc_dispatch_test.go` — full GraphQL → gRPC dispatch
-  round-trip: real `grpc.Server` on `127.0.0.1:0` implementing
-  GreeterService.Hello, registered via `AddProtoDescriptor`, queries
-  through `gw.Handler()`. Covers happy path, v1 sub-object, backend
-  error, no-live-replicas.
-- `schema_rebuild_test.go` — pool create rebuilds schema (greeter
-  field appears); pool destroy via `removeReplicasByOwnerLocked`
-  rebuilds (field disappears); hash mismatch on second registration
-  errors; same-hash second registration joins the pool (replica
-  count = 2); multiple namespaces coexist; `AsInternal()` hides
-  the namespace from Query but keeps the pool dispatchable.
-- `forget_peer_test.go` — single-node cluster, manual peer KV
-  manipulation. Covers: alive-rejection (peer present in KV),
-  happy path (peer expired/deleted → Removed=true), no-op for
-  never-registered peer, refuse-self, empty node_id, standalone
-  gateway (no cluster) errors with "cluster not configured".
-- `cluster_dispatch_test.go` — two `StartCluster` instances peering
-  via NATS routes; A receives a Register call, B's reconciler
-  picks it up via the registry KV and dials the greeter. GraphQL
-  query through B's `gw.Handler()` reaches the greeter (registered
-  on A) and returns the right payload. The same query through A
-  also works.
+- `schema_rebuild_test.go` — pool create/destroy/hash-mismatch
+  flows through `assembleLocked`. Includes auto-internal `_*`
+  namespace test.
 
-**Lifetime gotcha:** `startClusterTracking(ctx)` captures `ctx` as
-the parent of the long-running watch + reconciler goroutines. Test
-helpers must pass `context.Background()` (not a `WithTimeout`) so
-those goroutines outlive the helper return. Cleanup runs through
-`gw.Close → tracker.stop`. Burned ~30 minutes diagnosing this in
-the cross-gateway test — the symptom was "registry KV has the key
-on both nodes but B's reconciler never creates the pool".
-- `subscriptions_test.go` — full WebSocket round-trip via embedded
-  NATS (`StartCluster` with ephemeral ports + tempdir): happy-path
-  publish → next frame; HMAC SIGNATURE_MISMATCH / TOO_OLD;
-  NOT_CONFIGURED; client `complete` cleans up the broker entry.
+**HTTP-shape (httptest backend + `gw.Handler()`):**
+- `openapi_test.go` — boot-time OpenAPI dispatch + `ForwardHeaders`
+  + `WithOpenAPIClient` / `OpenAPIClient(c)` resolution.
+- `dynamic_openapi_test.go` — control-plane registration of
+  OpenAPI specs (standalone + cluster cross-gateway + multi-replica
+  least-in-flight).
+- `graphql_ingest_test.go` — `AddGraphQL` mirror, namespace prefix,
+  forwarding strips prefix, args pass through, duplicate ns
+  rejected. Hand-rolled introspection JSON in the test file.
+- `admin_huma_test.go` — channels / drain / openapi.json routes
+  through `AdminMiddleware`.
 
-Pattern: httptest + `gw.Handler()` for OpenAPI/subscription/gRPC;
-fakes or direct helper calls for unit-shape. Every new feature
+**gRPC-shape (in-process `grpc.Server`):**
+- `grpc_dispatch_test.go` — real grpc.Server on `127.0.0.1:0`
+  implementing GreeterService.Hello, registered via
+  `AddProtoDescriptor`. Happy path, v1 sub-object, backend error,
+  drained-pool.
+
+**Cluster-shape (`StartCluster` + ephemeral ports + tempdir):**
+- `forget_peer_test.go` — single-node cluster, manual peers-KV
+  manipulation; alive vs expired vs never-registered.
+- `cluster_dispatch_test.go` — two-node cluster peering on free
+  TCP ports; Register on A, dispatch from B via the KV reconciler.
+- `subscriptions_test.go` — embedded NATS + WebSocket; greeter
+  registered via `AddProtoDescriptor`; covers HMAC codes, NOT_CONFIGURED,
+  client-`complete` broker cleanup, admin\_events round-trip
+  (also exercises the proto-enum-as-int32 serialisation fix).
+- `admin_events_test.go` — admin\_events publisher direct via NATS
+  subscriber (no WS). Cluster-required check.
+
+**Pattern:** httptest + `gw.Handler()` for OpenAPI / GraphQL /
+subscription / gRPC paths; direct helper calls or
+`grpc.ClientConnInterface` fakes for unit shape. Every new feature
 should add same-shape coverage.
+
+**Lifetime gotcha** (in `cluster_dispatch_test.go` comments):
+`startClusterTracking(ctx)` captures `ctx` as the parent of the
+long-running watch + reconciler goroutines. Test helpers must pass
+`context.Background()` (not a `WithTimeout`) so those goroutines
+outlive the helper return. Cleanup runs through `gw.Close →
+tracker.stop`. The symptom of getting this wrong is "registry KV
+has the key on both nodes but B's reconciler never creates the
+pool".
 
 ### Schema export family
 
@@ -375,7 +367,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream GraphQL ingestion (boot-time, queries +
+- `3517273` downstream GraphQL ingestion (boot-time, queries +
   mutations). `gw.AddGraphQL(endpoint, opts...)` runs the canonical
   introspection query, parses into a typed model, mirrors every
   custom type with a `<ns>_` prefix (built-in scalars stay
@@ -494,39 +486,9 @@ older entries when they get stale.)
   GreeterService.Hello, registered via `AddProtoDescriptor`, queries
   through `gw.Handler()`. Covers happy path, v1 sub-object dispatch,
   backend error surfacing, drained-pool no-live-replicas error.
-- `1f85546` subscription e2e via embedded NATS + WebSocket.
-  `StartCluster` on ephemeral ports + tempdir; greeter registered
-  via `AddProtoDescriptor`; happy-path publish → next frame, HMAC
-  SIGNATURE_MISMATCH / TOO_OLD, NOT_CONFIGURED, client-`complete`
-  broker cleanup. First tests exercising NATS + WebSocket together.
-- `4346c12` AdminAuthorizer delegate (`adminauth/v1`) + wiring
-  in `AdminMiddleware`. Service registers under `_admin_auth/v1`;
-  delegate consulted first, boot token is the fallback. Tests cover
-  no-delegate, OK accept, DENIED short-circuit, UNAVAILABLE
-  fall-through, transport error → boot token still works, reads
-  remain public. Boot token is non-negotiable: a misbehaving
-  delegate cannot lock operators out.
-- `299c0ee` OpenAPI dispatch round-trip e2e tests
-  (`openapi_test.go`): httptest backend + `gw.Handler()`; covers
-  GET, POST-with-body, Authorization forwarding, ForwardHeaders
-  override, backend-error → graphql-error.
-- `f0cfe46` `ForwardHeaders(...)` ServiceOption + first
-  package-level tests (`auth_admin_test.go`). Replaces the static
-  global header allowlist with per-source allowlist.
-- `5bf7cdf` admin boot-token auth + `Authorization` forwarding on
-  OpenAPI dispatch. Token persists to `<adminDataDir>/admin-token`;
-  reads public, writes require bearer.
-- `df56e35` huma self-ingest of admin routes (the dogfood; the
-  surface admin\_\* GraphQL fields are built on).
-- `f9b30dd` schema export family `/schema/{graphql,proto,openapi}`.
-- `dc5e0f7` `AddOpenAPI` ingests OpenAPI 3.x specs into the GraphQL
-  schema.
-- `be4e832` `/health` + `Gateway.Drain` for rolling deploys.
-- `292c16f` graphql-ws WebSocket transport + NATS bridging for
-  subscriptions.
-
-Older commits (cluster KV, peers KV, embedded NATS, ForgetPeer,
-mTLS, schema diff, Prometheus, hybrid stream caps, HMAC verify,
-SignSubscriptionToken, etc.) are in the git log — they're not
-referenced by current decisions any more, so they've been trimmed
-here.
+Older commits (subscription e2e, OpenAPI dispatch e2e, AdminAuthorizer
+delegate, ForwardHeaders, admin boot-token, huma self-ingest, schema
+export family, AddOpenAPI ingestion, /health + Drain, graphql-ws
+transport + NATS bridge, cluster KV, peers KV, embedded NATS, mTLS,
+schema diff, Prometheus, etc.) are in the git log — they're not
+referenced by current decisions any more.
