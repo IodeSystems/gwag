@@ -47,6 +47,14 @@ type Metrics interface {
 	// attempt. code is the SubscribeAuthCode enum value's String()
 	// (e.g. "SUBSCRIBE_AUTH_CODE_OK", "..._SIGNATURE_MISMATCH").
 	RecordSubscribeAuth(namespace, version, method, code string)
+
+	// RecordAdminAuth records the outcome of an AdminMiddleware
+	// auth check. method is the HTTP method (POST/PUT/...). outcome
+	// is one of: "ok_delegate" (delegate said OK), "ok_bearer" (boot
+	// token matched), "denied_delegate" (delegate said DENIED),
+	// "denied_bearer" (no/wrong bearer + no delegate accept),
+	// "no_token_configured" (gateway has no boot token).
+	RecordAdminAuth(method, outcome string)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
@@ -59,6 +67,7 @@ func (noopMetrics) SetQueueDepth(string, string, string, int)                   
 func (noopMetrics) SetStreamsInflight(string, string, int)                       {}
 func (noopMetrics) SetStreamsInflightTotal(int)                                  {}
 func (noopMetrics) RecordSubscribeAuth(string, string, string, string)           {}
+func (noopMetrics) RecordAdminAuth(string, string)                               {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
 // Created by newPrometheusMetrics; the registry is exposed via
@@ -72,6 +81,7 @@ type prometheusMetrics struct {
 	streams      *prometheus.GaugeVec
 	streamsTotal prometheus.Gauge
 	subAuth      *prometheus.CounterVec
+	adminAuth    *prometheus.CounterVec
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -107,7 +117,11 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_subscribe_auth_total",
 		Help: "Outcomes of subscribe-auth checks (HMAC verify and delegate).",
 	}, []string{"namespace", "version", "method", "code"})
-	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth)
+	adminAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_admin_auth_total",
+		Help: "Outcomes of AdminMiddleware auth checks (delegate + boot-token bearer).",
+	}, []string{"method", "outcome"})
+	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, adminAuth)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -117,6 +131,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 		streams:      streams,
 		streamsTotal: streamsTotal,
 		subAuth:      subAuth,
+		adminAuth:    adminAuth,
 	}
 }
 
@@ -150,6 +165,10 @@ func (m *prometheusMetrics) SetStreamsInflightTotal(inflight int) {
 
 func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code string) {
 	m.subAuth.WithLabelValues(namespace, version, method, code).Inc()
+}
+
+func (m *prometheusMetrics) RecordAdminAuth(method, outcome string) {
+	m.adminAuth.WithLabelValues(method, outcome).Inc()
 }
 
 // classifyError maps an error to a stable label value. gRPC status

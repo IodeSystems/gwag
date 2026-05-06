@@ -60,7 +60,7 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 		// Collect matching pools' file descriptors.
 		matched := []*pool{}
 		for _, p := range g.pools {
-			if g.internal[p.key.namespace] {
+			if g.isInternal(p.key.namespace) {
 				continue
 			}
 			if !matchSelectors(p.key, selectors) {
@@ -203,7 +203,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 		g.mu.Lock()
 		out := map[string]any{}
 		for ns, src := range g.openAPISources {
-			if g.internal[ns] {
+			if g.isInternal(ns) {
 				continue
 			}
 			if !matchOpenAPISelectors(ns, selectors) {

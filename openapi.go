@@ -309,7 +309,7 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder) (graphql.Fields, gr
 	sort.Strings(names)
 	for _, ns := range names {
 		src := g.openAPISources[ns]
-		if g.internal[ns] {
+		if g.isInternal(ns) {
 			continue
 		}
 		paths := src.doc.Paths

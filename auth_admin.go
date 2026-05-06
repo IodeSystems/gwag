@@ -58,23 +58,28 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 		}
 		switch outcome, _ := g.consultAdminDelegate(r.Context(), r); outcome {
 		case adminDelegateAccept:
+			g.cfg.metrics.RecordAdminAuth(r.Method, "ok_delegate")
 			next.ServeHTTP(w, r.WithContext(WithAdminAuth(r.Context())))
 			return
 		case adminDelegateReject:
+			g.cfg.metrics.RecordAdminAuth(r.Method, "denied_delegate")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		// Fall through to boot-token check.
 		if len(tok) == 0 {
+			g.cfg.metrics.RecordAdminAuth(r.Method, "no_token_configured")
 			http.Error(w, "admin token not configured", http.StatusInternalServerError)
 			return
 		}
 		if !checkBearerEqual(r, tok) {
+			g.cfg.metrics.RecordAdminAuth(r.Method, "denied_bearer")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		g.cfg.metrics.RecordAdminAuth(r.Method, "ok_bearer")
 		next.ServeHTTP(w, r.WithContext(WithAdminAuth(r.Context())))
 	})
 }

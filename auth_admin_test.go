@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -133,8 +134,9 @@ func TestAdminMiddleware_GatesWrites(t *testing.T) {
 
 func TestAdminMiddleware_NoTokenConfigured(t *testing.T) {
 	// New() always populates a token; assemble the config manually
-	// for the misconfigured-explicitly-empty path.
-	gw := &Gateway{cfg: &config{adminToken: nil}}
+	// for the misconfigured-explicitly-empty path. metrics must be
+	// non-nil because AdminMiddleware records per-outcome counters.
+	gw := &Gateway{cfg: &config{adminToken: nil, metrics: noopMetrics{}}}
 	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -153,6 +155,64 @@ func TestAdminMiddleware_NoTokenConfigured(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("write got %d, want 500", rr.Code)
+	}
+}
+
+// countingMetrics is a noopMetrics that tallies AdminAuth outcomes
+// so the test can assert what fired.
+type countingMetrics struct {
+	noopMetrics
+	mu       sync.Mutex
+	outcomes map[string]int
+}
+
+func (c *countingMetrics) RecordAdminAuth(_, outcome string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outcomes == nil {
+		c.outcomes = map[string]int{}
+	}
+	c.outcomes[outcome]++
+}
+
+func TestAdminMiddleware_MetricsRecorded(t *testing.T) {
+	cm := &countingMetrics{}
+	tok := []byte("supersecret")
+	gw := New(WithMetrics(cm), WithoutBackpressure(), WithAdminToken(tok))
+	t.Cleanup(gw.Close)
+	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Public read — no metric (only writes are gated).
+	req := httptest.NewRequest(http.MethodGet, "/admin/peers", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Wrong bearer → denied_bearer.
+	req = httptest.NewRequest(http.MethodPost, "/admin/peers/x/forget", nil)
+	req.Header.Set("Authorization", "Bearer nope")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Right bearer → ok_bearer.
+	req = httptest.NewRequest(http.MethodPost, "/admin/peers/x/forget", nil)
+	req.Header.Set("Authorization", "Bearer "+hex.EncodeToString(tok))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.outcomes["ok_bearer"] != 1 {
+		t.Errorf("ok_bearer = %d, want 1", cm.outcomes["ok_bearer"])
+	}
+	if cm.outcomes["denied_bearer"] != 1 {
+		t.Errorf("denied_bearer = %d, want 1", cm.outcomes["denied_bearer"])
+	}
+	// Public read mustn't bump any auth counter.
+	total := 0
+	for _, n := range cm.outcomes {
+		total += n
+	}
+	if total != 2 {
+		t.Errorf("total outcomes = %d, want 2 (public read should not record): %v", total, cm.outcomes)
 	}
 }
 

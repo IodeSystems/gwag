@@ -109,21 +109,13 @@ Implementation notes:
 
 ### Admin auth follow-ups
 
-Three loose ends inherited from the admin-auth tier-1 work that
-landed; none blocks anything but each cleans up a sharp edge.
+Auto-internal `_*` namespaces and admin auth metrics shipped (see
+Recently Shipped). Remaining:
 - *Destructive read opt-in.* `AdminMiddleware` lets every GET
   through for the UI. Once a destructive read shows up
   (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via
   a per-route flag rather than flipping the global GET policy.
-- *Auto-internal underscore namespaces.* `_events_auth` and
-  `_admin_auth` rely on operators passing `AsInternal()` at
-  registration. Auto-flagging any `_*` namespace as internal would
-  prevent accidental schema leaks.
-- *Admin auth metrics.* No
-  `go_api_gateway_admin_auth_total{code,...}` counter today;
-  subscriptions already have one. Mirror it for delegate decisions
-  and bearer outcomes when an operator wants visibility into who's
-  getting denied.
+  Parked until a real destructive read needs it.
 
 ### OpenAPI multi-replica + load balancing
 
@@ -378,7 +370,17 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* dynamic OpenAPI registration through the
+- *(uncommitted)* admin-auth follow-ups pack: (1) auto-internal
+  `_*` namespaces — anything starting with underscore is hidden
+  from the public schema regardless of `AsInternal()`. Centralised
+  via a new `g.isInternal(ns)` helper; the explicit map still
+  works. (2) `go_api_gateway_admin_auth_total{method, outcome}`
+  counter mirroring the subscribe-auth metric. Outcomes:
+  `ok_delegate` / `ok_bearer` / `denied_delegate` / `denied_bearer`
+  / `no_token_configured`. Public reads never increment.
+  Destructive-read opt-in remains parked. 2 new tests
+  (`schema_rebuild_test.go`, `auth_admin_test.go`).
+- `784430a` dynamic OpenAPI registration through the
   control plane. New `ServiceBinding.openapi_spec` (proto field 5)
   alongside the existing `file_descriptor_set`; mutually exclusive.
   `controlPlane.Register` routes by which form was sent —
