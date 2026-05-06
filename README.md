@@ -131,19 +131,42 @@ $ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
 - `schema diff --strict` fails CI when a candidate schema would break
   existing consumers.
 
-## Metrics
+## Backpressure & metrics
 
-Every dispatch is timed by default. The library exposes a Prometheus
-histogram on `gw.MetricsHandler()`:
+Each `(namespace, version)` pool has its own dispatch concurrency cap
+and per-dispatch wait budget. Slow services back up *their own* pool
+without blocking dispatches to other pools — a sluggish `auth`
+service does not gate `library` requests.
+
+Defaults (override via `gateway.WithBackpressure(...)`):
+
+```go
+DefaultBackpressure = BackpressureOptions{
+    MaxInflight: 256,             // per-pool concurrent dispatches
+    MaxWaitTime: 10 * time.Second, // wait budget; exceeded → fast-reject
+}
+```
+
+A dispatch that cannot acquire its pool's slot within `MaxWaitTime`
+fails with `Reject(ResourceExhausted, "could not acquire slot in N")`
+— this is the "you can't even get a slot" backoff. The "external
+request pool" is the emergent set of all currently-waiting dispatches
+across the gateway; it has no separate flat cap (which would couple
+unrelated requests). Visibility comes from the per-pool metrics.
+
+Every dispatch is timed by default. `gw.MetricsHandler()` exposes:
 
 ```
-go_api_gateway_dispatch_duration_seconds{namespace, version, method, code}
+go_api_gateway_dispatch_duration_seconds{namespace,version,method,code}
+go_api_gateway_pool_queue_dwell_seconds{namespace,version,method}
+go_api_gateway_pool_backoff_total{namespace,version,method,reason}
+go_api_gateway_pool_queue_depth{namespace,version}                 (gauge)
 ```
 
 `code` is `ok` on success, the gRPC status string on failure (e.g.
 `Unavailable`, `Unauthenticated`), or one of the gateway's `Reject`
 codes when middleware short-circuits. `method` is the full gRPC path
-`/<service>/<rpc>`.
+`/<service>/<rpc>`. `reason` is currently always `wait_timeout`.
 
 Mount alongside the GraphQL endpoint:
 

@@ -19,19 +19,39 @@ type Metrics interface {
 	// (namespace, version) of the pool, the gRPC method path, the
 	// elapsed duration, and the dispatch error (nil on success).
 	RecordDispatch(namespace, version, method string, d time.Duration, err error)
+
+	// RecordDwell is called for every successful slot acquisition
+	// with the time spent waiting in the queue. d=0 when no queueing
+	// occurred (slot acquired immediately).
+	RecordDwell(namespace, version, method string, d time.Duration)
+
+	// RecordBackoff is called when a request is fast-rejected because
+	// the pool's queue is saturated. Reason is "queue_full" or
+	// "queue_timeout".
+	RecordBackoff(namespace, version, method, reason string)
+
+	// SetQueueDepth reflects the current count of requests waiting
+	// for a dispatch slot, per pool. Called on enqueue/dequeue.
+	SetQueueDepth(namespace, version string, depth int)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
 type noopMetrics struct{}
 
 func (noopMetrics) RecordDispatch(string, string, string, time.Duration, error) {}
+func (noopMetrics) RecordDwell(string, string, string, time.Duration)            {}
+func (noopMetrics) RecordBackoff(string, string, string, string)                 {}
+func (noopMetrics) SetQueueDepth(string, string, int)                            {}
 
-// prometheusMetrics implements Metrics on top of a single histogram
-// vector. Created by newPrometheusMetrics; the *prometheus.Registry it
-// owns is exposed by MetricsHandler.
+// prometheusMetrics implements Metrics over a Prometheus registry.
+// Created by newPrometheusMetrics; the registry is exposed via
+// MetricsHandler.
 type prometheusMetrics struct {
 	registry *prometheus.Registry
 	hist     *prometheus.HistogramVec
+	dwell    *prometheus.HistogramVec
+	backoff  *prometheus.CounterVec
+	depth    *prometheus.GaugeVec
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -41,8 +61,28 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Help:    "Duration of gRPC dispatches from the GraphQL surface to a backing replica.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"namespace", "version", "method", "code"})
-	reg.MustRegister(hist)
-	return &prometheusMetrics{registry: reg, hist: hist}
+	dwell := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "go_api_gateway_pool_queue_dwell_seconds",
+		Help: "Time a dispatch waited for an in-flight slot in its pool.",
+		// Tighter low-end buckets — well-tuned pools rarely queue.
+		Buckets: []float64{0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	}, []string{"namespace", "version", "method"})
+	backoff := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_pool_backoff_total",
+		Help: "Count of dispatches rejected by pool backpressure (queue full or timeout).",
+	}, []string{"namespace", "version", "method", "reason"})
+	depth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "go_api_gateway_pool_queue_depth",
+		Help: "Current count of dispatches waiting for an in-flight slot.",
+	}, []string{"namespace", "version"})
+	reg.MustRegister(hist, dwell, backoff, depth)
+	return &prometheusMetrics{
+		registry: reg,
+		hist:     hist,
+		dwell:    dwell,
+		backoff:  backoff,
+		depth:    depth,
+	}
 }
 
 func (m *prometheusMetrics) RecordDispatch(namespace, version, method string, d time.Duration, err error) {
@@ -51,6 +91,18 @@ func (m *prometheusMetrics) RecordDispatch(namespace, version, method string, d 
 		code = classifyError(err)
 	}
 	m.hist.WithLabelValues(namespace, version, method, code).Observe(d.Seconds())
+}
+
+func (m *prometheusMetrics) RecordDwell(namespace, version, method string, d time.Duration) {
+	m.dwell.WithLabelValues(namespace, version, method).Observe(d.Seconds())
+}
+
+func (m *prometheusMetrics) RecordBackoff(namespace, version, method, reason string) {
+	m.backoff.WithLabelValues(namespace, version, method, reason).Inc()
+}
+
+func (m *prometheusMetrics) SetQueueDepth(namespace, version string, depth int) {
+	m.depth.WithLabelValues(namespace, version).Set(float64(depth))
 }
 
 // classifyError maps an error to a stable label value. gRPC status

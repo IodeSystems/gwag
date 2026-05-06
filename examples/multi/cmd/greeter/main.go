@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -20,9 +21,13 @@ import (
 
 type greeterImpl struct {
 	greeterv1.UnimplementedGreeterServiceServer
+	delay time.Duration
 }
 
-func (*greeterImpl) Hello(_ context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+func (g *greeterImpl) Hello(_ context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+	if g.delay > 0 {
+		time.Sleep(g.delay)
+	}
 	name := req.GetName()
 	if name == "" {
 		name = "stranger"
@@ -35,6 +40,7 @@ func main() {
 	gatewayAddr := flag.String("gateway", "localhost:50090", "Gateway control plane address")
 	advertise := flag.String("advertise", "localhost:50051", "Address to advertise to the gateway")
 	version := flag.String("version", "v1", "Service version (v1, v2, ...)")
+	delay := flag.Duration("delay", 0, "Artificial delay per Hello call (for backpressure tests)")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -42,7 +48,7 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	greeterv1.RegisterGreeterServiceServer(srv, &greeterImpl{})
+	greeterv1.RegisterGreeterServiceServer(srv, &greeterImpl{delay: *delay})
 	go func() {
 		log.Printf("greeter gRPC listening on %s", *addr)
 		if err := srv.Serve(lis); err != nil {

@@ -54,7 +54,7 @@ func (g *Gateway) assembleLocked() error {
 
 		// Latest version's RPCs flat under the namespace — what
 		// version-agnostic clients see.
-		latestRPCs, err := buildPoolRPCs(tb, latest, chain, g.cfg.metrics)
+		latestRPCs, err := buildPoolRPCs(tb, latest, chain, g.cfg.metrics, g.cfg.backpressure)
 		if err != nil {
 			return err
 		}
@@ -64,7 +64,7 @@ func (g *Gateway) assembleLocked() error {
 
 		// Every version (including latest) addressable as a sub-object.
 		for _, p := range pools {
-			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics)
+			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics, g.cfg.backpressure)
 			if err != nil {
 				return err
 			}
@@ -122,7 +122,7 @@ func (g *Gateway) assembleLocked() error {
 // buildPoolRPCs returns one graphql.Field per RPC method declared in
 // the pool's proto. The dispatch closure picks a replica via
 // pool.pickReplica at invocation time.
-func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics) (graphql.Fields, error) {
+func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	services := p.file.Services()
 	for i := 0; i < services.Len(); i++ {
@@ -133,7 +133,7 @@ func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics) 
 			if md.IsStreamingClient() || md.IsStreamingServer() {
 				continue
 			}
-			field, err := buildPoolMethodField(tb, p, sd, md, chain, metrics)
+			field, err := buildPoolMethodField(tb, p, sd, md, chain, metrics, bp)
 			if err != nil {
 				return nil, err
 			}
@@ -150,6 +150,7 @@ func buildPoolMethodField(
 	md protoreflect.MethodDescriptor,
 	chain Middleware,
 	metrics Metrics,
+	bp BackpressureOptions,
 ) (*graphql.Field, error) {
 	inputDesc := md.Input()
 	outputDesc := md.Output()
@@ -168,6 +169,33 @@ func buildPoolMethodField(
 
 	dispatch := Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 		start := time.Now()
+
+		// Acquire a slot. Fast path: pool.sem nil (unbounded) or
+		// has immediate capacity. Slow path: queue, observe dwell,
+		// time out per MaxWaitTime.
+		if p.sem != nil {
+			waitStart := time.Now()
+			select {
+			case p.sem <- struct{}{}:
+				metrics.RecordDwell(ns, ver, method, time.Since(waitStart))
+			default:
+				depth := int(p.queueing.Add(1))
+				metrics.SetQueueDepth(ns, ver, depth)
+				dwell, err := waitForSlot(ctx, p, bp.MaxWaitTime)
+				now := int(p.queueing.Add(-1))
+				metrics.SetQueueDepth(ns, ver, now)
+				metrics.RecordDwell(ns, ver, method, dwell)
+				if err != nil {
+					reason := "wait_timeout"
+					rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
+					metrics.RecordBackoff(ns, ver, method, reason)
+					metrics.RecordDispatch(ns, ver, method, time.Since(start), rejErr)
+					return nil, rejErr
+				}
+			}
+			defer func() { <-p.sem }()
+		}
+
 		r := p.pickReplica()
 		if r == nil {
 			err := fmt.Errorf("gateway: no live replicas for %s/%s", ns, ver)
@@ -201,6 +229,32 @@ func buildPoolMethodField(
 			return messageToMap(resp.(*dynamicpb.Message)), nil
 		},
 	}, nil
+}
+
+// waitForSlot blocks until p.sem has capacity or the per-dispatch
+// MaxWaitTime budget expires. Returns the dwell time and an error
+// when the wait times out (or the request context cancels).
+func waitForSlot(ctx context.Context, p *pool, maxWait time.Duration) (time.Duration, error) {
+	start := time.Now()
+	if maxWait <= 0 {
+		// No wait timeout — block on context only.
+		select {
+		case p.sem <- struct{}{}:
+			return time.Since(start), nil
+		case <-ctx.Done():
+			return time.Since(start), ctx.Err()
+		}
+	}
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
+	select {
+	case p.sem <- struct{}{}:
+		return time.Since(start), nil
+	case <-timer.C:
+		return time.Since(start), fmt.Errorf("could not acquire slot in %s", maxWait)
+	case <-ctx.Done():
+		return time.Since(start), ctx.Err()
+	}
 }
 
 // runtimeChain returns the composed Middleware for runtime hooks. Pairs

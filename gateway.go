@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/handler"
@@ -39,9 +40,51 @@ type Gateway struct {
 
 type Option func(*config)
 type config struct {
-	cluster *Cluster
-	tls     *tls.Config
-	metrics Metrics
+	cluster      *Cluster
+	tls          *tls.Config
+	metrics      Metrics
+	backpressure BackpressureOptions
+}
+
+// BackpressureOptions controls per-pool concurrency caps and the
+// global wait budget. The model is intentionally per-pool to keep one
+// slow service from blocking dispatches that don't depend on it: a
+// dispatch waiting on pool X never blocks a dispatch to pool Y. The
+// only gateway-wide knob is MaxWaitTime, which bounds how long ANY
+// single dispatch will wait for its internal pool slot before
+// short-circuiting with backoff.
+type BackpressureOptions struct {
+	// MaxInflight is the per-pool ceiling on simultaneous dispatches.
+	// Once at the ceiling, additional requests for the same pool
+	// wait until a slot opens. 0 disables — dispatches go through
+	// unbounded.
+	MaxInflight int
+
+	// MaxWaitTime is the per-dispatch wait budget: a dispatch that
+	// cannot acquire its pool's slot within this window is rejected
+	// with Reject(ResourceExhausted, "wait timeout"). This is the
+	// "you cannot even get a slot in N seconds" backoff. 0 disables
+	// the timeout (wait forever; only the request context cancels).
+	MaxWaitTime time.Duration
+}
+
+// DefaultBackpressure is what gateway.New uses unless overridden.
+// 256 in-flight is sized for moderate-throughput services; 10s is the
+// outer wait window before a sustained-overload backoff kicks in.
+var DefaultBackpressure = BackpressureOptions{
+	MaxInflight: 256,
+	MaxWaitTime: 10 * time.Second,
+}
+
+// WithBackpressure overrides the default per-pool concurrency caps.
+func WithBackpressure(b BackpressureOptions) Option {
+	return func(cfg *config) { cfg.backpressure = b }
+}
+
+// WithoutBackpressure removes per-pool limits entirely. Dispatches
+// proceed without queueing or waiting; useful for tests and dev.
+func WithoutBackpressure() Option {
+	return func(cfg *config) { cfg.backpressure = BackpressureOptions{} }
 }
 
 // WithMetrics swaps the default Prometheus-backed metrics sink for a
@@ -74,7 +117,9 @@ func WithTLS(c *tls.Config) Option {
 }
 
 func New(opts ...Option) *Gateway {
-	cfg := &config{}
+	cfg := &config{
+		backpressure: DefaultBackpressure,
+	}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -225,6 +270,9 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		versionN: n,
 		file:     e.file,
 		hash:     e.hash,
+	}
+	if g.cfg.backpressure.MaxInflight > 0 {
+		p.sem = make(chan struct{}, g.cfg.backpressure.MaxInflight)
 	}
 	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 	g.pools[key] = p

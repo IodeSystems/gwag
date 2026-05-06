@@ -52,6 +52,8 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "Server key (PEM); pair with --tls-cert")
 	tlsCA := flag.String("tls-ca", "", "CA bundle (PEM) used to verify peer certs")
 	environment := flag.String("environment", "", "Deployment environment label (e.g. dev, staging, prod); part of NATS cluster name")
+	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool dispatch concurrency cap; 0 disables")
+	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
 	flag.Parse()
 
 	var mtls *tls.Config
@@ -93,6 +95,10 @@ func main() {
 	if mtls != nil {
 		gwOpts = append(gwOpts, gateway.WithTLS(mtls))
 	}
+	gwOpts = append(gwOpts, gateway.WithBackpressure(gateway.BackpressureOptions{
+		MaxInflight: *maxInflight,
+		MaxWaitTime: *maxWait,
+	}))
 	gw := gateway.New(gwOpts...)
 
 	cpLis, err := net.Listen("tcp", *cpAddr)

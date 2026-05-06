@@ -66,6 +66,15 @@ type pool struct {
 	// so dispatch closures snapshotting it never see partial mutation.
 	// Reads via Load() in pickReplica.
 	replicas atomic.Pointer[[]*replica]
+
+	// sem caps simultaneous dispatches against this pool. nil when
+	// MaxInflight is 0 (unbounded). Buffered channel; send to acquire,
+	// receive to release.
+	sem chan struct{}
+
+	// queueing tracks the count of dispatches currently waiting on sem,
+	// surfaced as the queue-depth gauge.
+	queueing atomic.Int32
 }
 
 // replica is one backend behind a pool. inflight is incremented before
