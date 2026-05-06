@@ -11,63 +11,40 @@ intentionally; not currently planned to fix.
 
 ## Tier 1 — load-bearing
 
-### Gateway admin auth (boot token)
+### Gateway admin auth: pluggable delegate (boot token shipped)
 
-**Scope:** this is *only* the gate on the gateway's own admin
-endpoints. It does **not** authenticate services, services calling
-each other through the gateway, or outbound dispatch to registered
-backends. Service auth is a separate concern (next section).
+**Boot token shipped** (see Recently Shipped). What's left in tier 1:
 
-**Boot token.** On startup, the gateway generates a 32-byte random
-token (or loads an existing one from `<data-dir>/admin-token`). The
-token is logged to stderr at boot:
-
-```
-gateway: admin token = 7c3a...  (persisted to /var/lib/.../admin-token)
-```
-
-Clients (the UI; operators with curl) present it as
-`Authorization: Bearer <token>`. The boot token is the **emergency
-hatch** — it always works, regardless of what other auth ships later.
-
-**Future: pluggable admin authorizer.** Same delegate shape as
+**Pluggable admin authorizer.** Same delegate shape as
 `SubscriptionAuthorizer`: a service registered under a reserved
-namespace (e.g., `_admin_auth`) implementing
+namespace (e.g. `_admin_auth/v1`) implementing
 `AuthorizeAdmin(token, operation) → code`. The gateway consults it on
 every protected request and falls through to the boot token if the
 delegate denies, errors, or isn't registered. The always-works boot
 token is non-negotiable. **This delegate authorizes operators against
 the gateway, not services against each other.**
 
-**Public vs protected surface (gateway endpoints only):**
+Implementation when it lands:
+- `eventsauth/v1`-style proto: `AdminAuth` service,
+  `Authorize(token, method, path) → (code, reason)`.
+- `WithAdminAuthorizer(...)` library option mirrors
+  `WithSubscriptionAuth`. Boot token remains the fallback.
+- `AdminMiddleware` consults the delegate first, then boot token —
+  parallel to subscription HMAC verify falling back to insecure mode.
 
-| Path / Operation | Auth |
-|---|---|
-| `/health` | public |
-| `/schema/graphql` (and `?format=json`) | public |
-| `/schema/proto?service=…` | public |
-| `/schema/openapi?service=…` | public |
-| `/graphql` read-only queries (incl. `admin_listPeers`, `admin_listServices`) | public |
-| `/graphql` mutations (incl. `admin_forgetPeer`, `admin_signSubscriptionToken`) | token required |
-| `/admin/*` (huma routes; mutations + future destructive reads) | token required |
-| `/metrics` | public (or behind reverse-proxy auth) |
-
-Reading is informational; writing/destructive ops require auth.
-Schema downloads stay public so the UI's service-status and
-schema-picker views work for unauthenticated users.
-
-**Implementation (when it lands):**
-- `auth_admin.go` with boot-token generation/persistence + bearer
-  middleware.
-- `WithAdminToken([]byte)` library option (callers supply their own
-  token for testing; default is generate-on-boot).
-- HTTP middleware wraps `/admin/*` and gates non-public GraphQL
-  mutations.
-- The OpenAPI dispatch path forwards the inbound `Authorization`
-  header to `/admin/*` so `admin_*` GraphQL fields work end-to-end
-  when the token is presented at `/graphql`.
-- Future `WithAdminAuthorizer(...)` plugs the delegate; boot token
-  remains the fallback.
+**Optional follow-ups now that the boot path is in place:**
+- *Destructive read opt-in.* `AdminMiddleware` currently lets every
+  GET through for the UI. Once a destructive read shows up
+  (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via a
+  per-route flag rather than flipping the global GET policy.
+- *Token rotation for admin.* Tier-2 already covers HMAC kid for
+  subscriptions; same idea here would let operators rotate without
+  restart.
+- *Configurable header pass-through.* `forwardedOpenAPIHeaders` is a
+  static `[]string{"Authorization"}` for v1. Per-source allowlist
+  (set via `ServiceOption`) would unblock multi-tenant scenarios
+  where different OpenAPI backends want different forward sets — see
+  next section.
 
 ### Outbound auth pass-through to OpenAPI services
 
@@ -78,12 +55,19 @@ gateway-originated call? Real services need bearer tokens, mTLS
 client certs, session cookies, signed URLs. The boot-token model
 above is unrelated; it lives entirely on the gateway's inbound side.
 
-Design forks:
-- **Header pass-through**: forward configured headers from the
-  inbound GraphQL request to the outbound HTTP request. Operator
-  configures `[]string{"Authorization", "X-Api-Key"}` per registered
-  spec. Inbound headers come from `WithHTTPRequest` ctx already
-  plumbed.
+**Status:** v1 of this is shipped — `Authorization` is forwarded
+unconditionally on every outbound OpenAPI dispatch (see
+`forwardedOpenAPIHeaders` in `openapi.go`). That covers the dogfood
+case (admin\_\* GraphQL mutations forward the bearer to /admin/\*) and
+the simplest external case (a backend that uses bearer auth and
+trusts whatever the GraphQL caller sent). It is **not** sufficient
+for backends that want a separate identity, header allowlist, or
+client cert.
+
+Remaining design forks (still open):
+- **Configurable header pass-through**: per-source allowlist
+  (`gateway.As("foo"), gateway.ForwardHeaders("Authorization",
+  "X-Api-Key")`). Replaces the static list when set.
 - **Service-account token**: gateway holds a credential per
   registered service and presents it on every outbound. Doesn't carry
   user identity; service does its own authz.
@@ -91,10 +75,12 @@ Design forks:
   a service-specific token via a configurable issuer. Heavier.
 - **mTLS client certs**: gateway dials with a configured client cert
   per service. Reuse `LoadMTLSConfig` plumbing.
+- **`WithOpenAPIClient(*http.Client)`**: operator-supplied transport
+  for arbitrary out-of-band auth (signed URLs, custom retry, etc.).
 
-Recommended v1: header pass-through + a
-`WithOpenAPIClient(*http.Client)` hook so operators can plug in their
-own transport (mTLS, retry, etc.).
+Recommended next step: per-source `ForwardHeaders(...)` ServiceOption.
+Cheapest win, unblocks multi-backend deployments without committing
+to a delegate or token-exchange model.
 
 ### Automated tests
 
@@ -115,25 +101,6 @@ Targets:
 
 Highest-leverage single thing in the entire codebase. Without this,
 every change requires manual verification.
-
-### Server-streaming gRPC dispatch (not just SDL)
-
-Server-streaming RPCs are surfaced as Subscription fields and bridged
-via NATS pub/sub when services publish to a NATS subject directly. But
-**gRPC server-streaming dispatch isn't wired** — we don't open a
-gRPC stream against a registered service to receive its messages. If a
-service implements an actual server-streaming gRPC method (rather than
-publishing to NATS), we can't read from it.
-
-Pick one:
-- (a) Document that subscription fields require NATS publishes; never
-  dispatch gRPC streams. Simpler, our preferred mental model.
-- (b) Also support gRPC streaming dispatch as a transport option per
-  service. Heavier; adds a per-stream gRPC client lifecycle.
-
-Lean (a) — keep one transport story (NATS pub/sub for events). Files
-declaring server-streaming RPCs but publishing via gRPC are not
-supported; they'd need to publish to NATS instead. Document this.
 
 ---
 
@@ -315,7 +282,9 @@ future sessions.
 | **`--environment` becomes part of NATS cluster name** | Hard isolation between dev/staging/prod at the broker level. Cannot accidentally cross-talk. |
 | **Schema diff via SDL, hash parity via canonical descriptors** | Two views of "are these clusters compatible": semantic (SDL diff) and structural (hash equality). |
 | **No flat gateway-wide unary queue** | Re-introduces the cross-pool blocking problem we explicitly designed away. |
-| **Server-streaming gRPC filtered with warning, not implemented** | Subscription path is NATS-backed. Lifting actual gRPC streams adds a transport story we'd rather not maintain. |
+| **Server-streaming gRPC filtered with warning, not implemented** | Subscription path is NATS-backed. Lifting actual gRPC streams adds a transport story we'd rather not maintain. Files declaring server-streaming RPCs surface in the schema, but services must publish to the resolved NATS subject rather than implementing the gRPC stream method — README documents the subject derivation. |
+| **`AdminMiddleware` gates writes, lets reads through** | UI's services/peers views must work unauthenticated for the operator to find the token in the first place. Destructive reads will need explicit opt-in once any exist. Dispatch path forwards `Authorization` so a token presented at /graphql reaches /admin/\* automatically — the bearer middleware is the single gating point. |
+| **`Authorization` forwarded unconditionally on OpenAPI dispatch** | Cheapest design that makes admin\_\* GraphQL mutations work end-to-end with one bearer. External backends that need a different identity will need the per-source `ForwardHeaders(...)` follow-up; revisit when a real use case shows up. |
 
 ---
 
@@ -400,13 +369,24 @@ Followups:
 - Embed `dist/` via `embed.FS` so a single gateway binary serves
   the UI (tier-2 above).
 - An "Events" page subscribing via graphql-ws to demo subscriptions.
-- Auth integration once tier-1 inbound auth lands.
+- **Admin token entry / storage in the UI.** Now that `admin_*`
+  mutations require a bearer, the UI needs a settings drawer that
+  takes the token (paste from the boot log), stores it
+  (sessionStorage — never persistence by default), and attaches it
+  to graphql-codegen's fetcher as `Authorization: Bearer <hex>`.
+  Without this, the Peers page's Forget button 401s.
 
 ## Recently shipped
 
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* admin auth: boot token + `AdminMiddleware` gating
+  /admin/\*; OpenAPI dispatch forwards `Authorization` so admin\_\*
+  GraphQL mutations work end-to-end with one bearer. Token persists
+  to `<adminDataDir>/admin-token` (defaults to JetStream data dir in
+  the example) — restart reuses the same token. Reads are public,
+  writes require bearer. Verified end-to-end in examples/multi.
 - `df56e35` huma self-ingest of admin routes (the dogfood)
 - `f5cf789` AddProtoDescriptor + UI scaffold + CLAUDE.md
 - `4df3f80` decisions: proto/gRPC canonical for s2s

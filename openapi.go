@@ -374,6 +374,7 @@ func dispatchOpenAPI(
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	forwardOpenAPIHeaders(ctx, req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -399,6 +400,25 @@ func dispatchOpenAPI(
 
 // readFile is os.ReadFile in a function var so tests can swap it.
 var readFile = os.ReadFile
+
+// forwardedOpenAPIHeaders is the static set forwarded from the inbound
+// GraphQL request onto outbound OpenAPI dispatches. v1 is auth-only —
+// enough to make admin_* mutations work end-to-end with one bearer
+// token. Tier-2 follow-up: per-source configurable list (mTLS,
+// service-account tokens, etc. — see docs/plan.md).
+var forwardedOpenAPIHeaders = []string{"Authorization"}
+
+func forwardOpenAPIHeaders(ctx context.Context, out *http.Request) {
+	in := HTTPRequestFromContext(ctx)
+	if in == nil {
+		return
+	}
+	for _, h := range forwardedOpenAPIHeaders {
+		if v := in.Header.Get(h); v != "" {
+			out.Header.Set(h, v)
+		}
+	}
+}
 
 // ---------------------------------------------------------------------
 // Type mapper: JSON Schema → GraphQL.

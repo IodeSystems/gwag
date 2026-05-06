@@ -103,6 +103,13 @@ func main() {
 	if mtls != nil {
 		gwOpts = append(gwOpts, gateway.WithTLS(mtls))
 	}
+	if *natsData != "" {
+		// Persist the admin token under the same data dir as JetStream
+		// so a restart reloads the same token (no reconfiguration of
+		// clients). Standalone gateways without a data dir get a
+		// fresh in-memory token each boot.
+		gwOpts = append(gwOpts, gateway.WithAdminDataDir(*natsData))
+	}
 	gwOpts = append(gwOpts, gateway.WithBackpressure(gateway.BackpressureOptions{
 		MaxInflight:     *maxInflight,
 		MaxStreams:      *maxStreams,
@@ -158,7 +165,14 @@ func main() {
 	mux.Handle("/schema/openapi", gw.SchemaOpenAPIHandler())
 	mux.Handle("/metrics", gw.MetricsHandler())
 	mux.Handle("/health", gw.HealthHandler())
-	mux.Handle("/admin/", adminMux) // huma routes mounted; OpenAPI ingested below
+	// Bearer-gated: writes require the boot token; reads stay public so
+	// the UI's services-list/peer views work unauthenticated.
+	mux.Handle("/admin/", gw.AdminMiddleware(adminMux))
+	if path := gw.AdminTokenPath(); path != "" {
+		log.Printf("admin token = %s  (persisted to %s)", gw.AdminTokenHex(), path)
+	} else {
+		log.Printf("admin token = %s  (in-memory, regenerated on restart)", gw.AdminTokenHex())
+	}
 
 	// Self-ingest the huma admin OpenAPI so its operations become
 	// GraphQL fields under namespace "admin".
