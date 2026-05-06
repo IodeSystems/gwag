@@ -37,12 +37,17 @@ func newForgetPeerFixture(t *testing.T) *forgetPeerFixture {
 	gw := New(WithCluster(cluster), WithoutMetrics(), WithoutBackpressure())
 	t.Cleanup(gw.Close)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := cluster.WaitForJetStream(ctx); err != nil {
+	jsCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := cluster.WaitForJetStream(jsCtx); err != nil {
+		cancel()
 		t.Fatalf("WaitForJetStream: %v", err)
 	}
-	if _, err := gw.startClusterTracking(ctx); err != nil {
+	cancel()
+	// startClusterTracking captures its ctx as the parent of the long-
+	// running watch + reconciler goroutines. Use Background so they
+	// don't die when this helper returns. Cleanup runs through
+	// gw.Close → tracker.stop.
+	if _, err := gw.startClusterTracking(context.Background()); err != nil {
 		t.Fatalf("startClusterTracking: %v", err)
 	}
 
