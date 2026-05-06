@@ -22,17 +22,22 @@ type Metrics interface {
 
 	// RecordDwell is called for every successful slot acquisition
 	// with the time spent waiting in the queue. d=0 when no queueing
-	// occurred (slot acquired immediately).
-	RecordDwell(namespace, version, method string, d time.Duration)
+	// occurred (slot acquired immediately). kind is "unary" or
+	// "stream".
+	RecordDwell(namespace, version, method, kind string, d time.Duration)
 
 	// RecordBackoff is called when a request is fast-rejected because
-	// the pool's queue is saturated. Reason is "queue_full" or
-	// "queue_timeout".
-	RecordBackoff(namespace, version, method, reason string)
+	// the pool's queue is saturated. kind is "unary" or "stream".
+	// Reason is currently always "wait_timeout".
+	RecordBackoff(namespace, version, method, kind, reason string)
 
 	// SetQueueDepth reflects the current count of requests waiting
-	// for a dispatch slot, per pool. Called on enqueue/dequeue.
-	SetQueueDepth(namespace, version string, depth int)
+	// for a dispatch slot, per pool. kind is "unary" or "stream".
+	SetQueueDepth(namespace, version, kind string, depth int)
+
+	// SetStreamsInflight reflects the current count of active
+	// subscription streams against a pool.
+	SetStreamsInflight(namespace, version string, inflight int)
 
 	// RecordSubscribeAuth records the outcome of a subscribe-auth
 	// attempt. code is the SubscribeAuthCode enum value's String()
@@ -44,9 +49,10 @@ type Metrics interface {
 type noopMetrics struct{}
 
 func (noopMetrics) RecordDispatch(string, string, string, time.Duration, error) {}
-func (noopMetrics) RecordDwell(string, string, string, time.Duration)            {}
-func (noopMetrics) RecordBackoff(string, string, string, string)                 {}
-func (noopMetrics) SetQueueDepth(string, string, int)                            {}
+func (noopMetrics) RecordDwell(string, string, string, string, time.Duration)    {}
+func (noopMetrics) RecordBackoff(string, string, string, string, string)         {}
+func (noopMetrics) SetQueueDepth(string, string, string, int)                    {}
+func (noopMetrics) SetStreamsInflight(string, string, int)                       {}
 func (noopMetrics) RecordSubscribeAuth(string, string, string, string)           {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
@@ -58,6 +64,7 @@ type prometheusMetrics struct {
 	dwell    *prometheus.HistogramVec
 	backoff  *prometheus.CounterVec
 	depth    *prometheus.GaugeVec
+	streams  *prometheus.GaugeVec
 	subAuth  *prometheus.CounterVec
 }
 
@@ -73,26 +80,31 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Help: "Time a dispatch waited for an in-flight slot in its pool.",
 		// Tighter low-end buckets — well-tuned pools rarely queue.
 		Buckets: []float64{0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-	}, []string{"namespace", "version", "method"})
+	}, []string{"namespace", "version", "method", "kind"})
 	backoff := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "go_api_gateway_pool_backoff_total",
 		Help: "Count of dispatches rejected by pool backpressure (queue full or timeout).",
-	}, []string{"namespace", "version", "method", "reason"})
+	}, []string{"namespace", "version", "method", "kind", "reason"})
 	depth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "go_api_gateway_pool_queue_depth",
 		Help: "Current count of dispatches waiting for an in-flight slot.",
+	}, []string{"namespace", "version", "kind"})
+	streams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "go_api_gateway_pool_streams_inflight",
+		Help: "Current count of active subscription streams in a pool.",
 	}, []string{"namespace", "version"})
 	subAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "go_api_gateway_subscribe_auth_total",
 		Help: "Outcomes of subscribe-auth checks (HMAC verify and delegate).",
 	}, []string{"namespace", "version", "method", "code"})
-	reg.MustRegister(hist, dwell, backoff, depth, subAuth)
+	reg.MustRegister(hist, dwell, backoff, depth, streams, subAuth)
 	return &prometheusMetrics{
 		registry: reg,
 		hist:     hist,
 		dwell:    dwell,
 		backoff:  backoff,
 		depth:    depth,
+		streams:  streams,
 		subAuth:  subAuth,
 	}
 }
@@ -105,16 +117,20 @@ func (m *prometheusMetrics) RecordDispatch(namespace, version, method string, d 
 	m.hist.WithLabelValues(namespace, version, method, code).Observe(d.Seconds())
 }
 
-func (m *prometheusMetrics) RecordDwell(namespace, version, method string, d time.Duration) {
-	m.dwell.WithLabelValues(namespace, version, method).Observe(d.Seconds())
+func (m *prometheusMetrics) RecordDwell(namespace, version, method, kind string, d time.Duration) {
+	m.dwell.WithLabelValues(namespace, version, method, kind).Observe(d.Seconds())
 }
 
-func (m *prometheusMetrics) RecordBackoff(namespace, version, method, reason string) {
-	m.backoff.WithLabelValues(namespace, version, method, reason).Inc()
+func (m *prometheusMetrics) RecordBackoff(namespace, version, method, kind, reason string) {
+	m.backoff.WithLabelValues(namespace, version, method, kind, reason).Inc()
 }
 
-func (m *prometheusMetrics) SetQueueDepth(namespace, version string, depth int) {
-	m.depth.WithLabelValues(namespace, version).Set(float64(depth))
+func (m *prometheusMetrics) SetQueueDepth(namespace, version, kind string, depth int) {
+	m.depth.WithLabelValues(namespace, version, kind).Set(float64(depth))
+}
+
+func (m *prometheusMetrics) SetStreamsInflight(namespace, version string, inflight int) {
+	m.streams.WithLabelValues(namespace, version).Set(float64(inflight))
 }
 
 func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code string) {

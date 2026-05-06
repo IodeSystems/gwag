@@ -32,6 +32,7 @@ type Gateway struct {
 	cfg      *config
 	cp       *controlPlane
 	peers    *peerTracker
+	broker   *subBroker
 
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
@@ -85,26 +86,40 @@ func WithoutSubscriptionAuth() Option {
 // only gateway-wide knob is MaxWaitTime, which bounds how long ANY
 // single dispatch will wait for its internal pool slot before
 // short-circuiting with backoff.
+//
+// Subscriptions (server-streaming → graphql-ws) have a separate slot
+// pool from unary dispatches because streams are long-lived and would
+// otherwise crowd unary capacity. MaxStreams is the per-pool cap;
+// MaxWaitTime applies to both.
 type BackpressureOptions struct {
-	// MaxInflight is the per-pool ceiling on simultaneous dispatches.
-	// Once at the ceiling, additional requests for the same pool
-	// wait until a slot opens. 0 disables — dispatches go through
-	// unbounded.
+	// MaxInflight is the per-pool ceiling on simultaneous unary
+	// dispatches. Once at the ceiling, additional requests for the
+	// same pool wait until a slot opens. 0 disables — dispatches go
+	// through unbounded.
 	MaxInflight int
+
+	// MaxStreams is the per-pool ceiling on simultaneous active
+	// subscription streams. Independent of MaxInflight: long-lived
+	// streams don't crowd out queries. 0 disables — streams go
+	// through unbounded.
+	MaxStreams int
 
 	// MaxWaitTime is the per-dispatch wait budget: a dispatch that
 	// cannot acquire its pool's slot within this window is rejected
 	// with Reject(ResourceExhausted, "wait timeout"). This is the
-	// "you cannot even get a slot in N seconds" backoff. 0 disables
-	// the timeout (wait forever; only the request context cancels).
+	// "you cannot even get a slot in N seconds" backoff. Applies to
+	// both unary and stream slot acquisition. 0 disables the
+	// timeout (wait forever; only the request context cancels).
 	MaxWaitTime time.Duration
 }
 
 // DefaultBackpressure is what gateway.New uses unless overridden.
-// 256 in-flight is sized for moderate-throughput services; 10s is the
-// outer wait window before a sustained-overload backoff kicks in.
+// 256 unary in-flight is sized for moderate-throughput services; 64
+// stream slots accommodate typical fan-out without unbounded growth;
+// 10s is the outer wait window before sustained-overload backoff.
 var DefaultBackpressure = BackpressureOptions{
 	MaxInflight: 256,
+	MaxStreams:  64,
 	MaxWaitTime: 10 * time.Second,
 }
 
@@ -305,6 +320,9 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	}
 	if g.cfg.backpressure.MaxInflight > 0 {
 		p.sem = make(chan struct{}, g.cfg.backpressure.MaxInflight)
+	}
+	if g.cfg.backpressure.MaxStreams > 0 {
+		p.streamSem = make(chan struct{}, g.cfg.backpressure.MaxStreams)
 	}
 	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
 	g.pools[key] = p

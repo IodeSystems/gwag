@@ -67,14 +67,23 @@ type pool struct {
 	// Reads via Load() in pickReplica.
 	replicas atomic.Pointer[[]*replica]
 
-	// sem caps simultaneous dispatches against this pool. nil when
-	// MaxInflight is 0 (unbounded). Buffered channel; send to acquire,
-	// receive to release.
+	// sem caps simultaneous unary dispatches against this pool. nil
+	// when MaxInflight is 0 (unbounded). Buffered channel; send to
+	// acquire, receive to release.
 	sem chan struct{}
 
-	// queueing tracks the count of dispatches currently waiting on sem,
-	// surfaced as the queue-depth gauge.
-	queueing atomic.Int32
+	// streamSem caps simultaneous active subscription streams. nil
+	// when MaxStreams is 0 (unbounded). Independent of sem so
+	// long-lived streams don't crowd out unary queries.
+	streamSem chan struct{}
+
+	// queueing / streamQueueing track waiters on each semaphore.
+	queueing       atomic.Int32
+	streamQueueing atomic.Int32
+
+	// streamInflight tracks active subscription streams against this
+	// pool, surfaced as the streams_inflight gauge.
+	streamInflight atomic.Int32
 }
 
 // replica is one backend behind a pool. inflight is incremented before

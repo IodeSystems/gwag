@@ -10,10 +10,7 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
 	"nhooyr.io/websocket"
 
 	cpv1 "github.com/iodesystems/go-api-gateway/controlplane/v1"
@@ -45,10 +42,11 @@ func subjectFor(ns, methodName string, inputDesc protoreflect.MessageDescriptor,
 	return strings.Join(parts, ".")
 }
 
-// subscribeNATS opens a NATS subscription for the resolved subject and
-// returns a channel of map[string]any (the decoded events). Caller's
-// context cancellation closes the NATS sub and the channel. Verifies
-// the HMAC auth args against SubscriptionAuthOptions before subscribing.
+// subscribeNATS resolves the channel from args, verifies HMAC, acquires
+// a stream slot from the pool's MaxStreams cap (with the same
+// MaxWaitTime backoff as unary), and acquires a fanout-shared NATS
+// subscription via the broker. Returns a receive channel of decoded
+// events; the request context cancels the entire chain.
 func (g *Gateway) subscribeNATS(
 	ctx context.Context,
 	ns, ver, methodName string,
@@ -64,36 +62,77 @@ func (g *Gateway) subscribeNATS(
 	}
 	subject := subjectFor(ns, methodName, pool.file.Services().Get(0).Methods().ByName(protoreflect.Name(methodName)).Input(), args)
 
-	// Verify HMAC before opening the NATS sub so unauthorized
-	// subscribes never touch the broker. Metric is recorded for
-	// every attempt.
+	// HMAC verify.
 	code := g.verifySubscribe(subject, args)
 	g.cfg.metrics.RecordSubscribeAuth(ns, ver, methodName, code.String())
 	if code != cpv1Ok {
 		return nil, &subscribeAuthError{Code: code}
 	}
 
-	ch := make(chan any, 32)
-	sub, err := g.cfg.cluster.Conn.Subscribe(subject, func(msg *nats.Msg) {
-		event := dynamicpb.NewMessage(outputDesc)
-		if err := proto.Unmarshal(msg.Data, event); err != nil {
-			return
-		}
+	// Acquire a stream slot (separate from unary in-flight cap).
+	if pool.streamSem != nil {
+		waitStart := time.Now()
 		select {
-		case ch <- messageToMap(event):
-		case <-ctx.Done():
+		case pool.streamSem <- struct{}{}:
+			g.cfg.metrics.RecordDwell(ns, ver, methodName, "stream", time.Since(waitStart))
+		default:
+			depth := int(pool.streamQueueing.Add(1))
+			g.cfg.metrics.SetQueueDepth(ns, ver, "stream", depth)
+			dwell, err := waitForSlot(ctx, pool.streamSem, g.cfg.backpressure.MaxWaitTime)
+			now := int(pool.streamQueueing.Add(-1))
+			g.cfg.metrics.SetQueueDepth(ns, ver, "stream", now)
+			g.cfg.metrics.RecordDwell(ns, ver, methodName, "stream", dwell)
+			if err != nil {
+				g.cfg.metrics.RecordBackoff(ns, ver, methodName, "stream", "wait_timeout")
+				return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
+			}
 		}
-	})
-	if err != nil {
-		close(ch)
-		return nil, fmt.Errorf("nats subscribe %s: %w", subject, err)
 	}
+
+	// Get the broker and join the per-subject fanout.
+	broker := g.subscriptionBroker()
+	if broker == nil {
+		if pool.streamSem != nil {
+			<-pool.streamSem
+		}
+		return nil, fmt.Errorf("gateway: subscription broker not available")
+	}
+	source, release, err := broker.acquire(subject, outputDesc)
+	if err != nil {
+		if pool.streamSem != nil {
+			<-pool.streamSem
+		}
+		return nil, err
+	}
+
+	// Track active streams.
+	inflight := int(pool.streamInflight.Add(1))
+	g.cfg.metrics.SetStreamsInflight(ns, ver, inflight)
+
+	// Cleanup runs once: release fanout, release stream slot, decrement
+	// gauge. graphql-go closes the source channel by cancelling ctx;
+	// we mirror that into the broker release.
 	go func() {
 		<-ctx.Done()
-		_ = sub.Unsubscribe()
-		close(ch)
+		release()
+		if pool.streamSem != nil {
+			<-pool.streamSem
+		}
+		now := int(pool.streamInflight.Add(-1))
+		g.cfg.metrics.SetStreamsInflight(ns, ver, now)
 	}()
-	return ch, nil
+	return source, nil
+}
+
+// subscriptionBroker returns the gateway's shared subBroker, lazy-
+// initialized on first use. nil when no cluster is configured.
+func (g *Gateway) subscriptionBroker() *subBroker {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.broker == nil && g.cfg.cluster != nil {
+		g.broker = newSubBroker(g.cfg.cluster.Conn)
+	}
+	return g.broker
 }
 
 // lookupPool returns the pool for (ns, ver) under g.mu.

@@ -266,18 +266,18 @@ func buildPoolMethodField(
 			waitStart := time.Now()
 			select {
 			case p.sem <- struct{}{}:
-				metrics.RecordDwell(ns, ver, method, time.Since(waitStart))
+				metrics.RecordDwell(ns, ver, method, "unary", time.Since(waitStart))
 			default:
 				depth := int(p.queueing.Add(1))
-				metrics.SetQueueDepth(ns, ver, depth)
-				dwell, err := waitForSlot(ctx, p, bp.MaxWaitTime)
+				metrics.SetQueueDepth(ns, ver, "unary", depth)
+				dwell, err := waitForSlot(ctx, p.sem, bp.MaxWaitTime)
 				now := int(p.queueing.Add(-1))
-				metrics.SetQueueDepth(ns, ver, now)
-				metrics.RecordDwell(ns, ver, method, dwell)
+				metrics.SetQueueDepth(ns, ver, "unary", now)
+				metrics.RecordDwell(ns, ver, method, "unary", dwell)
 				if err != nil {
 					reason := "wait_timeout"
 					rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
-					metrics.RecordBackoff(ns, ver, method, reason)
+					metrics.RecordBackoff(ns, ver, method, "unary", reason)
 					metrics.RecordDispatch(ns, ver, method, time.Since(start), rejErr)
 					return nil, rejErr
 				}
@@ -320,15 +320,15 @@ func buildPoolMethodField(
 	}, nil
 }
 
-// waitForSlot blocks until p.sem has capacity or the per-dispatch
+// waitForSlot blocks until sem has capacity or the per-dispatch
 // MaxWaitTime budget expires. Returns the dwell time and an error
-// when the wait times out (or the request context cancels).
-func waitForSlot(ctx context.Context, p *pool, maxWait time.Duration) (time.Duration, error) {
+// when the wait times out (or the request context cancels). Used for
+// both unary in-flight slots and stream slots.
+func waitForSlot(ctx context.Context, sem chan struct{}, maxWait time.Duration) (time.Duration, error) {
 	start := time.Now()
 	if maxWait <= 0 {
-		// No wait timeout — block on context only.
 		select {
-		case p.sem <- struct{}{}:
+		case sem <- struct{}{}:
 			return time.Since(start), nil
 		case <-ctx.Done():
 			return time.Since(start), ctx.Err()
@@ -337,7 +337,7 @@ func waitForSlot(ctx context.Context, p *pool, maxWait time.Duration) (time.Dura
 	timer := time.NewTimer(maxWait)
 	defer timer.Stop()
 	select {
-	case p.sem <- struct{}{}:
+	case sem <- struct{}{}:
 		return time.Since(start), nil
 	case <-timer.C:
 		return time.Since(start), fmt.Errorf("could not acquire slot in %s", maxWait)

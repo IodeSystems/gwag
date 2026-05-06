@@ -53,7 +53,8 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "Server key (PEM); pair with --tls-cert")
 	tlsCA := flag.String("tls-ca", "", "CA bundle (PEM) used to verify peer certs")
 	environment := flag.String("environment", "", "Deployment environment label (e.g. dev, staging, prod); part of NATS cluster name")
-	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool dispatch concurrency cap; 0 disables")
+	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool unary dispatch concurrency cap; 0 disables")
+	maxStreams := flag.Int("max-streams", gateway.DefaultBackpressure.MaxStreams, "Per-pool subscription stream cap; 0 disables")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
@@ -101,6 +102,7 @@ func main() {
 	}
 	gwOpts = append(gwOpts, gateway.WithBackpressure(gateway.BackpressureOptions{
 		MaxInflight: *maxInflight,
+		MaxStreams:  *maxStreams,
 		MaxWaitTime: *maxWait,
 	}))
 
