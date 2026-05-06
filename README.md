@@ -222,6 +222,42 @@ error frame's `extensions.subscribeAuthCode`.
 Client-streaming and bidi RPCs aren't promoted — they're filtered
 with a registration-time warning so operators can see what's hidden.
 
+## Admin auth (boot token)
+
+The gateway protects its own admin surface (`/admin/*` writes,
+`admin_*` GraphQL mutations) with a bearer token. On boot, the
+gateway either reads an existing token from
+`<adminDataDir>/admin-token` or generates a fresh 32-byte one and
+persists it. The token is logged to stderr at startup:
+
+```
+admin token = ab9089b1...  (persisted to /var/lib/gateway/admin-token)
+```
+
+Wire it as standard `Authorization: Bearer <hex>`. Reads (GETs on
+`/admin/*`, `admin_listPeers` / `admin_listServices` queries) are
+public so the UI works unauthenticated; writes require the token.
+
+```go
+gw := gateway.New(
+    gateway.WithAdminDataDir("/var/lib/gateway"),
+)
+adminMux, adminSpec, _ := gw.AdminHumaRouter()
+mux.Handle("/admin/", gw.AdminMiddleware(adminMux))
+
+// admin_* GraphQL mutations dispatch through /admin/*; the inbound
+// Authorization header is forwarded automatically, so one bearer
+// covers both surfaces.
+gw.AddOpenAPIBytes(adminSpec,
+    gateway.As("admin"),
+    gateway.To("http://localhost:8080"))
+```
+
+Boot-token-only is the v1 design — pluggable admin authorizer is the
+next step (see `docs/plan.md`). The token is the gateway's own
+emergency hatch and is unrelated to outbound auth to OpenAPI
+backends, which is a separate concern (also tracked in plan.md).
+
 ## Health & graceful drain
 
 `gw.HealthHandler()` mounts a `/health` endpoint that returns:

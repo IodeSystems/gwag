@@ -66,6 +66,8 @@ type config struct {
 	metrics      Metrics
 	backpressure BackpressureOptions
 	subAuth      SubscriptionAuthOptions
+	adminToken   []byte
+	adminDataDir string
 }
 
 // SubscriptionAuthOptions configures HMAC verification for incoming
@@ -192,6 +194,27 @@ func WithTLS(c *tls.Config) Option {
 	return func(cfg *config) { cfg.tls = c }
 }
 
+// WithAdminToken pins the gateway's admin bearer token to a
+// caller-supplied value (raw bytes; AdminTokenHex returns the
+// presentation form). If unset, the gateway generates a 32-byte token
+// at New — persisted to <adminDataDir>/admin-token if WithAdminDataDir
+// was set, otherwise in-memory only.
+//
+// The token gates non-public /admin/* HTTP routes and, transitively,
+// admin_* GraphQL mutations dispatched through them. It does not
+// authenticate services calling each other through the gateway.
+func WithAdminToken(token []byte) Option {
+	return func(cfg *config) { cfg.adminToken = token }
+}
+
+// WithAdminDataDir is the directory under which the gateway persists
+// (and reloads) its boot admin token. Pairs naturally with the
+// JetStream data dir on a clustered gateway, but standalone gateways
+// can pass any writable path.
+func WithAdminDataDir(dir string) Option {
+	return func(cfg *config) { cfg.adminDataDir = dir }
+}
+
 func New(opts ...Option) *Gateway {
 	cfg := &config{
 		backpressure: DefaultBackpressure,
@@ -201,6 +224,13 @@ func New(opts ...Option) *Gateway {
 	}
 	if cfg.metrics == nil {
 		cfg.metrics = newPrometheusMetrics()
+	}
+	if len(cfg.adminToken) == 0 {
+		tok, err := loadOrGenerateAdminToken(cfg.adminDataDir)
+		if err != nil {
+			panic(fmt.Sprintf("gateway: admin token: %v", err))
+		}
+		cfg.adminToken = tok
 	}
 	life, cancel := context.WithCancel(context.Background())
 	g := &Gateway{

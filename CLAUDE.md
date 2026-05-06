@@ -46,6 +46,7 @@ broker.go                Sub-fanout: shared NATS subs across N WebSockets
 subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
 auth_subscribe.go        HMAC verify + SubscribeAuthCode
 auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
+auth_admin.go            Boot-token gen/persist + AdminMiddleware bearer
 metrics.go               Prometheus dispatch + dwell + backoff + queue
                          + stream + auth gauges/histograms/counters
 health.go                /health endpoint + Drain method
@@ -124,21 +125,25 @@ go-api-gateway sign          --gateway gw:50090 --channel events.X --ttl 60
 
 ## HTTP surface
 
-| Path | Auth (planned) | What |
+| Path | Auth | What |
 |---|---|---|
 | `/graphql` (queries, subscriptions) | public | GraphQL queries + WebSocket upgrade for subscriptions |
-| `/graphql` (mutations) | token | mutations including `admin_*` fields |
+| `/graphql` (mutations) | bearer (transitive) | admin\_\* dispatch through /admin/\* — operator must send `Authorization: Bearer <token>` to /graphql; the gateway forwards it on outbound dispatch |
 | `/schema`, `/schema/graphql` | public | SDL (or `?format=json` for introspection) |
 | `/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
 | `/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
-| `/admin/*` | token | huma admin routes (peers, services, sign, forget) |
+| `/admin/*` reads (GET) | public | huma reads (peers, services list) |
+| `/admin/*` writes | bearer | huma mutations (forget, sign) |
 | `/health` | public | JSON status; 503 when `Drain()` is in flight |
-| `/metrics` | public | Prometheus scrape |
+| `/metrics` | public (or behind reverse-proxy auth) | Prometheus scrape |
 
-Auth column reflects the **agreed v1 design** in `docs/plan.md`; not
-yet implemented. The boot-token model is for the gateway's own admin
-endpoints and `admin_*` GraphQL mutations only — separate concern
-from outbound auth to OpenAPI services (also tier-1 in plan.md).
+The bearer is the gateway's boot token (logged at startup, persisted
+to `<adminDataDir>/admin-token` if `WithAdminDataDir(...)` is set).
+Boot-token model is the gateway's own emergency hatch — it does not
+authenticate services calling each other through the gateway, and it
+has nothing to do with outbound auth to OpenAPI backends (which is a
+separate tier-1 in plan.md). The pluggable admin authorizer
+delegate is still tier-1; boot token is the always-works fallback.
 
 ## When in doubt
 
