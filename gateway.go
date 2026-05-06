@@ -458,14 +458,22 @@ func (g *Gateway) Handler() http.Handler {
 	})
 }
 
-// SchemaHandler returns an http.Handler that exports the current
-// GraphQL schema for client codegen pipelines:
+// SchemaHandler returns an http.Handler that exports the GraphQL
+// schema as SDL or introspection JSON. Mount it at /schema/graphql
+// for the canonical path; SchemaProtoHandler and SchemaOpenAPIHandler
+// are siblings:
 //
-//	GET /schema                  → SDL (text/plain; application/graphql)
-//	GET /schema?format=json      → introspection result (application/json)
+//	GET /schema/graphql                → SDL (default)
+//	GET /schema/graphql?format=json    → introspection JSON
+//	GET /schema/proto?service=ns:ver   → FileDescriptorSet (binary)
+//	GET /schema/openapi?service=ns     → re-emit ingested OpenAPI specs
 //
 // The X-Gateway-Environment header carries the cluster's environment
-// label so codegen pipelines can record what they grabbed.
+// label on every response so codegen pipelines can record what they
+// grabbed.
+//
+// Service selectors apply to /schema/proto and /schema/openapi only;
+// /schema/graphql currently returns the whole schema.
 func (g *Gateway) SchemaHandler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {

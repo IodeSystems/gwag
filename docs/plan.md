@@ -222,6 +222,31 @@ future sessions.
 
 ---
 
+## Schema export family
+
+Three sibling endpoints under `/schema/*`, each accepting a
+`?service=ns[:ver][,...]` selector (selector applies to proto and
+openapi; graphql currently returns the whole schema):
+
+- `GET /schema/graphql` — SDL (default) or introspection JSON via
+  `?format=json`. Derived from registered protos + OpenAPI.
+- `GET /schema/proto` — FileDescriptorSet (binary `application/protobuf`)
+  with **gateway transformations applied**: hidden fields stripped via
+  the `Pair.Hides` set; internal namespaces excluded. Not the raw
+  registered protos — the contract surface as the gateway exposes it.
+- `GET /schema/openapi` — JSON object keyed by namespace, re-emitting
+  each ingested OpenAPI spec.
+
+`/schema` (without sub-path) stays as a back-compat alias for SDL.
+
+Selector grammar:
+- `service=auth:v1,library` → auth at v1 + all versions of library.
+- Missing version → all versions of that namespace.
+- Missing service param → everything (subject to internal filtering).
+
+Tier-2 follow-up: support selectors on `/schema/graphql` too. Requires
+a filtered schema-build path; not difficult, just hasn't been needed.
+
 ## Recently shipped
 
 (Last n commits worth knowing about for context. Update on commit; trim

@@ -144,7 +144,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", gw.Handler())
-	mux.Handle("/schema", gw.SchemaHandler())
+	mux.Handle("/schema", gw.SchemaHandler()) // back-compat alias
+	mux.Handle("/schema/graphql", gw.SchemaHandler())
+	mux.Handle("/schema/proto", gw.SchemaProtoHandler())
+	mux.Handle("/schema/openapi", gw.SchemaOpenAPIHandler())
 	mux.Handle("/metrics", gw.MetricsHandler())
 	mux.Handle("/health", gw.HealthHandler())
 	go func() {
