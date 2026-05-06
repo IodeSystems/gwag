@@ -84,28 +84,31 @@ to a delegate or token-exchange model.
 
 ### Automated tests
 
-**Seed in place** (`auth_admin_test.go`): AdminMiddleware
-read/write split, token persistence, header forwarding allowlist
-behavior. Pattern is httptest + direct package-level access — no
-NATS, no full Gateway. Every new feature should add same-shape
-coverage.
+**Seed in place:**
+- `auth_admin_test.go` — AdminMiddleware read/write split, token
+  persistence, header-forwarding allowlist (unit-level helper).
+- `openapi_test.go` — full GraphQL → HTTP dispatch round-trip via
+  httptest backend: GET path params, POST request body,
+  Authorization forwarding default, `ForwardHeaders` override,
+  backend error surfacing.
+
+Pattern: httptest + `gw.Handler()` for OpenAPI; httptest + direct
+helper calls for unit-shape. No NATS, no live services. Every new
+feature should add same-shape coverage.
 
 **Still missing** (every entry is silent-regression risk):
-- Multi-replica + version e2e (`examples/multi`-style scripted).
+- Multi-replica + version e2e (`examples/multi`-style scripted)
+  exercising gRPC dispatch, not just OpenAPI.
 - Cluster mode 2-node with cross-gateway dispatch.
 - Subscription publish → WebSocket frame round-trip.
 - HMAC verify codes (OK, TOO_OLD, SIGNATURE_MISMATCH, etc.).
-- OpenAPI request/response round-trip (httptest backend +
-  `dispatchOpenAPI` exercising the full GraphQL → HTTP path).
 - ForgetPeer happy path + alive-rejection.
 - Schema rebuild on pool create/destroy + pool-hash collision
   rejection.
 
-The integration tests are higher-leverage than unit tests — the
+Integration tests are higher-leverage than unit tests — the
 load-bearing logic is glue (registration → schema rebuild →
-dispatch). Build them out in shape with the seed; they should not
-require live services or NATS for the unary-dispatch and OpenAPI
-cases.
+dispatch). Build them out in shape with the seed.
 
 ---
 
@@ -386,10 +389,14 @@ Followups:
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* `ForwardHeaders(...)` ServiceOption + tier-1 test
-  seed (`auth_admin_test.go`): AdminMiddleware coverage, custom-vs-
-  default header allowlist coverage. First package-level tests in the
-  repo; pattern future tier-1 tests should follow.
+- *(uncommitted)* OpenAPI dispatch round-trip e2e tests
+  (`openapi_test.go`): httptest backend + `gw.Handler()`; covers
+  GET, POST-with-body, Authorization forwarding, ForwardHeaders
+  override, backend-error → graphql-error. Pattern for cluster /
+  subscription tests.
+- `f0cfe46` `ForwardHeaders(...)` ServiceOption + first
+  package-level tests (`auth_admin_test.go`). Replaces the static
+  global header allowlist with per-source allowlist.
 - `5bf7cdf` admin boot-token auth + `Authorization` forwarding on
   OpenAPI dispatch. Token persists to `<adminDataDir>/admin-token`;
   restart reuses the same token. Reads are public, writes require
