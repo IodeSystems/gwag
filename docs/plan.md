@@ -11,29 +11,90 @@ intentionally; not currently planned to fix.
 
 ## Tier 1 — load-bearing
 
-### Auth pass-through for OpenAPI services
+### Gateway admin auth (boot token)
 
-The current OpenAPI ingestion has **no authentication story**. Today's
-HTTP dispatch sends a request with `Content-Type: application/json` and
-nothing else. Real services have bearer tokens, mTLS client certs,
-session cookies, signed URLs, etc.
+**Scope:** this is *only* the gate on the gateway's own admin
+endpoints. It does **not** authenticate services, services calling
+each other through the gateway, or outbound dispatch to registered
+backends. Service auth is a separate concern (next section).
 
-Design forks (pick before implementing):
-- **Header pass-through**: forward configured headers from the inbound
-  GraphQL request to the outbound HTTP request. Simplest. Operator
+**Boot token.** On startup, the gateway generates a 32-byte random
+token (or loads an existing one from `<data-dir>/admin-token`). The
+token is logged to stderr at boot:
+
+```
+gateway: admin token = 7c3a...  (persisted to /var/lib/.../admin-token)
+```
+
+Clients (the UI; operators with curl) present it as
+`Authorization: Bearer <token>`. The boot token is the **emergency
+hatch** — it always works, regardless of what other auth ships later.
+
+**Future: pluggable admin authorizer.** Same delegate shape as
+`SubscriptionAuthorizer`: a service registered under a reserved
+namespace (e.g., `_admin_auth`) implementing
+`AuthorizeAdmin(token, operation) → code`. The gateway consults it on
+every protected request and falls through to the boot token if the
+delegate denies, errors, or isn't registered. The always-works boot
+token is non-negotiable. **This delegate authorizes operators against
+the gateway, not services against each other.**
+
+**Public vs protected surface (gateway endpoints only):**
+
+| Path / Operation | Auth |
+|---|---|
+| `/health` | public |
+| `/schema/graphql` (and `?format=json`) | public |
+| `/schema/proto?service=…` | public |
+| `/schema/openapi?service=…` | public |
+| `/graphql` read-only queries (incl. `admin_listPeers`, `admin_listServices`) | public |
+| `/graphql` mutations (incl. `admin_forgetPeer`, `admin_signSubscriptionToken`) | token required |
+| `/admin/*` (huma routes; mutations + future destructive reads) | token required |
+| `/metrics` | public (or behind reverse-proxy auth) |
+
+Reading is informational; writing/destructive ops require auth.
+Schema downloads stay public so the UI's service-status and
+schema-picker views work for unauthenticated users.
+
+**Implementation (when it lands):**
+- `auth_admin.go` with boot-token generation/persistence + bearer
+  middleware.
+- `WithAdminToken([]byte)` library option (callers supply their own
+  token for testing; default is generate-on-boot).
+- HTTP middleware wraps `/admin/*` and gates non-public GraphQL
+  mutations.
+- The OpenAPI dispatch path forwards the inbound `Authorization`
+  header to `/admin/*` so `admin_*` GraphQL fields work end-to-end
+  when the token is presented at `/graphql`.
+- Future `WithAdminAuthorizer(...)` plugs the delegate; boot token
+  remains the fallback.
+
+### Outbound auth pass-through to OpenAPI services
+
+**Different concern.** This is *not* gateway auth. This is: when the
+gateway dispatches to an OpenAPI-registered backend
+(`AddOpenAPI("...")`), how does the *backend* authenticate the
+gateway-originated call? Real services need bearer tokens, mTLS
+client certs, session cookies, signed URLs. The boot-token model
+above is unrelated; it lives entirely on the gateway's inbound side.
+
+Design forks:
+- **Header pass-through**: forward configured headers from the
+  inbound GraphQL request to the outbound HTTP request. Operator
   configures `[]string{"Authorization", "X-Api-Key"}` per registered
-  spec. Inbound headers come from `WithHTTPRequest` ctx already plumbed.
-- **Service-account token**: gateway holds a credential per registered
-  service and presents it on every outbound. Doesn't carry user
-  identity; service does its own authz from per-request context.
-- **OAuth/JWT translation**: gateway exchanges the inbound user token
-  for a service-specific token via a configurable issuer. Heavier.
+  spec. Inbound headers come from `WithHTTPRequest` ctx already
+  plumbed.
+- **Service-account token**: gateway holds a credential per
+  registered service and presents it on every outbound. Doesn't carry
+  user identity; service does its own authz.
+- **OAuth/JWT translation**: gateway exchanges the inbound token for
+  a service-specific token via a configurable issuer. Heavier.
 - **mTLS client certs**: gateway dials with a configured client cert
   per service. Reuse `LoadMTLSConfig` plumbing.
 
-Recommended v1: header pass-through + a `WithOpenAPIClient(*http.Client)`
-hook so operators can plug in their own transport (mTLS, retry, etc.).
-Combine for most cases.
+Recommended v1: header pass-through + a
+`WithOpenAPIClient(*http.Client)` hook so operators can plug in their
+own transport (mTLS, retry, etc.).
 
 ### Automated tests
 
@@ -150,6 +211,42 @@ Implementation notes:
 - HMAC computation: include kid in the signed payload so swapping kid
   doesn't allow token replay across keys.
 
+### Embed UI bundle into the gateway binary
+
+`ui/dist/` (after `pnpm run build`) should be served by the gateway
+itself so a single binary boots with everything. Recommended shape:
+`gw.UIHandler(fs.FS) http.Handler` that the operator passes via
+`embed.FS` (or a runtime `os.DirFS` for dev).
+
+Example wiring:
+
+```go
+//go:embed ui/dist/*
+var uiBundle embed.FS
+
+mux.Handle("/", gw.UIHandler(uiBundle))   // SPA fallback to index.html
+```
+
+Codegen prerequisite: the dist/ bundle is the output of
+`pnpm run gen && pnpm run build` against a running gateway, so the
+UI's typed SDK matches the gateway's actual SDL.
+
+### More huma admin routes
+
+`admin_huma.go` covers `peers`, `services`, `forgetPeer`,
+`signSubscriptionToken`. Useful additions, all backed by existing
+in-process state:
+- `GET /admin/channels` — list active subscription subjects from
+  `subBroker.activeSubjectCount` etc.; useful for the UI's events
+  page.
+- `POST /admin/drain` — trigger graceful drain remotely (operator
+  flow, not just SIGTERM). Returns when drain completes.
+- `GET /admin/health` — currently public; could move under /admin
+  once auth lands.
+- `GET /admin/openapi.json` — re-emit the admin spec for tooling
+  that wants to inspect it directly (huma already serves something
+  similar at /openapi.json).
+
 ---
 
 ## Tier 3 — operational polish
@@ -247,11 +344,11 @@ Selector grammar:
 Tier-2 follow-up: support selectors on `/schema/graphql` too. Requires
 a filtered schema-build path; not difficult, just hasn't been needed.
 
-## Dogfooding the OpenAPI ingest
+## Dogfooding: huma → OpenAPI → GraphQL
 
-The gateway's own admin operations (peers, services, forget,
-sign-token) are defined via huma in `admin_huma.go`, mounted as plain
-HTTP at `/admin/*`, and **self-ingested** at boot:
+The gateway's own admin operations are defined via huma
+(`admin_huma.go`), mounted as plain HTTP at `/admin/*`, and
+**self-ingested** at boot via `AddOpenAPIBytes`:
 
 ```go
 adminMux, adminSpec, _ := gw.AdminHumaRouter()
@@ -261,24 +358,60 @@ gw.AddOpenAPIBytes(adminSpec,
     gateway.To("http://localhost:18080"))
 ```
 
-Result: the SDL gains `Query.admin_listPeers`, `Query.admin_listServices`,
-`Mutation.admin_forgetPeer`, `Mutation.admin_signSubscriptionToken`.
-Same path any external huma-defined service takes; the UI talks to
-`/graphql` only.
+Result: SDL gains flat `Query.admin_listPeers`,
+`Query.admin_listServices`, `Mutation.admin_forgetPeer`,
+`Mutation.admin_signSubscriptionToken`. Each huma handler
+delegates to the existing `controlPlane` gRPC methods in-process
+(no extra hop). External clients see one GraphQL surface; the
+huma OpenAPI is the contract source.
 
-Older (now removed): the gateway used to self-register the control
-plane proto via `AddProtoDescriptor(cpv1.File_control_proto, …)`,
-which produced a nested `Query.admin.listPeers` shape. We replaced
-it with the huma path so admin/operator routes flow through the
-same gateway → OpenAPI → GraphQL pipeline as any other registered
-service. The control plane gRPC service stays as the
-service-to-service registration API.
+This is the same path any external huma-defined service takes —
+`gw.AddOpenAPI("https://service/openapi.json", gateway.To(...))`.
+Dogfooding it for the gateway's own admin keeps the integration
+path tested by the gateway itself.
+
+`AddProtoDescriptor` survives for the gRPC-self-registration
+case (e.g., expose a service whose proto is compiled into the
+gateway binary) but the recommended path is huma + OpenAPI for
+admin/operator surfaces.
+
+## UI
+
+React + MUI v6 + TanStack Router admin console at `ui/`.
+
+**Build flow** (the dogfood):
+```
+1. start gateway        cd examples/multi && ./run.sh
+2. fetch + codegen      cd ui && pnpm install && pnpm run gen
+3. dev server           pnpm run dev    → http://localhost:5173
+4. production           pnpm run build  → dist/
+```
+
+`pnpm run gen` is `pnpm run schema && pnpm run codegen`:
+- `schema` curls `${GATEWAY_URL:-http://localhost:18080}/schema/graphql`
+  into `schema.graphql`.
+- `codegen` runs graphql-codegen against the cached SDL, emitting
+  `src/api/gateway.ts` with typed query/mutation functions.
+
+Pages: Dashboard, Services, Peers (with Forget mutation), Schema
+viewer. Vite proxies `/graphql`, `/schema`, `/health` to the gateway.
+
+Followups:
+- Embed `dist/` via `embed.FS` so a single gateway binary serves
+  the UI (tier-2 above).
+- An "Events" page subscribing via graphql-ws to demo subscriptions.
+- Auth integration once tier-1 inbound auth lands.
 
 ## Recently shipped
 
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- `df56e35` huma self-ingest of admin routes (the dogfood)
+- `f5cf789` AddProtoDescriptor + UI scaffold + CLAUDE.md
+- `4df3f80` decisions: proto/gRPC canonical for s2s
+- `9b0a5bf` docs: docs/plan.md
+- `f9b30dd` schema export family `/schema/{graphql,proto,openapi}`
 - `dc5e0f7` AddOpenAPI ingests OpenAPI 3.x specs into the GraphQL schema
 - `be4e832` /health endpoint + Gateway.Drain for rolling deploys
 - `8f731a9` hybrid stream caps (per-pool + gateway-wide) + raised defaults
