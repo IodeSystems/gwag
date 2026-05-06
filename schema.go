@@ -124,6 +124,18 @@ func (g *Gateway) assembleLocked() error {
 		rootFields[k] = v
 	}
 
+	// Merge downstream-GraphQL ingest fields. Same collision rules.
+	gqlQueries, gqlMutations, err := g.buildGraphQLFields()
+	if err != nil {
+		return err
+	}
+	for k, v := range gqlQueries {
+		if _, exists := rootFields[k]; exists {
+			return fmt.Errorf("graphql ingest field collision in Query: %s", k)
+		}
+		rootFields[k] = v
+	}
+
 	if len(rootFields) == 0 {
 		rootFields["_status"] = &graphql.Field{
 			Type: graphql.String,
@@ -140,10 +152,20 @@ func (g *Gateway) assembleLocked() error {
 
 	cfg := graphql.SchemaConfig{Query: queryObj}
 
-	if len(openMutations) > 0 {
+	mutationFields := openMutations
+	for k, v := range gqlMutations {
+		if mutationFields == nil {
+			mutationFields = graphql.Fields{}
+		}
+		if _, exists := mutationFields[k]; exists {
+			return fmt.Errorf("graphql ingest field collision in Mutation: %s", k)
+		}
+		mutationFields[k] = v
+	}
+	if len(mutationFields) > 0 {
 		cfg.Mutation = graphql.NewObject(graphql.ObjectConfig{
 			Name:   "Mutation",
-			Fields: openMutations,
+			Fields: mutationFields,
 		})
 	}
 
