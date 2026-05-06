@@ -8,10 +8,19 @@
 
 import { GraphQLClient } from 'graphql-request';
 import { getSdk } from './gateway';
+import { getAdminToken } from './auth';
 
 export const client = new GraphQLClient('/graphql', {
-  // Headers added here are forwarded on every request — pair with
-  // a server-side auth pass-through middleware (see plan.md tier-1).
+  // Lazy header function — re-evaluated per request, so updates to the
+  // sessionStorage-backed token take effect immediately without
+  // recreating the client. admin_* mutations dispatch through the
+  // gateway's /admin/* path, which gates writes on the bearer.
+  headers: () => {
+    const token = getAdminToken();
+    const h: Record<string, string> = {};
+    if (token) h.Authorization = `Bearer ${token}`;
+    return h;
+  },
 });
 
 export const sdk = getSdk(client);

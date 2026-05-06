@@ -29,15 +29,6 @@ Ordered by current leverage. The top three unblock real
 deployments; the rest fill in design-completing features the
 gateway claims to support.
 
-### Admin token entry / storage in the UI
-
-Now that admin\_\* mutations require a bearer, the UI's Forget
-button (and any future write) 401s by default. Settings drawer
-that takes the token (paste from boot log), stores it
-(sessionStorage — never persistence by default), and attaches it
-to graphql-codegen's fetcher as `Authorization: Bearer <hex>`.
-Blocks the UI from being a complete admin surface.
-
 ### Embed UI bundle into the gateway binary
 
 `ui/dist/` (after `pnpm run build`) should be served by the gateway
@@ -410,11 +401,16 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* cluster cross-gateway dispatch e2e
+- *(uncommitted)* UI admin token entry: `ui/src/api/auth.ts`
+  (sessionStorage-backed store), `ui/src/components/SettingsDrawer.tsx`
+  (paste/save/clear UI), `useAdminToken()` hook, lazy Authorization
+  header in `client.ts`, gear icon + "no token" badge dot in the
+  AppBar. Closes the tier-2 "Forget button 401s" item.
+- `778559d` cluster cross-gateway dispatch e2e
   (`cluster_dispatch_test.go`): two `StartCluster` instances
   peering on free TCP ports; A receives Register, B's reconciler
   picks it up via the registry KV, and a GraphQL query through B
-  reaches the greeter registered on A. Closes the tier-1
+  reaches the greeter registered on A. Closed the tier-1
   test-coverage gap. Also: applied the lifetime-context fix to
   `forget_peer_test.go` (helpers were passing 10s ctx into
   `startClusterTracking`, which would have killed long-running
