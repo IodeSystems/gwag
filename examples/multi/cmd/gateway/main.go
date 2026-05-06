@@ -214,6 +214,16 @@ func main() {
 		gateway.To("http://localhost"+*httpAddr+"/api")); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
+
+	// Surface admin_events_watchServices in the Subscription type.
+	// The gateway publishes ServiceChange events to NATS whenever its
+	// registry mutates; UI clients (and any subscriber) see them in
+	// real time.
+	if cluster != nil {
+		if err := gw.AddAdminEvents(); err != nil {
+			log.Fatalf("AddAdminEvents: %v", err)
+		}
+	}
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
 		if err := http.ListenAndServe(*httpAddr, mux); err != nil {

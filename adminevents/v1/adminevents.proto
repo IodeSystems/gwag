@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package gateway.adminevents.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/adminevents/v1;admineventsv1";
+
+// AdminEvents exposes gateway-internal admin events as a
+// server-streaming RPC. Subscriptions are NATS-backed (per the
+// project's transport decision); the gateway publishes to
+// `events.admin_events.WatchServices.<namespace>` whenever its
+// service registry mutates, and clients consume via the auto-
+// generated `admin_events_watchServices` Subscription field.
+//
+// Register via `Gateway.AddAdminEvents()` — the gateway is the
+// publisher, and there is no separate gRPC implementation (the
+// stream dispatch is intentionally never invoked).
+service AdminEvents {
+  // WatchServices yields a ServiceChange every time a registry
+  // entry is added, removed, or replaced. Optional namespace
+  // filter selects a single namespace; empty matches all.
+  rpc WatchServices(WatchServicesRequest) returns (stream ServiceChange);
+}
+
+message WatchServicesRequest {
+  // Filter to a single namespace; empty / unset → all namespaces.
+  // Translates into NATS subject component (so client-side wildcard
+  // matching is just NATS subject hierarchy).
+  string namespace = 1;
+}
+
+message ServiceChange {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACTION_REGISTERED = 1;     // new replica joined a pool
+    ACTION_DEREGISTERED = 2;   // replica left a pool (or pool destroyed)
+  }
+  Action action = 1;
+
+  string namespace = 2;
+  string version = 3;
+  string addr = 4;
+
+  // Wall-clock timestamp the gateway applied the change.
+  int64 timestamp_unix_ms = 5;
+
+  // Pool replica count after the change (0 when the pool was
+  // destroyed entirely).
+  uint32 replica_count = 6;
+}

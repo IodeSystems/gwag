@@ -39,6 +39,7 @@ control.go               gRPC control plane: Register/Heartbeat/Deregister
 controlplane/v1/         Control plane proto + generated bindings
 eventsauth/v1/           SubscriptionAuthorizer delegate proto
 adminauth/v1/            AdminAuthorizer delegate proto
+adminevents/v1/          AdminEvents (service-change stream) proto
 admin_huma.go            huma admin routes (peers, services, forget,
                          sign, channels, drain, openapi.json);
                          self-ingested via OpenAPI to surface as
@@ -51,6 +52,7 @@ auth_subscribe.go        HMAC verify + SubscribeAuthCode
 auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
 auth_admin.go            Boot-token gen/persist + AdminMiddleware
 auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
+admin_events.go          AddAdminEvents() + publishServiceChange (NATS)
 ui_handler.go            UIHandler: fs.FS → http.Handler with SPA fallback
 ui/embed.go              Embeds ui/dist/* as embed.FS for the binary
 metrics.go               Prometheus dispatch + dwell + backoff + queue
