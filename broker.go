@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -134,6 +135,46 @@ func (b *subBroker) activeSubjectCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.subs)
+}
+
+// activeSubjects returns one entry per subject the broker is fanning
+// out, sorted by subject name. Order is stable so the admin UI shows
+// the same listing across polls.
+func (b *subBroker) activeSubjects() []SubjectInfo {
+	b.mu.Lock()
+	out := make([]SubjectInfo, 0, len(b.subs))
+	for _, f := range b.subs {
+		f.mu.Lock()
+		consumers := len(f.targets)
+		f.mu.Unlock()
+		out = append(out, SubjectInfo{
+			Subject:   f.subject,
+			Consumers: consumers,
+		})
+	}
+	b.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Subject < out[j].Subject })
+	return out
+}
+
+// SubjectInfo describes one active subscription subject and how many
+// in-process WebSocket consumers are listening on it.
+type SubjectInfo struct {
+	Subject   string `json:"subject"`
+	Consumers int    `json:"consumers"`
+}
+
+// ActiveSubjects returns a snapshot of currently-fanned-out
+// subscription subjects. Empty when the broker hasn't been
+// initialised yet (no cluster, or no subscribe has happened).
+func (g *Gateway) ActiveSubjects() []SubjectInfo {
+	g.mu.Lock()
+	br := g.broker
+	g.mu.Unlock()
+	if br == nil {
+		return nil
+	}
+	return br.activeSubjects()
 }
 
 // silence unused context import warning when build tags trim file.

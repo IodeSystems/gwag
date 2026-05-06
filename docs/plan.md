@@ -29,19 +29,14 @@ Ordered by current leverage. The top three unblock real
 deployments; the rest fill in design-completing features the
 gateway claims to support.
 
-### More huma admin routes
+### More huma admin routes — done
 
-`admin_huma.go` covers `peers`, `services`, `forgetPeer`,
-`signSubscriptionToken`. Useful additions, all backed by existing
-in-process state:
-- `GET /admin/channels` — list active subscription subjects from
-  `subBroker.activeSubjectCount` etc.; useful for the UI's events
-  page.
-- `POST /admin/drain` — trigger graceful drain remotely (operator
-  flow, not just SIGTERM). Returns when drain completes.
-- `GET /admin/openapi.json` — re-emit the admin spec for tooling
-  that wants to inspect it directly (huma already serves something
-  similar at /openapi.json).
+`admin_huma.go` now covers `peers`, `services`, `forgetPeer`,
+`signSubscriptionToken`, `listChannels`, `drain`, and exposes the
+huma OpenAPI spec at `/admin/openapi.json`. The latter three landed
+in this round (see Recently Shipped). All operations self-ingest
+into GraphQL automatically as `admin_*` fields via the same
+OpenAPI ingestion path.
 
 ### Outbound auth pass-through alternatives
 
@@ -383,7 +378,15 @@ entry/storage, dist embed, eventually an Events page.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* `/api/*` split + embedded UI bundle. Library:
+- *(uncommitted)* More huma admin routes: `GET /admin/channels`
+  (active subscription subjects + per-subject consumer count via
+  new `gw.ActiveSubjects()`), `POST /admin/drain` (operator-driven
+  graceful drain with configurable timeout, requires bearer),
+  `GET /admin/openapi.json` (huma's OpenAPI spec repointed under
+  /admin/ so it's reachable via the gateway's mount). All
+  self-ingest as `admin_*` GraphQL fields automatically. 5 new
+  tests in `admin_huma_test.go`.
+- `06b1fc2` `/api/*` split + embedded UI bundle. Library:
   `gateway.UIHandler(fs.FS)` for SPA serving with index.html
   fallback. New `ui` package embeds `ui/dist/` via `//go:embed
   all:dist`. Example: all gateway routes moved under `/api/*`,
