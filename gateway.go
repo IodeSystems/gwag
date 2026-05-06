@@ -41,6 +41,18 @@ type Gateway struct {
 	streamGlobal    atomic.Int32 // active count
 	streamGlobalQ   atomic.Int32 // waiting count
 
+	// draining flips to true on Drain(). Health returns 503; new
+	// WebSocket upgrades and new GraphQL queries reject; existing
+	// connections receive a `complete` and are then closed.
+	draining atomic.Bool
+
+	// wsConns is the registry of live WebSocket subscription
+	// connections. Each entry is a cancel func bound to the
+	// connection's serveWebSocket lifetime; Drain cancels all to
+	// force-close active subscriptions.
+	wsMu    sync.Mutex
+	wsConns map[uintptr]context.CancelFunc
+
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
@@ -194,6 +206,7 @@ func New(opts ...Option) *Gateway {
 		cfg:        cfg,
 		pools:      map[poolKey]*pool{},
 		internal:   map[string]bool{},
+		wsConns:    map[uintptr]context.CancelFunc{},
 		life:       life,
 		lifeCancel: cancel,
 	}

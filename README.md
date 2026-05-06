@@ -222,6 +222,34 @@ error frame's `extensions.subscribeAuthCode`.
 Client-streaming and bidi RPCs aren't promoted — they're filtered
 with a registration-time warning so operators can see what's hidden.
 
+## Health & graceful drain
+
+`gw.HealthHandler()` mounts a `/health` endpoint that returns:
+
+```json
+{"status":"serving","active_streams":0,"environment":"prod","node_id":"NA..."}
+```
+
+with HTTP 200 normally, or HTTP 503 once `gw.Drain(ctx)` has been called.
+Wire `/health` to your load balancer's health check.
+
+`gw.Drain(ctx)` performs the rolling-deploy preamble:
+
+1. `/health` flips to 503 — LB pulls this node out within its check
+   interval (typically 5-30 s).
+2. New WebSocket upgrades return 503.
+3. Existing WebSocket connections have their context cancelled —
+   graphql-go emits `complete` per active subscription, then close.
+4. Drain waits for `streams_inflight_total` to reach 0 or `ctx`
+   to expire.
+5. After Drain returns, run your gRPC/`Cluster.Close()` teardown.
+
+HTTP unary queries are *not* actively drained — they're sub-second and
+finish on their own once the LB stops sending new traffic.
+
+The example wires SIGTERM to a 30-second drain, so a `kubectl delete`
+or `docker stop` triggers the right behaviour automatically.
+
 ## Backpressure & metrics
 
 Each `(namespace, version)` pool has its own dispatch concurrency caps

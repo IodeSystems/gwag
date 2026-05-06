@@ -207,6 +207,10 @@ type subscribePayload struct {
 // Each connection multiplexes any number of subscriptions, each tied
 // to its own context so completion / cancellation is per-id.
 func (g *Gateway) serveWebSocket(w http.ResponseWriter, r *http.Request) {
+	if g.draining.Load() {
+		http.Error(w, "gateway is draining", http.StatusServiceUnavailable)
+		return
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{wsSubprotocol},
 	})
@@ -221,6 +225,23 @@ func (g *Gateway) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+
+	// Register so Drain can fire all cancels.
+	connKey := uintptr(0)
+	g.wsMu.Lock()
+	for k := uintptr(1); ; k++ {
+		if _, exists := g.wsConns[k]; !exists {
+			connKey = k
+			g.wsConns[k] = cancel
+			break
+		}
+	}
+	g.wsMu.Unlock()
+	defer func() {
+		g.wsMu.Lock()
+		delete(g.wsConns, connKey)
+		g.wsMu.Unlock()
+	}()
 
 	// Per-connection write serializer — websocket.Conn isn't
 	// safe for concurrent writes.

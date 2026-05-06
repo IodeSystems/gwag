@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/hex"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -144,6 +146,7 @@ func main() {
 	mux.Handle("/graphql", gw.Handler())
 	mux.Handle("/schema", gw.SchemaHandler())
 	mux.Handle("/metrics", gw.MetricsHandler())
+	mux.Handle("/health", gw.HealthHandler())
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
 		if err := http.ListenAndServe(*httpAddr, mux); err != nil {
@@ -154,7 +157,19 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
-	log.Printf("shutting down")
+
+	// Graceful drain: /health flips to 503 immediately so the LB pulls
+	// us out, active subscriptions get cancelled, then we wait up to
+	// 30s for streams to finish. After that, gRPC and NATS shut down.
+	log.Printf("draining...")
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := gw.Drain(drainCtx); err != nil {
+		log.Printf("drain returned: %v (proceeding with shutdown)", err)
+	} else {
+		log.Printf("drained cleanly")
+	}
+	drainCancel()
+
 	srv.GracefulStop()
 	cluster.Close()
 }
