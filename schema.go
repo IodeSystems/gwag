@@ -141,7 +141,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	}
 
 	// Merge downstream-GraphQL ingest fields. Same collision rules.
-	gqlQueries, gqlMutations, err := g.buildGraphQLFields(filter)
+	gqlQueries, gqlMutations, gqlSubs, err := g.buildGraphQLFields(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +193,15 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	subFields, err := g.buildSubscriptionFields(tb, filter)
 	if err != nil {
 		return nil, err
+	}
+	for name, f := range gqlSubs {
+		if subFields == nil {
+			subFields = graphql.Fields{}
+		}
+		if _, exists := subFields[name]; exists {
+			return nil, fmt.Errorf("graphql ingest field collision in Subscription: %s", name)
+		}
+		subFields[name] = f
 	}
 	if len(subFields) > 0 {
 		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{

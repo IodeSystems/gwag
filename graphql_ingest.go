@@ -453,12 +453,14 @@ func dispatchGraphQL(
 }
 
 // buildGraphQLFields walks every registered downstream GraphQL source
-// and emits namespace-prefixed Query / Mutation field maps. Type
-// mirroring is done lazily inside graphql.NewObject thunks to handle
-// recursive type references without needing topological sort.
-func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
+// and emits namespace-prefixed Query / Mutation / Subscription field
+// maps. Type mirroring is done lazily inside graphql.NewObject thunks
+// to handle recursive type references without needing topological
+// sort.
+func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
+	subscriptions := graphql.Fields{}
 	for ns, src := range g.graphQLSources {
 		if g.isInternal(ns) {
 			continue
@@ -467,22 +469,28 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 			continue
 		}
 		mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure)
-		q, m, err := mb.build()
+		q, m, s, err := mb.build()
 		if err != nil {
-			return nil, nil, fmt.Errorf("graphql ingest %s: %w", ns, err)
+			return nil, nil, nil, fmt.Errorf("graphql ingest %s: %w", ns, err)
 		}
 		for name, f := range q {
 			if _, exists := queries[name]; exists {
-				return nil, nil, fmt.Errorf("graphql ingest %s: Query field %s collides", ns, name)
+				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Query field %s collides", ns, name)
 			}
 			queries[name] = f
 		}
 		for name, f := range m {
 			if _, exists := mutations[name]; exists {
-				return nil, nil, fmt.Errorf("graphql ingest %s: Mutation field %s collides", ns, name)
+				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Mutation field %s collides", ns, name)
 			}
 			mutations[name] = f
 		}
+		for name, f := range s {
+			if _, exists := subscriptions[name]; exists {
+				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Subscription field %s collides", ns, name)
+			}
+			subscriptions[name] = f
+		}
 	}
-	return queries, mutations, nil
+	return queries, mutations, subscriptions, nil
 }
