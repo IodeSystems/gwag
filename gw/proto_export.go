@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/desc/protoprint"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -81,15 +83,67 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 			return fds.File[i].GetName() < fds.File[j].GetName()
 		})
 
-		out, err := proto.MarshalOptions{Deterministic: true}.Marshal(fds)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		switch r.URL.Query().Get("format") {
+		case "sdl":
+			emitProtoSDL(w, fds)
+		default:
+			out, err := proto.MarshalOptions{Deterministic: true}.Marshal(fds)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/protobuf")
+			w.Header().Set("Content-Disposition", `attachment; filename="services.fds"`)
+			_, _ = w.Write(out)
+		}
+	})
+}
+
+// emitProtoSDL renders each FileDescriptorProto in `fds` as `.proto`
+// SDL text via jhump/protoreflect's protoprint package, packs them
+// as a JSON array of {name, sdl} entries, and writes the result.
+//
+// One JSON envelope keeps the response self-describing for browser
+// consumers (the /schema viewer can render per-file blocks without
+// hand-parsing a custom delimiter format), and the array preserves
+// the deterministic file ordering above.
+func emitProtoSDL(w http.ResponseWriter, fds *descriptorpb.FileDescriptorSet) {
+	type fileSDL struct {
+		Name string `json:"name"`
+		SDL  string `json:"sdl"`
+	}
+
+	// CreateFileDescriptorsFromSet honours the import graph: every
+	// dependency must be in the set so transitive lookups resolve.
+	// collectTransformedFiles already includes imports, so we're
+	// guaranteed a closed set here.
+	descs, err := desc.CreateFileDescriptorsFromSet(fds)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("desc: %v", err), http.StatusInternalServerError)
+		return
+	}
+	printer := &protoprint.Printer{
+		Compact:                  false,
+		SortElements:             true,
+		ForceFullyQualifiedNames: false,
+	}
+	out := make([]fileSDL, 0, len(fds.File))
+	for _, fp := range fds.File {
+		fd, ok := descs[fp.GetName()]
+		if !ok {
+			continue
+		}
+		var sb strings.Builder
+		if err := printer.PrintProtoFile(fd, &sb); err != nil {
+			http.Error(w, fmt.Sprintf("print %s: %v", fp.GetName(), err), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/protobuf")
-		w.Header().Set("Content-Disposition", `attachment; filename="services.fds"`)
-		_, _ = w.Write(out)
-	})
+		out = append(out, fileSDL{Name: fp.GetName(), SDL: sb.String()})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := writeJSON(w, out); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // serviceSelector picks a (namespace, optional version) for export.
