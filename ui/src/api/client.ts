@@ -11,7 +11,17 @@ import { GraphQLClient } from 'graphql-request';
 import { getSdk } from './gateway';
 import { getAdminToken } from './auth';
 
-export const client = new GraphQLClient('/api/graphql', {
+// graphql-request 7.x calls `new URL(endpoint)` per request — that
+// throws on a bare relative path ("/api/graphql") in browsers since
+// URL needs a base for relative paths. Build the absolute URL from
+// window.location at startup; fall back to a placeholder for SSR /
+// non-window contexts (codegen tests, etc.).
+const endpoint =
+  typeof window === 'undefined'
+    ? 'http://localhost/api/graphql'
+    : `${window.location.origin}/api/graphql`;
+
+export const client = new GraphQLClient(endpoint, {
   // Lazy header function — re-evaluated per request, so updates to the
   // sessionStorage-backed token take effect immediately without
   // recreating the client. admin_* mutations dispatch through the
