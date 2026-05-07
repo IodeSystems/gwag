@@ -625,14 +625,17 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 			Reason: "subscription secret not configured",
 		}, nil
 	}
-	// The RPC always signs against the legacy default secret (kid="")
-	// for back-compat. Callers that want a kid-bound token should sign
-	// locally with SignSubscribeTokenWithKid using their secret.
-	defaultSecret, ok := cp.gw.cfg.subAuth.lookupSecret("")
+	kid := req.GetKid()
+	secret, ok := cp.gw.cfg.subAuth.lookupSecret(kid)
 	if !ok {
+		// Empty kid + no Secret/Secrets[""] → operator hasn't authorized
+		// unkeyed tokens on this gateway. Non-empty kid → rotation set
+		// doesn't carry it. Both surface as UNKNOWN_KID so the caller
+		// can react identically.
 		return &cpv1.SignSubscriptionTokenResponse{
-			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED,
-			Reason: "no default (kid=\"\") secret configured; sign locally with a kid via SignSubscribeTokenWithKid",
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNKNOWN_KID,
+			Reason: fmt.Sprintf("no secret configured for kid %q", kid),
+			Kid:    kid,
 		}, nil
 	}
 
@@ -651,11 +654,12 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 		return &cpv1.SignSubscriptionTokenResponse{Code: code, Reason: reason}, nil
 	}
 
-	mac := computeSubscribeHMAC(defaultSecret, "", req.GetChannel(), timestamp)
+	mac := computeSubscribeHMAC(secret, kid, req.GetChannel(), timestamp)
 	return &cpv1.SignSubscriptionTokenResponse{
 		Code:          cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK,
 		Hmac:          base64.StdEncoding.EncodeToString(mac),
 		TimestampUnix: timestamp,
+		Kid:           kid,
 	}, nil
 }
 

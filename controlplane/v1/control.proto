@@ -222,11 +222,20 @@ message SignSubscriptionTokenRequest {
   // How long the token should be considered valid (informational
   // for the verifier, which uses a wall-clock skew window).
   int64 ttl_seconds = 2;
+
+  // Optional key id selecting which entry of
+  // SubscriptionAuthOptions.Secrets to sign with. Empty (default) uses
+  // the legacy `Secret` field and the legacy single-key payload
+  // "<channel>\n<timestamp>". Non-empty kid signs the rotated payload
+  // "<kid>\n<channel>\n<timestamp>". UNKNOWN_KID is returned when the
+  // gateway has no secret for the given kid.
+  string kid = 3;
 }
 
 message SignSubscriptionTokenResponse {
   // OK on success; otherwise the failure code (NOT_CONFIGURED if the
-  // gateway has no secret, DENIED/UNAVAILABLE if the delegate refused).
+  // gateway has no secret, UNKNOWN_KID if the kid in the request has
+  // no entry in Secrets, DENIED/UNAVAILABLE if the delegate refused).
   SubscribeAuthCode code = 1;
 
   // Base64-encoded HMAC. Empty when code != OK.
@@ -237,4 +246,10 @@ message SignSubscriptionTokenResponse {
 
   // Operator-friendly explanation when code != OK.
   string reason = 4;
+
+  // The key id this token was signed with. Echoes the request's kid;
+  // empty for legacy single-key signing. Subscribers must pass this
+  // back as the `kid` arg on the subscribe field for the gateway to
+  // resolve the matching secret.
+  string kid = 5;
 }

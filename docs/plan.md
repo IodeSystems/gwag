@@ -30,31 +30,24 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Smallest:* *Token rotation RPC follow-up* — extend
-  `SignSubscriptionToken` proto with `kid` in/out so the centralized
-  signer can mint rotated tokens. Gateway-side change is ~30 LOC
-  on top of what already shipped; the proto regen is the only
-  meaningful surface area.
-- *Architecturally interesting:* GraphQL **subscription forwarding**
-  (graphql-ws upstream multiplexer); GraphQL **dynamic registration
-  over the control plane** (mirrors the OpenAPI pattern shipped
-  in `784430a`). With dispatch metric + classification + backpressure
-  now shipped for `AddGraphQL`, dynamic registration is the natural
-  next leverage point — adds `bytes graphql_introspection`
+- *Architecturally interesting:* GraphQL **dynamic registration over
+  the control plane** (mirrors the OpenAPI pattern shipped in
+  `784430a`). All boot-time `AddGraphQL` glue now has dispatch metric
+  + classification + backpressure parity, so dynamic registration is
+  the natural next leverage point — adds `bytes graphql_introspection`
   (or `string graphql_endpoint`) to `ServiceBinding`, plumbs through
   reconciler.handlePut, plus `controlclient.Service.GraphQLEndpoint`.
+- *Architecturally interesting #2:* GraphQL **subscription forwarding**
+  (graphql-ws upstream multiplexer). Closes the AddGraphQL story so
+  remote Subscription roots aren't skipped at registration time.
 
 ### Token rotation (kid in tokens)
 
-Verifier + standalone signer landed (see Recently Shipped). Open
-follow-up: extend the **`SignSubscriptionToken` RPC** to take an
-optional `kid` field on the request and echo it on the response so
-centrally-signed tokens can target a specific rotated key. Today
-the RPC always signs against the legacy `Secret` (kid="") for
-back-compat — kid-bound tokens are minted locally via
-`SignSubscribeTokenWithKid`. Adding a proto field is additive
-(backward-compatible) and would close the rotation story for
-clients that delegate signing to the gateway.
+Done — see `325aaf4` (verifier + standalone signer) and the
+follow-on commit (RPC kid in/out) under Recently Shipped. Future
+work would be the UI side: a "rotate key" panel that shows the
+configured kid set, with a "set active" toggle. Park until an
+operator asks.
 
 ### Downstream GraphQL ingestion: subscriptions
 
@@ -354,6 +347,22 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* `SignSubscriptionToken` RPC kid in/out. Closes
+  the rotation story for centrally-signed tokens (the open
+  follow-up after `325aaf4`). `SignSubscriptionTokenRequest` gains
+  `string kid = 3`; `SignSubscriptionTokenResponse` gains
+  `string kid = 5`. Handler routes through the same
+  `lookupSecret(kid)` helper as the verifier — empty kid +
+  configured Secret stays on the legacy single-key payload (back-
+  compat); non-empty kid signs the rotated payload via
+  `computeSubscribeHMAC(secret, kid, channel, ts)`. UNKNOWN_KID is
+  surfaced when the gateway has no entry for the requested kid.
+  Admin huma route (`signIn` / `signOut` JSON shapes) and the CLI
+  `sign` subcommand both gained `--kid` (input) + `kid=` (output);
+  CLI's local-sign path now uses `SignSubscribeTokenWithKid`. 3
+  new unit tests in `auth_subscribe_test.go` cover RPC happy path
+  (rotated kid round-trips through verify), UNKNOWN_KID, and the
+  legacy default-kid back-compat path.
 - `325aaf4` token rotation (kid in HMAC tokens). Verifier +
   standalone signer half. `SubscriptionAuthOptions.Secrets
   map[string][]byte` joins the legacy `Secret []byte`; verifier
