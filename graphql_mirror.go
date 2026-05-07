@@ -397,7 +397,13 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 		}
 		query := printed
 
-		resp, err := dispatchGraphQL(rp.Context, src.httpClient, src.endpoint, query, rp.Info.VariableValues, src.forwardHeaders)
+		r := src.pickReplica()
+		if r == nil {
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", ns)))
+		}
+		r.inflight.Add(1)
+		defer r.inflight.Add(-1)
+		resp, err := dispatchGraphQL(rp.Context, r.httpClient, r.endpoint, query, rp.Info.VariableValues, src.forwardHeaders)
 		if err != nil {
 			return nil, record(err)
 		}

@@ -32,12 +32,16 @@ fresh session.
 **Suggested pickups:**
 - *Architecturally interesting:* GraphQL **subscription forwarding**
   (graphql-ws upstream multiplexer). Closes the AddGraphQL story so
-  remote Subscription roots aren't skipped at registration time.
-- *Operational:* GraphQL ingest **multi-replica** (matching what
-  OpenAPI has via `dfae181`). Today downstream-GraphQL is single-
-  replica per namespace; collisions error. Adding a replicas slice
-  + least-in-flight pickReplica would let multiple endpoints share
-  a namespace.
+  remote Subscription roots aren't skipped at registration time. With
+  dispatch metric + classification + backpressure + dynamic
+  registration + multi-replica all shipped for queries/mutations,
+  subscriptions are the last AddGraphQL gap.
+- *Operational:* OpenAPI / GraphQL **multi-version**. Today both
+  pin to `v1`; multi-version (matching the proto pool model) needs
+  the version axis threaded through `addOpenAPISourceLocked` /
+  `addGraphQLSourceLocked` and the schema-build paths. Probably
+  larger than it looks because the codepaths assume single-version
+  in many places.
 
 ### Token rotation (kid in tokens)
 
@@ -340,6 +344,29 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL multi-replica + load
+  balancing. Mirrors `dfae181` for OpenAPI: one source per
+  namespace, N replicas. `graphQLSource` collapses
+  `endpoint`+`httpClient`+`owner` into
+  `replicas atomic.Pointer[[]*graphQLReplica]` plus a `pickHint`
+  for round-robin tiebreaking; `graphQLReplica` carries id,
+  endpoint, owner, httpClient, inflight. `pickReplica` returns
+  lowest-in-flight (round-robin among ties so serial low-traffic
+  dispatch spreads across replicas instead of stacking on the
+  first). Same hash → idempotent multi-replica add; mismatched
+  hash still rejects. Granular replica delete via
+  `removeGraphQLReplicaByIDLocked` (source dies when last replica
+  leaves) for the cluster reconciler path; owner-based eviction
+  via `removeGraphQLSourcesByOwnerLocked` for standalone
+  Deregister + boot rollback. The forwarding resolver in
+  `graphql_mirror.go` now picks per call and inflight-bumps with
+  defer, the same shape as the OpenAPI resolver.
+  control.Register's standalone-rollback path simplified to
+  owner-walk every kind of source instead of tracking
+  per-namespace add lists. 1 new test
+  (`TestDynamicGraphQL_MultiReplica`): two backends, alternating
+  dispatch over 10 calls, deregister-A → all 5 follow-ups land
+  on B, replicaCount goes 2→1.
 - `2afa1d5` downstream-GraphQL dynamic registration over the
   control plane. Mirrors `784430a` for OpenAPI:
   `ServiceBinding.graphql_endpoint` (proto field 6) joins

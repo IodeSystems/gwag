@@ -184,6 +184,117 @@ func TestDynamicGraphQL_NamespaceRequired(t *testing.T) {
 	}
 }
 
+// TestDynamicGraphQL_MultiReplica registers two distinct upstream
+// GraphQL endpoints under the same namespace + matching introspection
+// hash. Confirms dispatch alternates via least-in-flight selection,
+// then deregisters one replica and confirms traffic shifts to the
+// survivor. Mirrors TestDynamicOpenAPI_MultiReplica.
+func TestDynamicGraphQL_MultiReplica(t *testing.T) {
+	hits := func() (handler http.HandlerFunc, count func() int32) {
+		var n atomic.Int32
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				Query string `json:"query"`
+			}
+			_ = json.Unmarshal(body, &req)
+			if strings.Contains(req.Query, "IntrospectionQuery") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(petsIntrospection))
+				return
+			}
+			n.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"users":[{"id":"1"}]}}`))
+		}
+		return handler, n.Load
+	}
+	hA, countA := hits()
+	hB, countB := hits()
+	a := httptest.NewServer(hA)
+	t.Cleanup(a.Close)
+	b := httptest.NewServer(hB)
+	t.Cleanup(b.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	cp := gw.ControlPlane()
+
+	regA, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
+		Addr: a.URL,
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:       "pets",
+			GraphqlEndpoint: a.URL,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Register A: %v", err)
+	}
+	if _, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
+		Addr: b.URL,
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:       "pets",
+			GraphqlEndpoint: b.URL,
+		}},
+	}); err != nil {
+		t.Fatalf("Register B (same hash, different endpoint): %v", err)
+	}
+
+	gw.mu.Lock()
+	src := gw.graphQLSources["pets"]
+	gw.mu.Unlock()
+	if src == nil {
+		t.Fatal("no pets source")
+	}
+	if got := src.replicaCount(); got != 2 {
+		t.Fatalf("replicaCount = %d, want 2", got)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	// Fire 10 queries serially. With pickReplica picking the lowest
+	// in-flight, sequential requests alternate between A and B.
+	for i := 0; i < 10; i++ {
+		got := postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id } }"}`)
+		if strings.Contains(got, "errors") {
+			t.Fatalf("dispatch errored: %s", got)
+		}
+	}
+	totalA, totalB := countA(), countB()
+	if totalA+totalB != 10 {
+		t.Fatalf("backend hits don't sum to 10: A=%d B=%d", totalA, totalB)
+	}
+	if totalA == 0 || totalB == 0 {
+		t.Fatalf("expected pickReplica to spread load, got A=%d B=%d", totalA, totalB)
+	}
+
+	// Drop A's registration → only B should serve subsequent calls.
+	if _, err := cp.Deregister(context.Background(), &cpv1.DeregisterRequest{
+		RegistrationId: regA.GetRegistrationId(),
+	}); err != nil {
+		t.Fatalf("Deregister A: %v", err)
+	}
+	gw.mu.Lock()
+	if got := gw.graphQLSources["pets"].replicaCount(); got != 1 {
+		gw.mu.Unlock()
+		t.Fatalf("after deregister A: replicaCount = %d, want 1", got)
+	}
+	gw.mu.Unlock()
+
+	beforeB := countB()
+	for i := 0; i < 5; i++ {
+		_ = postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id } }"}`)
+	}
+	afterA, afterB := countA(), countB()
+	if afterA != totalA {
+		t.Errorf("A still receiving traffic after deregister: was %d, now %d", totalA, afterA)
+	}
+	if afterB-beforeB != 5 {
+		t.Errorf("B should have caught all 5 post-deregister calls: was %d, now %d", beforeB, afterB)
+	}
+}
+
 // TestDynamicGraphQL_CrossGatewayDispatch is the cluster equivalent
 // of the standalone test: register on A, expect B's reconciler to
 // pick up the introspection bytes from KV and create the source so a

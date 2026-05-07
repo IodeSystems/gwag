@@ -387,27 +387,21 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		}
 	}
 
-	openAPIAdded := []string{}
-	graphQLAdded := []string{}
 	rollback := func() {
-		for _, ns := range openAPIAdded {
-			cp.gw.removeOpenAPISourceLocked(ns)
-		}
-		for _, ns := range graphQLAdded {
-			cp.gw.removeGraphQLSourceLocked(ns)
-		}
 		_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+		cp.gw.removeOpenAPISourcesByOwnerLocked(id)
+		cp.gw.removeGraphQLSourcesByOwnerLocked(id)
 		if sc != nil {
 			cp.releaseConnLocked(req.GetAddr())
 		}
 	}
 	for _, p := range prep {
 		if p.isGraphQL {
-			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id); err != nil {
+			// Standalone path: replicaID unused (no KV-driven removal).
+			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, ""); err != nil {
 				rollback()
 				return nil, err
 			}
-			graphQLAdded = append(graphQLAdded, p.namespace)
 			continue
 		}
 		if p.isOpenAPI {
@@ -418,7 +412,6 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				rollback()
 				return nil, err
 			}
-			openAPIAdded = append(openAPIAdded, p.namespace)
 			continue
 		}
 		err := cp.gw.joinPoolLocked(poolEntry{
