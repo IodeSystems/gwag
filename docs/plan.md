@@ -338,7 +338,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL subscription multiplexer.
+- `659fa7c` downstream-GraphQL subscription multiplexer.
   Per-source upstream graphql-transport-ws connection pool with
   operation-level fanout — same shape as `broker.go` for local
   NATS subs. New `graphql_sub_broker.go`: lazy-dialed shared WS,
