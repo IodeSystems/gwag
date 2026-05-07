@@ -25,8 +25,8 @@ BENCH_BIN="$REPO_DIR/bin/bench"
 echo "==> starting gateway n1"
 "$BENCH_BIN" gw add
 
-echo "==> starting peer g1"
-"$BENCH_BIN" peer add greeter --version v1
+echo "==> starting service g1"
+"$BENCH_BIN" service add greeter --version v1
 
 echo "==> starting prometheus + grafana (docker compose)"
 (cd "$SCRIPT_DIR" && docker compose up -d)
@@ -72,7 +72,7 @@ Quick sanity check (one greeter dispatch):
 Scale + load:
   bin/bench status
   bin/bench gw add
-  bin/bench peer add greeter --version v2
+  bin/bench service add greeter --version v2
   bin/bench traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
 
 Tear down:
