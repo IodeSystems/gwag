@@ -347,7 +347,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* `SignSubscriptionToken` RPC kid in/out. Closes
+- `45c0cd4` `SignSubscriptionToken` RPC kid in/out. Closes
   the rotation story for centrally-signed tokens (the open
   follow-up after `325aaf4`). `SignSubscriptionTokenRequest` gains
   `string kid = 3`; `SignSubscriptionTokenResponse` gains
