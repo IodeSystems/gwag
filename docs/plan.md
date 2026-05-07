@@ -36,12 +36,6 @@ fresh session.
   `addGraphQLSourceLocked` and the schema-build paths. Probably
   larger than it looks because the codepaths assume single-version
   in many places.
-- *Operational:* GraphQL ingest **subscription dispatch metric +
-  classification**. The multiplexer doesn't fire RecordDispatch on
-  per-frame deliveries (the per-call dispatch shape doesn't quite
-  apply to streams), but a per-fanout open/close metric — counting
-  fanout creations + active gauge by namespace — would round out
-  observability for the new multiplex path.
 
 ### Token rotation (kid in tokens)
 
@@ -338,6 +332,27 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL subscription fanout
+  open/close metric. Closes the multiplexer observability gap left
+  by the suggested-pickup item: the broker doesn't fire RecordDispatch
+  on per-frame deliveries (per-call dispatch shape doesn't apply to
+  streams), but every fanout creation/teardown is now a
+  `go_api_gateway_graphql_sub_fanout_total{namespace,event}` counter
+  tick (event="open"|"close") plus a per-namespace
+  `go_api_gateway_graphql_sub_fanouts_active{namespace}` gauge. New
+  `Metrics.RecordGraphQLSubFanout(ns, event)` +
+  `SetGraphQLSubFanoutsActive(ns, n)`; noop / Prometheus impls + a
+  `metrics` field on `graphQLSource` set in both creation paths
+  (boot-time `AddGraphQL` and reconciler `addGraphQLSourceLocked`).
+  Open emits in `acquire` when a new fanout is added to the broker
+  map; close emits at the four removal sites (last-consumer
+  `releaseTarget`, upstream-driven `removeFanout` from complete /
+  error, transport `failAll`, broker `shutdown`) — wholesale clears
+  emit one close per snapshotted fanout. Active gauge is
+  `len(b.fanouts)` after each transition under `b.mu`. 1 new test
+  (`TestGraphQLIngest_SubscriptionMultiplexerMetrics`): two
+  subscribers same op → open=1 active=1; upstream complete →
+  close=1 active=0.
 - `659fa7c` downstream-GraphQL subscription multiplexer.
   Per-source upstream graphql-transport-ws connection pool with
   operation-level fanout — same shape as `broker.go` for local
