@@ -344,7 +344,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL multi-replica + load
+- `5f03354` downstream-GraphQL multi-replica + load
   balancing. Mirrors `dfae181` for OpenAPI: one source per
   namespace, N replicas. `graphQLSource` collapses
   `endpoint`+`httpClient`+`owner` into
