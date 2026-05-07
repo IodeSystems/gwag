@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/graphql-go/graphql"
@@ -279,6 +280,23 @@ type graphQLSource struct {
 	// queueing tracks waiters on the semaphore for the queue-depth
 	// gauge.
 	queueing atomic.Int32
+
+	// subBroker is the lazy-init upstream graphql-transport-ws
+	// multiplexer. Same (query, vars) across N local subscribers
+	// share an upstream subscription via this broker; one upstream
+	// WS connection serves the whole namespace. Created on first
+	// subscribingResolver call; closed when the last consumer leaves.
+	subBrokerOnce sync.Once
+	subBroker     *graphQLSubBroker
+}
+
+// getSubBroker returns the source's subscription multiplexer,
+// creating it on first use.
+func (s *graphQLSource) getSubBroker() *graphQLSubBroker {
+	s.subBrokerOnce.Do(func() {
+		s.subBroker = newGraphQLSubBroker(s)
+	})
+	return s.subBroker
 }
 
 // graphQLReplica is one upstream behind a graphQLSource. Each Register
