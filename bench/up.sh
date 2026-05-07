@@ -20,11 +20,13 @@ if [[ -n $existing ]]; then
     exit 1
 fi
 
-echo "==> starting gateway n1"
-"$SCRIPT_DIR/scale.sh" add-gateway
+BENCH_BIN="$REPO_DIR/bin/bench"
 
-echo "==> starting backend g1"
-"$SCRIPT_DIR/scale.sh" add-backend greeter --version v1
+echo "==> starting gateway n1"
+"$BENCH_BIN" gw add
+
+echo "==> starting peer g1"
+"$BENCH_BIN" peer add greeter --version v1
 
 echo "==> starting prometheus + grafana (docker compose)"
 (cd "$SCRIPT_DIR" && docker compose up -d)
@@ -69,8 +71,8 @@ Quick sanity check (one greeter dispatch):
 
 Scale + load:
   bin/bench status
-  bin/bench scale add-gateway
-  bin/bench scale add-backend greeter --version v2
+  bin/bench gw add
+  bin/bench peer add greeter --version v2
   bin/bench traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
 
 Tear down:

@@ -2,8 +2,11 @@
 # Shared helpers for bench/up.sh, bench/scale.sh, bench/down.sh.
 # Sourced — every var defined here ends up in the caller's shell.
 
-# Resolve repo + bench dirs from the script that sourced this file.
-BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
+# Resolve from this file's own location (bench/lib.sh), not the
+# caller's. A sibling script (up.sh / down.sh) and the top-level
+# dispatcher (bin/bench) both source this; using BASH_SOURCE[1]
+# would point at the wrong dir for the latter.
+BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 RUN_DIR="$BENCH_DIR/.run"
 BIN_DIR="$RUN_DIR/bin"
