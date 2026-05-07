@@ -67,6 +67,12 @@ cmd_up() {
     done
     if [[ $build == 1 ]]; then
         "$REPO_DIR/bin/build"
+        # bin/build refreshes ui/dist/ + builds the host Go packages,
+        # but up.sh's build_binaries_if_missing would still reuse a
+        # cached .run/bin/gateway that embeds the OLD ui/dist/. Drop
+        # the cache so up.sh re-runs `go build` and the freshly-
+        # generated SPA bundle gets baked in.
+        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register"
     fi
     "$BENCH_DIR/up.sh"
 }
