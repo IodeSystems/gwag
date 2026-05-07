@@ -260,6 +260,12 @@ func (g *Gateway) buildSubscriptionField(
 	// them; gateway transport will populate/verify at subscribe time.
 	args["hmac"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)}
 	args["timestamp"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.Int)}
+	// Optional key id for token rotation. Clients targeting the legacy
+	// single-key Secret leave it null (or omit it). Clients targeting a
+	// rotated key from SubscriptionAuthOptions.Secrets pass the kid here
+	// — the verifier uses it both to select the secret and as part of
+	// the signed payload.
+	args["kid"] = &graphql.ArgumentConfig{Type: graphql.String}
 
 	outputType, err := tb.objectFromMessage(md.Output())
 	if err != nil {
