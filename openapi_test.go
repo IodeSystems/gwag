@@ -451,8 +451,8 @@ func TestOpenAPIE2E_BackpressureTimesOutAndRejects(t *testing.T) {
 // label parity with the proto pool path.
 type openAPIDispatchMetrics struct {
 	noopMetrics
-	mu      sync.Mutex
-	calls   []openAPIDispatchCall
+	mu    sync.Mutex
+	calls []openAPIDispatchCall
 }
 
 type openAPIDispatchCall struct {
@@ -585,4 +585,111 @@ func TestOpenAPIE2E_BackendErrorSurfaces(t *testing.T) {
 	if !strings.Contains(body, "errors") || !strings.Contains(body, "500") {
 		t.Fatalf("expected backend 500 surfaced as graphql error, got %s", body)
 	}
+}
+
+// TestOpenAPIE2E_TwoVersions registers two versions of the same
+// namespace, each with its own backend. v2's fields should land flat
+// under "<ns>_<op>" (latest), v1's fields under "<ns>_v1_<op>"
+// (older, with deprecation). Dispatching either field hits the
+// matching backend; field names disambiguate.
+func TestOpenAPIE2E_TwoVersions(t *testing.T) {
+	var v1Hits, v2Hits atomic.Int32
+	v1Backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v1Hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"v1","name":"old"}`))
+	}))
+	t.Cleanup(v1Backend.Close)
+	v2Backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v2Hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"v2","name":"new"}`))
+	}))
+	t.Cleanup(v2Backend.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(v1Backend.URL), As("svc"), Version("v1")); err != nil {
+		t.Fatalf("AddOpenAPIBytes v1: %v", err)
+	}
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(v2Backend.URL), As("svc"), Version("v2")); err != nil {
+		t.Fatalf("AddOpenAPIBytes v2: %v", err)
+	}
+	h := gw.Handler()
+
+	post := func(query string) string {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":`+jsonQuote(query)+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Body.String()
+	}
+
+	pickID := func(body string) string {
+		var out struct {
+			Data   map[string]map[string]any `json:"data"`
+			Errors []any                     `json:"errors"`
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatalf("decode: %v: %s", err, body)
+		}
+		if len(out.Errors) > 0 {
+			t.Fatalf("graphql errors: %v", out.Errors)
+		}
+		for _, m := range out.Data {
+			if id, ok := m["id"].(string); ok {
+				return id
+			}
+		}
+		return ""
+	}
+
+	// Latest field — flat naming, hits v2.
+	if got := pickID(post(`{ svc_getThing(id:"x") { id } }`)); got != "v2" {
+		t.Errorf("svc_getThing id=%q want v2", got)
+	}
+	if v2Hits.Load() != 1 || v1Hits.Load() != 0 {
+		t.Errorf("after latest call: v1Hits=%d v2Hits=%d, want 0/1", v1Hits.Load(), v2Hits.Load())
+	}
+
+	// v1 field — versioned naming, hits v1.
+	if got := pickID(post(`{ svc_v1_getThing(id:"x") { id } }`)); got != "v1" {
+		t.Errorf("svc_v1_getThing id=%q want v1", got)
+	}
+	if v1Hits.Load() != 1 {
+		t.Errorf("after v1 call: v1Hits=%d, want 1", v1Hits.Load())
+	}
+
+	// SDL contains both, with v1 carrying @deprecated.
+	sdl := getSDL(t, gw)
+	if !strings.Contains(sdl, "svc_getThing(") {
+		t.Errorf("SDL missing svc_getThing: %s", sdl)
+	}
+	if !strings.Contains(sdl, "svc_v1_getThing(") {
+		t.Errorf("SDL missing svc_v1_getThing: %s", sdl)
+	}
+	if !strings.Contains(sdl, `svc_v1_getThing(id: String!): SVC_v1_Object @deprecated(reason: "v2 is current")`) &&
+		!strings.Contains(sdl, `@deprecated(reason: "v2 is current")`) {
+		t.Errorf("SDL must mark v1 fields @deprecated with v2 reason: %s", sdl)
+	}
+}
+
+// jsonQuote produces a JSON string literal of s — preserves embedded
+// quotes by escaping them. Used by the TwoVersions test to embed an
+// inline GraphQL query in a POST body.
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// getSDL renders the gateway's full SDL for the test's assertions.
+func getSDL(t *testing.T, gw *Gateway) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/schema/graphql", nil)
+	rr := httptest.NewRecorder()
+	gw.SchemaHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("schema fetch: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	return rr.Body.String()
 }

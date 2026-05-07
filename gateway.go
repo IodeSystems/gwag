@@ -33,8 +33,8 @@ type Gateway struct {
 	cp             *controlPlane
 	peers          *peerTracker
 	broker         *subBroker
-	openAPISources map[string]*openAPISource
-	graphQLSources map[string]*graphQLSource
+	openAPISources map[poolKey]*openAPISource
+	graphQLSources map[poolKey]*graphQLSource
 
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
@@ -292,6 +292,7 @@ func (g *Gateway) Cluster() *Cluster {
 type ServiceOption func(*serviceConfig)
 type serviceConfig struct {
 	namespace      string
+	version        string // canonical "vN"; empty → defaults to v1
 	conn           grpc.ClientConnInterface
 	internal       bool
 	forwardHeaders []string
@@ -322,6 +323,17 @@ func (g *Gateway) isInternal(ns string) bool {
 // proto. Collisions across registered protos are an error.
 func As(namespace string) ServiceOption {
 	return func(c *serviceConfig) { c.namespace = namespace }
+}
+
+// Version pins the (namespace, version) coordinate the registration
+// joins. Accepts "vN" or "N". Empty / unset defaults to "v1". For
+// AddProto / AddProtoDescriptor this is informational — proto's own
+// version comes from the package; for AddOpenAPI / AddOpenAPIBytes /
+// AddGraphQL it identifies the source within a namespace, mirroring
+// the proto pool model: latest-flat under the namespace + every
+// version addressable as `<ns>.<vN>` with @deprecated on older.
+func Version(v string) ServiceOption {
+	return func(c *serviceConfig) { c.version = v }
 }
 
 // To wires the gRPC destination for a registered proto. Accepts either
@@ -629,7 +641,7 @@ func (g *Gateway) Handler() http.Handler {
 // Selector grammar (shared across the /schema/* family):
 //   - ns        → all versions of ns
 //   - ns:vN     → just that version of ns (proto pools only; OpenAPI
-//                 / downstream-GraphQL sources have no version axis)
+//     / downstream-GraphQL sources have no version axis)
 //   - missing   → no filter, full schema
 //
 // Filtered requests build a fresh schema per call (cached g.schema is
@@ -773,7 +785,7 @@ type rejection struct {
 	Msg  string
 }
 
-func (r *rejection) Error() string         { return r.Msg }
+func (r *rejection) Error() string              { return r.Msg }
 func (r *rejection) Extensions() map[string]any { return map[string]any{"code": r.Code.String()} }
 
 func (c Code) String() string {

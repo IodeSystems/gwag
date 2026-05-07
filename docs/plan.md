@@ -29,13 +29,11 @@ Open items only — completed work is in *Recently Shipped*. Ordered
 by current leverage; the top items are realistic next picks for a
 fresh session.
 
-**Suggested pickups:**
-- *Operational:* OpenAPI / GraphQL **multi-version**. Today both
-  pin to `v1`; multi-version (matching the proto pool model) needs
-  the version axis threaded through `addOpenAPISourceLocked` /
-  `addGraphQLSourceLocked` and the schema-build paths. Probably
-  larger than it looks because the codepaths assume single-version
-  in many places.
+**Suggested pickups:** none of high leverage right now — every
+remaining tier-2 item is parked behind a real use case (Interface /
+Union mirror, oneOf/anyOf union mapping, richer outbound auth,
+destructive-read opt-in, UI rotate-key panel). If something becomes
+load-bearing, file it as tier 1.
 
 ### Token rotation (kid in tokens)
 
@@ -332,7 +330,31 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL subscription fanout
+- *(uncommitted)* OpenAPI + downstream-GraphQL **multi-version**.
+  Sources now key on `(namespace, version)` instead of just
+  namespace; both register paths honor `Version("vN")` ServiceOption
+  (default v1) and the wire-format `ServiceBinding.version` field
+  (previously documented as "ignored" for OpenAPI). Schema build
+  groups sources by namespace, sorts by versionN, and emits the
+  latest's fields under the existing flat naming
+  (`<ns>_<op>` / `<ns>_<TypeName>`) — back-compat with the
+  single-version case — while older versions disambiguate via
+  `<ns>_<vN>_<op>` / `<ns>_<vN>_<TypeName>` and stamp GraphQL
+  `@deprecated(reason: "<latest> is current")` on every emitted
+  field. Type-name caching in `openAPITypeBuilder` and
+  `graphQLMirror` is per-source-prefix so two versions sharing a
+  schema name like `Pet` produce distinct types. Dispatch metric
+  labels drop the hardcoded `"v1"` and use `src.version`.
+  `/schema/openapi` re-emits as `{"<ns>": {"<vN>": <spec>, ...}}`.
+  Reconciler's `handlePut` / `handleDelete` thread `ver` through to
+  `addOpenAPISourceLocked` / `addGraphQLSourceLocked` and the
+  remove-by-id helpers. Control plane proto comment updated;
+  `controlplane/v1/control.pb.go` regenerated. 2 new tests
+  (`TestOpenAPIE2E_TwoVersions`, `TestGraphQLIngest_TwoVersions`):
+  v1 + v2 backends, latest field hits v2, versioned field hits v1,
+  SDL contains both fields with `@deprecated` on older + distinct
+  type names.
+- `3a5bdd0` downstream-GraphQL subscription fanout
   open/close metric. Closes the multiplexer observability gap left
   by the suggested-pickup item: the broker doesn't fire RecordDispatch
   on per-frame deliveries (per-call dispatch shape doesn't apply to

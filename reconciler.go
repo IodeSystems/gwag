@@ -105,10 +105,9 @@ func (r *reconciler) watchLoop(ctx context.Context) {
 // (matched by id), nothing to do. Otherwise, ensure the pool exists,
 // dial the addr (refcount bump), and add.
 //
-// OpenAPI-tagged values take a separate path: the gateway's openAPI
-// source map is keyed by namespace only (single source per ns in v1),
-// so we just call addOpenAPISourceLocked which is idempotent under
-// hash equality.
+// OpenAPI / GraphQL bindings take a separate path: their source maps
+// are keyed by (namespace, version) and addXxxSourceLocked is
+// idempotent under hash equality.
 func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, raw []byte) {
 	var v registryValue
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -122,10 +121,10 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addOpenAPISourceLocked(ns, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID)
+		err := g.addOpenAPISourceLocked(ns, ver, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID)
 		g.mu.Unlock()
 		if err != nil {
-			g.cfg.cluster.Server.Warnf("reconciler: openapi %s: %v", ns, err)
+			g.cfg.cluster.Server.Warnf("reconciler: openapi %s/%s: %v", ns, ver, err)
 		}
 		return
 	}
@@ -134,10 +133,10 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addGraphQLSourceLocked(ns, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID)
+		err := g.addGraphQLSourceLocked(ns, ver, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID)
 		g.mu.Unlock()
 		if err != nil {
-			g.cfg.cluster.Server.Warnf("reconciler: graphql %s: %v", ns, err)
+			g.cfg.cluster.Server.Warnf("reconciler: graphql %s/%s: %v", ns, ver, err)
 		}
 		return
 	}
@@ -185,18 +184,19 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
 	g.mu.Lock()
-	// Try the OpenAPI side first — sources are keyed by namespace.
+	key := poolKey{namespace: ns, version: ver}
+	// Try the OpenAPI side first — sources are keyed by (ns, ver).
 	// If we find one, drop just this replica; the source dies when
 	// its last replica leaves.
-	if _, isOpenAPI := g.openAPISources[ns]; isOpenAPI {
-		g.removeOpenAPIReplicaByIDLocked(ns, replicaID)
+	if _, isOpenAPI := g.openAPISources[key]; isOpenAPI {
+		g.removeOpenAPIReplicaByIDLocked(ns, ver, replicaID)
 		g.mu.Unlock()
 		return
 	}
 	// GraphQL sources support multi-replica too; drop the matching
 	// replica, source dies when last replica leaves.
-	if _, isGraphQL := g.graphQLSources[ns]; isGraphQL {
-		g.removeGraphQLReplicaByIDLocked(ns, replicaID)
+	if _, isGraphQL := g.graphQLSources[key]; isGraphQL {
+		g.removeGraphQLReplicaByIDLocked(ns, ver, replicaID)
 		g.mu.Unlock()
 		return
 	}

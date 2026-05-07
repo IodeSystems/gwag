@@ -214,7 +214,7 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		b.gw.mu.Lock()
-		_, ok := b.gw.openAPISources["billing"]
+		_, ok := b.gw.openAPISources[poolKey{namespace: "billing", version: "v1"}]
 		b.gw.mu.Unlock()
 		if ok {
 			break
@@ -222,7 +222,7 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	b.gw.mu.Lock()
-	_, ok := b.gw.openAPISources["billing"]
+	_, ok := b.gw.openAPISources[poolKey{namespace: "billing", version: "v1"}]
 	b.gw.mu.Unlock()
 	if !ok {
 		t.Fatal("billing openAPISource never appeared on gateway B")
@@ -283,7 +283,7 @@ func TestDynamicOpenAPI_MultiReplica(t *testing.T) {
 
 	// Two replicas now under "billing".
 	gw.mu.Lock()
-	src := gw.openAPISources["billing"]
+	src := gw.openAPISources[poolKey{namespace: "billing", version: "v1"}]
 	gw.mu.Unlock()
 	if src == nil {
 		t.Fatal("no billing source")
@@ -320,7 +320,7 @@ func TestDynamicOpenAPI_MultiReplica(t *testing.T) {
 		t.Fatalf("Deregister A: %v", err)
 	}
 	gw.mu.Lock()
-	if got := gw.openAPISources["billing"].replicaCount(); got != 1 {
+	if got := gw.openAPISources[poolKey{namespace: "billing", version: "v1"}].replicaCount(); got != 1 {
 		gw.mu.Unlock()
 		t.Fatalf("after deregister A: replicaCount = %d, want 1", got)
 	}

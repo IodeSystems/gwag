@@ -21,10 +21,17 @@ type graphQLMirror struct {
 	src     *graphQLSource
 	metrics Metrics
 	bp      BackpressureOptions
-	objects map[string]*graphql.Object
-	inputs  map[string]*graphql.InputObject
-	enums   map[string]*graphql.Enum
-	scalars map[string]*graphql.Scalar
+	// isLatest controls whether this mirror's fields and types use
+	// the bare "<ns>_" prefix (true, single-version or current) or
+	// the disambiguated "<ns>_<vN>_" prefix (false, older version).
+	// Older versions also stamp deprecationReason on every emitted
+	// field so codegen consumers see "<latest> is current".
+	isLatest          bool
+	deprecationReason string
+	objects           map[string]*graphql.Object
+	inputs            map[string]*graphql.InputObject
+	enums             map[string]*graphql.Enum
+	scalars           map[string]*graphql.Scalar
 }
 
 func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions) *graphQLMirror {
@@ -32,13 +39,14 @@ func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOption
 		metrics = noopMetrics{}
 	}
 	return &graphQLMirror{
-		src:     src,
-		metrics: metrics,
-		bp:      bp,
-		objects: map[string]*graphql.Object{},
-		inputs:  map[string]*graphql.InputObject{},
-		enums:   map[string]*graphql.Enum{},
-		scalars: map[string]*graphql.Scalar{},
+		src:      src,
+		metrics:  metrics,
+		bp:       bp,
+		isLatest: true,
+		objects:  map[string]*graphql.Object{},
+		inputs:   map[string]*graphql.InputObject{},
+		enums:    map[string]*graphql.Enum{},
+		scalars:  map[string]*graphql.Scalar{},
 	}
 }
 
@@ -85,11 +93,15 @@ func (m *graphQLMirror) buildRootFields(rootName, opType string) (graphql.Fields
 		}
 		fieldName := m.prefix(f.Name)
 		remote := f.Name // unprefixed name on the remote
-		out[fieldName] = &graphql.Field{
+		field := &graphql.Field{
 			Type:    typ,
 			Args:    args,
 			Resolve: m.forwardingResolver(remote, opType),
 		}
+		if !m.isLatest {
+			field.DeprecationReason = m.deprecationReason
+		}
+		out[fieldName] = field
 	}
 	return out, nil
 }
@@ -123,7 +135,7 @@ func (m *graphQLMirror) buildSubscriptionRootFields(rootName string) (graphql.Fi
 		}
 		fieldName := m.prefix(f.Name)
 		remote := f.Name
-		out[fieldName] = &graphql.Field{
+		field := &graphql.Field{
 			Type:      typ,
 			Args:      args,
 			Subscribe: m.subscribingResolver(remote),
@@ -137,12 +149,19 @@ func (m *graphQLMirror) buildSubscriptionRootFields(rootName string) (graphql.Fi
 				return rp.Source, nil
 			},
 		}
+		if !m.isLatest {
+			field.DeprecationReason = m.deprecationReason
+		}
+		out[fieldName] = field
 	}
 	return out, nil
 }
 
 func (m *graphQLMirror) prefix(name string) string {
-	return m.src.namespace + "_" + name
+	if m.isLatest {
+		return m.src.namespace + "_" + name
+	}
+	return m.src.namespace + "_" + m.src.version + "_" + name
 }
 
 // shouldPrefix names — built-in scalars stay unprefixed so codegen
@@ -388,11 +407,12 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 	metrics := m.metrics
 	bp := m.bp
 	ns := src.namespace
+	ver := src.version
 	methodLabel := opLabel + " " + remoteFieldName
 	return func(rp graphql.ResolveParams) (any, error) {
 		start := time.Now()
 		record := func(err error) error {
-			metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+			metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
 			return err
 		}
 		// Acquire a slot. Fast path: src.sem nil (unbounded) or has
@@ -403,16 +423,16 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 			waitStart := time.Now()
 			select {
 			case src.sem <- struct{}{}:
-				metrics.RecordDwell(ns, "v1", methodLabel, "unary", time.Since(waitStart))
+				metrics.RecordDwell(ns, ver, methodLabel, "unary", time.Since(waitStart))
 			default:
 				depth := int(src.queueing.Add(1))
-				metrics.SetQueueDepth(ns, "v1", "unary", depth)
+				metrics.SetQueueDepth(ns, ver, "unary", depth)
 				dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
 				now := int(src.queueing.Add(-1))
-				metrics.SetQueueDepth(ns, "v1", "unary", now)
-				metrics.RecordDwell(ns, "v1", methodLabel, "unary", dwell)
+				metrics.SetQueueDepth(ns, ver, "unary", now)
+				metrics.RecordDwell(ns, ver, methodLabel, "unary", dwell)
 				if err != nil {
-					metrics.RecordBackoff(ns, "v1", methodLabel, "unary", "wait_timeout")
+					metrics.RecordBackoff(ns, ver, methodLabel, "unary", "wait_timeout")
 					return nil, record(Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error())))
 				}
 			}

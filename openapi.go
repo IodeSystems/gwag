@@ -83,24 +83,29 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI: %w", err)
 	}
+	ver, verN, err := parseVersion(sc.version)
+	if err != nil {
+		return fmt.Errorf("gateway: AddOpenAPI: %w", err)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {
 		g.internal[ns] = true
 	}
 	if g.openAPISources == nil {
-		g.openAPISources = map[string]*openAPISource{}
+		g.openAPISources = map[poolKey]*openAPISource{}
 	}
 	hash := sha256.Sum256(specBytes)
 	httpClient := sc.httpClient
 	if httpClient == nil {
 		httpClient = g.cfg.openAPIHTTP
 	}
-	if existing, ok := g.openAPISources[ns]; ok {
+	key := poolKey{namespace: ns, version: ver}
+	if existing, ok := g.openAPISources[key]; ok {
 		// Same hash → idempotent multi-replica add. Different hash →
 		// configuration drift; reject.
 		if existing.hash != hash {
-			return fmt.Errorf("gateway: AddOpenAPI: namespace %s already registered with different spec hash", ns)
+			return fmt.Errorf("gateway: AddOpenAPI: %s/%s already registered with different spec hash", ns, ver)
 		}
 		existing.addReplica(&openAPIReplica{
 			baseURL:    addr,
@@ -110,6 +115,8 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	}
 	src := &openAPISource{
 		namespace:      ns,
+		version:        ver,
+		versionN:       verN,
 		doc:            doc,
 		hash:           hash,
 		forwardHeaders: sc.forwardHeaders,
@@ -122,19 +129,22 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		baseURL:    addr,
 		httpClient: httpClient,
 	})
-	g.openAPISources[ns] = src
+	g.openAPISources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
 	return nil
 }
 
-// openAPISource is what AddOpenAPI stores. One source per (namespace),
-// pinned to a single hash. Multiple replicas can join a source so long
-// as they all carry the same spec bytes. Dispatch picks the
-// lowest-in-flight replica each call (HTTP analogue of pool.pickReplica).
+// openAPISource is what AddOpenAPI stores. One source per
+// (namespace, version), pinned to a single hash. Multiple replicas can
+// join a source so long as they all carry the same spec bytes.
+// Dispatch picks the lowest-in-flight replica each call (HTTP analogue
+// of pool.pickReplica).
 type openAPISource struct {
 	namespace      string
+	version        string // canonical "vN"
+	versionN       int    // numeric version for ordering (latest = max)
 	doc            *openapi3.T
 	hash           [32]byte
 	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
@@ -296,20 +306,26 @@ func (s *openAPISource) replicaCount() int {
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
 // reconciler.handleDelete can later remove the matching replica.
-func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string) error {
+func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
+	canonicalVer, verN, err := parseVersion(ver)
+	if err != nil {
+		return fmt.Errorf("openapi: %w", err)
+	}
+	ver = canonicalVer
 	if g.openAPISources == nil {
-		g.openAPISources = map[string]*openAPISource{}
+		g.openAPISources = map[poolKey]*openAPISource{}
 	}
 	addr := strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
 		addr = "http://" + addr
 	}
-	if existing, ok := g.openAPISources[ns]; ok {
+	key := poolKey{namespace: ns, version: ver}
+	if existing, ok := g.openAPISources[key]; ok {
 		if existing.hash != hash {
-			return fmt.Errorf("openapi: namespace %s already registered with different spec hash", ns)
+			return fmt.Errorf("openapi: %s/%s already registered with different spec hash", ns, ver)
 		}
 		// Idempotent: if a replica with the same id already lives
 		// here, treat as no-op (reconciler replays).
@@ -328,13 +344,15 @@ func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, h
 	loader.IsExternalRefsAllowed = false
 	doc, err := loader.LoadFromData(specBytes)
 	if err != nil {
-		return fmt.Errorf("openapi: parse %s: %w", ns, err)
+		return fmt.Errorf("openapi: parse %s/%s: %w", ns, ver, err)
 	}
 	if err := doc.Validate(loader.Context); err != nil {
-		return fmt.Errorf("openapi: validate %s: %w", ns, err)
+		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
 	src := &openAPISource{
 		namespace: ns,
+		version:   ver,
+		versionN:  verN,
 		doc:       doc,
 		hash:      hash,
 		rawSpec:   append([]byte(nil), specBytes...),
@@ -348,7 +366,7 @@ func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, h
 		owner:      owner,
 		httpClient: g.cfg.openAPIHTTP,
 	})
-	g.openAPISources[ns] = src
+	g.openAPISources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -356,10 +374,10 @@ func (g *Gateway) addOpenAPISourceLocked(ns, baseURL string, specBytes []byte, h
 }
 
 // removeOpenAPIReplicaByIDLocked drops the single replica matching
-// (ns, replicaID). When the source's last replica leaves, the source
-// itself is deleted and the schema rebuilt. Caller holds g.mu.
-func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, replicaID string) {
-	src, ok := g.openAPISources[ns]
+// (ns, ver, replicaID). When the source's last replica leaves, the
+// source itself is deleted and the schema rebuilt. Caller holds g.mu.
+func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, ver, replicaID string) {
+	src, ok := g.openAPISources[poolKey{namespace: ns, version: ver}]
 	if !ok {
 		return
 	}
@@ -367,24 +385,10 @@ func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, replicaID string) {
 		return
 	}
 	if src.replicaCount() == 0 {
-		delete(g.openAPISources, ns)
+		delete(g.openAPISources, poolKey{namespace: ns, version: ver})
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
 		}
-	}
-}
-
-// removeOpenAPISourceLocked drops the source for ns entirely (every
-// replica) and rebuilds the schema. No-op when not present. Used by
-// the standalone control-plane Deregister path which evicts owned
-// replicas en masse.
-func (g *Gateway) removeOpenAPISourceLocked(ns string) {
-	if _, ok := g.openAPISources[ns]; !ok {
-		return
-	}
-	delete(g.openAPISources, ns)
-	if g.schema.Load() != nil {
-		_ = g.assembleLocked()
 	}
 }
 
@@ -398,14 +402,14 @@ func (g *Gateway) removeOpenAPISourcesByOwnerLocked(owner string) int {
 	}
 	removed := 0
 	rebuild := false
-	for ns, s := range g.openAPISources {
+	for k, s := range g.openAPISources {
 		n := s.removeReplicasByOwner(owner)
 		if n == 0 {
 			continue
 		}
 		removed += n
 		if s.replicaCount() == 0 {
-			delete(g.openAPISources, ns)
+			delete(g.openAPISources, k)
 			rebuild = true
 		}
 	}
@@ -506,50 +510,84 @@ func sanitizeNamespace(s string) string {
 // buildOpenAPIFields walks every registered OpenAPI source and builds
 // query and mutation fields. Returns (queries, mutations). Conflicting
 // field names within the same root error.
+//
+// Multi-version: sources are grouped by namespace and sorted by
+// versionN. The latest version's fields use the unprefixed
+// "<ns>_<op>" naming (back-compat with the single-version case). Older
+// versions are surfaced as "<ns>_<vN>_<op>" with a GraphQL deprecation
+// reason — same "latest is current; older addressable but discouraged"
+// shape proto pools use, expressed via name disambiguation rather than
+// nested namespace objects.
 func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
-	names := make([]string, 0, len(g.openAPISources))
-	for n := range g.openAPISources {
-		names = append(names, n)
+
+	// Group sources by namespace, applying the selector filter.
+	byNS := map[string][]*openAPISource{}
+	for k, s := range g.openAPISources {
+		if g.isInternal(k.namespace) {
+			continue
+		}
+		if !filter.matchPool(k) {
+			continue
+		}
+		byNS[k.namespace] = append(byNS[k.namespace], s)
 	}
-	sort.Strings(names)
-	for _, ns := range names {
-		src := g.openAPISources[ns]
-		if g.isInternal(ns) {
-			continue
-		}
-		if !filter.matchNS(ns) {
-			continue
-		}
-		paths := src.doc.Paths
-		if paths == nil {
-			continue
-		}
-		pathKeys := make([]string, 0)
-		for k := range paths.Map() {
-			pathKeys = append(pathKeys, k)
-		}
-		sort.Strings(pathKeys)
-		for _, p := range pathKeys {
-			pathItem := paths.Map()[p]
-			for _, op := range listOperations(p, pathItem) {
-				field, err := g.buildOpenAPIField(tb, src, op)
-				if err != nil {
-					return nil, nil, err
-				}
-				name := openAPIFieldName(ns, op)
-				switch strings.ToUpper(op.Method) {
-				case "GET":
-					if _, exists := queries[name]; exists {
-						return nil, nil, fmt.Errorf("openapi field name collision (Query): %s", name)
+
+	nsNames := make([]string, 0, len(byNS))
+	for ns := range byNS {
+		nsNames = append(nsNames, ns)
+	}
+	sort.Strings(nsNames)
+
+	for _, ns := range nsNames {
+		sources := byNS[ns]
+		sort.Slice(sources, func(i, j int) bool { return sources[i].versionN < sources[j].versionN })
+		latest := sources[len(sources)-1]
+		latestReason := fmt.Sprintf("%s is current", latest.version)
+
+		for _, src := range sources {
+			isLatest := src.versionN == latest.versionN
+			fieldPrefix := ns + "_"
+			typePrefix := ns + "_"
+			if !isLatest {
+				fieldPrefix = ns + "_" + src.version + "_"
+				typePrefix = ns + "_" + src.version + "_"
+			}
+			tb.withPrefix(typePrefix)
+
+			paths := src.doc.Paths
+			if paths == nil {
+				continue
+			}
+			pathKeys := make([]string, 0)
+			for k := range paths.Map() {
+				pathKeys = append(pathKeys, k)
+			}
+			sort.Strings(pathKeys)
+			for _, p := range pathKeys {
+				pathItem := paths.Map()[p]
+				for _, op := range listOperations(p, pathItem) {
+					field, err := g.buildOpenAPIField(tb, src, op)
+					if err != nil {
+						return nil, nil, err
 					}
-					queries[name] = field
-				default:
-					if _, exists := mutations[name]; exists {
-						return nil, nil, fmt.Errorf("openapi field name collision (Mutation): %s", name)
+					if !isLatest {
+						field.DeprecationReason = latestReason
 					}
-					mutations[name] = field
+					name := openAPIFieldName(fieldPrefix, op)
+					switch strings.ToUpper(op.Method) {
+					case "GET":
+						if _, exists := queries[name]; exists {
+							return nil, nil, fmt.Errorf("openapi field name collision (Query): %s", name)
+						}
+						queries[name] = field
+					default:
+						if _, exists := mutations[name]; exists {
+							return nil, nil, fmt.Errorf("openapi field name collision (Mutation): %s", name)
+						}
+						mutations[name] = field
+					}
 				}
 			}
 		}
@@ -587,14 +625,15 @@ func listOperations(path string, item *openapi3.PathItem) []openAPIOperation {
 
 // openAPIFieldName builds a GraphQL field name from an operation.
 // Prefers operationId (huma sets these); falls back to a method+path
-// slug. Always prefixed with the namespace so cross-spec collisions
-// don't trample.
-func openAPIFieldName(ns string, op openAPIOperation) string {
+// slug. The caller passes the per-source prefix ("<ns>_" for the
+// latest version, "<ns>_<vN>_" for older) so cross-spec / cross-
+// version collisions are isolated by name.
+func openAPIFieldName(prefix string, op openAPIOperation) string {
 	id := op.Op.OperationID
 	if id == "" {
 		id = strings.ToLower(op.Method) + pathToSlug(op.Path)
 	}
-	return ns + "_" + lowerCamel(sanitizeNamespace(id))
+	return prefix + lowerCamel(sanitizeNamespace(id))
 }
 
 func pathToSlug(p string) string {
@@ -659,6 +698,7 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	bp := g.cfg.backpressure
 	metrics := g.cfg.metrics
 	ns := src.namespace
+	ver := src.version
 	methodLabel := method + " " + pathTemplate
 
 	return &graphql.Field{
@@ -675,18 +715,18 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 				waitStart := time.Now()
 				select {
 				case src.sem <- struct{}{}:
-					metrics.RecordDwell(ns, "v1", methodLabel, "unary", time.Since(waitStart))
+					metrics.RecordDwell(ns, ver, methodLabel, "unary", time.Since(waitStart))
 				default:
 					depth := int(src.queueing.Add(1))
-					metrics.SetQueueDepth(ns, "v1", "unary", depth)
+					metrics.SetQueueDepth(ns, ver, "unary", depth)
 					dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
 					now := int(src.queueing.Add(-1))
-					metrics.SetQueueDepth(ns, "v1", "unary", now)
-					metrics.RecordDwell(ns, "v1", methodLabel, "unary", dwell)
+					metrics.SetQueueDepth(ns, ver, "unary", now)
+					metrics.RecordDwell(ns, ver, methodLabel, "unary", dwell)
 					if err != nil {
-						metrics.RecordBackoff(ns, "v1", methodLabel, "unary", "wait_timeout")
-						rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error()))
-						metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), rejErr)
+						metrics.RecordBackoff(ns, ver, methodLabel, "unary", "wait_timeout")
+						rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
+						metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), rejErr)
 						return nil, rejErr
 					}
 				}
@@ -695,14 +735,14 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 
 			r := src.pickReplica()
 			if r == nil {
-				err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s", src.namespace))
-				metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+				err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", ns, ver))
+				metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
 				return nil, err
 			}
 			r.inflight.Add(1)
 			defer r.inflight.Add(-1)
 			resp, err := dispatchOpenAPI(rp.Context, method, r.baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, r.httpClient)
-			metrics.RecordDispatch(ns, "v1", methodLabel, time.Since(start), err)
+			metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
 			if err != nil {
 				return nil, err
 			}
@@ -853,10 +893,15 @@ func forwardOpenAPIHeaders(ctx context.Context, out *http.Request, allow []strin
 // ---------------------------------------------------------------------
 
 type openAPITypeBuilder struct {
-	mu       sync.Mutex
-	objects  map[string]*graphql.Object
-	inputs   map[string]*graphql.InputObject
-	enums    map[string]*graphql.Enum
+	mu sync.Mutex
+	// typePrefix is the per-source prefix (e.g. "petstore_" for the
+	// latest version, "petstore_v1_" for older). Object/Enum/Input
+	// names are this prefix + schemaName so two versions of the same
+	// namespace produce distinct GraphQL types.
+	typePrefix string
+	objects    map[string]*graphql.Object
+	inputs     map[string]*graphql.InputObject
+	enums      map[string]*graphql.Enum
 	jsonScalar *graphql.Scalar
 }
 
@@ -872,6 +917,15 @@ func newOpenAPITypeBuilder() *openAPITypeBuilder {
 			ParseValue:  func(v any) any { return v },
 		}),
 	}
+}
+
+// withPrefix scopes type-name caching for the next batch of fields.
+// Callers set this per-source (latest = "<ns>_", older = "<ns>_<vN>_")
+// before invoking outputTypeFromSchema / inputTypeFromSchema, so two
+// versions of the same namespace get distinct Object / Enum / Input
+// types even when their underlying schemas share a name like "Pet".
+func (tb *openAPITypeBuilder) withPrefix(p string) {
+	tb.typePrefix = p
 }
 
 // primaryType strips "null" from an OpenAPI 3.1 multi-type
@@ -995,7 +1049,7 @@ func parseStatus(s string) int {
 }
 
 func (tb *openAPITypeBuilder) objectFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Output, error) {
-	name := schemaName(ref, s, "Object")
+	name := tb.typePrefix + schemaName(ref, s, "Object")
 	if obj, ok := tb.objects[name]; ok {
 		return obj, nil
 	}
@@ -1034,7 +1088,7 @@ func (tb *openAPITypeBuilder) objectFor(ref *openapi3.SchemaRef, s *openapi3.Sch
 }
 
 func (tb *openAPITypeBuilder) inputObjectFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Input, error) {
-	name := schemaName(ref, s, "Input") + "Input"
+	name := tb.typePrefix + schemaName(ref, s, "Input") + "Input"
 	if io, ok := tb.inputs[name]; ok {
 		return io, nil
 	}
@@ -1093,7 +1147,7 @@ func validGraphQLName(s string) bool {
 }
 
 func (tb *openAPITypeBuilder) enumFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (*graphql.Enum, error) {
-	name := schemaName(ref, s, "Enum")
+	name := tb.typePrefix + schemaName(ref, s, "Enum")
 	if e, ok := tb.enums[name]; ok {
 		return e, nil
 	}

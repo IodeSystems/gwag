@@ -201,7 +201,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			if err := validateNS(ns); err != nil {
 				return nil, fmt.Errorf("controlplane: %w", err)
 			}
-			ver := "v1"
+			ver, _, err := parseVersion(b.GetVersion())
+			if err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
 			k := nsverKey{ns, ver}
 			if used[k] {
 				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
@@ -232,9 +235,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			if err != nil {
 				return nil, fmt.Errorf("controlplane: %w", err)
 			}
-			// OpenAPI bindings are single-version (pinned to v1) for now;
-			// tier-2 multi-version is a follow-up.
-			ver := "v1"
+			ver, _, err := parseVersion(b.GetVersion())
+			if err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
 			k := nsverKey{ns, ver}
 			if used[k] {
 				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
@@ -398,7 +402,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	for _, p := range prep {
 		if p.isGraphQL {
 			// Standalone path: replicaID unused (no KV-driven removal).
-			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, ""); err != nil {
+			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.version, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, ""); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -408,7 +412,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			// Standalone path: replicaID is unused (no KV-driven
 			// removal). Pass "" so addOpenAPISourceLocked treats this
 			// as a boot-time-style replica owned by the registration.
-			if err := cp.gw.addOpenAPISourceLocked(p.namespace, req.GetAddr(), p.openAPISpec, p.hash, id, ""); err != nil {
+			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, ""); err != nil {
 				rollback()
 				return nil, err
 			}
