@@ -291,8 +291,9 @@ func signCmd(args []string) int {
 	channel := fs.String("channel", "", "Resolved subject the token will sign")
 	ttl := fs.Int64("ttl", 60, "Token TTL in seconds (informational)")
 	secretHex := fs.String("secret", "", "Hex-encoded shared secret (local sign mode)")
+	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway sign --channel SUBJECT [--ttl 60]")
+		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway sign --channel SUBJECT [--ttl 60] [--kid KID]")
 		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT")
 		fmt.Fprintln(fs.Output(), "  Local:  --secret HEX")
 		fs.PrintDefaults()
@@ -317,6 +318,7 @@ func signCmd(args []string) int {
 		resp, err := client.SignSubscriptionToken(ctx, &cpv1.SignSubscriptionTokenRequest{
 			Channel:    *channel,
 			TtlSeconds: *ttl,
+			Kid:        *kid,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "SignSubscriptionToken: %v\n", err)
@@ -326,7 +328,7 @@ func signCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "code=%s reason=%s\n", resp.GetCode(), resp.GetReason())
 			return 1
 		}
-		fmt.Printf("hmac=%s\nts=%d\n", resp.GetHmac(), resp.GetTimestampUnix())
+		fmt.Printf("hmac=%s\nts=%d\nkid=%s\n", resp.GetHmac(), resp.GetTimestampUnix(), resp.GetKid())
 		return 0
 	}
 	if *secretHex == "" {
@@ -338,8 +340,8 @@ func signCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "decode --secret:", err)
 		return 1
 	}
-	mac, ts := gateway.SignSubscribeToken(secret, *channel, *ttl)
-	fmt.Printf("hmac=%s\nts=%d\n", mac, ts)
+	mac, kidOut, ts := gateway.SignSubscribeTokenWithKid(secret, *kid, *channel, *ttl)
+	fmt.Printf("hmac=%s\nts=%d\nkid=%s\n", mac, ts, kidOut)
 	return 0
 }
 

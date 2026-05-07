@@ -110,6 +110,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		resp, err := cp.SignSubscriptionToken(ctx, &cpv1.SignSubscriptionTokenRequest{
 			Channel:    in.Body.Channel,
 			TtlSeconds: in.Body.TtlSeconds,
+			Kid:        in.Body.Kid,
 		})
 		if err != nil {
 			return nil, err
@@ -119,6 +120,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out.Body.Hmac = resp.GetHmac()
 		out.Body.TimestampUnix = resp.GetTimestampUnix()
 		out.Body.Reason = resp.GetReason()
+		out.Body.Kid = resp.GetKid()
 		return out, nil
 	})
 
@@ -210,6 +212,8 @@ type signIn struct {
 	Body struct {
 		Channel    string `json:"channel"`
 		TtlSeconds int64  `json:"ttlSeconds"`
+		// Optional rotation key id; empty = legacy default secret.
+		Kid string `json:"kid,omitempty"`
 	}
 }
 
@@ -219,6 +223,9 @@ type signOut struct {
 		Hmac          string `json:"hmac,omitempty"`
 		TimestampUnix int64  `json:"timestampUnix,omitempty"`
 		Reason        string `json:"reason,omitempty"`
+		// Echoes the kid the gateway signed under; clients must pass
+		// it back as the `kid` arg on the subscribe field.
+		Kid string `json:"kid,omitempty"`
 	}
 }
 

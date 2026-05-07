@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
 	"time"
@@ -173,6 +174,114 @@ func TestVerifySubscribe_NoSecretConfigured(t *testing.T) {
 	})
 	if got != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED {
 		t.Errorf("got %s, want NOT_CONFIGURED", got)
+	}
+}
+
+// TestSignSubscriptionTokenRPC_RotatedKid covers the RPC's new kid
+// in/out: caller passes kid in the request, gateway looks it up in
+// Secrets, signs the rotated payload, and echoes kid in the response.
+// The result must verify through verifySubscribe with the same kid.
+func TestSignSubscriptionTokenRPC_RotatedKid(t *testing.T) {
+	v2 := []byte("v2-key")
+	channel := "events.x"
+	gw := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithSubscriptionAuth(SubscriptionAuthOptions{
+			Secrets: map[string][]byte{"v2": v2},
+		}),
+		WithAdminToken([]byte("admin")),
+	)
+	t.Cleanup(gw.Close)
+
+	cp := &controlPlane{gw: gw}
+	resp, err := cp.SignSubscriptionToken(context.Background(), &cpv1.SignSubscriptionTokenRequest{
+		Channel:    channel,
+		TtlSeconds: 60,
+		Kid:        "v2",
+	})
+	if err != nil {
+		t.Fatalf("SignSubscriptionToken: %v", err)
+	}
+	if resp.GetCode() != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+		t.Fatalf("code=%s reason=%s", resp.GetCode(), resp.GetReason())
+	}
+	if resp.GetKid() != "v2" {
+		t.Errorf("kid in response = %q, want v2", resp.GetKid())
+	}
+	// Round-trip through the verifier with the kid the response gave us.
+	got := gw.verifySubscribe(channel, map[string]any{
+		"hmac":      resp.GetHmac(),
+		"timestamp": resp.GetTimestampUnix(),
+		"kid":       resp.GetKid(),
+	})
+	if got != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+		t.Errorf("verify of RPC-signed token: got %s, want OK", got)
+	}
+}
+
+// TestSignSubscriptionTokenRPC_UnknownKid covers the rejection path:
+// the caller asks the RPC to sign with a kid the gateway doesn't have.
+func TestSignSubscriptionTokenRPC_UnknownKid(t *testing.T) {
+	gw := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithSubscriptionAuth(SubscriptionAuthOptions{
+			Secrets: map[string][]byte{"v2": []byte("k")},
+		}),
+		WithAdminToken([]byte("admin")),
+	)
+	t.Cleanup(gw.Close)
+
+	cp := &controlPlane{gw: gw}
+	resp, err := cp.SignSubscriptionToken(context.Background(), &cpv1.SignSubscriptionTokenRequest{
+		Channel: "events.x",
+		Kid:     "v3",
+	})
+	if err != nil {
+		t.Fatalf("SignSubscriptionToken: %v", err)
+	}
+	if resp.GetCode() != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNKNOWN_KID {
+		t.Errorf("code=%s, want UNKNOWN_KID", resp.GetCode())
+	}
+	if resp.GetKid() != "v3" {
+		t.Errorf("kid echoed = %q, want v3", resp.GetKid())
+	}
+}
+
+// TestSignSubscriptionTokenRPC_LegacyDefaultKid covers back-compat:
+// caller omits kid, gateway uses legacy Secret + legacy payload, and
+// the empty-kid token verifies.
+func TestSignSubscriptionTokenRPC_LegacyDefaultKid(t *testing.T) {
+	secret := []byte("legacy")
+	channel := "events.x"
+	gw := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithSubscriptionAuth(SubscriptionAuthOptions{Secret: secret}),
+		WithAdminToken([]byte("admin")),
+	)
+	t.Cleanup(gw.Close)
+
+	cp := &controlPlane{gw: gw}
+	resp, err := cp.SignSubscriptionToken(context.Background(), &cpv1.SignSubscriptionTokenRequest{
+		Channel: channel,
+	})
+	if err != nil {
+		t.Fatalf("SignSubscriptionToken: %v", err)
+	}
+	if resp.GetCode() != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+		t.Fatalf("code=%s reason=%s", resp.GetCode(), resp.GetReason())
+	}
+	if resp.GetKid() != "" {
+		t.Errorf("kid = %q, want empty", resp.GetKid())
+	}
+	got := gw.verifySubscribe(channel, map[string]any{
+		"hmac":      resp.GetHmac(),
+		"timestamp": resp.GetTimestampUnix(),
+	})
+	if got != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
+		t.Errorf("verify of legacy-signed token: got %s, want OK", got)
 	}
 }
 
