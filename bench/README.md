@@ -12,6 +12,16 @@ client-side latency quantiles.
 - Linux host networking (the compose file uses `network_mode: host`
   so Prometheus can scrape `localhost:1808N` directly).
 
+The bench targets `/api/graphql` and `/api/metrics` only — the admin
+SPA at `/` is irrelevant. `ui/dist/index.html` is committed as a
+placeholder so `go build` succeeds without a UI build. If you want
+the admin panels (services list, peers, schema viewer, events tray)
+to render when poking around in a browser, build it once:
+
+```
+cd ui && pnpm install && pnpm run build
+```
+
 ## Boot
 
 ```

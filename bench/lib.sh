@@ -81,12 +81,22 @@ write_targets() {
     } > "$out"
 }
 
-# pick_gateway — print NAME of an arbitrary live gateway, or "" if
-# none. Used by add-backend when the user didn't specify one.
+# pick_gateway — print NAME of the first live gateway found, or ""
+# if none. Used by add-backend when the user didn't specify one.
 pick_gateway() {
     for f in "$GW_DIR"/*.env; do
         [[ -e $f ]] || continue
-        (load_env "$f"; if proc_alive "$PID"; then echo "$NAME"; exit 0; fi)
+        local got
+        got=$(
+            load_env "$f"
+            if proc_alive "$PID"; then
+                echo "$NAME"
+            fi
+        )
+        if [[ -n $got ]]; then
+            echo "$got"
+            return 0
+        fi
     done
 }
 
