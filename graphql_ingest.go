@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,10 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
+	ver, verN, err := parseVersion(sc.version)
+	if err != nil {
+		return fmt.Errorf("gateway: AddGraphQL: %w", err)
+	}
 	hash := hashIntrospection(rawIntro)
 
 	g.mu.Lock()
@@ -74,11 +79,12 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		g.internal[ns] = true
 	}
 	if g.graphQLSources == nil {
-		g.graphQLSources = map[string]*graphQLSource{}
+		g.graphQLSources = map[poolKey]*graphQLSource{}
 	}
-	if existing, ok := g.graphQLSources[ns]; ok {
+	key := poolKey{namespace: ns, version: ver}
+	if existing, ok := g.graphQLSources[key]; ok {
 		if existing.hash != hash {
-			return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered with different schema hash", ns)
+			return fmt.Errorf("gateway: AddGraphQL: %s/%s already registered with different schema hash", ns, ver)
 		}
 		existing.addReplica(&graphQLReplica{
 			endpoint:   endpoint,
@@ -88,6 +94,8 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	}
 	src := &graphQLSource{
 		namespace:        ns,
+		version:          ver,
+		versionN:         verN,
 		introspection:    intro,
 		rawIntrospection: rawIntro,
 		hash:             hash,
@@ -101,7 +109,7 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		endpoint:   endpoint,
 		httpClient: httpClient,
 	})
-	g.graphQLSources[ns] = src
+	g.graphQLSources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -116,23 +124,29 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
 // reconciler.handleDelete can later remove the matching replica.
-func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, hash [32]byte, owner, replicaID string) error {
+func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []byte, hash [32]byte, owner, replicaID string) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}
 	if endpoint == "" {
 		return fmt.Errorf("graphql: endpoint is required")
 	}
+	canonicalVer, verN, err := parseVersion(ver)
+	if err != nil {
+		return fmt.Errorf("graphql: %w", err)
+	}
+	ver = canonicalVer
 	if g.graphQLSources == nil {
-		g.graphQLSources = map[string]*graphQLSource{}
+		g.graphQLSources = map[poolKey]*graphQLSource{}
 	}
 	httpClient := g.cfg.openAPIHTTP
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	if existing, ok := g.graphQLSources[ns]; ok {
+	key := poolKey{namespace: ns, version: ver}
+	if existing, ok := g.graphQLSources[key]; ok {
 		if existing.hash != hash {
-			return fmt.Errorf("graphql: namespace %s already registered with different schema hash", ns)
+			return fmt.Errorf("graphql: %s/%s already registered with different schema hash", ns, ver)
 		}
 		// Idempotent: replay of the same KV value (same replicaID) is
 		// a no-op.
@@ -149,10 +163,12 @@ func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, h
 	}
 	intro, err := parseIntrospectionData(rawIntro)
 	if err != nil {
-		return fmt.Errorf("graphql: parse introspection %s: %w", ns, err)
+		return fmt.Errorf("graphql: parse introspection %s/%s: %w", ns, ver, err)
 	}
 	src := &graphQLSource{
 		namespace:        ns,
+		version:          ver,
+		versionN:         verN,
 		introspection:    intro,
 		rawIntrospection: append([]byte(nil), rawIntro...),
 		hash:             hash,
@@ -167,7 +183,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, h
 		owner:      owner,
 		httpClient: httpClient,
 	})
-	g.graphQLSources[ns] = src
+	g.graphQLSources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -175,10 +191,10 @@ func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, h
 }
 
 // removeGraphQLReplicaByIDLocked drops the single replica matching
-// (ns, replicaID). When the source's last replica leaves, the source
-// itself is deleted and the schema rebuilt. Caller holds g.mu.
-func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, replicaID string) {
-	src, ok := g.graphQLSources[ns]
+// (ns, ver, replicaID). When the source's last replica leaves, the
+// source itself is deleted and the schema rebuilt. Caller holds g.mu.
+func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, ver, replicaID string) {
+	src, ok := g.graphQLSources[poolKey{namespace: ns, version: ver}]
 	if !ok {
 		return
 	}
@@ -186,24 +202,10 @@ func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, replicaID string) {
 		return
 	}
 	if src.replicaCount() == 0 {
-		delete(g.graphQLSources, ns)
+		delete(g.graphQLSources, poolKey{namespace: ns, version: ver})
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
 		}
-	}
-}
-
-// removeGraphQLSourceLocked drops the source for ns entirely (every
-// replica) and rebuilds the schema. No-op when not present. Used by
-// the cluster-side reconciler.handleDelete path when the source's
-// last replica's KV key is deleted.
-func (g *Gateway) removeGraphQLSourceLocked(ns string) {
-	if _, ok := g.graphQLSources[ns]; !ok {
-		return
-	}
-	delete(g.graphQLSources, ns)
-	if g.schema.Load() != nil {
-		_ = g.assembleLocked()
 	}
 }
 
@@ -217,14 +219,14 @@ func (g *Gateway) removeGraphQLSourcesByOwnerLocked(owner string) int {
 	}
 	removed := 0
 	rebuild := false
-	for ns, s := range g.graphQLSources {
+	for k, s := range g.graphQLSources {
 		n := s.removeReplicasByOwner(owner)
 		if n == 0 {
 			continue
 		}
 		removed += n
 		if s.replicaCount() == 0 {
-			delete(g.graphQLSources, ns)
+			delete(g.graphQLSources, k)
 			rebuild = true
 		}
 	}
@@ -244,11 +246,13 @@ func hashIntrospection(b []byte) [32]byte {
 
 // graphQLSource is the gateway-internal handle on a registered
 // downstream GraphQL endpoint. Stored on Gateway.graphQLSources keyed
-// by namespace. Same hash → identical schema; multiple replicas can
-// share a source (mirror of openAPISource). Dispatch picks the
-// lowest-in-flight replica per call.
+// by (namespace, version). Same hash → identical schema; multiple
+// replicas can share a source (mirror of openAPISource). Dispatch
+// picks the lowest-in-flight replica per call.
 type graphQLSource struct {
 	namespace      string
+	version        string // canonical "vN"
+	versionN       int    // numeric version for ordering (latest = max)
 	introspection  *introspectionSchema
 	forwardHeaders []string // nil → defaultForwardedHeaders
 
@@ -482,39 +486,70 @@ func dispatchGraphQL(
 // maps. Type mirroring is done lazily inside graphql.NewObject thunks
 // to handle recursive type references without needing topological
 // sort.
+//
+// Multi-version: sources are grouped by namespace and sorted by
+// versionN. The latest version's fields use the bare "<ns>_<remote>"
+// naming and bare "<ns>_<TypeName>" type names (back-compat with the
+// single-version case). Older versions use "<ns>_<vN>_<remote>" /
+// "<ns>_<vN>_<TypeName>" with GraphQL @deprecated stamped on every
+// emitted field.
 func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
 	subscriptions := graphql.Fields{}
-	for ns, src := range g.graphQLSources {
-		if g.isInternal(ns) {
+
+	byNS := map[string][]*graphQLSource{}
+	for k, s := range g.graphQLSources {
+		if g.isInternal(k.namespace) {
 			continue
 		}
-		if !filter.matchNS(ns) {
+		if !filter.matchPool(k) {
 			continue
 		}
-		mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure)
-		q, m, s, err := mb.build()
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("graphql ingest %s: %w", ns, err)
-		}
-		for name, f := range q {
-			if _, exists := queries[name]; exists {
-				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Query field %s collides", ns, name)
+		byNS[k.namespace] = append(byNS[k.namespace], s)
+	}
+
+	nsNames := make([]string, 0, len(byNS))
+	for ns := range byNS {
+		nsNames = append(nsNames, ns)
+	}
+	sort.Strings(nsNames)
+
+	for _, ns := range nsNames {
+		sources := byNS[ns]
+		sort.Slice(sources, func(i, j int) bool { return sources[i].versionN < sources[j].versionN })
+		latest := sources[len(sources)-1]
+		latestReason := fmt.Sprintf("%s is current", latest.version)
+
+		for _, src := range sources {
+			isLatest := src.versionN == latest.versionN
+			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure)
+			mb.isLatest = isLatest
+			if !isLatest {
+				mb.deprecationReason = latestReason
 			}
-			queries[name] = f
-		}
-		for name, f := range m {
-			if _, exists := mutations[name]; exists {
-				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Mutation field %s collides", ns, name)
+			q, m, s, err := mb.build()
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: %w", ns, src.version, err)
 			}
-			mutations[name] = f
-		}
-		for name, f := range s {
-			if _, exists := subscriptions[name]; exists {
-				return nil, nil, nil, fmt.Errorf("graphql ingest %s: Subscription field %s collides", ns, name)
+			for name, f := range q {
+				if _, exists := queries[name]; exists {
+					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Query field %s collides", ns, src.version, name)
+				}
+				queries[name] = f
 			}
-			subscriptions[name] = f
+			for name, f := range m {
+				if _, exists := mutations[name]; exists {
+					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Mutation field %s collides", ns, src.version, name)
+				}
+				mutations[name] = f
+			}
+			for name, f := range s {
+				if _, exists := subscriptions[name]; exists {
+					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Subscription field %s collides", ns, src.version, name)
+				}
+				subscriptions[name] = f
+			}
 		}
 	}
 	return queries, mutations, subscriptions, nil

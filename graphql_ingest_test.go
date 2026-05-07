@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -68,9 +69,9 @@ const petsIntrospection = `{
 // remoteFixture is a fake downstream GraphQL service. Records the
 // last query body the gateway forwarded; respond shape is per-test.
 type remoteFixture struct {
-	t           *testing.T
-	server      *httptest.Server
-	lastQuery   atomic.Pointer[string]
+	t            *testing.T
+	server       *httptest.Server
+	lastQuery    atomic.Pointer[string]
 	queryHandler func(query string, vars map[string]any) any
 }
 
@@ -506,5 +507,97 @@ func TestGraphQLIngest_DuplicateNamespaceIdempotent(t *testing.T) {
 	}
 	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
 		t.Fatalf("second AddGraphQL same hash: %v", err)
+	}
+}
+
+// TestGraphQLIngest_TwoVersions registers v1 and v2 of the same
+// namespace. Latest (v2) is exposed flat as "<ns>_users" with type
+// "pets_User"; older (v1) gets "<ns>_v1_users" with deprecation +
+// type "pets_v1_User" so the two versions don't collide on type
+// identity even when the introspection JSON is identical.
+func TestGraphQLIngest_TwoVersions(t *testing.T) {
+	v1 := newRemoteFixture(t)
+	v2 := newRemoteFixture(t)
+	v1.queryHandler = func(query string, vars map[string]any) any {
+		return map[string]any{"users": []map[string]any{{"id": "v1", "name": "old", "role": "ADMIN"}}}
+	}
+	v2.queryHandler = func(query string, vars map[string]any) any {
+		return map[string]any{"users": []map[string]any{{"id": "v2", "name": "new", "role": "ADMIN"}}}
+	}
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(v1.server.URL, As("pets"), Version("v1")); err != nil {
+		t.Fatalf("AddGraphQL v1: %v", err)
+	}
+	if err := gw.AddGraphQL(v2.server.URL, As("pets"), Version("v2")); err != nil {
+		t.Fatalf("AddGraphQL v2: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+	post := func(query string) string {
+		body, _ := json.Marshal(map[string]any{"query": query})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/graphql", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer resp.Body.Close()
+		out, _ := io.ReadAll(resp.Body)
+		return string(out)
+	}
+	pickFirstID := func(body string) string {
+		var out struct {
+			Data   map[string]any `json:"data"`
+			Errors []any          `json:"errors"`
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatalf("decode: %v: %s", err, body)
+		}
+		if len(out.Errors) > 0 {
+			t.Fatalf("graphql errors: %v", out.Errors)
+		}
+		for _, v := range out.Data {
+			users, _ := v.([]any)
+			if len(users) == 0 {
+				continue
+			}
+			u, _ := users[0].(map[string]any)
+			if id, ok := u["id"].(string); ok {
+				return id
+			}
+		}
+		return ""
+	}
+
+	if got := pickFirstID(post(`{ pets_users { id } }`)); got != "v2" {
+		t.Errorf("pets_users id=%q want v2 (latest)", got)
+	}
+	if got := pickFirstID(post(`{ pets_v1_users { id } }`)); got != "v1" {
+		t.Errorf("pets_v1_users id=%q want v1", got)
+	}
+
+	// SDL: latest types stay "pets_TYPE", older types include version.
+	schemaSrv := httptest.NewServer(gw.SchemaHandler())
+	t.Cleanup(schemaSrv.Close)
+	resp, err := http.Get(schemaSrv.URL)
+	if err != nil {
+		t.Fatalf("schema fetch: %v", err)
+	}
+	defer resp.Body.Close()
+	sdlBytes, _ := io.ReadAll(resp.Body)
+	sdl := string(sdlBytes)
+	for _, want := range []string{
+		"pets_users",    // latest field
+		"pets_v1_users", // older field
+		"pets_User",     // latest type
+		"pets_v1_User",  // older type — distinct from latest
+		`@deprecated(reason: "v2 is current")`,
+	} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
+		}
 	}
 }

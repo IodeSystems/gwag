@@ -21,9 +21,9 @@ import (
 //
 // Query parameters:
 //   - service=ns[:ver][,ns[:ver]...]  — selector, comma separated.
-//                                       Missing version → all versions
-//                                       of that namespace. Missing
-//                                       service param → all services.
+//     Missing version → all versions
+//     of that namespace. Missing
+//     service param → all services.
 //
 // Response: application/protobuf, the marshalled FileDescriptorSet.
 //
@@ -109,8 +109,6 @@ type schemaFilter struct {
 
 func (f schemaFilter) matchPool(k poolKey) bool { return matchSelectors(k, f.selectors) }
 
-func (f schemaFilter) matchNS(ns string) bool { return matchOpenAPISelectors(ns, f.selectors) }
-
 func parseProtoSelectors(raw string) ([]serviceSelector, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -192,15 +190,17 @@ func transformFileDescriptor(
 }
 
 // SchemaOpenAPIHandler returns an http.Handler for GET /schema/openapi.
-// It re-emits each ingested OpenAPI spec keyed by namespace, optionally
-// filtered by the selector.
+// It re-emits each ingested OpenAPI spec keyed by namespace + version,
+// optionally filtered by the selector.
 //
 // Query parameters:
-//   - service=ns[,ns,...]  — comma-separated namespaces. Empty → all.
-//                            (Version qualifier accepted but ignored;
-//                            OpenAPI specs aren't versioned today.)
+//   - service=ns[:ver][,...]  — comma-separated namespaces, each
+//     optionally pinned to a version. Empty
+//     selector → all.
 //
-// Response: application/json, an object {"<ns>": <spec>, ...}.
+// Response: application/json, an object
+// `{"<ns>": {"<vN>": <spec>, ...}, ...}`. Single-version namespaces
+// surface as `{"<ns>": {"v1": <spec>}}`.
 func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -212,17 +212,23 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		filter := schemaFilter{selectors: selectors}
 
 		g.mu.Lock()
-		out := map[string]any{}
-		for ns, src := range g.openAPISources {
-			if g.isInternal(ns) {
+		out := map[string]map[string]any{}
+		for k, src := range g.openAPISources {
+			if g.isInternal(k.namespace) {
 				continue
 			}
-			if !matchOpenAPISelectors(ns, selectors) {
+			if !filter.matchPool(k) {
 				continue
 			}
-			out[ns] = src.doc
+			byVer, ok := out[k.namespace]
+			if !ok {
+				byVer = map[string]any{}
+				out[k.namespace] = byVer
+			}
+			byVer[k.version] = src.doc
 		}
 		g.mu.Unlock()
 
@@ -231,18 +237,6 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
-}
-
-func matchOpenAPISelectors(ns string, sels []serviceSelector) bool {
-	if len(sels) == 0 {
-		return true
-	}
-	for _, s := range sels {
-		if s.namespace == ns {
-			return true
-		}
-	}
-	return false
 }
 
 // stripHiddenFields removes fields whose type_name resolves to a
