@@ -1,0 +1,15 @@
+# Prometheus config for the gateway bench stack. Targets are
+# discovered from /bench-run/targets.json (scale.sh writes it). The
+# 10s refresh keeps adds/removes near-realtime without a reload.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /api/metrics
+    file_sd_configs:
+      - files:
+          - /bench-run/targets.json
+        refresh_interval: 10s

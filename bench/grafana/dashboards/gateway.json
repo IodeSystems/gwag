@@ -1,0 +1,119 @@
+{
+  "title": "Gateway Bench",
+  "uid": "gateway-bench",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Dispatch RPS by namespace",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "sum by (namespace) (rate(go_api_gateway_dispatch_duration_seconds_count[1m]))",
+        "legendFormat": "{{namespace}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Dispatch p99 latency by namespace",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "histogram_quantile(0.99, sum by (namespace, le) (rate(go_api_gateway_dispatch_duration_seconds_bucket[1m])))",
+        "legendFormat": "{{namespace}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Dispatch quantiles (overall)",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(go_api_gateway_dispatch_duration_seconds_bucket[1m])))", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(go_api_gateway_dispatch_duration_seconds_bucket[1m])))", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(go_api_gateway_dispatch_duration_seconds_bucket[1m])))", "legendFormat": "p99", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Errors by code",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "sum by (code) (rate(go_api_gateway_dispatch_duration_seconds_count{code!=\"ok\"}[1m]))",
+        "legendFormat": "{{code}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Queue depth by pool",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "go_api_gateway_pool_queue_depth",
+        "legendFormat": "{{namespace}}/{{version}} {{kind}}",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Backoff rate (rejected) by namespace",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "sum by (namespace) (rate(go_api_gateway_pool_backoff_total[1m]))",
+        "legendFormat": "{{namespace}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Streams in-flight (gateway-wide)",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 0, "y": 24, "w": 6, "h": 5},
+      "targets": [{"expr": "go_api_gateway_streams_inflight_total", "refId": "A"}]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "GraphQL sub fanouts active",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 6, "y": 24, "w": 6, "h": 5},
+      "targets": [{
+        "expr": "sum(go_api_gateway_graphql_sub_fanouts_active)",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Subscribe-auth outcomes",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "gridPos": {"x": 12, "y": 24, "w": 12, "h": 5},
+      "targets": [{
+        "expr": "sum by (code) (rate(go_api_gateway_subscribe_auth_total[1m]))",
+        "legendFormat": "{{code}}",
+        "refId": "A"
+      }]
+    }
+  ]
+}

@@ -331,7 +331,26 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI **oneOf/anyOf → graphql.NewUnion**.
+- *(uncommitted)* `bench/` — local benchmark + demo stack.
+  `up.sh` boots a 1-gateway + 1-greeter cluster with Prometheus
+  (`:19090`, picked above the common port range so it doesn't
+  clash with a host's existing Prometheus) and Grafana (`:3001`)
+  via docker-compose with `network_mode: host`. `scale.sh`
+  add-gateway / add-backend / rm / status mutates the stack at
+  runtime — gateways auto-join the NATS cluster via `--nats-peer`
+  flags; Prometheus's scrape targets track via file_sd reading
+  `bench/.run/targets.json` (rewritten on every change). State
+  lives in per-node .env files under `.run/{gateways,backends}`
+  so Bash can read it via plain `source`. New `bench/cmd/traffic`
+  Go binary fires GraphQL POSTs at configurable RPS / concurrency
+  / duration, spreads across N targets, and prints client-side
+  count / err / p50/p95/p99 per target. Provisioned Grafana
+  dashboard surfaces dispatch RPS + p99 + quantiles + errors-by-code
+  + queue depth + backoff + streams in-flight + graphql-sub
+  fanouts. README documents the layout, scaling moves, and known
+  limits (single host; greeter gRPC backends only — OpenAPI +
+  downstream-GraphQL bench backends noted as a follow-up).
+- `20e4453` OpenAPI **oneOf/anyOf → graphql.NewUnion**.
   Closes the second polymorphism gap. When every variant in a
   oneOf/anyOf resolves to a known Object, `outputTypeFromSchema`
   emits a `graphql.NewUnion` named from the schema's $ref/title

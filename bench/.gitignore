@@ -1,0 +1,3 @@
+# Runtime state — built binaries, PID files, NATS data, logs,
+# Prometheus targets file. Wiped by bench/down.sh --purge.
+.run/
