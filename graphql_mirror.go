@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -32,6 +31,7 @@ type graphQLMirror struct {
 	inputs            map[string]*graphql.InputObject
 	enums             map[string]*graphql.Enum
 	scalars           map[string]*graphql.Scalar
+	unions            map[string]*graphql.Union
 }
 
 func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions) *graphQLMirror {
@@ -47,6 +47,7 @@ func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOption
 		inputs:   map[string]*graphql.InputObject{},
 		enums:    map[string]*graphql.Enum{},
 		scalars:  map[string]*graphql.Scalar{},
+		unions:   map[string]*graphql.Union{},
 	}
 }
 
@@ -215,9 +216,15 @@ func (m *graphQLMirror) namedOutput(name string) (graphql.Output, error) {
 	case "SCALAR":
 		return m.scalarFor(t), nil
 	case "INTERFACE", "UNION":
-		// v1 fallback: serialise as JSON. Lossy but lets the field
-		// exist in the schema instead of erroring out the whole build.
-		return m.jsonScalarFor(t), nil
+		// Both Interface and Union project to graphql.NewUnion in the
+		// local schema — the gateway forwards the whole subselection
+		// upstream, so the only thing the local schema needs to do at
+		// dispatch time is pick the right concrete Object via
+		// `__typename`. Carrying graphql.Interface (with shared fields)
+		// would force every Object to declare `Interfaces:` *during
+		// thunk-build*, which is a topological hassle without
+		// pulling its weight for a forwarding role.
+		return m.unionFor(t), nil
 	}
 	return nil, fmt.Errorf("unsupported type kind %q for %s", t.Kind, name)
 }
@@ -364,11 +371,56 @@ func (m *graphQLMirror) scalarFor(t *introspectionType) *graphql.Scalar {
 	return s
 }
 
-// jsonScalarFor is the catch-all for Interface/Union — emit a passthrough
-// JSON scalar so the field type still resolves at schema-build time.
-func (m *graphQLMirror) jsonScalarFor(t *introspectionType) *graphql.Scalar {
-	log.Printf("graphql ingest %s: %s %s falls back to JSON scalar (Interface/Union not yet typed)", m.src.namespace, t.Kind, t.Name)
-	return m.scalarFor(t)
+// unionFor projects an INTERFACE or UNION into a graphql.NewUnion over
+// the prefixed Object types from the introspected `possibleTypes`.
+// ResolveType reads `__typename` off the per-value map (clients are
+// expected to select it under any abstract type — the gateway does
+// not auto-inject it).
+//
+// If `possibleTypes` is empty (e.g. a poorly-introspected upstream)
+// or no variant resolves to an Object the mirror has built, fall
+// back to a JSON-scalar mirror so the field still surfaces — same
+// shape the v1 fallback used.
+func (m *graphQLMirror) unionFor(t *introspectionType) graphql.Output {
+	if u, ok := m.unions[t.Name]; ok {
+		return u
+	}
+	types := []*graphql.Object{}
+	byRemoteName := map[string]*graphql.Object{}
+	for _, p := range t.PossibleTypes {
+		if p == nil || p.Name == "" {
+			continue
+		}
+		concrete, ok := m.src.introspection.Types[p.Name]
+		if !ok || concrete.Kind != "OBJECT" {
+			continue
+		}
+		obj := m.objectFor(concrete)
+		types = append(types, obj)
+		byRemoteName[p.Name] = obj
+	}
+	if len(types) == 0 {
+		log.Printf("graphql ingest %s: %s %s has no resolvable possibleTypes — falling back to JSON scalar",
+			m.src.namespace, t.Kind, t.Name)
+		return m.scalarFor(t)
+	}
+	u := graphql.NewUnion(graphql.UnionConfig{
+		Name:        m.prefix(t.Name),
+		Description: t.Description,
+		Types:       types,
+		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
+			if v, ok := p.Value.(map[string]any); ok {
+				if name, ok := v["__typename"].(string); ok {
+					if obj, ok := byRemoteName[name]; ok {
+						return obj
+					}
+				}
+			}
+			return nil
+		},
+	})
+	m.unions[t.Name] = u
+	return u
 }
 
 func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldConfigArgument, error) {
@@ -442,7 +494,7 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", remoteFieldName)))
 		}
 		field := rp.Info.FieldASTs[0]
-		rewritten := rewriteFieldForRemote(field, remoteFieldName)
+		rewritten := m.rewriteFieldForRemote(field, remoteFieldName)
 		opType := ast.OperationTypeQuery
 		var varDefs []*ast.VariableDefinition
 		if op, ok := rp.Info.Operation.(*ast.OperationDefinition); ok && op != nil {
@@ -510,7 +562,7 @@ func (m *graphQLMirror) subscribingResolver(remoteFieldName string) graphql.Fiel
 			return nil, fmt.Errorf("graphql ingest: no AST for subscription %s", remoteFieldName)
 		}
 		field := rp.Info.FieldASTs[0]
-		rewritten := rewriteFieldForRemote(field, remoteFieldName)
+		rewritten := m.rewriteFieldForRemote(field, remoteFieldName)
 		var varDefs []*ast.VariableDefinition
 		if op, ok := rp.Info.Operation.(*ast.OperationDefinition); ok && op != nil {
 			varDefs = op.VariableDefinitions
@@ -584,11 +636,14 @@ func (m *graphQLMirror) subscribingResolver(remoteFieldName string) graphql.Fiel
 }
 
 // rewriteFieldForRemote returns a clone of the AST field with its
-// Name set to remoteName and all nested field names un-prefixed
-// where the prefix matches. Argument lists and aliases pass through
-// unchanged. Always uses ast.NewX constructors so the Kind fields
-// the printer's visitor relies on are populated.
-func rewriteFieldForRemote(field *ast.Field, remoteName string) *ast.Field {
+// Name set to remoteName and any inline-fragment type-conditions
+// in the selection tree un-prefixed (`<ns>_Cat` → `Cat`) so the
+// remote sees its own type names. Nested field names pass through
+// unchanged — the gateway only prefixes top-level names in the
+// local schema. Argument lists and aliases pass through unchanged.
+// Always uses ast.NewX constructors so the Kind fields the
+// printer's visitor relies on are populated.
+func (m *graphQLMirror) rewriteFieldForRemote(field *ast.Field, remoteName string) *ast.Field {
 	out := ast.NewField(&ast.Field{
 		Alias:      field.Alias,
 		Name:       ast.NewName(&ast.Name{Value: remoteName}),
@@ -596,12 +651,12 @@ func rewriteFieldForRemote(field *ast.Field, remoteName string) *ast.Field {
 		Directives: field.Directives,
 	})
 	if field.SelectionSet != nil {
-		out.SelectionSet = rewriteSelectionSet(field.SelectionSet, remoteName)
+		out.SelectionSet = m.rewriteSelectionSet(field.SelectionSet)
 	}
 	return out
 }
 
-func rewriteSelectionSet(sel *ast.SelectionSet, parentRemote string) *ast.SelectionSet {
+func (m *graphQLMirror) rewriteSelectionSet(sel *ast.SelectionSet) *ast.SelectionSet {
 	if sel == nil {
 		return nil
 	}
@@ -622,15 +677,56 @@ func rewriteSelectionSet(sel *ast.SelectionSet, parentRemote string) *ast.Select
 				Directives: n.Directives,
 			})
 			if n.SelectionSet != nil {
-				cloned.SelectionSet = rewriteSelectionSet(n.SelectionSet, parentRemote)
+				cloned.SelectionSet = m.rewriteSelectionSet(n.SelectionSet)
 			}
 			out.Selections = append(out.Selections, cloned)
+		case *ast.InlineFragment:
+			// Inline fragments target a concrete variant of an abstract
+			// type. The local TypeCondition carries the prefixed name
+			// (e.g. `<ns>_Cat`); on the wire the remote expects its own
+			// `Cat`. Recurse into the body so nested inline fragments /
+			// inline subselections also un-prefix.
+			frag := ast.NewInlineFragment(&ast.InlineFragment{
+				Directives: n.Directives,
+			})
+			if n.TypeCondition != nil && n.TypeCondition.Name != nil {
+				frag.TypeCondition = ast.NewNamed(&ast.Named{
+					Name: ast.NewName(&ast.Name{Value: m.unprefixTypeName(n.TypeCondition.Name.Value)}),
+				})
+			}
+			if n.SelectionSet != nil {
+				frag.SelectionSet = m.rewriteSelectionSet(n.SelectionSet)
+			}
+			out.Selections = append(out.Selections, frag)
 		default:
-			// Inline fragments & fragment spreads pass through verbatim.
+			// Fragment spreads (`...Foo`) pass through unchanged. v1
+			// callers don't synthesise these locally — every selection
+			// the gateway sees comes from rp.Info.FieldASTs which only
+			// carries inline fragments. If a real client ever sends a
+			// named fragment we'd need its definition forwarded too.
 			out.Selections = append(out.Selections, s)
 		}
 	}
 	return out
+}
+
+// unprefixTypeName strips the source's "<ns>_" or "<ns>_<vN>_" prefix
+// from a local type name. Returns the name unchanged when there's no
+// match — the rewriter is best-effort, and a non-prefixed name is
+// either a built-in scalar or an introspection mismatch we forward
+// verbatim.
+func (m *graphQLMirror) unprefixTypeName(name string) string {
+	if !m.isLatest {
+		long := m.src.namespace + "_" + m.src.version + "_"
+		if len(name) > len(long) && name[:len(long)] == long {
+			return name[len(long):]
+		}
+	}
+	short := m.src.namespace + "_"
+	if len(name) > len(short) && name[:len(short)] == short {
+		return name[len(short):]
+	}
+	return name
 }
 
 // graphqlBuiltinScalar maps the standard scalar names to graphql-go's
@@ -652,10 +748,13 @@ func graphqlBuiltinScalar(name string) *graphql.Scalar {
 	return nil
 }
 
-// jsonUnmarshalLoose is encoding/json.Unmarshal with the
-// number-as-json.Number behavior so large IDs don't lose precision.
+// jsonUnmarshalLoose decodes the upstream's `data` envelope into a
+// generic map. Numbers stay as float64 — graphql-go's coerceInt
+// does not match json.Number (typed-string), so UseNumber would
+// silently null out every Int field on the response. ID values
+// large enough to lose float64 precision should be carried as
+// strings on the wire (which is the conventional GraphQL ID
+// shape anyway).
 func jsonUnmarshalLoose(data []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	return dec.Decode(v)
+	return json.Unmarshal(data, v)
 }

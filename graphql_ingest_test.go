@@ -601,3 +601,163 @@ func TestGraphQLIngest_TwoVersions(t *testing.T) {
 		}
 	}
 }
+
+// petsUnionIntrospection extends petsIntrospection with a UNION type
+// `Animal = Cat | Dog` and a Query.findAnimal field returning it.
+// Used by TestGraphQLIngest_UnionTypedMirror to exercise the
+// possibleTypes → graphql.NewUnion path.
+const petsUnionIntrospection = `{
+  "data": {
+    "__schema": {
+      "queryType": {"name": "Query"},
+      "mutationType": null,
+      "subscriptionType": null,
+      "types": [
+        {
+          "kind": "OBJECT", "name": "Query", "fields": [
+            {
+              "name": "findAnimal",
+              "args": [{"name": "id", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "ID"}}}],
+              "type": {"kind": "UNION", "name": "Animal"}
+            }
+          ]
+        },
+        {
+          "kind": "UNION", "name": "Animal",
+          "possibleTypes": [
+            {"kind": "OBJECT", "name": "Cat"},
+            {"kind": "OBJECT", "name": "Dog"}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "Cat", "fields": [
+            {"name": "name", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}},
+            {"name": "claws", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "Int"}}}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "Dog", "fields": [
+            {"name": "name", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}},
+            {"name": "barksPerMinute", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "Int"}}}
+          ]
+        }
+      ]
+    }
+  }
+}`
+
+// TestGraphQLIngest_UnionTypedMirror covers the introspection →
+// graphql.NewUnion path: SDL contains "union pets_Animal = pets_Cat
+// | pets_Dog"; clients dispatch with inline fragments per variant;
+// the gateway un-prefixes type-conditions on the wire and
+// ResolveType picks the local Object via __typename.
+func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
+	var lastQuery atomic.Pointer[string]
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(petsUnionIntrospection))
+			return
+		}
+		lastQuery.Store(&req.Query)
+		// Reply with a Cat-shaped value carrying __typename so
+		// ResolveType picks pets_Cat.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"findAnimal": map[string]any{
+					"__typename": "Cat",
+					"name":       "whiskers",
+					"claws":      9,
+				},
+			},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(upstream.URL, As("pets")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+
+	// SDL: union with namespace-prefixed variants.
+	schemaSrv := httptest.NewServer(gw.SchemaHandler())
+	t.Cleanup(schemaSrv.Close)
+	sdlResp, err := http.Get(schemaSrv.URL)
+	if err != nil {
+		t.Fatalf("schema fetch: %v", err)
+	}
+	defer sdlResp.Body.Close()
+	sdlBytes, _ := io.ReadAll(sdlResp.Body)
+	sdl := string(sdlBytes)
+	for _, want := range []string{
+		"union pets_Animal",
+		"pets_Cat",
+		"pets_Dog",
+	} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
+		}
+	}
+
+	// Dispatch with an inline fragment under the union. The local
+	// query uses pets_Cat / pets_Dog; the gateway must un-prefix to
+	// `Cat` / `Dog` on the wire so the upstream sees its own names.
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+	gqlBody, _ := json.Marshal(map[string]any{
+		"query": `{
+			pets_findAnimal(id: "1") {
+				__typename
+				... on pets_Cat { name claws }
+				... on pets_Dog { name barksPerMinute }
+			}
+		}`,
+	})
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", bytes.NewReader(gqlBody))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	rawBody, _ := io.ReadAll(resp.Body)
+	var out struct {
+		Data struct {
+			FindAnimal map[string]any `json:"pets_findAnimal"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(rawBody, &out); err != nil {
+		t.Fatalf("decode: %v: %s", err, rawBody)
+	}
+	if len(out.Errors) > 0 {
+		t.Fatalf("graphql errors: %v\nbody=%s", out.Errors, rawBody)
+	}
+	if got := out.Data.FindAnimal["__typename"]; got != "pets_Cat" {
+		t.Errorf("__typename=%v want pets_Cat", got)
+	}
+	if got := out.Data.FindAnimal["name"]; got != "whiskers" {
+		t.Errorf("name=%v want whiskers", got)
+	}
+	if _, ok := out.Data.FindAnimal["claws"]; !ok {
+		t.Errorf("missing claws (Cat-specific) field; body=%s", rawBody)
+	}
+
+	// Forwarded query: type-conditions un-prefixed (`Cat`, `Dog`),
+	// not the local `pets_Cat` / `pets_Dog`.
+	last := lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received a query")
+	}
+	if !strings.Contains(*last, "on Cat") || !strings.Contains(*last, "on Dog") {
+		t.Errorf("forwarded query missing un-prefixed inline fragments: %s", *last)
+	}
+	if strings.Contains(*last, "on pets_Cat") || strings.Contains(*last, "on pets_Dog") {
+		t.Errorf("forwarded query still has prefixed type-conditions: %s", *last)
+	}
+}

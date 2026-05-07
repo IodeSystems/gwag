@@ -18,12 +18,14 @@ type introspectionSchema struct {
 }
 
 type introspectionType struct {
-	Kind        string                  // SCALAR / OBJECT / INTERFACE / UNION / ENUM / INPUT_OBJECT / LIST / NON_NULL
-	Name        string                  // top-level types only — non-empty when Kind is one of the named kinds
-	Description string                  //
-	Fields      []*introspectionField   // OBJECT, INTERFACE
-	InputFields []*introspectionInputV  // INPUT_OBJECT
-	EnumValues  []*introspectionEnumVal // ENUM
+	Kind          string                  // SCALAR / OBJECT / INTERFACE / UNION / ENUM / INPUT_OBJECT / LIST / NON_NULL
+	Name          string                  // top-level types only — non-empty when Kind is one of the named kinds
+	Description   string                  //
+	Fields        []*introspectionField   // OBJECT, INTERFACE
+	InputFields   []*introspectionInputV  // INPUT_OBJECT
+	EnumValues    []*introspectionEnumVal // ENUM
+	Interfaces    []*introspectionTypeRef // OBJECT — interfaces this object implements
+	PossibleTypes []*introspectionTypeRef // INTERFACE / UNION — concrete object variants
 }
 
 type introspectionField struct {
@@ -90,9 +92,9 @@ func fetchIntrospectionBytes(ctx context.Context, client *http.Client, endpoint 
 func parseIntrospectionData(data json.RawMessage) (*introspectionSchema, error) {
 	var wire struct {
 		Schema struct {
-			QueryType        *struct{ Name string } `json:"queryType"`
-			MutationType     *struct{ Name string } `json:"mutationType"`
-			SubscriptionType *struct{ Name string } `json:"subscriptionType"`
+			QueryType        *struct{ Name string }  `json:"queryType"`
+			MutationType     *struct{ Name string }  `json:"mutationType"`
+			SubscriptionType *struct{ Name string }  `json:"subscriptionType"`
 			Types            []wireIntrospectionType `json:"types"`
 		} `json:"__schema"`
 	}
@@ -134,6 +136,16 @@ func parseIntrospectionData(data json.RawMessage) (*introspectionSchema, error) 
 				Description: ev.Description,
 			})
 		}
+		for _, i := range t.Interfaces {
+			if r := wireTypeRef(i); r != nil {
+				conv.Interfaces = append(conv.Interfaces, r)
+			}
+		}
+		for _, p := range t.PossibleTypes {
+			if r := wireTypeRef(p); r != nil {
+				conv.PossibleTypes = append(conv.PossibleTypes, r)
+			}
+		}
 		out.Types[t.Name] = conv
 	}
 	return out, nil
@@ -144,9 +156,9 @@ type wireIntrospectionType struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Fields      []struct {
-		Name        string                  `json:"name"`
-		Description string                  `json:"description"`
-		Args        []wireIntrospectionInput `json:"args"`
+		Name        string                    `json:"name"`
+		Description string                    `json:"description"`
+		Args        []wireIntrospectionInput  `json:"args"`
 		Type        *wireIntrospectionTypeRef `json:"type"`
 	} `json:"fields"`
 	InputFields []wireIntrospectionInput `json:"inputFields"`
@@ -154,6 +166,8 @@ type wireIntrospectionType struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	} `json:"enumValues"`
+	Interfaces    []*wireIntrospectionTypeRef `json:"interfaces"`
+	PossibleTypes []*wireIntrospectionTypeRef `json:"possibleTypes"`
 }
 
 type wireIntrospectionInput struct {
