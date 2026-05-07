@@ -338,7 +338,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL subscription forwarding.
+- `6e07e07` downstream-GraphQL subscription forwarding.
   Closes the AddGraphQL story so remote Subscription roots no
   longer skip at registration with a "not yet supported" log line.
   New `graphql_subscribe.go` implements an upstream
