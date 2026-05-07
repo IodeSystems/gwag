@@ -57,10 +57,11 @@ multi-replica + load balancing (see suggested pickups).
 
 ### Downstream GraphQL ingestion: Interface / Union typed mirror
 
-v1 falls back to a JSON scalar with a registration-time log line.
-Add proper Interface / Union mirroring once a real downstream uses
-them. Map possibleTypes to `graphql.NewUnion`; resolve `__typename`
-on each value to pick the variant.
+Done — see Recently Shipped. Both INTERFACE and UNION map to
+`graphql.NewUnion` over `possibleTypes`. ResolveType reads
+`__typename`. Inline-fragment type-conditions are un-prefixed on the
+forwarded query. Carrying graphql.Interface (with shared fields)
+isn't worth the thunk-build gymnastics for a forwarding role.
 
 ### Outbound auth pass-through alternatives
 
@@ -91,14 +92,14 @@ Auto-internal `_*` namespaces and admin auth metrics shipped
 
 ### OpenAPI oneOf / anyOf → GraphQL Union
 
-Currently falls back to a JSON scalar. GraphQL Union supports the
-common case (each variant is an Object with a known name). When all
-variants in a `oneOf` resolve to known objects, emit a Union;
-otherwise keep the JSON scalar fallback.
-
-Edge cases:
-- Discriminator field → resolver picks the variant.
-- Inline objects without `$ref` → synthesise type names.
+Done — see Recently Shipped. When every variant resolves to a known
+Object, the gateway emits a `graphql.NewUnion` over them. ResolveType
+prefers `discriminator.propertyName` (with `discriminator.mapping`
+overriding the default schema-name resolution); falls back to a
+"first variant whose required props are all present on the value"
+heuristic. Variants that aren't clean objects (primitives, mixed
+arrays) keep the JSON scalar fallback. Input side stays JSON scalar
+— GraphQL has no input unions.
 
 ---
 
@@ -330,7 +331,41 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* OpenAPI + downstream-GraphQL **multi-version**.
+- *(uncommitted)* OpenAPI **oneOf/anyOf → graphql.NewUnion**.
+  Closes the second polymorphism gap. When every variant in a
+  oneOf/anyOf resolves to a known Object, `outputTypeFromSchema`
+  emits a `graphql.NewUnion` named from the schema's $ref/title
+  (or synthesised "AOrB" from variant names when the union itself
+  has no name). ResolveType: discriminator-first
+  (`discriminator.propertyName` + optional `discriminator.mapping`,
+  which kin-openapi exposes as `MappingRef.Ref`); falls through to
+  a required-properties heuristic so a value carrying every
+  variant's required props lands on the first match. Variants that
+  aren't clean Objects (primitives, mixed arrays) keep the
+  JSON-scalar fallback. Input side stays JSON scalar (GraphQL has
+  no input unions). The JSON scalar gained a `ParseLiteral` (no-op
+  passthrough) so graphql-go's schema validator accepts it when
+  any field actually references the fallback. 3 new tests in
+  openapi_test.go: discriminated happy path, no-discriminator
+  heuristic, primitive-variant fallback.
+- `6ca385c` downstream-GraphQL Interface/Union typed mirror.
+  Replaces the JSON-scalar fallback with a `graphql.NewUnion`
+  projection of introspected `possibleTypes`. Both INTERFACE and
+  UNION become a local Union — the gateway is a forwarder, not an
+  executor of shared interface fields. ResolveType reads
+  `__typename` off the per-value map. The AST rewriter
+  (rewriteFieldForRemote / rewriteSelectionSet) became a method on
+  `*graphQLMirror` and recurses into `ast.InlineFragment` so
+  TypeCondition is un-prefixed on the wire (`... on pets_Cat` →
+  `... on Cat`). Bug fix uncovered by the test:
+  `jsonUnmarshalLoose` used `dec.UseNumber`, which decodes ints as
+  `json.Number` (typed-string). graphql-go's `coerceInt` only
+  matches the bare `string` case for the type-switch, so Int fields
+  silently became null. Dropped UseNumber. Introspection parser
+  also captures `interfaces` + `possibleTypes` (the canonical query
+  already requested them — data was just being thrown away).
+  1 new test (`TestGraphQLIngest_UnionTypedMirror`).
+- `1ad86dd` OpenAPI + downstream-GraphQL **multi-version**.
   Sources now key on `(namespace, version)` instead of just
   namespace; both register paths honor `Version("vN")` ServiceOption
   (default v1) and the wire-format `ServiceBinding.version` field

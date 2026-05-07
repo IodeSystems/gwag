@@ -19,6 +19,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
 )
 
 // AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape
@@ -902,6 +903,7 @@ type openAPITypeBuilder struct {
 	objects    map[string]*graphql.Object
 	inputs     map[string]*graphql.InputObject
 	enums      map[string]*graphql.Enum
+	unions     map[string]*graphql.Union
 	jsonScalar *graphql.Scalar
 }
 
@@ -910,11 +912,13 @@ func newOpenAPITypeBuilder() *openAPITypeBuilder {
 		objects: map[string]*graphql.Object{},
 		inputs:  map[string]*graphql.InputObject{},
 		enums:   map[string]*graphql.Enum{},
+		unions:  map[string]*graphql.Union{},
 		jsonScalar: graphql.NewScalar(graphql.ScalarConfig{
-			Name:        "JSON",
-			Description: "Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly).",
-			Serialize:   func(v any) any { return v },
-			ParseValue:  func(v any) any { return v },
+			Name:         "JSON",
+			Description:  "Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly).",
+			Serialize:    func(v any) any { return v },
+			ParseValue:   func(v any) any { return v },
+			ParseLiteral: func(v ast.Value) any { return v },
 		}),
 	}
 }
@@ -949,15 +953,16 @@ func primaryType(s *openapi3.Schema) string {
 }
 
 // outputTypeFromSchema returns a GraphQL output Type for the given
-// OpenAPI schema. Unsupported shapes (oneOf/anyOf/allOf, mixed types)
-// fall back to the JSON scalar.
+// OpenAPI schema. Unsupported shapes (allOf, mixed types) fall back
+// to the JSON scalar. oneOf / anyOf project to graphql.NewUnion when
+// every variant resolves to a known Object; otherwise fall back.
 func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (graphql.Output, error) {
 	if ref == nil || ref.Value == nil {
 		return tb.jsonScalar, nil
 	}
 	s := ref.Value
 	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
-		return tb.jsonScalar, nil
+		return tb.unionFromVariants(ref, s)
 	}
 	if pt := primaryType(s); pt != "" {
 		switch pt {
@@ -983,6 +988,148 @@ func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (gra
 		}
 	}
 	return tb.jsonScalar, nil
+}
+
+// unionFromVariants projects an OpenAPI oneOf / anyOf into a
+// graphql.NewUnion when every variant resolves to a known Object.
+// Falls back to the JSON scalar when:
+//   - a variant doesn't resolve to an Object (primitive / array / nested
+//     union / unnamed inline schema we can't synthesize a name for);
+//   - the union itself has no stable name (not a $ref, no title, and
+//     fewer than two named variants to compose from);
+//   - the variant list is empty.
+//
+// ResolveType uses the spec's `discriminator.propertyName` when present
+// (with `discriminator.mapping` overriding the default schema-name
+// mapping); falls back to a "first variant whose required props are
+// all set on the value" heuristic; returns nil when nothing matches
+// (graphql-go surfaces that as a runtime error so the operator notices).
+func (tb *openAPITypeBuilder) unionFromVariants(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Output, error) {
+	variants := s.OneOf
+	if len(variants) == 0 {
+		variants = s.AnyOf
+	}
+	if len(variants) == 0 {
+		return tb.jsonScalar, nil
+	}
+
+	// Resolve each variant; bail to JSON scalar if any isn't a clean Object.
+	type resolvedVariant struct {
+		name     string // un-prefixed schema name (the Object's local key)
+		obj      *graphql.Object
+		schema   *openapi3.Schema
+		required []string
+	}
+	resolved := make([]resolvedVariant, 0, len(variants))
+	for _, v := range variants {
+		if v == nil || v.Value == nil {
+			return tb.jsonScalar, nil
+		}
+		// Each variant must resolve to an OBJECT.
+		if pt := primaryType(v.Value); pt != "" && pt != "object" {
+			return tb.jsonScalar, nil
+		}
+		out, err := tb.objectFor(v, v.Value)
+		if err != nil {
+			return tb.jsonScalar, nil
+		}
+		obj, ok := out.(*graphql.Object)
+		if !ok {
+			return tb.jsonScalar, nil
+		}
+		resolved = append(resolved, resolvedVariant{
+			name:     schemaName(v, v.Value, "Object"),
+			obj:      obj,
+			schema:   v.Value,
+			required: v.Value.Required,
+		})
+	}
+
+	unionLocalName := schemaName(ref, s, "")
+	if unionLocalName == "" {
+		// Synthesize a name from the variants — "AOrB". Only safe when
+		// every variant has a stable name itself.
+		parts := make([]string, len(resolved))
+		for i, v := range resolved {
+			if v.name == "" {
+				return tb.jsonScalar, nil
+			}
+			parts[i] = v.name
+		}
+		unionLocalName = strings.Join(parts, "Or")
+	}
+	name := tb.typePrefix + unionLocalName
+	if u, ok := tb.unions[name]; ok {
+		return u, nil
+	}
+
+	// Discriminator is on s, not on the variant. Build the value→Object
+	// lookup once and close over it.
+	byVariantName := map[string]*graphql.Object{}
+	for _, v := range resolved {
+		byVariantName[v.name] = v.obj
+	}
+	mapping := map[string]*graphql.Object{}
+	if s.Discriminator != nil {
+		for k, ref := range s.Discriminator.Mapping {
+			// Mapping values are typically "#/components/schemas/Foo"
+			// — kin-openapi exposes the raw string via .Ref. Plain
+			// schema names ("Foo") survive the split unchanged.
+			parts := strings.Split(ref.Ref, "/")
+			leaf := parts[len(parts)-1]
+			if obj, ok := byVariantName[leaf]; ok {
+				mapping[k] = obj
+			}
+		}
+	}
+	discriminatorProp := ""
+	if s.Discriminator != nil {
+		discriminatorProp = s.Discriminator.PropertyName
+	}
+
+	types := make([]*graphql.Object, len(resolved))
+	for i, v := range resolved {
+		types[i] = v.obj
+	}
+	u := graphql.NewUnion(graphql.UnionConfig{
+		Name:        name,
+		Description: s.Description,
+		Types:       types,
+		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
+			m, ok := p.Value.(map[string]any)
+			if !ok {
+				return nil
+			}
+			if discriminatorProp != "" {
+				if d, ok := m[discriminatorProp].(string); ok {
+					if obj, ok := mapping[d]; ok {
+						return obj
+					}
+					if obj, ok := byVariantName[d]; ok {
+						return obj
+					}
+				}
+			}
+			// Heuristic: first variant whose required properties are
+			// all present on the value. Falls through to nil when no
+			// variant matches — graphql-go surfaces that to the client.
+			for _, v := range resolved {
+				ok := true
+				for _, req := range v.required {
+					if _, present := m[req]; !present {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					return v.obj
+				}
+			}
+			return nil
+		},
+	})
+	tb.unions[name] = u
+	return u, nil
 }
 
 func (tb *openAPITypeBuilder) inputTypeFromSchema(ref *openapi3.SchemaRef) (graphql.Input, error) {
