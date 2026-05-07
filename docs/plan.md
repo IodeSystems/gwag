@@ -30,16 +30,18 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Operational:* downstream-GraphQL subscription **multiplexer** —
-  v1 opens one upstream WS per local subscriber; share an upstream
-  WS across many local subs (broker.go-style fanout) when the
-  operation matches.
 - *Operational:* OpenAPI / GraphQL **multi-version**. Today both
   pin to `v1`; multi-version (matching the proto pool model) needs
   the version axis threaded through `addOpenAPISourceLocked` /
   `addGraphQLSourceLocked` and the schema-build paths. Probably
   larger than it looks because the codepaths assume single-version
   in many places.
+- *Operational:* GraphQL ingest **subscription dispatch metric +
+  classification**. The multiplexer doesn't fire RecordDispatch on
+  per-frame deliveries (the per-call dispatch shape doesn't quite
+  apply to streams), but a per-fanout open/close metric — counting
+  fanout creations + active gauge by namespace — would round out
+  observability for the new multiplex path.
 
 ### Token rotation (kid in tokens)
 
@@ -51,12 +53,10 @@ operator asks.
 
 ### Downstream GraphQL ingestion: subscriptions
 
-v1 shipped (see Recently Shipped). Open follow-up: **multiplex one
-upstream graphql-ws WebSocket per (gateway, downstream-service)** —
-today every local subscriber opens its own upstream WS, which scales
-poorly under fanout. Same shape as the existing local sub fanout in
-`broker.go`: one upstream sub serves N local subscribers when the
-operation is shared.
+Done — see Recently Shipped. v1 plus the multiplexer (one upstream
+WS per source, operation-level fanout matching `broker.go`) both
+shipped. AddGraphQL queries / mutations / subscriptions are now at
+full parity with the OpenAPI side.
 
 ### Downstream GraphQL ingestion: dynamic registration
 
@@ -338,6 +338,23 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL subscription multiplexer.
+  Per-source upstream graphql-transport-ws connection pool with
+  operation-level fanout — same shape as `broker.go` for local
+  NATS subs. New `graphql_sub_broker.go`: lazy-dialed shared WS,
+  fanouts keyed by SHA256 of (printed-query + canonical-JSON of
+  variables). Concurrent local subscribers issuing the same
+  operation share one upstream subscribe and each receive every
+  `next` payload (non-blocking fanout — slow consumer drops, same
+  policy as broker.go). Reader pump dispatches frames by upstream
+  subID. Last-consumer-leaves teardown: `complete` upstream, drop
+  fanout, close WS when broker has no remaining fanouts. The
+  `subscribingResolver` now acquires through the broker rather
+  than calling `subscribeUpstreamGraphQL` (now removed; helpers
+  retained for tests). 1 new test
+  (`TestGraphQLIngest_SubscriptionMultiplexer`): two local
+  subscribers with the same op → upstream sees exactly 1
+  connection + 1 subscribe; both receive a pushed `tick:7`.
 - `6e07e07` downstream-GraphQL subscription forwarding.
   Closes the AddGraphQL story so remote Subscription roots no
   longer skip at registration with a "not yet supported" log line.

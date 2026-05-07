@@ -513,7 +513,8 @@ func (m *graphQLMirror) subscribingResolver(remoteFieldName string) graphql.Fiel
 		if r == nil {
 			return nil, fmt.Errorf("graphql ingest: no live replicas for %s", src.namespace)
 		}
-		upstream, err := subscribeUpstreamGraphQL(rp.Context, r.endpoint, printed, rp.Info.VariableValues, src.forwardHeaders)
+		broker := src.getSubBroker()
+		upstream, release, err := broker.acquire(rp.Context, r.endpoint, printed, rp.Info.VariableValues, src.forwardHeaders)
 		if err != nil {
 			return nil, err
 		}
@@ -522,32 +523,38 @@ func (m *graphQLMirror) subscribingResolver(remoteFieldName string) graphql.Fiel
 		out := make(chan any, 8)
 		go func() {
 			defer close(out)
-			for f := range upstream {
-				if f == nil {
-					continue
-				}
-				if len(f.Errors) > 0 {
-					// Surface the first remote error as an error on the
-					// channel so graphql-go's subscribe loop can format
-					// it for the local client.
-					select {
-					case out <- fmt.Errorf("graphql remote: %s", f.Errors[0]):
-					case <-rp.Context.Done():
+			defer release()
+			for {
+				select {
+				case f, ok := <-upstream:
+					if !ok {
 						return
+					}
+					if f == nil {
+						continue
+					}
+					if len(f.Errors) > 0 {
+						select {
+						case out <- fmt.Errorf("graphql remote: %s", f.Errors[0]):
+						case <-rp.Context.Done():
+							return
+						}
+						if f.Done {
+							return
+						}
+						continue
+					}
+					if f.Result != nil {
+						select {
+						case out <- f.Result:
+						case <-rp.Context.Done():
+							return
+						}
 					}
 					if f.Done {
 						return
 					}
-					continue
-				}
-				if f.Result != nil {
-					select {
-					case out <- f.Result:
-					case <-rp.Context.Done():
-						return
-					}
-				}
-				if f.Done {
+				case <-rp.Context.Done():
 					return
 				}
 			}
