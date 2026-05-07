@@ -30,6 +30,19 @@ build_binaries() {
     (cd "$REPO_DIR" && go build -o "$BIN_DIR/traffic" ./bench/cmd/traffic)
 }
 
+# build_binaries_if_missing only invokes the Go toolchain when one
+# or more of the expected binaries doesn't already exist. Used by
+# up.sh so a `bench restart` (which keeps .run/bin/ in place) skips
+# the build entirely. `bin/bench up --build` is the explicit
+# rebuild path that goes through bin/build.
+build_binaries_if_missing() {
+    ensure_dirs
+    if [[ -x $BIN_DIR/gateway && -x $BIN_DIR/greeter && -x $BIN_DIR/traffic ]]; then
+        return 0
+    fi
+    build_binaries
+}
+
 # next_index <dir> <prefix> — print the smallest unused integer N
 # such that <dir>/<prefix>N.env doesn't exist. Used to allocate
 # names like n1, n2, ... and g1, g2, ...

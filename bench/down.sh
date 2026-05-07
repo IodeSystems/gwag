@@ -27,6 +27,12 @@ if [[ -d $RUN_DIR ]]; then
                     kill "$PID" 2>/dev/null || true
                 fi
             )
+            # The .env files describe live processes. Once the PID
+            # is gone they're stale state — clean them so the next
+            # `up` doesn't trip the leftover-state guard. Cached
+            # binaries / nats data / logs survive (only --purge
+            # wipes those).
+            rm -f "$f"
         done
     done
 fi
