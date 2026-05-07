@@ -42,23 +42,25 @@ func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOption
 	}
 }
 
-// build emits (queries, mutations) keyed by namespace-prefixed field
-// names. Each top-level field's Resolve forwards to the remote.
-func (m *graphQLMirror) build() (graphql.Fields, graphql.Fields, error) {
+// build emits (queries, mutations, subscriptions) keyed by
+// namespace-prefixed field names. Each top-level field's Resolve
+// (queries / mutations) or Subscribe (subscriptions) forwards to the
+// remote.
+func (m *graphQLMirror) build() (graphql.Fields, graphql.Fields, graphql.Fields, error) {
 	intro := m.src.introspection
-	if intro.SubscriptionTypeName != "" {
-		log.Printf("graphql ingest %s: skipping Subscription root (not yet supported)", m.src.namespace)
-	}
-
 	queries, err := m.buildRootFields(intro.QueryTypeName, "query")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	mutations, err := m.buildRootFields(intro.MutationTypeName, "mutation")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return queries, mutations, nil
+	subscriptions, err := m.buildSubscriptionRootFields(intro.SubscriptionTypeName)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return queries, mutations, subscriptions, nil
 }
 
 func (m *graphQLMirror) buildRootFields(rootName, opType string) (graphql.Fields, error) {
@@ -87,6 +89,53 @@ func (m *graphQLMirror) buildRootFields(rootName, opType string) (graphql.Fields
 			Type:    typ,
 			Args:    args,
 			Resolve: m.forwardingResolver(remote, opType),
+		}
+	}
+	return out, nil
+}
+
+// buildSubscriptionRootFields walks the upstream's Subscription type
+// and emits a `<namespace>_<remoteName>` field per remote subscription.
+// Subscribe opens an upstream graphql-transport-ws and pumps frames
+// into graphql-go's subscribe channel; Resolve picks the remote field
+// out of each `next` payload's data envelope so the local consumer
+// sees the field's value directly (matching the query/mutation
+// forwarder's shape).
+func (m *graphQLMirror) buildSubscriptionRootFields(rootName string) (graphql.Fields, error) {
+	if rootName == "" {
+		return graphql.Fields{}, nil
+	}
+	root := m.src.introspection.Types[rootName]
+	if root == nil {
+		return nil, fmt.Errorf("subscription root type %q missing from introspection", rootName)
+	}
+	out := graphql.Fields{}
+	for _, f := range root.Fields {
+		typ, err := m.outputType(f.Type)
+		if err != nil {
+			log.Printf("graphql ingest %s: skipping subscription %s: %v", m.src.namespace, f.Name, err)
+			continue
+		}
+		args, err := m.argsConfig(f.Args)
+		if err != nil {
+			log.Printf("graphql ingest %s: skipping subscription %s args: %v", m.src.namespace, f.Name, err)
+			continue
+		}
+		fieldName := m.prefix(f.Name)
+		remote := f.Name
+		out[fieldName] = &graphql.Field{
+			Type:      typ,
+			Args:      args,
+			Subscribe: m.subscribingResolver(remote),
+			Resolve: func(rp graphql.ResolveParams) (any, error) {
+				// rp.Source is the per-frame map[string]any the
+				// Subscribe channel emitted; pluck the remote field's
+				// value so consumers see it directly.
+				if m, ok := rp.Source.(map[string]any); ok {
+					return m[remote], nil
+				}
+				return rp.Source, nil
+			},
 		}
 	}
 	return out, nil
@@ -422,6 +471,88 @@ func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) grap
 		}
 		record(nil)
 		return data[remoteFieldName], nil
+	}
+}
+
+// subscribingResolver is the Subscribe-side counterpart of
+// forwardingResolver. It rebuilds the upstream operation, opens a
+// graphql-transport-ws connection (one per local subscriber for v1 —
+// multiplexing is a tier-3 follow-up), and pumps the upstream's
+// `next` payloads into a Go channel that graphql-go drains.
+//
+// Errors and `complete` from the upstream terminate the local
+// subscription with the same shape graphql-go's runSubscription
+// expects.
+func (m *graphQLMirror) subscribingResolver(remoteFieldName string) graphql.FieldResolveFn {
+	src := m.src
+	return func(rp graphql.ResolveParams) (any, error) {
+		if len(rp.Info.FieldASTs) == 0 {
+			return nil, fmt.Errorf("graphql ingest: no AST for subscription %s", remoteFieldName)
+		}
+		field := rp.Info.FieldASTs[0]
+		rewritten := rewriteFieldForRemote(field, remoteFieldName)
+		var varDefs []*ast.VariableDefinition
+		if op, ok := rp.Info.Operation.(*ast.OperationDefinition); ok && op != nil {
+			varDefs = op.VariableDefinitions
+		}
+		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+			Operation:           ast.OperationTypeSubscription,
+			VariableDefinitions: varDefs,
+			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+				Selections: []ast.Selection{rewritten},
+			}),
+		})
+		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+		raw := printer.Print(doc)
+		printed, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
+		}
+
+		r := src.pickReplica()
+		if r == nil {
+			return nil, fmt.Errorf("graphql ingest: no live replicas for %s", src.namespace)
+		}
+		upstream, err := subscribeUpstreamGraphQL(rp.Context, r.endpoint, printed, rp.Info.VariableValues, src.forwardHeaders)
+		if err != nil {
+			return nil, err
+		}
+		// Translate upstream frames into a graphql-go Subscribe channel:
+		// emit map[string]any for `next`, close on `complete` / ctx.
+		out := make(chan any, 8)
+		go func() {
+			defer close(out)
+			for f := range upstream {
+				if f == nil {
+					continue
+				}
+				if len(f.Errors) > 0 {
+					// Surface the first remote error as an error on the
+					// channel so graphql-go's subscribe loop can format
+					// it for the local client.
+					select {
+					case out <- fmt.Errorf("graphql remote: %s", f.Errors[0]):
+					case <-rp.Context.Done():
+						return
+					}
+					if f.Done {
+						return
+					}
+					continue
+				}
+				if f.Result != nil {
+					select {
+					case out <- f.Result:
+					case <-rp.Context.Done():
+						return
+					}
+				}
+				if f.Done {
+					return
+				}
+			}
+		}()
+		return out, nil
 	}
 }
 

@@ -30,12 +30,10 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Architecturally interesting:* GraphQL **subscription forwarding**
-  (graphql-ws upstream multiplexer). Closes the AddGraphQL story so
-  remote Subscription roots aren't skipped at registration time. With
-  dispatch metric + classification + backpressure + dynamic
-  registration + multi-replica all shipped for queries/mutations,
-  subscriptions are the last AddGraphQL gap.
+- *Operational:* downstream-GraphQL subscription **multiplexer** —
+  v1 opens one upstream WS per local subscriber; share an upstream
+  WS across many local subs (broker.go-style fanout) when the
+  operation matches.
 - *Operational:* OpenAPI / GraphQL **multi-version**. Today both
   pin to `v1`; multi-version (matching the proto pool model) needs
   the version axis threaded through `addOpenAPISourceLocked` /
@@ -53,16 +51,12 @@ operator asks.
 
 ### Downstream GraphQL ingestion: subscriptions
 
-The boot-time mirror handles queries + mutations (see commit
-`3517273`). To complete the story, forward subscriptions:
-- Multiplex one upstream graphql-ws WebSocket per (gateway,
-  downstream-service) — same shape as the existing local sub
-  fanout in `broker.go`.
-- The local Subscription type gains a `<ns>_<remoteSubField>`
-  entry per remote subscription field. Resolver dials the upstream
-  WS, subscribes, fans incoming `next` frames to the local client.
-- Auth: respect `ForwardHeaders` for connection_init and HMAC
-  args for subscribes (same convention as queries).
+v1 shipped (see Recently Shipped). Open follow-up: **multiplex one
+upstream graphql-ws WebSocket per (gateway, downstream-service)** —
+today every local subscriber opens its own upstream WS, which scales
+poorly under fanout. Same shape as the existing local sub fanout in
+`broker.go`: one upstream sub serves N local subscribers when the
+operation is shared.
 
 ### Downstream GraphQL ingestion: dynamic registration
 
@@ -344,6 +338,27 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL subscription forwarding.
+  Closes the AddGraphQL story so remote Subscription roots no
+  longer skip at registration with a "not yet supported" log line.
+  New `graphql_subscribe.go` implements an upstream
+  graphql-transport-ws client: dial → connection_init →
+  connection_ack → subscribe → pump `next` / `error` /
+  `complete` frames into a Go channel. The mirror's
+  `buildSubscriptionRootFields` walks `intro.SubscriptionTypeName`
+  and emits one `<namespace>_<remoteName>` field per upstream
+  subscription. Each field's `Subscribe` opens an upstream WS
+  (one per local subscriber for v1; multiplexing across N local
+  subs is a tier-3 follow-up); `Resolve` plucks the remote field
+  out of each `next` payload's `data` envelope so consumers see
+  the field's value directly. ForwardHeaders is honored on the
+  upstream WS upgrade. `buildGraphQLFields` returns
+  `(queries, mutations, subscriptions)`; schema.go merges them
+  into the existing Subscription root with the same collision
+  rules. 1 new test (`TestGraphQLIngest_SubscriptionForwarding`):
+  fake upstream WS server emits 3 `tick` frames + complete; the
+  test dials the gateway WS, subscribes to `pets_tick`, observes
+  the values 1/2/3 and the terminating `complete`.
 - `5f03354` downstream-GraphQL multi-replica + load
   balancing. Mirrors `dfae181` for OpenAPI: one source per
   namespace, N replicas. `graphQLSource` collapses
