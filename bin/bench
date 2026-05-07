@@ -63,7 +63,10 @@ cmd_down() {
 }
 
 cmd_restart() {
-    "$BENCH_DIR/down.sh" --purge
+    # Preserve state: only kill processes, leave .run/{bin,nats,…}
+    # in place so the next up reuses cached binaries + JetStream
+    # data dirs. `bench up --build` is the explicit rebuild path.
+    "$BENCH_DIR/down.sh"
     cmd_up "$@"
 }
 

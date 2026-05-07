@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib.sh"
 
-echo "==> building binaries"
-build_binaries
+echo "==> ensuring binaries"
+build_binaries_if_missing
 
 # Refuse to start on top of leftover state — would silently allocate
 # n2/n3 etc. and produce a confusing tree. The user almost always
