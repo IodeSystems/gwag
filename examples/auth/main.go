@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	gateway "github.com/iodesystems/go-api-gateway"
+	gateway "github.com/iodesystems/go-api-gateway/gw"
 	authv1 "github.com/iodesystems/go-api-gateway/examples/auth/gen/auth/v1"
 	userv1 "github.com/iodesystems/go-api-gateway/examples/auth/gen/user/v1"
 )

@@ -50,7 +50,7 @@ defer reg.Close(ctx) // graceful deregister
 One Register call can carry many services on one address (multiple
 RPCs in one binary). Heartbeats every TTL/3; missed heartbeats past
 TTL evict. The control-plane API is in
-[`controlplane/v1/control.proto`](./controlplane/v1/control.proto).
+[`gw/proto/controlplane/v1/control.proto`](./gw/proto/controlplane/v1/control.proto).
 
 OpenAPI services register the same way — the `Service` struct takes
 either `FileDescriptor` (proto) or `OpenAPISpec` (raw OpenAPI 3.x
@@ -276,7 +276,7 @@ gw.AddOpenAPIBytes(adminSpec,
 
 For richer authz than a single static token, register an
 `AdminAuthorizer` service at `_admin_auth/v1` (proto in
-[`adminauth/v1`](./adminauth/v1)). The middleware consults it on
+[`adminauth/v1`](./gw/proto/adminauth/v1)). The middleware consults it on
 every protected request:
 
 | Delegate response       | Middleware action                          |

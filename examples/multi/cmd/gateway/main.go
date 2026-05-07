@@ -36,8 +36,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	gateway "github.com/iodesystems/go-api-gateway"
-	cpv1 "github.com/iodesystems/go-api-gateway/controlplane/v1"
+	gateway "github.com/iodesystems/go-api-gateway/gw"
+	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 	gwui "github.com/iodesystems/go-api-gateway/ui"
 )
 

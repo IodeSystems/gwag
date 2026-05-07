@@ -14,7 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/iodesystems/go-api-gateway/controlclient"
+	"github.com/iodesystems/go-api-gateway/gw/controlclient"
 	libraryv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/library/v1"
 )
 

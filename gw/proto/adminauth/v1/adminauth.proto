@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package gateway.adminauth.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/gw/proto/adminauth/v1;adminauthv1";
+
+// AdminAuthorizer is the optional delegate the gateway calls before
+// AdminMiddleware accepts a write to /admin/*. Implement it in your
+// authz service and register it under namespace "_admin_auth" /
+// version v1.
+//
+// Policy: if a delegate is registered, the gateway consults it on
+// every protected request. OK accepts, DENIED rejects (without
+// falling through). Anything else (UNAVAILABLE, NOT_CONFIGURED,
+// UNSPECIFIED, transport error) falls through to boot-token bearer
+// verification — the always-works emergency hatch is non-negotiable.
+service AdminAuthorizer {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+message AuthorizeRequest {
+  // Bearer token presented by the client (the raw value after
+  // `Bearer `). Empty string when the request had no Authorization
+  // header — the delegate decides whether to accept anonymous calls.
+  string token = 1;
+
+  // HTTP method, uppercased (POST/PUT/PATCH/DELETE/...).
+  string method = 2;
+
+  // Request path on the gateway (e.g. "/admin/peers/X/forget").
+  string path = 3;
+
+  // Inbound remote address (best-effort; may be empty if the gateway
+  // is behind a proxy that doesn't forward it).
+  string remote_addr = 4;
+}
+
+message AuthorizeResponse {
+  AdminAuthCode code = 1;
+  // Optional, for operator logs. Never leaked to clients.
+  string reason = 2;
+}
+
+enum AdminAuthCode {
+  ADMIN_AUTH_CODE_UNSPECIFIED = 0;
+  // Delegate authorized the request. The middleware accepts without
+  // checking the boot token.
+  ADMIN_AUTH_CODE_OK = 1;
+  // Delegate explicitly rejected. The middleware returns 401 without
+  // falling through to the boot token.
+  ADMIN_AUTH_CODE_DENIED = 2;
+  // Delegate is currently unavailable (degraded backend, exceeded
+  // budget, etc.). Middleware falls through to boot-token check.
+  ADMIN_AUTH_CODE_UNAVAILABLE = 3;
+  // Delegate is registered but unwilling to make a decision (e.g.
+  // policy not loaded). Middleware falls through to boot-token.
+  ADMIN_AUTH_CODE_NOT_CONFIGURED = 4;
+}

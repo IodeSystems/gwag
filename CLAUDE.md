@@ -45,71 +45,90 @@ pub/sub with HMAC channel auth.
 
 ## Layout
 
-```
-gateway.go               Top-level Gateway, Options, http handlers
-pools.go                 Pool, replica, descriptor hashing (canonical)
-schema.go                GraphQL assembly: rootFields, query/subscription
-control.go               gRPC control plane: Register/Heartbeat/Deregister
-                         + Sign/List/Forget admin RPCs
-controlplane/v1/         Control plane proto + generated bindings
-eventsauth/v1/           SubscriptionAuthorizer delegate proto
-adminauth/v1/            AdminAuthorizer delegate proto
-adminevents/v1/          AdminEvents (service-change stream) proto
-admin_huma.go            huma admin routes (peers, services, forget,
-                         sign, channels, drain, openapi.json);
-                         self-ingested via OpenAPI to surface as
-                         admin_* GraphQL fields (dogfood)
-peers.go                 Peers KV bucket + monotonic R bump
-reconciler.go            Watches registry KV, syncs local pool state
-broker.go                Sub-fanout: shared NATS subs across N WebSockets
-subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
-auth_subscribe.go        HMAC verify + SubscribeAuthCode
-auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
-auth_admin.go            Boot-token gen/persist + AdminMiddleware
-auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
-admin_events.go          AddAdminEvents() + publishServiceChange (NATS)
-ui_handler.go            UIHandler: fs.FS → http.Handler with SPA fallback
-ui/embed.go              Embeds ui/dist/* as embed.FS for the binary
-metrics.go               Prometheus dispatch + dwell + backoff + queue
-                         + stream + auth gauges/histograms/counters
-health.go                /health endpoint + Drain method
-sdl.go                   Runtime graphql.Schema → SDL printer
-proto_export.go          /schema/proto + /schema/openapi
-                         (transformed FDS + ingested OpenAPI re-emit)
-openapi.go               OpenAPI ingestion (file/URL + AddOpenAPIBytes)
-                         → GraphQL fields, HTTP dispatch
-graphql_ingest.go        Downstream GraphQL ingest API (AddGraphQL)
-graphql_introspect.go    Canonical introspection query + parser
-graphql_mirror.go        Type mirror with namespace prefix +
-                         forwarding resolver
-cluster.go               Embedded NATS server + JetStream
-hide_inject.go           HideAndInject middleware Pair
-convert.go               Proto descriptor → GraphQL type builder
-loader.go                Proto file parsing
-controlclient/           Service-side: SelfRegister + heartbeat goroutine
-cmd/go-api-gateway/      Binary: gateway runner + peer/services/schema/sign
-                         subcommands + diff.go (SDL diff)
-examples/multi/          greeter + library + run.sh + run-cluster.sh
-docs/plan.md             Authoritative roadmap & decisions
-ui/                      React + MUI + TanStack Router admin UI; consumes
-                         GraphQL only via graphql-codegen-typed SDK
+Top-level repo:
 
-# Tests (~70 cases across these files; ~22s wall clock for the heavy
-# cluster ones)
-admin_events_test.go        admin_events publish path (NATS subscriber)
-admin_huma_test.go          channels / drain / openapi.json routes
-auth_admin_test.go          AdminMiddleware + token store + metrics
-auth_admin_delegate_test.go AdminAuthorizer delegate fall-through
-cluster_dispatch_test.go    Two-node cluster cross-gateway dispatch
-dynamic_openapi_test.go     ServiceBinding.openapi_spec path
-                            (standalone + cluster + multi-replica)
-forget_peer_test.go         peers KV manipulation; alive vs expired
-graphql_ingest_test.go      AddGraphQL: prefix mirror + forwarding
-grpc_dispatch_test.go       In-process grpc.Server + GraphQL → gRPC
-openapi_test.go             Httptest backend + GraphQL → HTTP/JSON
-schema_rebuild_test.go      Pool create/destroy + hash collision
-subscriptions_test.go       Embedded NATS + WebSocket round-trip
 ```
+README.md / CLAUDE.md / LICENSE
+go.mod / go.sum
+gw/                  Gateway library (package gateway) + subpkgs
+ui/                  React + MUI + TanStack Router admin UI; consumes
+                     GraphQL only via graphql-codegen-typed SDK
+bench/               Local benchmark + demo stack (compose, scripts,
+                     cmd/traffic). bin/bench dispatches everything.
+examples/            Example services that register against the gateway
+docs/                plan.md (roadmap + decisions log) + design notes
+bin/                 Top-level shell scripts (build, bench)
+.bin/                Pinned tooling (protoc-gen-go-grpc etc.)
+```
+
+Inside `gw/` (package `gateway` unless noted):
+
+```
+gw/
+  gateway.go               Top-level Gateway, Options, http handlers
+  pools.go                 Pool, replica, descriptor hashing (canonical)
+  schema.go                GraphQL assembly: rootFields, query/subscription
+  control.go               gRPC control plane: Register/Heartbeat/Deregister
+                           + Sign/List/Forget admin RPCs
+  admin_huma.go            huma admin routes (peers, services, forget,
+                           sign, channels, drain, openapi.json);
+                           self-ingested via OpenAPI to surface as
+                           admin_* GraphQL fields (dogfood)
+  peers.go                 Peers KV bucket + monotonic R bump
+  reconciler.go            Watches registry KV, syncs local pool state
+  broker.go                Sub-fanout: shared NATS subs across N WebSockets
+  subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
+  auth_subscribe.go        HMAC verify + SubscribeAuthCode
+  auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
+  auth_admin.go            Boot-token gen/persist + AdminMiddleware
+  auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
+  admin_events.go          AddAdminEvents() + publishServiceChange (NATS)
+  ui_handler.go            UIHandler: fs.FS → http.Handler with SPA fallback
+  metrics.go               Prometheus dispatch + dwell + backoff + queue
+                           + stream + auth gauges/histograms/counters
+  health.go                /health endpoint + Drain method
+  sdl.go                   Runtime graphql.Schema → SDL printer
+  proto_export.go          /schema/proto + /schema/openapi
+                           (transformed FDS + ingested OpenAPI re-emit)
+  openapi.go               OpenAPI ingestion (file/URL + AddOpenAPIBytes)
+                           → GraphQL fields, HTTP dispatch
+  graphql_ingest.go        Downstream GraphQL ingest API (AddGraphQL)
+  graphql_introspect.go    Canonical introspection query + parser
+  graphql_mirror.go        Type mirror with namespace prefix +
+                           forwarding resolver
+  cluster.go               Embedded NATS server + JetStream
+  hide_inject.go           HideAndInject middleware Pair
+  convert.go               Proto descriptor → GraphQL type builder
+  loader.go                Proto file parsing
+  proto/                   Generated proto bindings:
+    controlplane/v1/       Control plane proto + generated bindings
+    eventsauth/v1/         SubscriptionAuthorizer delegate proto
+    adminauth/v1/          AdminAuthorizer delegate proto
+    adminevents/v1/        AdminEvents (service-change stream) proto
+  controlclient/           Service-side: SelfRegister + heartbeat goroutine
+  cmd/go-api-gateway/      Binary: gateway runner + peer/services/schema/sign
+                           subcommands + diff.go (SDL diff)
+
+  # Tests live next to their code (~70 cases; ~22s wall clock for the
+  # cluster-heavy ones).
+  admin_events_test.go        admin_events publish path (NATS subscriber)
+  admin_huma_test.go          channels / drain / openapi.json routes
+  auth_admin_test.go          AdminMiddleware + token store + metrics
+  auth_admin_delegate_test.go AdminAuthorizer delegate fall-through
+  cluster_dispatch_test.go    Two-node cluster cross-gateway dispatch
+  dynamic_openapi_test.go     ServiceBinding.openapi_spec path
+                              (standalone + cluster + multi-replica)
+  forget_peer_test.go         peers KV manipulation; alive vs expired
+  graphql_ingest_test.go      AddGraphQL: prefix mirror + forwarding
+  grpc_dispatch_test.go       In-process grpc.Server + GraphQL → gRPC
+  openapi_test.go             Httptest backend + GraphQL → HTTP/JSON
+  schema_rebuild_test.go      Pool create/destroy + hash collision
+  subscriptions_test.go       Embedded NATS + WebSocket round-trip
+```
+
+Importers use `gateway "github.com/iodesystems/go-api-gateway/gw"`
+for the library and `github.com/iodesystems/go-api-gateway/gw/proto/...`
+for the generated bindings.
 
 ## Conventions
 
@@ -123,9 +142,9 @@ subscriptions_test.go       Embedded NATS + WebSocket round-trip
   the watch + reconciler goroutines — pass `context.Background()`
   in test helpers, not a `WithTimeout`, or the goroutines die mid-
   test. (See `cluster_dispatch_test.go` comment.)
-- Generated code: `controlplane/v1/control.pb.go`,
-  `eventsauth/v1/eventsauth.pb.go`, `adminauth/v1/adminauth.pb.go`,
-  `adminevents/v1/adminevents.pb.go`, `examples/multi/gen/**`. Never
+- Generated code: `gw/proto/controlplane/v1/control.pb.go`,
+  `gw/proto/eventsauth/v1/eventsauth.pb.go`, `gw/proto/adminauth/v1/adminauth.pb.go`,
+  `gw/proto/adminevents/v1/adminevents.pb.go`, `examples/multi/gen/**`. Never
   edit; regenerate with protoc (`PATH=".bin:$PATH" protoc --go_out=...`).
 - **Per-pool isolation is sacred.** Anything that introduces a
   gateway-wide cap on unary dispatches (beyond per-pool `MaxInflight`)
@@ -216,7 +235,7 @@ The `/api/*` split is an example wiring choice, not a library
 constraint. `gateway.UIHandler(fs.FS)` and the per-handler primitives
 (`gw.Handler()`, `gw.SchemaHandler()`, `gw.AdminMiddleware(...)`)
 let operators arrange the routes however they like. The
-`cmd/go-api-gateway` CLI mounts GraphQL at `/` directly when no UI
+`gw/cmd/go-api-gateway` CLI mounts GraphQL at `/` directly when no UI
 is in play.
 
 ## When in doubt

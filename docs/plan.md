@@ -403,7 +403,7 @@ older entries when they get stale.)
   Reconciler's `handlePut` / `handleDelete` thread `ver` through to
   `addOpenAPISourceLocked` / `addGraphQLSourceLocked` and the
   remove-by-id helpers. Control plane proto comment updated;
-  `controlplane/v1/control.pb.go` regenerated. 2 new tests
+  `gw/proto/controlplane/v1/control.pb.go` regenerated. 2 new tests
   (`TestOpenAPIE2E_TwoVersions`, `TestGraphQLIngest_TwoVersions`):
   v1 + v2 backends, latest field hits v2, versioned field hits v1,
   SDL contains both fields with `@deprecated` on older + distinct
