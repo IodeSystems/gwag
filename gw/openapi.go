@@ -905,6 +905,7 @@ type openAPITypeBuilder struct {
 	enums      map[string]*graphql.Enum
 	unions     map[string]*graphql.Union
 	jsonScalar *graphql.Scalar
+	longScalar *graphql.Scalar
 }
 
 func newOpenAPITypeBuilder() *openAPITypeBuilder {
@@ -919,6 +920,43 @@ func newOpenAPITypeBuilder() *openAPITypeBuilder {
 			Serialize:    func(v any) any { return v },
 			ParseValue:   func(v any) any { return v },
 			ParseLiteral: func(v ast.Value) any { return v },
+		}),
+		longScalar: graphql.NewScalar(graphql.ScalarConfig{
+			Name: "Long",
+			Description: "64-bit integer encoded as a decimal string. " +
+				"OpenAPI integer fields with format=int64/uint64 land here; " +
+				"graphql-go's built-in Int is signed 32-bit and would lose " +
+				"precision (or null out entirely) for values above 2^31.",
+			Serialize: func(v any) any {
+				switch x := v.(type) {
+				case float64:
+					// json.Unmarshal turns numeric responses into float64.
+					// strconv.FormatFloat with -1 precision avoids the "%v"
+					// scientific notation graphql.String falls into.
+					return strconv.FormatInt(int64(x), 10)
+				case int64:
+					return strconv.FormatInt(x, 10)
+				case uint64:
+					return strconv.FormatUint(x, 10)
+				case int:
+					return strconv.Itoa(x)
+				case string:
+					return x
+				case json.Number:
+					return x.String()
+				}
+				return nil
+			},
+			ParseValue: func(v any) any { return v },
+			ParseLiteral: func(v ast.Value) any {
+				switch x := v.(type) {
+				case *ast.StringValue:
+					return x.Value
+				case *ast.IntValue:
+					return x.Value
+				}
+				return nil
+			},
 		}),
 	}
 }
@@ -972,7 +1010,7 @@ func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (gra
 			}
 			return graphql.String, nil
 		case "integer":
-			return graphql.Int, nil
+			return tb.integerType(s), nil
 		case "number":
 			return graphql.Float, nil
 		case "boolean":
@@ -988,6 +1026,22 @@ func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (gra
 		}
 	}
 	return tb.jsonScalar, nil
+}
+
+// integerType picks a GraphQL output for an OpenAPI `integer` schema
+// based on its declared format. graphql-go's `Int` is signed 32-bit,
+// so any int64-shaped value (Unix-ms timestamps, large IDs, ...)
+// silently coerces to nil and trips a NonNull error on the wire.
+// Mirrors gw/types.go's proto-side mapping where Int64Kind also
+// becomes a string-encoded representation. Returns the per-builder
+// `Long` scalar (decimal-formatted on serialize) for int64 / uint64
+// formats; plain integer stays graphql.Int.
+func (tb *openAPITypeBuilder) integerType(s *openapi3.Schema) graphql.Output {
+	switch s.Format {
+	case "int64", "uint64":
+		return tb.longScalar
+	}
+	return graphql.Int
 }
 
 // unionFromVariants projects an OpenAPI oneOf / anyOf into a
@@ -1152,6 +1206,11 @@ func (tb *openAPITypeBuilder) inputTypeFromSchema(ref *openapi3.SchemaRef) (grap
 			}
 			return graphql.String, nil
 		case "integer":
+			// Same int64-overflow concern as the output path; clients
+			// pass large ints through the same Long scalar.
+			if s.Format == "int64" || s.Format == "uint64" {
+				return tb.longScalar, nil
+			}
 			return graphql.Int, nil
 		case "number":
 			return graphql.Float, nil
