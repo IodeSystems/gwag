@@ -144,7 +144,17 @@ func main() {
 	for ti, target := range targets {
 		ti := ti
 		target := target
-		client := &http.Client{Timeout: *timeout}
+		// Default http.Transport sets MaxIdleConnsPerHost=2 — at any
+		// real load, requests beyond that pair burn fresh TCP
+		// connections, pile up in TIME_WAIT, and after a few seconds
+		// surface as "connect: cannot assign requested address" when
+		// the local ephemeral-port range is exhausted. Size the pool
+		// to match concurrency so keep-alive actually works.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.MaxIdleConns = *concurrency * 4
+		tr.MaxIdleConnsPerHost = *concurrency * 4
+		tr.IdleConnTimeout = 90 * time.Second
+		client := &http.Client{Timeout: *timeout, Transport: tr}
 		sem := make(chan struct{}, *concurrency)
 		ticker := time.NewTicker(time.Second / time.Duration(*rps))
 		wg.Add(1)
@@ -178,7 +188,7 @@ func main() {
 		postSnap = collectMetrics(metricsClient, targets)
 	}
 
-	printClientSummary(targets, stats)
+	printClientSummary(targets, stats, elapsed)
 	if *serverSide {
 		printServerSummary(preSnap, postSnap, elapsed)
 	}
@@ -240,43 +250,67 @@ func fireOnce(ctx context.Context, client *http.Client, target string, body []by
 	s.mu.Unlock()
 }
 
-func printClientSummary(targets []string, stats []*targetStats) {
+func printClientSummary(targets []string, stats []*targetStats, elapsed time.Duration) {
 	fmt.Println()
-	fmt.Println("=== client-side ===")
+	fmt.Printf("=== client-side (over %s) ===\n", elapsed.Round(time.Millisecond))
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  TARGET\tRPS\tP50\tP95\tP99\tOK\tERRS\tCODES")
 	for ti, t := range targets {
 		s := stats[ti]
 		count := atomic.LoadUint64(&s.count)
 		errs := s.totalErrs()
-		total := count + errs
-		fmt.Printf("\n%s\n", t)
-		fmt.Printf("  total=%d ok=%d errs=%d errRate=%.2f%%\n", total, count, errs, errPct(total, errs))
-		if len(s.codes) > 0 {
-			fmt.Printf("  http codes: %s\n", formatCodeMap(s.codes))
-		}
-		if errs > 0 {
-			fmt.Println("  by category:")
-			for _, cat := range []errCategory{errDrop, errTransport, errHTTP, errGraphQL} {
-				n := s.errs[cat]
-				if n == 0 {
-					continue
-				}
-				fmt.Printf("    %-9s %d\n", cat, n)
-				for _, msg := range s.samples[cat] {
-					fmt.Printf("      sample: %s\n", msg)
-				}
-			}
-		}
 		s.mu.Lock()
 		ls := append([]time.Duration(nil), s.latencies...)
+		codeSnapshot := copyIntCounts(s.codes)
 		s.mu.Unlock()
+		var p50s, p95s, p99s string
 		if len(ls) == 0 {
-			fmt.Println("  no successful samples (latency unknown)")
+			p50s, p95s, p99s = "-", "-", "-"
+		} else {
+			sort.Slice(ls, func(i, j int) bool { return ls[i] < ls[j] })
+			p50s = fmtSeconds(pct(ls, 0.5))
+			p95s = fmtSeconds(pct(ls, 0.95))
+			p99s = fmtSeconds(pct(ls, 0.99))
+		}
+		rps := float64(count+errs) / elapsed.Seconds()
+		fmt.Fprintf(tw, "  %s\t%.1f\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			t, rps, p50s, p95s, p99s, count, errs, formatCodeMap(codeSnapshot))
+		_ = ti
+	}
+	tw.Flush()
+
+	// Per-category errors with sample messages live below the table —
+	// only the targets that actually saw errors print, so the happy
+	// path stays a single line per target.
+	for ti, t := range targets {
+		s := stats[ti]
+		errs := s.totalErrs()
+		if errs == 0 {
 			continue
 		}
-		sort.Slice(ls, func(i, j int) bool { return ls[i] < ls[j] })
-		fmt.Printf("  latency p50=%s p95=%s p99=%s max=%s\n",
-			pct(ls, 0.5), pct(ls, 0.95), pct(ls, 0.99), ls[len(ls)-1])
+		fmt.Printf("\n  %s — error breakdown:\n", t)
+		for _, cat := range []errCategory{errDrop, errTransport, errHTTP, errGraphQL} {
+			n := s.errs[cat]
+			if n == 0 {
+				continue
+			}
+			fmt.Printf("    %-9s %d\n", cat, n)
+			for _, msg := range s.samples[cat] {
+				fmt.Printf("      sample: %s\n", msg)
+			}
+		}
+		_ = ti
 	}
+}
+
+// copyIntCounts is a defensive copy so the caller can inspect the
+// codes map without keeping the stats lock held while it formats.
+func copyIntCounts(src map[int]uint64) map[int]uint64 {
+	out := make(map[int]uint64, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // printServerSummary diffs the gateway-side dispatch metrics to show
