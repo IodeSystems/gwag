@@ -58,23 +58,50 @@ func RenderOpenAPI(svc *Service) (*openapi3.T, error) {
 		}
 	}
 
-	// Operations.
+	// Operations. Streaming operations (Subscription / client-
+	// streaming proto methods) drop here — OpenAPI has no native
+	// streaming shape and the gateway's existing /api/schema/openapi
+	// path was unary-only. Same-kind shortcut already preserves
+	// these for OpenAPI-origin services (which never have them
+	// anyway).
 	for _, op := range svc.Operations {
+		if op.Kind == OpSubscription || op.StreamingClient {
+			continue
+		}
 		path := op.HTTPPath
 		method := op.HTTPMethod
 		if path == "" {
-			// Synthetic path for proto-origin / unknown: treat the
-			// canonical Service+op like a gRPC-over-HTTP route.
-			ns := svc.ServiceName
-			if ns == "" {
-				ns = svc.Namespace
+			// Synthetic path: proto-origin services use the
+			// gRPC-over-HTTP convention `/<package>.<Service>/<Method>`
+			// when the package can be reconstructed from
+			// Namespace/Version; everything else falls back to
+			// `/<NamespaceOrService>/<op>`.
+			pkg := svc.Namespace
+			if svc.Version != "" {
+				pkg = svc.Namespace + "." + svc.Version
 			}
-			path = fmt.Sprintf("/%s/%s", ns, op.Name)
+			svcName := svc.ServiceName
+			if svcName == "" {
+				svcName = "Service"
+			}
+			if pkg != "" {
+				path = fmt.Sprintf("/%s.%s/%s", pkg, svcName, op.Name)
+			} else {
+				path = fmt.Sprintf("/%s/%s", svcName, op.Name)
+			}
 		}
 		if method == "" {
-			if op.Kind == OpQuery {
+			// Proto-origin operations always render as POST under
+			// the gRPC-over-HTTP convention; the proto OpKind
+			// (Query vs Mutation) doesn't carry transport
+			// semantics. Non-proto cross-kind synthesis honors
+			// OpKind.
+			switch {
+			case op.OriginKind == KindProto:
+				method = "POST"
+			case op.Kind == OpQuery:
 				method = "GET"
-			} else {
+			default:
 				method = "POST"
 			}
 		}
