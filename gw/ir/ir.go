@@ -96,8 +96,16 @@ type Operation struct {
 	Description string
 	Deprecated  string
 
-	Args   []*Arg
-	Output *TypeRef // nil for "void" returns
+	Args []*Arg
+
+	// Output is the return type. Repeated/Required carry the
+	// list/non-null wrapping of the result slot so renderers can
+	// reconstruct e.g. GraphQL's `[User!]!` shape from the same
+	// canonical fields used for Field slots.
+	Output             *TypeRef // nil for "void" returns
+	OutputRepeated     bool
+	OutputRequired     bool
+	OutputItemRequired bool // when Repeated, each element is non-null
 
 	// Proto streaming flags. StreamingServer corresponds to
 	// Kind=OpSubscription; StreamingClient is the rare case that
@@ -122,11 +130,13 @@ type Operation struct {
 // proto renderer reverses this by re-synthesizing a request message
 // from Args when the Origin isn't present.
 type Arg struct {
-	Name        string
-	Type        TypeRef
-	Required    bool
-	Description string
-	Default     any
+	Name         string
+	Type         TypeRef
+	Repeated     bool
+	Required     bool
+	ItemRequired bool // when Repeated, each list element is non-null
+	Description  string
+	Default      any
 
 	// OpenAPILocation reflects the OpenAPI parameter location for
 	// args ingested from openapi (path / query / header / cookie /
@@ -184,14 +194,15 @@ type EnumValue struct {
 // Field is one property on an Object/Input type. The same struct
 // also represents one element of a oneof (with OneofIndex set).
 type Field struct {
-	Name        string
-	JSONName    string // proto json_name override; equal to Name elsewhere
-	Type        TypeRef
-	Repeated    bool
-	Required    bool
-	Description string
-	Deprecated  string
-	Default     any
+	Name         string
+	JSONName     string // proto json_name override; equal to Name elsewhere
+	Type         TypeRef
+	Repeated     bool
+	Required     bool
+	ItemRequired bool // when Repeated, each list element is non-null
+	Description  string
+	Deprecated   string
+	Default      any
 
 	// Proto-specific:
 	ProtoNumber int32 // ≥1 for proto-origin; 0 for synthesized fields
