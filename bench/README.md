@@ -22,31 +22,37 @@ to render when poking around in a browser, build it once:
 cd ui && pnpm install && pnpm run build
 ```
 
-## Boot
+## Entry point: `bin/bench`
+
+One dispatcher for everything:
 
 ```
-bench/up.sh
+bin/bench up [--build]      boot the stack; --build runs bin/build first
+bin/bench restart [--build] down (purging) then up
+bin/bench down [--no-purge] kill + `docker compose down`; wipes .run/ unless --no-purge
+bin/bench status            list running gateways/backends
+bin/bench scale args...     forwards to scale.sh:
+                              add-gateway, add-backend, rm, status
+bin/bench traffic args...   run the traffic generator (builds it on demand)
+bin/bench logs NAME         tail bench/.run/logs/<NAME>.log
 ```
 
-Builds `gateway`, `greeter`, and `traffic` binaries into
-`bench/.run/bin/`, starts one gateway (`n1` on `:18080`) plus one
-greeter backend (`g1` registered through the control plane), then
-brings up Prometheus on `:19090` and Grafana on `:3001`.
+`bin/bench up` builds `gateway`, `greeter`, and `traffic` binaries
+into `bench/.run/bin/`, starts one gateway (`n1` on `:18080`) plus
+one greeter backend (`g1` registered through the control plane),
+then brings up Prometheus on `:19090` and Grafana on `:3001`. URLs
+printed at the end include this box's LAN IP — your other machine
+can hit `http://<lan-ip>:3001` for Grafana.
 
-URLs printed at the end include this box's LAN IP — your other
-machine can hit `http://<lan-ip>:3001` for Grafana.
-
-## Scaling
-
-Everything dynamic goes through `bench/scale.sh`:
+## Scaling at runtime
 
 ```
-bench/scale.sh status                          # what's running
-bench/scale.sh add-gateway                     # next-free n2/n3/...
-bench/scale.sh add-backend greeter --version v2
-bench/scale.sh add-backend greeter --gateway n2
-bench/scale.sh rm n2
-bench/scale.sh rm g3
+bin/bench status
+bin/bench scale add-gateway                    # next-free n2/n3/...
+bin/bench scale add-backend greeter --version v2
+bin/bench scale add-backend greeter --gateway n2
+bin/bench scale rm n2
+bin/bench scale rm g3
 ```
 
 Adding a gateway joins the existing NATS cluster (the new node's
@@ -64,30 +70,31 @@ file-SD picks up the new scrape target within ~10s without a reload.
 ## Traffic
 
 ```
-bench/.run/bin/traffic \
+bin/bench traffic \
   --target http://localhost:18080/api/graphql \
   --target http://localhost:18081/api/graphql \
   --rps 500 --duration 30s --concurrency 32
 ```
 
 - `--rps` is per-target. Two targets at `--rps 500` is 1k/s total.
-- `--concurrency` caps simultaneous in-flight per target. When the
-  ticker would fire while saturated, the request is dropped and
-  counted as an error so it shows up in the summary instead of
-  silently waiting.
-- `--query` overrides the default greeter query. Use it to exercise
-  other shapes (mutations, deeper subselections, multi-version
-  fields, etc.).
+- `--concurrency` caps simultaneous in-flight per target. Saturation
+  drops are counted as errors (`drop` category) so a too-low cap
+  shows up in the summary.
+- `--query` overrides the default greeter query.
 
-The summary prints per-target count / error rate / p50 / p95 / p99 /
-max. Use the Grafana dashboard for the gateway-side view (queue
-depth, dispatch quantiles, backoff rate, etc.).
+Summary blocks: per-target row with RPS / P50 / P95 / P99 / OK /
+ERRS / CODES, plus example response bodies per status code (so a
+4xx body is right there, not buried in Grafana). Gateway-side block
+follows: per-(namespace, version, method) RPS / P50 / P95 / P99 /
+COUNT / CODES from the gateway's own histograms (server view; lower
+bound per bucket means short requests look pessimistic — use the
+client row for sub-millisecond precision).
 
 ## Tear down
 
 ```
-bench/down.sh           # kill processes + docker compose down
-bench/down.sh --purge   # also wipe .run/ (binaries, NATS data, logs)
+bin/bench down              # purges .run/ by default
+bin/bench down --no-purge   # keep .run/ for a faster re-up
 ```
 
 ## Layout

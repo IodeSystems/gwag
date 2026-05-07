@@ -59,12 +59,12 @@ Quick sanity check (one greeter dispatch):
     -d '{"query":"{ greeter { hello(name:\\"world\\") { greeting } } }"}'
 
 Scale + load:
-  bench/scale.sh status
-  bench/scale.sh add-gateway
-  bench/scale.sh add-backend greeter --version v2
-  bench/.run/bin/traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
+  bin/bench status
+  bin/bench scale add-gateway
+  bin/bench scale add-backend greeter --version v2
+  bin/bench traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
 
 Tear down:
-  bench/down.sh           # leaves binaries + nats data
-  bench/down.sh --purge   # also wipes .run/${UI_HINT}
+  bin/bench down              # purges .run/ by default
+  bin/bench down --no-purge   # keep .run/ for a faster re-up${UI_HINT}
 EOF

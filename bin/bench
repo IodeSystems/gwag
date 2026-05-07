@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# bench — single entry point for the local benchmark + demo stack.
+#
+#   bench up [--build]        boot the stack (1 gateway + 1 backend +
+#                              prom + grafana). --build runs bin/build
+#                              first so a stale UI / Go binary doesn't
+#                              creep into the run.
+#   bench restart [--build]   down (purging) then up.
+#   bench down [--no-purge]   kill every tracked process + `docker
+#                              compose down`. Wipes .run/ by default
+#                              (binaries, NATS data, logs); --no-purge
+#                              keeps them so a follow-up `up` is faster.
+#   bench scale args...       forwards to bench/scale.sh:
+#                                add-gateway, add-backend, rm, status
+#   bench status              alias for `bench scale status`
+#   bench traffic args...     run the traffic generator. Builds it on
+#                              demand if the .run/bin/traffic binary
+#                              isn't there yet.
+#   bench logs NAME           tail the per-process log
+#                              (.run/logs/<NAME>.log)
+#
+# State lives under bench/.run/. See bench/README.md for the full
+# layout.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BENCH_DIR="$REPO_DIR/bench"
+RUN_DIR="$BENCH_DIR/.run"
+
+usage() {
+    sed -n '3,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | grep '^# ' | sed 's/^# //'
+    exit "${1:-1}"
+}
+
+cmd_up() {
+    local build=0
+    for a; do
+        case $a in
+            --build) build=1 ;;
+            -h|--help) usage 0 ;;
+            *) echo "unknown arg: $a" >&2; usage ;;
+        esac
+    done
+    if [[ $build == 1 ]]; then
+        "$REPO_DIR/bin/build"
+    fi
+    "$BENCH_DIR/up.sh"
+}
+
+cmd_down() {
+    local purge=1
+    for a; do
+        case $a in
+            --no-purge) purge=0 ;;
+            -h|--help) usage 0 ;;
+            *) echo "unknown arg: $a" >&2; usage ;;
+        esac
+    done
+    if [[ $purge == 1 ]]; then
+        "$BENCH_DIR/down.sh" --purge
+    else
+        "$BENCH_DIR/down.sh"
+    fi
+}
+
+cmd_restart() {
+    "$BENCH_DIR/down.sh" --purge
+    cmd_up "$@"
+}
+
+cmd_traffic() {
+    local bin="$RUN_DIR/bin/traffic"
+    if [[ ! -x $bin ]]; then
+        echo "==> building traffic generator (.run/bin/traffic)"
+        mkdir -p "$RUN_DIR/bin"
+        (cd "$REPO_DIR" && go build -o "$bin" ./bench/cmd/traffic)
+    fi
+    exec "$bin" "$@"
+}
+
+cmd_logs() {
+    local name=${1:-}
+    [[ -n $name ]] || { echo "logs needs NAME (gateway name like n1, or backend like g1)" >&2; exit 1; }
+    local log="$RUN_DIR/logs/$name.log"
+    [[ -e $log ]] || { echo "$log not found; bench up first or check 'bench status'" >&2; exit 1; }
+    exec tail -f "$log"
+}
+
+sub=${1:-}
+shift || true
+case "$sub" in
+    up)       cmd_up "$@" ;;
+    down)     cmd_down "$@" ;;
+    restart)  cmd_restart "$@" ;;
+    scale)    exec "$BENCH_DIR/scale.sh" "$@" ;;
+    status)   exec "$BENCH_DIR/scale.sh" status ;;
+    traffic)  cmd_traffic "$@" ;;
+    logs)     cmd_logs "$@" ;;
+    -h|--help|"") usage 0 ;;
+    *) echo "unknown subcommand: $sub" >&2; usage ;;
+esac
