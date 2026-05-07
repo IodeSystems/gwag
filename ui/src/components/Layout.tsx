@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import {
+  Alert,
   AppBar,
   Badge,
   Box,
+  Button,
   Drawer,
   IconButton,
   List,
@@ -56,6 +58,44 @@ function LayoutInner({ children }: { children: ReactNode }) {
     markRead();
     setEventsOpen(true);
   };
+
+  // Without an admin token the UI runs in "status" mode: the
+  // Dashboard's read-only tiles render fine (admin reads are public),
+  // but the side-nav, events tray, and the deeper pages — where
+  // mutations and HMAC-signed subscriptions only work with auth —
+  // stay out of view. A prominent "Sign in" button + dismissible
+  // banner explain how to upgrade to the full admin UI.
+  if (!token) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+        <AppBar position="fixed">
+          <Toolbar>
+            <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
+              go-api-gateway
+            </Typography>
+            <Button
+              color="inherit"
+              startIcon={<SettingsIcon />}
+              onClick={() => setSettingsOpen(true)}
+              aria-label="sign in"
+            >
+              Sign in
+            </Button>
+          </Toolbar>
+        </AppBar>
+        <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+          <Toolbar />
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Public status view. Sign in with the gateway's admin token
+            (printed at startup, persisted under the gateway's data dir)
+            to unlock services / peers / schema panels and mutations.
+          </Alert>
+          {children}
+        </Box>
+        <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ display: 'flex' }}>

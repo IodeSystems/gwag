@@ -43,6 +43,12 @@ in a browser if you build the UI:
 Then re-run bench/up.sh so the gateway re-embeds the fresh dist.'
 fi
 
+ADMIN_TOKEN_HINT="(missing — gateway log $LOG_DIR/n1.log will have it)"
+ADMIN_TOKEN_FILE="$NATS_DIR/n1/admin-token"
+if [[ -r $ADMIN_TOKEN_FILE ]]; then
+    ADMIN_TOKEN_HINT="$(cat "$ADMIN_TOKEN_FILE")"
+fi
+
 cat <<EOF
 
 bench up.
@@ -52,6 +58,9 @@ bench up.
   Metrics     http://${LAN_IP}:18080/api/metrics
   Prometheus  http://${LAN_IP}:19090
   Grafana     http://${LAN_IP}:3001  (admin / admin)
+  Admin UI    http://${LAN_IP}:18080/  (paste token below in Settings)
+
+  Admin token  ${ADMIN_TOKEN_HINT}
 
 Quick sanity check (one greeter dispatch):
   curl -s -X POST http://${LAN_IP}:18080/api/graphql \\
