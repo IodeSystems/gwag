@@ -619,10 +619,20 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 			Reason: "gateway is in insecure-subscribe mode; HMAC signing is disabled",
 		}, nil
 	}
-	if len(cp.gw.cfg.subAuth.Secret) == 0 {
+	if !cp.gw.cfg.subAuth.hasAnySecret() {
 		return &cpv1.SignSubscriptionTokenResponse{
 			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED,
 			Reason: "subscription secret not configured",
+		}, nil
+	}
+	// The RPC always signs against the legacy default secret (kid="")
+	// for back-compat. Callers that want a kid-bound token should sign
+	// locally with SignSubscribeTokenWithKid using their secret.
+	defaultSecret, ok := cp.gw.cfg.subAuth.lookupSecret("")
+	if !ok {
+		return &cpv1.SignSubscriptionTokenResponse{
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED,
+			Reason: "no default (kid=\"\") secret configured; sign locally with a kid via SignSubscribeTokenWithKid",
 		}, nil
 	}
 
@@ -641,7 +651,7 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 		return &cpv1.SignSubscriptionTokenResponse{Code: code, Reason: reason}, nil
 	}
 
-	mac := computeSubscribeHMAC(cp.gw.cfg.subAuth.Secret, req.GetChannel(), timestamp)
+	mac := computeSubscribeHMAC(defaultSecret, "", req.GetChannel(), timestamp)
 	return &cpv1.SignSubscriptionTokenResponse{
 		Code:          cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK,
 		Hmac:          base64.StdEncoding.EncodeToString(mac),

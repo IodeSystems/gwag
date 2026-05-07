@@ -73,19 +73,31 @@ type config struct {
 }
 
 // SubscriptionAuthOptions configures HMAC verification for incoming
-// graphql-ws subscriptions. The auth args (hmac, timestamp) are
+// graphql-ws subscriptions. The auth args (hmac, timestamp, kid) are
 // auto-injected on every subscription field's SDL; this controls how
 // the gateway verifies them at subscribe time.
 type SubscriptionAuthOptions struct {
 	// Insecure bypasses HMAC verification entirely. Auth args are
 	// accepted (for SDL compatibility) but not checked. Dev/local only.
-	// Mutually exclusive with Secret.
+	// Mutually exclusive with Secret / Secrets.
 	Insecure bool
 
-	// Secret is the shared HMAC key. Required when not Insecure. The
-	// signed payload is "<channel>\n<timestamp_unix>" with
-	// HMAC-SHA256, base64-encoded.
+	// Secret is the legacy single shared HMAC key. Tokens minted with
+	// no kid (or kid=="") verify against this. Signed payload is
+	// "<channel>\n<timestamp_unix>" with HMAC-SHA256, base64-encoded.
+	// Either Secret, Secrets, or both may be set; if both supply the
+	// empty kid, Secret wins.
 	Secret []byte
+
+	// Secrets is the keyed-secret set used for token rotation. Each
+	// entry maps a key id (kid) to its HMAC secret. Subscribers send
+	// their kid alongside hmac/timestamp; the verifier looks it up
+	// here, returning UNKNOWN_KID when absent. Tokens carrying a
+	// non-empty kid sign over "<kid>\n<channel>\n<timestamp_unix>"
+	// so swapping kid can't replay a token across keys. To rotate:
+	// add a new (kid,secret) entry, switch signers to it, drop the
+	// old entry once outstanding tokens have aged out.
+	Secrets map[string][]byte
 
 	// SkewWindow caps acceptable clock drift between the signer and
 	// the gateway. 0 → 5 minutes default.

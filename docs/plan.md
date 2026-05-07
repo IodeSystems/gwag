@@ -30,7 +30,11 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Smallest:* *Token rotation* — contained, well-specified.
+- *Smallest:* *Token rotation RPC follow-up* — extend
+  `SignSubscriptionToken` proto with `kid` in/out so the centralized
+  signer can mint rotated tokens. Gateway-side change is ~30 LOC
+  on top of what already shipped; the proto regen is the only
+  meaningful surface area.
 - *Architecturally interesting:* GraphQL **subscription forwarding**
   (graphql-ws upstream multiplexer); GraphQL **dynamic registration
   over the control plane** (mirrors the OpenAPI pattern shipped
@@ -42,17 +46,15 @@ fresh session.
 
 ### Token rotation (kid in tokens)
 
-Gateway accepts N HMAC secrets keyed by id. Token format becomes
-`base64(kid || hmac)` or carries `kid` as a separate arg. Operator
-adds a new key, old keys remain valid until their lifetime expires.
-
-Implementation notes:
-- New `SubscriptionAuthOptions.Secrets map[string][]byte`.
-- HMAC computation: include kid in the signed payload so swapping kid
-  doesn't allow token replay across keys.
-- Both the verifier (`auth_subscribe.go`) and signer
-  (`SignSubscriptionToken`) need to learn about kid. The
-  `SubscribeAuthCode` enum already has `UNKNOWN_KID`.
+Verifier + standalone signer landed (see Recently Shipped). Open
+follow-up: extend the **`SignSubscriptionToken` RPC** to take an
+optional `kid` field on the request and echo it on the response so
+centrally-signed tokens can target a specific rotated key. Today
+the RPC always signs against the legacy `Secret` (kid="") for
+back-compat — kid-bound tokens are minted locally via
+`SignSubscribeTokenWithKid`. Adding a proto field is additive
+(backward-compatible) and would close the rotation story for
+clients that delegate signing to the gateway.
 
 ### Downstream GraphQL ingestion: subscriptions
 
@@ -352,6 +354,26 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* token rotation (kid in HMAC tokens). Verifier +
+  standalone signer half. `SubscriptionAuthOptions.Secrets
+  map[string][]byte` joins the legacy `Secret []byte`; verifier
+  reads an optional `kid: String` arg from subscribe payloads,
+  resolves it via `lookupSecret(kid)` (legacy `Secret` wins for
+  kid=""; `Secrets[kid]` otherwise), and emits `UNKNOWN_KID` when
+  unmapped. HMAC payload bound to kid: empty kid stays on the
+  legacy `<channel>\n<ts>` payload (back-compat); non-empty kid
+  signs `<kid>\n<channel>\n<ts>` so a token can't be replayed by
+  changing the kid arg on the wire. SDL gains optional `kid: String`
+  on every Subscription field. New public helper
+  `SignSubscribeTokenWithKid(secret, kid, channel, ttl) (hmacB64,
+  kidOut, ts)`; the original `SignSubscribeToken` is preserved as
+  a kid="" wrapper. The `SignSubscriptionToken` RPC continues to
+  sign with the default secret (kid="") for back-compat — extending
+  the RPC proto with `kid` in/out is the documented follow-up.
+  7 new unit tests in `auth_subscribe_test.go`: legacy still
+  verifies, rotated verifies, unknown kid → UNKNOWN_KID, cross-kid
+  replay → SIGNATURE_MISMATCH, legacy + rotated coexist, no-secret
+  → NOT_CONFIGURED, kid wrong type → MALFORMED.
 - `2c1f58d` downstream-GraphQL backpressure. Closes the
   per-source semaphore parity with the proto and OpenAPI paths.
   `graphQLSource` gains `sem chan struct{}` + `queueing
