@@ -219,11 +219,22 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 
 // buildSubscriptionFields walks every non-internal pool, finds
 // server-streaming RPCs (one request → many responses), and returns
-// a graphql.Fields map keyed by "<namespace>_<lowerCamel(method)>".
-// Client-streaming and bidi are NOT promoted; they're filtered with a
-// warning at registration time (see control.go).
+// a graphql.Fields map. Client-streaming and bidi are NOT promoted;
+// they're filtered with a warning at registration time (see
+// control.go).
+//
+// Multi-version: sources are grouped by namespace and sorted by
+// versionN. The latest version's subscription methods use the flat
+// "<ns>_<method>" naming (back-compat with the single-version case).
+// Older versions disambiguate via "<ns>_<vN>_<method>" and stamp
+// GraphQL @deprecated. Same shape as buildOpenAPIFields /
+// buildGraphQLFields — Subscription is flat (graphql-go doesn't
+// support nested namespace objects under Subscription), so we
+// disambiguate by name rather than by structure.
 func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) (graphql.Fields, error) {
 	out := graphql.Fields{}
+
+	byNS := map[string][]*pool{}
 	for _, p := range g.pools {
 		if g.isInternal(p.key.namespace) {
 			continue
@@ -231,24 +242,48 @@ func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) 
 		if !filter.matchPool(p.key) {
 			continue
 		}
-		services := p.file.Services()
-		for i := 0; i < services.Len(); i++ {
-			sd := services.Get(i)
-			methods := sd.Methods()
-			for j := 0; j < methods.Len(); j++ {
-				md := methods.Get(j)
-				if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
-					continue
+		byNS[p.key.namespace] = append(byNS[p.key.namespace], p)
+	}
+
+	nsNames := make([]string, 0, len(byNS))
+	for ns := range byNS {
+		nsNames = append(nsNames, ns)
+	}
+	sort.Strings(nsNames)
+
+	for _, ns := range nsNames {
+		pools := byNS[ns]
+		sort.Slice(pools, func(i, j int) bool { return pools[i].versionN < pools[j].versionN })
+		latest := pools[len(pools)-1]
+		latestReason := fmt.Sprintf("%s is current", latest.key.version)
+
+		for _, p := range pools {
+			isLatest := p.versionN == latest.versionN
+			services := p.file.Services()
+			for i := 0; i < services.Len(); i++ {
+				sd := services.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
+						continue
+					}
+					field, err := g.buildSubscriptionField(tb, p, sd, md)
+					if err != nil {
+						return nil, err
+					}
+					var name string
+					if isLatest {
+						name = ns + "_" + lowerCamel(string(md.Name()))
+					} else {
+						name = ns + "_" + p.key.version + "_" + lowerCamel(string(md.Name()))
+						field.DeprecationReason = latestReason
+					}
+					if _, exists := out[name]; exists {
+						return nil, fmt.Errorf("subscription field name collision: %s", name)
+					}
+					out[name] = field
 				}
-				field, err := g.buildSubscriptionField(tb, p, sd, md)
-				if err != nil {
-					return nil, err
-				}
-				name := p.key.namespace + "_" + lowerCamel(string(md.Name()))
-				if _, exists := out[name]; exists {
-					return nil, fmt.Errorf("subscription field name collision: %s", name)
-				}
-				out[name] = field
 			}
 		}
 	}
