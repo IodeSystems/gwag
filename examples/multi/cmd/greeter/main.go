@@ -15,7 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/iodesystems/go-api-gateway/controlclient"
+	"github.com/iodesystems/go-api-gateway/gw/controlclient"
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
 
