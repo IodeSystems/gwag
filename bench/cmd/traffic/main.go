@@ -68,13 +68,19 @@ type targetStats struct {
 	mu        sync.Mutex
 	latencies []time.Duration
 	samples   map[errCategory][]string // up to sampleErrMessages each
+	// bodyByCode keeps the FIRST observed response body per outcome
+	// label. The labels are HTTP status codes (e.g. "200", "500") with
+	// "200 (graphql errors)" used for 200 responses that carry a
+	// non-empty GraphQL `errors` envelope. Stored truncated.
+	bodyByCode map[string]string
 }
 
 func newTargetStats() *targetStats {
 	return &targetStats{
-		errs:    map[errCategory]uint64{},
-		codes:   map[int]uint64{},
-		samples: map[errCategory][]string{},
+		errs:       map[errCategory]uint64{},
+		codes:      map[int]uint64{},
+		samples:    map[errCategory][]string{},
+		bodyByCode: map[string]string{},
 	}
 }
 
@@ -85,6 +91,18 @@ func (s *targetStats) recordErr(cat errCategory, msg string) {
 	if len(s.samples[cat]) < sampleErrMessages {
 		s.samples[cat] = append(s.samples[cat], msg)
 	}
+}
+
+// recordBody saves the first non-empty body seen for a given outcome
+// label. Callers truncate before passing in; this is just a "first
+// wins" cache so the summary has one example per label.
+func (s *targetStats) recordBody(label, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.bodyByCode[label]; exists {
+		return
+	}
+	s.bodyByCode[label] = body
 }
 
 func (s *targetStats) totalErrs() uint64 {
@@ -223,9 +241,10 @@ func fireOnce(ctx context.Context, client *http.Client, target string, body []by
 	s.mu.Unlock()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	excerpt := truncate(string(respBody), 200)
 	if resp.StatusCode != 200 {
-		excerpt := truncate(string(respBody), 200)
 		s.recordErr(errHTTP, fmt.Sprintf("status=%d body=%s", resp.StatusCode, excerpt))
+		s.recordBody(fmt.Sprintf("%d", resp.StatusCode), excerpt)
 		return
 	}
 	// 200 — but might still carry a GraphQL error envelope. Inspect.
@@ -242,8 +261,10 @@ func fireOnce(ctx context.Context, client *http.Client, target string, body []by
 			code = " code=" + c
 		}
 		s.recordErr(errGraphQL, fmt.Sprintf("%s%s", first.Message, code))
+		s.recordBody("200 (graphql errors)", excerpt)
 		return
 	}
+	s.recordBody("200", excerpt)
 	atomic.AddUint64(&s.count, 1)
 	s.mu.Lock()
 	s.latencies = append(s.latencies, elapsed)
@@ -253,8 +274,22 @@ func fireOnce(ctx context.Context, client *http.Client, target string, body []by
 func printClientSummary(targets []string, stats []*targetStats, elapsed time.Duration) {
 	fmt.Println()
 	fmt.Printf("=== client-side (over %s) ===\n", elapsed.Round(time.Millisecond))
+
+	// Single-target runs print the URL on its own line and drop the
+	// TARGET column from the table — long URLs would wrap and break
+	// the alignment for no information gain. Multi-target runs keep
+	// the column so rows are disambiguated.
+	singleTarget := len(targets) == 1
+	if singleTarget {
+		fmt.Printf("  target: %s\n", targets[0])
+	}
+
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  TARGET\tRPS\tP50\tP95\tP99\tOK\tERRS\tCODES")
+	if singleTarget {
+		fmt.Fprintln(tw, "  RPS\tP50\tP95\tP99\tOK\tERRS\tCODES")
+	} else {
+		fmt.Fprintln(tw, "  TARGET\tRPS\tP50\tP95\tP99\tOK\tERRS\tCODES")
+	}
 	for ti, t := range targets {
 		s := stats[ti]
 		count := atomic.LoadUint64(&s.count)
@@ -273,33 +308,63 @@ func printClientSummary(targets []string, stats []*targetStats, elapsed time.Dur
 			p99s = fmtSeconds(pct(ls, 0.99))
 		}
 		rps := float64(count+errs) / elapsed.Seconds()
-		fmt.Fprintf(tw, "  %s\t%.1f\t%s\t%s\t%s\t%d\t%d\t%s\n",
-			t, rps, p50s, p95s, p99s, count, errs, formatCodeMap(codeSnapshot))
-		_ = ti
+		if singleTarget {
+			fmt.Fprintf(tw, "  %.1f\t%s\t%s\t%s\t%d\t%d\t%s\n",
+				rps, p50s, p95s, p99s, count, errs, formatCodeMap(codeSnapshot))
+		} else {
+			fmt.Fprintf(tw, "  %s\t%.1f\t%s\t%s\t%s\t%d\t%d\t%s\n",
+				t, rps, p50s, p95s, p99s, count, errs, formatCodeMap(codeSnapshot))
+		}
 	}
 	tw.Flush()
 
-	// Per-category errors with sample messages live below the table —
-	// only the targets that actually saw errors print, so the happy
-	// path stays a single line per target.
+	// Per-target detail block — each target gets one example body per
+	// observed response code (200, 200 with graphql errors, 4xx, 5xx)
+	// and an error-category breakdown when ERRS > 0. With one target
+	// the URL header is implicit; with several we still tag each
+	// block so the operator can match it to the table row.
 	for ti, t := range targets {
 		s := stats[ti]
 		errs := s.totalErrs()
-		if errs == 0 {
+		s.mu.Lock()
+		bodies := make(map[string]string, len(s.bodyByCode))
+		for k, v := range s.bodyByCode {
+			bodies[k] = v
+		}
+		s.mu.Unlock()
+
+		if len(bodies) == 0 && errs == 0 {
 			continue
 		}
-		fmt.Printf("\n  %s — error breakdown:\n", t)
-		for _, cat := range []errCategory{errDrop, errTransport, errHTTP, errGraphQL} {
-			n := s.errs[cat]
-			if n == 0 {
-				continue
+		if singleTarget {
+			fmt.Println()
+		} else {
+			fmt.Printf("\n  %s\n", t)
+		}
+		if len(bodies) > 0 {
+			fmt.Println("  example responses:")
+			labels := make([]string, 0, len(bodies))
+			for k := range bodies {
+				labels = append(labels, k)
 			}
-			fmt.Printf("    %-9s %d\n", cat, n)
-			for _, msg := range s.samples[cat] {
-				fmt.Printf("      sample: %s\n", msg)
+			sort.Strings(labels)
+			for _, lab := range labels {
+				fmt.Printf("    [%s] %s\n", lab, bodies[lab])
 			}
 		}
-		_ = ti
+		if errs > 0 {
+			fmt.Println("  error breakdown:")
+			for _, cat := range []errCategory{errDrop, errTransport, errHTTP, errGraphQL} {
+				n := s.errs[cat]
+				if n == 0 {
+					continue
+				}
+				fmt.Printf("    %-9s %d\n", cat, n)
+				for _, msg := range s.samples[cat] {
+					fmt.Printf("      sample: %s\n", msg)
+				}
+			}
+		}
 	}
 }
 
@@ -680,7 +745,11 @@ func errPct(total, errs uint64) float64 {
 }
 
 func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
+	// Collapse runs of whitespace (incl. newlines) so pretty-printed
+	// JSON renders on one line in the table-adjacent samples block.
+	// Errors / 4xx bodies are usually short enough this doesn't matter,
+	// but a 200 GraphQL response body otherwise eats ~10 terminal rows.
+	s = strings.Join(strings.Fields(s), " ")
 	if len(s) <= n {
 		return s
 	}
