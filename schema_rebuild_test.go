@@ -255,6 +255,63 @@ func TestSchemaHandler_ServiceSelectorFiltersSDL(t *testing.T) {
 	}
 }
 
+// TestSchemaRebuild_SubscriptionMultiVersion exercises the
+// proto-pool side of multi-version Subscription field naming. Two
+// pools at v1 + v2 in the same namespace — both with a Greetings
+// server-streaming method — must coexist without colliding. Latest
+// (v2) keeps the flat "<ns>_<method>" name; v1 falls back to
+// "<ns>_<vN>_<method>" with @deprecated stamped on the field.
+//
+// Reproduces the warning seen by bench/scale.sh add-backend greeter
+// --version v2:
+//
+//	reconciler: join pool greeter/v2: subscription field name
+//	collision: greeter_greetings
+func TestSchemaRebuild_SubscriptionMultiVersion(t *testing.T) {
+	gw := newSchemaTestGateway(t)
+	fd := greeterv1.File_greeter_proto
+	hash, err := hashFromFileDescriptor(fd)
+	if err != nil {
+		t.Fatalf("hashFromFileDescriptor: %v", err)
+	}
+	gw.mu.Lock()
+	if err := gw.joinPoolLocked(poolEntry{
+		namespace: "greeter", version: "v1", hash: hash, file: fd,
+		addr: "v1addr", conn: nopGRPCConn{}, owner: "",
+	}); err != nil {
+		gw.mu.Unlock()
+		t.Fatalf("joinPoolLocked v1: %v", err)
+	}
+	if err := gw.joinPoolLocked(poolEntry{
+		namespace: "greeter", version: "v2", hash: hash, file: fd,
+		addr: "v2addr", conn: nopGRPCConn{}, owner: "",
+	}); err != nil {
+		gw.mu.Unlock()
+		t.Fatalf("joinPoolLocked v2: %v", err)
+	}
+	gw.mu.Unlock()
+
+	srv := httptest.NewServer(gw.SchemaHandler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("schema fetch: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	sdl := string(body)
+
+	for _, want := range []string{
+		"greeter_greetings",    // latest (v2) — flat
+		"greeter_v1_greetings", // older — versioned + deprecated
+		`@deprecated(reason: "v2 is current")`,
+	} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
+		}
+	}
+}
+
 func TestSchemaRebuild_AsInternalHidesFromQuery(t *testing.T) {
 	gw := newSchemaTestGateway(t)
 	if err := gw.AddProtoDescriptor(
