@@ -1,35 +1,66 @@
 #!/usr/bin/env bash
 # bench — single entry point for the local benchmark + demo stack.
 #
-#   bench up [--build]        boot the stack (1 gateway + 1 backend +
-#                              prom + grafana). --build runs bin/build
-#                              first so a stale UI / Go binary doesn't
-#                              creep into the run.
-#   bench restart [--build]   down (purging) then up.
-#   bench down [--no-purge]   kill every tracked process + `docker
-#                              compose down`. Wipes .run/ by default
-#                              (binaries, NATS data, logs); --no-purge
-#                              keeps them so a follow-up `up` is faster.
-#   bench scale args...       forwards to bench/scale.sh:
-#                                add-gateway, add-backend, rm, status
-#   bench status              alias for `bench scale status`
-#   bench traffic args...     run the traffic generator. Builds it on
-#                              demand if the .run/bin/traffic binary
-#                              isn't there yet.
-#   bench logs NAME           tail the per-process log
-#                              (.run/logs/<NAME>.log)
+# Lifecycle:
+#   bench up [--build]        boot the stack (gateway n1 + greeter g1
+#                              + prom + grafana). --build runs
+#                              bin/build first so a stale UI / Go
+#                              binary doesn't creep into the run.
+#   bench restart [--build]   stop processes, leave .run/{bin,nats}
+#                              cached, start fresh. --build forces a
+#                              full rebuild via bin/build.
+#   bench down [--no-purge]   kill + `docker compose down`. Wipes
+#                              .run/ by default; --no-purge keeps
+#                              cached binaries + nats data + logs.
+#
+# Cluster (gateway processes — n1, n2, ...):
+#   bench gw                  list live gateways
+#   bench gw add [--name N]   spawn another gateway, joining the
+#                              existing NATS cluster via --nats-peer
+#   bench gw remove NAME      kill + clean up
+#
+# Backends (services that register against a gateway via control
+# plane — g1, g2, ...). "Peer" here = "peer of the gateway", i.e. a
+# downstream service. (Distinct from the gateway's own admin notion
+# of "peer", which means a cluster member — that's `bench gw`.)
+#   bench peer                            list live backends
+#   bench peer add KIND [--version vN] [--gateway GW] [--name N]
+#       KIND: greeter (a managed example process the bench spawns)
+#   bench peer remove NAME
+#
+# External services (the gateway dispatches to a URL you already
+# stand up — bench just owns the registration lifecycle):
+#   bench service add --name NS --baseurl URL --schema FILE_OR_URL
+#                     [--version vN] [--gateway GW]
+#       --schema: OpenAPI spec (auto-detected by JSON/YAML payload),
+#                 or a `graphql:URL` to ingest by introspection.
+#   bench service remove NAME
+#
+# Other:
+#   bench status              same table that `bench gw && bench peer`
+#                              print, in one shot
+#   bench traffic args...     run the traffic generator (builds it on
+#                              demand if .run/bin/traffic missing)
+#   bench logs NAME           tail .run/logs/<NAME>.log
 #
 # State lives under bench/.run/. See bench/README.md for the full
 # layout.
 set -euo pipefail
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BENCH_DIR="$REPO_DIR/bench"
+# shellcheck disable=SC1091
+source "$BENCH_DIR/lib.sh"
 RUN_DIR="$BENCH_DIR/.run"
 
 usage() {
     sed -n '3,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | grep '^# ' | sed 's/^# //'
     exit "${1:-1}"
 }
+
+# -----------------------------------------------------------------
+# Lifecycle
+# -----------------------------------------------------------------
 
 cmd_up() {
     local build=0
@@ -63,12 +94,346 @@ cmd_down() {
 }
 
 cmd_restart() {
-    # Preserve state: only kill processes, leave .run/{bin,nats,…}
-    # in place so the next up reuses cached binaries + JetStream
-    # data dirs. `bench up --build` is the explicit rebuild path.
     "$BENCH_DIR/down.sh"
     cmd_up "$@"
 }
+
+# -----------------------------------------------------------------
+# Gateways (cluster nodes)
+# -----------------------------------------------------------------
+
+# gw_add allocates next-free ports + names, reserves the .env file
+# (so concurrent invocations don't race the index), execs the
+# gateway binary with --nats-peer pointing at every live gateway,
+# waits for the control-plane port to bind, stamps the PID into the
+# .env, and rewrites .run/targets.json so Prometheus's file_sd
+# refresh picks up the new scrape target.
+gw_add() {
+    ensure_dirs
+    local name=""
+    while (($#)); do
+        case $1 in
+            --name) name=$2; shift 2 ;;
+            -h|--help) usage 0 ;;
+            *) echo "unknown arg: $1" >&2; usage ;;
+        esac
+    done
+    local idx; idx=$(next_index "$GW_DIR" "n")
+    if [[ -z $name ]]; then
+        name="n$idx"
+    fi
+    if [[ -e $GW_DIR/$name.env ]]; then
+        echo "gateway $name already registered" >&2
+        return 1
+    fi
+    local http=$((HTTP_BASE + idx - 1))
+    local cp=$((CP_BASE + idx - 1))
+    local nats_listen=$((NATS_LISTEN_BASE + idx - 1))
+    local nats_cluster=$((NATS_CLUSTER_BASE + idx - 1))
+    local data="$NATS_DIR/$name"
+    mkdir -p "$data"
+    local peers; peers=$(nats_peer_args)
+
+    cat > "$GW_DIR/$name.env" <<EOF
+NAME=$name
+HTTP_PORT=$http
+CP_PORT=$cp
+NATS_LISTEN=$nats_listen
+NATS_CLUSTER=$nats_cluster
+DATA=$data
+PID=0
+EOF
+
+    echo "==> launching gateway $name (http=:$http control-plane=:$cp nats=:$nats_listen)"
+    # shellcheck disable=SC2086
+    "$BIN_DIR/gateway" \
+        --node-name "$name" \
+        --http ":$http" --control-plane ":$cp" \
+        --nats-listen ":$nats_listen" --nats-cluster ":$nats_cluster" \
+        --nats-data "$data" \
+        $peers \
+        > "$LOG_DIR/$name.log" 2>&1 &
+    local pid=$!
+    for _ in $(seq 1 50); do
+        nc -z 127.0.0.1 "$cp" 2>/dev/null && break
+        sleep 0.2
+    done
+    sed -i "s/^PID=.*/PID=$pid/" "$GW_DIR/$name.env"
+    write_targets
+    echo "    gateway $name up at http://localhost:$http/api/graphql"
+}
+
+gw_remove() {
+    local name=${1:-}
+    [[ -n $name ]] || { echo "gw remove needs NAME" >&2; usage; }
+    [[ -e $GW_DIR/$name.env ]] || { echo "gateway $name not found" >&2; return 1; }
+    kill_env "$GW_DIR/$name.env"
+    write_targets
+    echo "    gateway $name removed"
+}
+
+gw_list() {
+    print_table "$GW_DIR"
+}
+
+cmd_gw() {
+    local sub=${1:-list}
+    shift || true
+    case "$sub" in
+        ""|list) gw_list ;;
+        add)     gw_add "$@" ;;
+        remove)  gw_remove "$@" ;;
+        -h|--help) usage 0 ;;
+        *) echo "unknown gw sub: $sub" >&2; usage ;;
+    esac
+}
+
+# -----------------------------------------------------------------
+# Peers (registered backend services)
+# -----------------------------------------------------------------
+
+# peer_add spawns a backend (today: greeter) bound to a chosen
+# gateway via --gateway / control-plane port. Self-registration
+# happens inside the backend; the gateway's reconciler then makes
+# the (namespace, version) pool visible to every gateway in the
+# cluster. The .env trail lets `peer remove` find the PID later.
+peer_add() {
+    ensure_dirs
+    local kind=${1:-}
+    [[ -n $kind ]] || { echo "peer add: missing KIND (try: greeter)" >&2; usage; }
+    shift
+    local name="" version="v1" gateway=""
+    while (($#)); do
+        case $1 in
+            --name) name=$2; shift 2 ;;
+            --version) version=$2; shift 2 ;;
+            --gateway) gateway=$2; shift 2 ;;
+            -h|--help) usage 0 ;;
+            *) echo "unknown arg: $1" >&2; usage ;;
+        esac
+    done
+    if [[ $kind != greeter ]]; then
+        echo "unsupported KIND $kind (only 'greeter' for now)" >&2
+        return 1
+    fi
+    local idx; idx=$(next_index "$BE_DIR" "g")
+    if [[ -z $name ]]; then
+        name="g$idx"
+    fi
+    if [[ -e $BE_DIR/$name.env ]]; then
+        echo "peer $name already registered" >&2
+        return 1
+    fi
+    if [[ -z $gateway ]]; then
+        gateway=$(pick_gateway)
+        [[ -n $gateway ]] || { echo "no live gateway to bind against (start one first)" >&2; return 1; }
+    fi
+    local gw_env="$GW_DIR/$gateway.env"
+    [[ -e $gw_env ]] || { echo "gateway $gateway not registered" >&2; return 1; }
+    local cp_port; cp_port=$(load_env "$gw_env"; echo "$CP_PORT")
+    local port=$((BE_BASE + idx - 1))
+
+    cat > "$BE_DIR/$name.env" <<EOF
+NAME=$name
+PORT=$port
+KIND=$kind
+VERSION=$version
+GATEWAY=$gateway
+PID=0
+EOF
+    echo "==> launching peer $name ($kind $version → gateway $gateway)"
+    "$BIN_DIR/$kind" \
+        --addr ":$port" --advertise "localhost:$port" \
+        --gateway "localhost:$cp_port" --version "$version" \
+        > "$LOG_DIR/$name.log" 2>&1 &
+    local pid=$!
+    sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"
+    echo "    peer $name up on :$port"
+}
+
+peer_remove() {
+    local name=${1:-}
+    [[ -n $name ]] || { echo "peer remove needs NAME" >&2; usage; }
+    [[ -e $BE_DIR/$name.env ]] || { echo "peer $name not found" >&2; return 1; }
+    kill_env "$BE_DIR/$name.env"
+    echo "    peer $name removed"
+}
+
+peer_list() {
+    print_table "$BE_DIR"
+}
+
+cmd_peer() {
+    local sub=${1:-list}
+    shift || true
+    case "$sub" in
+        ""|list) peer_list ;;
+        add)     peer_add "$@" ;;
+        remove)  peer_remove "$@" ;;
+        -h|--help) usage 0 ;;
+        *) echo "unknown peer sub: $sub" >&2; usage ;;
+    esac
+}
+
+# -----------------------------------------------------------------
+# Services (external registrations)
+# -----------------------------------------------------------------
+
+# service_add spawns a small registration sidecar (bench/cmd/register)
+# that talks to the chosen gateway's control plane, registers an
+# OpenAPI / GraphQL service bound to --baseurl, and heartbeats
+# until killed. The .env trail records the chosen ports + spawned
+# PID so `service remove` can clean up.
+service_add() {
+    ensure_dirs
+    local name="" baseurl="" schema="" version="v1" gateway=""
+    while (($#)); do
+        case $1 in
+            --name) name=$2; shift 2 ;;
+            --baseurl) baseurl=$2; shift 2 ;;
+            --schema) schema=$2; shift 2 ;;
+            --version) version=$2; shift 2 ;;
+            --gateway) gateway=$2; shift 2 ;;
+            -h|--help) usage 0 ;;
+            *) echo "unknown arg: $1" >&2; usage ;;
+        esac
+    done
+    [[ -n $name ]] || { echo "service add: --name required" >&2; usage; }
+    [[ -n $schema ]] || { echo "service add: --schema required" >&2; usage; }
+    if [[ -e $BE_DIR/$name.env ]]; then
+        echo "service $name already registered" >&2
+        return 1
+    fi
+    if [[ -z $gateway ]]; then
+        gateway=$(pick_gateway)
+        [[ -n $gateway ]] || { echo "no live gateway to bind against (start one first)" >&2; return 1; }
+    fi
+    local gw_env="$GW_DIR/$gateway.env"
+    [[ -e $gw_env ]] || { echo "gateway $gateway not registered" >&2; return 1; }
+    local cp_port; cp_port=$(load_env "$gw_env"; echo "$CP_PORT")
+
+    # Build the register binary on demand (it's small; rebuilds are fast).
+    local bin="$BIN_DIR/register"
+    if [[ ! -x $bin ]]; then
+        echo "==> building register sidecar"
+        (cd "$REPO_DIR" && go build -o "$bin" ./bench/cmd/register)
+    fi
+
+    # Schema flag dispatch: graphql:<URL> means GraphQL ingest;
+    # everything else is treated as an OpenAPI spec (file or URL).
+    local schema_flag=""
+    if [[ $schema == graphql:* ]]; then
+        schema_flag="--graphql ${schema#graphql:}"
+    else
+        schema_flag="--openapi $schema"
+        [[ -n $baseurl ]] || { echo "service add: --baseurl required for OpenAPI services" >&2; return 1; }
+    fi
+
+    cat > "$BE_DIR/$name.env" <<EOF
+NAME=$name
+KIND=service
+VERSION=$version
+GATEWAY=$gateway
+BASEURL=$baseurl
+SCHEMA=$schema
+PID=0
+EOF
+
+    echo "==> registering service $name ($version → gateway $gateway, baseurl=$baseurl)"
+    # shellcheck disable=SC2086
+    "$bin" \
+        --gateway "localhost:$cp_port" \
+        --name "$name" --version "$version" \
+        --baseurl "$baseurl" \
+        $schema_flag \
+        > "$LOG_DIR/$name.log" 2>&1 &
+    local pid=$!
+    sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"
+    echo "    service $name registered"
+}
+
+service_remove() {
+    local name=${1:-}
+    [[ -n $name ]] || { echo "service remove needs NAME" >&2; usage; }
+    [[ -e $BE_DIR/$name.env ]] || { echo "service $name not found" >&2; return 1; }
+    kill_env "$BE_DIR/$name.env"
+    echo "    service $name removed"
+}
+
+cmd_service() {
+    local sub=${1:-}
+    shift || true
+    case "$sub" in
+        ""|list) peer_list ;;  # services share the BE_DIR table
+        add)     service_add "$@" ;;
+        remove)  service_remove "$@" ;;
+        -h|--help) usage 0 ;;
+        *) echo "unknown service sub: $sub" >&2; usage ;;
+    esac
+}
+
+# -----------------------------------------------------------------
+# Helpers — both gw and peer call into these.
+# -----------------------------------------------------------------
+
+# kill_env stops the process tracked by ENV_FILE (PID=N inside it),
+# waits up to 2s for graceful exit, falls back to SIGKILL, then
+# deletes the .env so subsequent commands don't see stale state.
+kill_env() {
+    local f=$1
+    local pid; pid=$(load_env "$f"; echo "$PID")
+    if proc_alive "$pid"; then
+        kill "$pid" 2>/dev/null || true
+        for _ in $(seq 1 10); do proc_alive "$pid" || break; sleep 0.2; done
+        proc_alive "$pid" && kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$f"
+}
+
+# print_table renders one .env per row in DIR — uses fixed-width
+# columns so gw / peer / service rows line up regardless of name or
+# endpoint length. Tolerates missing fields (services don't have
+# PORT; peers don't have BASEURL) by defaulting unset variables to
+# empty before the format string.
+print_table() {
+    local dir=$1
+    printf '%-8s %-12s %-50s %-8s %s\n' NAME KIND ENDPOINT PID UP
+    for f in "$dir"/*.env; do
+        [[ -e $f ]] || continue
+        (
+            load_env "$f"
+            : "${KIND:=}" "${VERSION:=}" "${PORT:=}" "${GATEWAY:=}"
+            : "${BASEURL:=}" "${HTTP_PORT:=}" "${PID:=0}"
+            local kind="" endpoint=""
+            if [[ $dir == "$BE_DIR" ]]; then
+                kind="$KIND/$VERSION"
+                if [[ -n $BASEURL ]]; then
+                    endpoint="$BASEURL → $GATEWAY"
+                else
+                    endpoint="localhost:$PORT → $GATEWAY"
+                fi
+            else
+                kind="gateway"
+                endpoint="http://localhost:$HTTP_PORT/api/graphql"
+            fi
+            local marker="·"
+            proc_alive "$PID" && marker="✓"
+            printf '%-8s %-12s %-50s %-8s %s\n' "$NAME" "$kind" "$endpoint" "$PID" "$marker"
+        )
+    done
+}
+
+cmd_status() {
+    echo "=== gateways ==="
+    gw_list
+    echo
+    echo "=== peers ==="
+    peer_list
+}
+
+# -----------------------------------------------------------------
+# Traffic + logs
+# -----------------------------------------------------------------
 
 cmd_traffic() {
     local bin="$RUN_DIR/bin/traffic"
@@ -82,11 +447,15 @@ cmd_traffic() {
 
 cmd_logs() {
     local name=${1:-}
-    [[ -n $name ]] || { echo "logs needs NAME (gateway name like n1, or backend like g1)" >&2; exit 1; }
-    local log="$RUN_DIR/logs/$name.log"
+    [[ -n $name ]] || { echo "logs needs NAME (e.g. n1, g1)" >&2; exit 1; }
+    local log="$LOG_DIR/$name.log"
     [[ -e $log ]] || { echo "$log not found; bench up first or check 'bench status'" >&2; exit 1; }
     exec tail -f "$log"
 }
+
+# -----------------------------------------------------------------
+# Dispatch
+# -----------------------------------------------------------------
 
 sub=${1:-}
 shift || true
@@ -94,8 +463,10 @@ case "$sub" in
     up)       cmd_up "$@" ;;
     down)     cmd_down "$@" ;;
     restart)  cmd_restart "$@" ;;
-    scale)    exec "$BENCH_DIR/scale.sh" "$@" ;;
-    status)   exec "$BENCH_DIR/scale.sh" status ;;
+    gw)       cmd_gw "$@" ;;
+    peer)     cmd_peer "$@" ;;
+    service)  cmd_service "$@" ;;
+    status)   cmd_status ;;
     traffic)  cmd_traffic "$@" ;;
     logs)     cmd_logs "$@" ;;
     -h|--help|"") usage 0 ;;
