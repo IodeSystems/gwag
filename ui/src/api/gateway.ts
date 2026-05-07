@@ -9,11 +9,25 @@ import type { GraphQLClient } from 'graphql-request';
 // Shape after `pnpm run gen` runs against the gateway's actual SDL.
 // admin_* fields are flat because they're huma-generated OpenAPI
 // operations ingested into GraphQL (vs proto-style nested namespaces).
+//
+// The placeholder return types are tight enough that .map((p, i) =>)
+// callbacks in the route files don't trip noImplicitAny — peers /
+// services are `any[]` rather than `any`. Real codegen-emitted Sdk
+// will replace this with proper field types.
 export type Sdk = {
-  Dashboard: () => Promise<any>;
-  Services: () => Promise<any>;
-  Peers: () => Promise<any>;
-  ForgetPeer: (vars: { nodeId: string }) => Promise<any>;
+  Dashboard: () => Promise<{
+    admin_listPeers?: { peers?: any[] };
+    admin_listServices?: { services?: any[]; environment?: string };
+  }>;
+  Services: () => Promise<{
+    admin_listServices?: { services?: any[]; environment?: string };
+  }>;
+  Peers: () => Promise<{
+    admin_listPeers?: { peers?: any[] };
+  }>;
+  ForgetPeer: (vars: { nodeId: string }) => Promise<{
+    admin_forgetPeer?: { removed?: boolean };
+  }>;
 };
 
 export function getSdk(_client: GraphQLClient): Sdk {
