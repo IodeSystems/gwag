@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -161,7 +162,12 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		// OpenAPI path
 		openAPISpec []byte
 
+		// GraphQL path
+		graphqlEndpoint      string
+		graphqlIntrospection []byte
+
 		isOpenAPI bool
+		isGraphQL bool
 	}
 	prep := make([]prepared, 0, len(req.GetServices()))
 	type nsverKey struct{ ns, ver string }
@@ -169,11 +175,56 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	for _, b := range req.GetServices() {
 		hasProto := len(b.GetFileDescriptorSet()) > 0
 		hasOpenAPI := len(b.GetOpenapiSpec()) > 0
-		if hasProto && hasOpenAPI {
-			return nil, fmt.Errorf("controlplane: ServiceBinding cannot set both file_descriptor_set and openapi_spec")
+		hasGraphQL := b.GetGraphqlEndpoint() != ""
+		setForms := 0
+		if hasProto {
+			setForms++
 		}
-		if !hasProto && !hasOpenAPI {
-			return nil, fmt.Errorf("controlplane: ServiceBinding must set file_descriptor_set OR openapi_spec")
+		if hasOpenAPI {
+			setForms++
+		}
+		if hasGraphQL {
+			setForms++
+		}
+		if setForms > 1 {
+			return nil, fmt.Errorf("controlplane: ServiceBinding may set only one of file_descriptor_set, openapi_spec, graphql_endpoint")
+		}
+		if setForms == 0 {
+			return nil, fmt.Errorf("controlplane: ServiceBinding must set file_descriptor_set, openapi_spec, OR graphql_endpoint")
+		}
+
+		if hasGraphQL {
+			ns := b.GetNamespace()
+			if ns == "" {
+				return nil, fmt.Errorf("controlplane: graphql_endpoint binding requires explicit namespace")
+			}
+			if err := validateNS(ns); err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
+			ver := "v1"
+			k := nsverKey{ns, ver}
+			if used[k] {
+				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
+			}
+			used[k] = true
+			endpoint := b.GetGraphqlEndpoint()
+			httpClient := cp.gw.cfg.openAPIHTTP
+			if httpClient == nil {
+				httpClient = http.DefaultClient
+			}
+			rawIntro, err := fetchIntrospectionBytes(ctx, httpClient, endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("controlplane: introspect %s: %w", endpoint, err)
+			}
+			prep = append(prep, prepared{
+				namespace:            ns,
+				version:              ver,
+				hash:                 hashIntrospection(rawIntro),
+				graphqlEndpoint:      endpoint,
+				graphqlIntrospection: rawIntro,
+				isGraphQL:            true,
+			})
+			continue
 		}
 
 		if hasOpenAPI {
@@ -265,9 +316,13 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				Hash:        p.hash[:],
 				OwnerNodeID: ownerNode,
 			}
-			if p.isOpenAPI {
+			switch {
+			case p.isGraphQL:
+				val.GraphQLEndpoint = p.graphqlEndpoint
+				val.GraphQLIntrospection = p.graphqlIntrospection
+			case p.isOpenAPI:
 				val.OpenAPISpec = p.openAPISpec
-			} else {
+			default:
 				val.FileName = p.fileName
 				val.FileDescriptorSet = p.fdBytes
 			}
@@ -317,7 +372,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 
 	hasProtoBinding := false
 	for _, p := range prep {
-		if !p.isOpenAPI {
+		if !p.isOpenAPI && !p.isGraphQL {
 			hasProtoBinding = true
 			break
 		}
@@ -333,19 +388,34 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	}
 
 	openAPIAdded := []string{}
+	graphQLAdded := []string{}
+	rollback := func() {
+		for _, ns := range openAPIAdded {
+			cp.gw.removeOpenAPISourceLocked(ns)
+		}
+		for _, ns := range graphQLAdded {
+			cp.gw.removeGraphQLSourceLocked(ns)
+		}
+		_, _ = cp.gw.removeReplicasByOwnerLocked(id)
+		if sc != nil {
+			cp.releaseConnLocked(req.GetAddr())
+		}
+	}
 	for _, p := range prep {
+		if p.isGraphQL {
+			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id); err != nil {
+				rollback()
+				return nil, err
+			}
+			graphQLAdded = append(graphQLAdded, p.namespace)
+			continue
+		}
 		if p.isOpenAPI {
 			// Standalone path: replicaID is unused (no KV-driven
 			// removal). Pass "" so addOpenAPISourceLocked treats this
 			// as a boot-time-style replica owned by the registration.
 			if err := cp.gw.addOpenAPISourceLocked(p.namespace, req.GetAddr(), p.openAPISpec, p.hash, id, ""); err != nil {
-				for _, ns := range openAPIAdded {
-					cp.gw.removeOpenAPISourceLocked(ns)
-				}
-				_, _ = cp.gw.removeReplicasByOwnerLocked(id)
-				if sc != nil {
-					cp.releaseConnLocked(req.GetAddr())
-				}
+				rollback()
 				return nil, err
 			}
 			openAPIAdded = append(openAPIAdded, p.namespace)
@@ -361,11 +431,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			owner:     id,
 		})
 		if err != nil {
-			for _, ns := range openAPIAdded {
-				cp.gw.removeOpenAPISourceLocked(ns)
-			}
-			_, _ = cp.gw.removeReplicasByOwnerLocked(id)
-			cp.releaseConnLocked(req.GetAddr())
+			rollback()
 			return nil, err
 		}
 	}
@@ -443,6 +509,7 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	cp.gw.mu.Lock()
 	_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
 	cp.gw.removeOpenAPISourcesByOwnerLocked(reg.id)
+	cp.gw.removeGraphQLSourcesByOwnerLocked(reg.id)
 	cp.gw.mu.Unlock()
 	if reg.conn != nil {
 		cp.releaseConnLocked(reg.addr)

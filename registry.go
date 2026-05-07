@@ -13,9 +13,11 @@ import (
 )
 
 // registryValue is the JSON payload stored in the registry KV bucket
-// under each replica key. Carries either a FileDescriptorSet (proto
-// gRPC service) or an OpenAPISpec (OpenAPI HTTP service). Reconciler
-// disambiguates by which of the two byte slices is non-empty.
+// under each replica key. Carries one of three possible service
+// shapes: a FileDescriptorSet (proto gRPC), an OpenAPISpec (HTTP), or
+// a GraphQLEndpoint + GraphQLIntrospection (downstream GraphQL).
+// Reconciler disambiguates via the IsOpenAPI / IsGraphQL helpers;
+// when neither is set, the entry is treated as proto.
 type registryValue struct {
 	RegID       string `json:"reg_id"`
 	Namespace   string `json:"namespace"`
@@ -30,13 +32,23 @@ type registryValue struct {
 	FileName          string `json:"file_name,omitempty"`
 	FileDescriptorSet []byte `json:"fd_set,omitempty"`
 
-	// OpenAPI path: raw spec bytes (JSON or YAML). Mutually exclusive
-	// with FileDescriptorSet — exactly one is set.
+	// OpenAPI path: raw spec bytes (JSON or YAML).
 	OpenAPISpec []byte `json:"openapi_spec,omitempty"`
+
+	// GraphQL path: the endpoint URL the source forwards dispatches
+	// to, plus the introspection-result JSON the receiving gateway
+	// fetched at Register time. Caching the introspection means
+	// other peers' reconcilers don't have to re-fetch.
+	GraphQLEndpoint      string `json:"graphql_endpoint,omitempty"`
+	GraphQLIntrospection []byte `json:"graphql_introspection,omitempty"`
 }
 
 // IsOpenAPI reports whether this entry represents an OpenAPI source.
 func (v *registryValue) IsOpenAPI() bool { return len(v.OpenAPISpec) > 0 }
+
+// IsGraphQL reports whether this entry represents a downstream
+// GraphQL source.
+func (v *registryValue) IsGraphQL() bool { return v.GraphQLEndpoint != "" }
 
 // replicaKey returns the KV key for a given (namespace, version, replica_id).
 // Format: "pool.<ns>.<ver>.<replica_id>". All three components must be

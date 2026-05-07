@@ -64,6 +64,15 @@ type Service struct {
 	// the parent Options is the HTTP base URL the gateway dispatches
 	// to (e.g. "https://billing.internal").
 	OpenAPISpec []byte
+
+	// GraphQLEndpoint is the URL of an upstream GraphQL service to
+	// ingest under this Namespace. Mutually exclusive with
+	// FileDescriptor and OpenAPISpec. The receiving gateway runs the
+	// canonical introspection query against this endpoint at Register
+	// time and forwards dispatches back to it. ServiceAddr is ignored
+	// for GraphQL bindings — the endpoint URL carries both the
+	// schema source and the dispatch destination.
+	GraphQLEndpoint string
 }
 
 type Options struct {
@@ -172,11 +181,29 @@ func (r *Registration) register(ctx context.Context) error {
 	for _, s := range r.opts.Services {
 		hasProto := s.FileDescriptor != nil
 		hasOpenAPI := len(s.OpenAPISpec) > 0
-		if hasProto && hasOpenAPI {
-			return fmt.Errorf("service %q: cannot set both FileDescriptor and OpenAPISpec", s.Namespace)
+		hasGraphQL := s.GraphQLEndpoint != ""
+		set := 0
+		if hasProto {
+			set++
 		}
-		if !hasProto && !hasOpenAPI {
-			return fmt.Errorf("service %q: must set FileDescriptor or OpenAPISpec", s.Namespace)
+		if hasOpenAPI {
+			set++
+		}
+		if hasGraphQL {
+			set++
+		}
+		if set > 1 {
+			return fmt.Errorf("service %q: may set only one of FileDescriptor, OpenAPISpec, GraphQLEndpoint", s.Namespace)
+		}
+		if set == 0 {
+			return fmt.Errorf("service %q: must set FileDescriptor, OpenAPISpec, or GraphQLEndpoint", s.Namespace)
+		}
+		if hasGraphQL {
+			req.Services = append(req.Services, &cpv1.ServiceBinding{
+				Namespace:       s.Namespace,
+				GraphqlEndpoint: s.GraphQLEndpoint,
+			})
+			continue
 		}
 		if hasOpenAPI {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{

@@ -61,6 +61,19 @@ type introspectionTypeRef struct {
 // remote endpoint and decodes the response. Returns a parsed model
 // suitable for handing to newGraphQLMirror.
 func fetchIntrospection(ctx context.Context, client *http.Client, endpoint string) (*introspectionSchema, error) {
+	raw, err := fetchIntrospectionBytes(ctx, client, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return parseIntrospectionData(raw)
+}
+
+// fetchIntrospectionBytes returns the raw `data` JSON from running
+// the canonical introspection query against `endpoint`. Used by both
+// the parsing path (AddGraphQL local) and the control-plane path
+// (which caches the bytes in the registry KV so other peers don't
+// have to re-fetch).
+func fetchIntrospectionBytes(ctx context.Context, client *http.Client, endpoint string) (json.RawMessage, error) {
 	resp, err := dispatchGraphQL(ctx, client, endpoint, introspectionQuery, nil, nil)
 	if err != nil {
 		return nil, err
@@ -68,7 +81,7 @@ func fetchIntrospection(ctx context.Context, client *http.Client, endpoint strin
 	if len(resp.Errors) > 0 {
 		return nil, fmt.Errorf("introspection errors: %s", resp.Errors)
 	}
-	return parseIntrospectionData(resp.Data)
+	return resp.Data, nil
 }
 
 // parseIntrospectionData turns the JSON `data` field into an

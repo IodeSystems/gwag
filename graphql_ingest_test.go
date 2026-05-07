@@ -494,14 +494,17 @@ func TestGraphQLIngest_BackpressureTimesOutAndRejects(t *testing.T) {
 	}
 }
 
-func TestGraphQLIngest_DuplicateNamespaceRejected(t *testing.T) {
+func TestGraphQLIngest_DuplicateNamespaceIdempotent(t *testing.T) {
+	// Re-registering the same namespace with the same introspection
+	// is a no-op (matches the OpenAPI source path). A different hash
+	// → error is covered by TestDynamicGraphQL_HashMismatchRejected.
 	rf := newRemoteFixture(t)
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
 	t.Cleanup(gw.Close)
 	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
 		t.Fatalf("first AddGraphQL: %v", err)
 	}
-	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err == nil {
-		t.Fatal("expected error on duplicate namespace")
+	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
+		t.Fatalf("second AddGraphQL same hash: %v", err)
 	}
 }

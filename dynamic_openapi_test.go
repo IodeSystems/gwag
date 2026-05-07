@@ -151,7 +151,7 @@ func TestDynamicOpenAPI_BothSpecAndDescriptorRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when both descriptor and spec set")
 	}
-	if !strings.Contains(err.Error(), "cannot set both") {
+	if !strings.Contains(err.Error(), "may set only one of") {
 		t.Fatalf("error: %v", err)
 	}
 }
