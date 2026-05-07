@@ -72,35 +72,34 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if sc.internal {
 		g.internal[ns] = true
 	}
-	return g.addGraphQLSourceLockedDirect(&graphQLSource{
+	if g.graphQLSources == nil {
+		g.graphQLSources = map[string]*graphQLSource{}
+	}
+	if existing, ok := g.graphQLSources[ns]; ok {
+		if existing.hash != hash {
+			return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered with different schema hash", ns)
+		}
+		existing.addReplica(&graphQLReplica{
+			endpoint:   endpoint,
+			httpClient: httpClient,
+		})
+		return nil
+	}
+	src := &graphQLSource{
 		namespace:        ns,
-		endpoint:         endpoint,
 		introspection:    intro,
 		rawIntrospection: rawIntro,
 		hash:             hash,
 		forwardHeaders:   sc.forwardHeaders,
-		httpClient:       httpClient,
-	})
-}
-
-// addGraphQLSourceLockedDirect installs `src` under its namespace.
-// Idempotent under hash equality (matches the OpenAPI source path):
-// re-adding the same ns with the same hash is a no-op; mismatched
-// hash is an error. Caller holds g.mu.
-func (g *Gateway) addGraphQLSourceLockedDirect(src *graphQLSource) error {
-	if g.graphQLSources == nil {
-		g.graphQLSources = map[string]*graphQLSource{}
 	}
-	if existing, ok := g.graphQLSources[src.namespace]; ok {
-		if existing.hash != src.hash {
-			return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered with different schema hash", src.namespace)
-		}
-		return nil
-	}
-	if mi := g.cfg.backpressure.MaxInflight; mi > 0 && src.sem == nil {
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
 	}
-	g.graphQLSources[src.namespace] = src
+	src.addReplica(&graphQLReplica{
+		endpoint:   endpoint,
+		httpClient: httpClient,
+	})
+	g.graphQLSources[ns] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -108,43 +107,93 @@ func (g *Gateway) addGraphQLSourceLockedDirect(src *graphQLSource) error {
 }
 
 // addGraphQLSourceLocked is the control-plane / reconciler entry
-// point. Builds a graphQLSource from raw introspection bytes the
-// receiving gateway already fetched (and cached in the registry KV)
-// and installs it. Idempotent under hash equality.
-func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, hash [32]byte, owner string) error {
+// point. Idempotent under hash equality: a duplicate register with
+// matching introspection bytes appends a new replica to the existing
+// source; mismatched hash rejects. Caller holds g.mu.
+//
+// replicaID may be empty for boot-time / standalone control-plane
+// callers; cluster-driven callers pass the registry KV replica id so
+// reconciler.handleDelete can later remove the matching replica.
+func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, hash [32]byte, owner, replicaID string) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}
 	if endpoint == "" {
 		return fmt.Errorf("graphql: endpoint is required")
 	}
+	if g.graphQLSources == nil {
+		g.graphQLSources = map[string]*graphQLSource{}
+	}
+	httpClient := g.cfg.openAPIHTTP
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	if existing, ok := g.graphQLSources[ns]; ok {
 		if existing.hash != hash {
 			return fmt.Errorf("graphql: namespace %s already registered with different schema hash", ns)
 		}
+		// Idempotent: replay of the same KV value (same replicaID) is
+		// a no-op.
+		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
+			return nil
+		}
+		existing.addReplica(&graphQLReplica{
+			id:         replicaID,
+			endpoint:   endpoint,
+			owner:      owner,
+			httpClient: httpClient,
+		})
 		return nil
 	}
 	intro, err := parseIntrospectionData(rawIntro)
 	if err != nil {
 		return fmt.Errorf("graphql: parse introspection %s: %w", ns, err)
 	}
-	httpClient := g.cfg.openAPIHTTP
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	return g.addGraphQLSourceLockedDirect(&graphQLSource{
+	src := &graphQLSource{
 		namespace:        ns,
-		endpoint:         endpoint,
 		introspection:    intro,
 		rawIntrospection: append([]byte(nil), rawIntro...),
 		hash:             hash,
-		owner:            owner,
-		httpClient:       httpClient,
+	}
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
+		src.sem = make(chan struct{}, mi)
+	}
+	src.addReplica(&graphQLReplica{
+		id:         replicaID,
+		endpoint:   endpoint,
+		owner:      owner,
+		httpClient: httpClient,
 	})
+	g.graphQLSources[ns] = src
+	if g.schema.Load() != nil {
+		return g.assembleLocked()
+	}
+	return nil
 }
 
-// removeGraphQLSourceLocked drops the source for ns entirely.
-// No-op when absent. Caller holds g.mu.
+// removeGraphQLReplicaByIDLocked drops the single replica matching
+// (ns, replicaID). When the source's last replica leaves, the source
+// itself is deleted and the schema rebuilt. Caller holds g.mu.
+func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, replicaID string) {
+	src, ok := g.graphQLSources[ns]
+	if !ok {
+		return
+	}
+	if src.removeReplicaByID(replicaID) == nil {
+		return
+	}
+	if src.replicaCount() == 0 {
+		delete(g.graphQLSources, ns)
+		if g.schema.Load() != nil {
+			_ = g.assembleLocked()
+		}
+	}
+}
+
+// removeGraphQLSourceLocked drops the source for ns entirely (every
+// replica) and rebuilds the schema. No-op when not present. Used by
+// the cluster-side reconciler.handleDelete path when the source's
+// last replica's KV key is deleted.
 func (g *Gateway) removeGraphQLSourceLocked(ns string) {
 	if _, ok := g.graphQLSources[ns]; !ok {
 		return
@@ -155,22 +204,28 @@ func (g *Gateway) removeGraphQLSourceLocked(ns string) {
 	}
 }
 
-// removeGraphQLSourcesByOwnerLocked drops every source whose owner
-// matches. Used by the standalone Deregister path. Returns the count
-// removed. Schema rebuilt once if any source was destroyed.
+// removeGraphQLSourcesByOwnerLocked walks every source removing
+// replicas whose owner matches. Sources whose last replica leaves
+// are deleted. Schema rebuilt once if any source was destroyed.
+// Returns the count of replicas removed.
 func (g *Gateway) removeGraphQLSourcesByOwnerLocked(owner string) int {
 	if owner == "" {
-		return 0 // boot-time sources aren't evictable
+		return 0 // boot-time replicas aren't evictable
 	}
 	removed := 0
+	rebuild := false
 	for ns, s := range g.graphQLSources {
-		if s.owner != owner {
+		n := s.removeReplicasByOwner(owner)
+		if n == 0 {
 			continue
 		}
-		delete(g.graphQLSources, ns)
-		removed++
+		removed += n
+		if s.replicaCount() == 0 {
+			delete(g.graphQLSources, ns)
+			rebuild = true
+		}
 	}
-	if removed > 0 && g.schema.Load() != nil {
+	if rebuild && g.schema.Load() != nil {
 		_ = g.assembleLocked()
 	}
 	return removed
@@ -186,13 +241,13 @@ func hashIntrospection(b []byte) [32]byte {
 
 // graphQLSource is the gateway-internal handle on a registered
 // downstream GraphQL endpoint. Stored on Gateway.graphQLSources keyed
-// by namespace.
+// by namespace. Same hash → identical schema; multiple replicas can
+// share a source (mirror of openAPISource). Dispatch picks the
+// lowest-in-flight replica per call.
 type graphQLSource struct {
 	namespace      string
-	endpoint       string
 	introspection  *introspectionSchema
-	forwardHeaders []string     // nil → defaultForwardedHeaders
-	httpClient     *http.Client // nil → http.DefaultClient
+	forwardHeaders []string // nil → defaultForwardedHeaders
 
 	// rawIntrospection is the JSON the receiving gateway fetched (and,
 	// in cluster mode, cached in the registry KV). Kept for cluster
@@ -203,9 +258,16 @@ type graphQLSource struct {
 	// addGraphQLSourceLocked.
 	hash [32]byte
 
-	// owner is the registration ID for control-plane sources; "" for
-	// boot-time AddGraphQL sources (which aren't evictable by owner).
-	owner string
+	// replicas slice replaced (not mutated in place) on add/remove so
+	// dispatch closures snapshotting it never see partial mutation.
+	// Reads via Load() in pickReplica.
+	replicas atomic.Pointer[[]*graphQLReplica]
+
+	// pickHint round-robins between replicas tied at the same lowest
+	// in-flight count — without it, a low-traffic source where every
+	// dispatch finishes before the next begins would funnel 100% of
+	// traffic to replicas[0]. Atomic-incremented per pickReplica call.
+	pickHint atomic.Uint64
 
 	// sem caps simultaneous concurrent dispatches against this source.
 	// nil when MaxInflight is 0 (unbounded). Buffered channel; send to
@@ -217,6 +279,123 @@ type graphQLSource struct {
 	// queueing tracks waiters on the semaphore for the queue-depth
 	// gauge.
 	queueing atomic.Int32
+}
+
+// graphQLReplica is one upstream behind a graphQLSource. Each Register
+// call against the same (namespace, hash) appends one of these.
+// Dispatch picks the lowest-inflight replica each call.
+type graphQLReplica struct {
+	id         string       // KV-side replica id; "" for boot-time AddGraphQL entries
+	endpoint   string       // upstream GraphQL URL (no trailing slash needed)
+	owner      string       // registration ID; "" for boot-time
+	httpClient *http.Client // nil → http.DefaultClient
+	inflight   atomic.Int32
+}
+
+// pickReplica returns the replica with the lowest in-flight count,
+// breaking ties via round-robin so serial low-traffic dispatch still
+// spreads across replicas. Returns nil when the source is empty
+// (transient state during drain).
+func (s *graphQLSource) pickReplica() *graphQLReplica {
+	rs := s.replicas.Load()
+	if rs == nil || len(*rs) == 0 {
+		return nil
+	}
+	minN := (*rs)[0].inflight.Load()
+	for _, r := range (*rs)[1:] {
+		if n := r.inflight.Load(); n < minN {
+			minN = n
+		}
+	}
+	hint := s.pickHint.Add(1) - 1
+	n := uint64(len(*rs))
+	for i := uint64(0); i < n; i++ {
+		r := (*rs)[(hint+i)%n]
+		if r.inflight.Load() == minN {
+			return r
+		}
+	}
+	return (*rs)[0]
+}
+
+// addReplica appends r. Returns the new replica count.
+func (s *graphQLSource) addReplica(r *graphQLReplica) int {
+	cur := s.replicas.Load()
+	var next []*graphQLReplica
+	if cur != nil {
+		next = make([]*graphQLReplica, 0, len(*cur)+1)
+		next = append(next, *cur...)
+	}
+	next = append(next, r)
+	s.replicas.Store(&next)
+	return len(next)
+}
+
+// removeReplicaByID drops the replica with the given KV id, returning
+// the removed *graphQLReplica or nil if not present.
+func (s *graphQLSource) removeReplicaByID(id string) *graphQLReplica {
+	cur := s.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	next := make([]*graphQLReplica, 0, len(*cur))
+	var removed *graphQLReplica
+	for _, r := range *cur {
+		if removed == nil && r.id == id {
+			removed = r
+			continue
+		}
+		next = append(next, r)
+	}
+	if removed == nil {
+		return nil
+	}
+	s.replicas.Store(&next)
+	return removed
+}
+
+// removeReplicasByOwner returns the count removed.
+func (s *graphQLSource) removeReplicasByOwner(owner string) int {
+	cur := s.replicas.Load()
+	if cur == nil || owner == "" {
+		return 0
+	}
+	next := make([]*graphQLReplica, 0, len(*cur))
+	removed := 0
+	for _, r := range *cur {
+		if r.owner == owner {
+			removed++
+			continue
+		}
+		next = append(next, r)
+	}
+	if removed == 0 {
+		return 0
+	}
+	s.replicas.Store(&next)
+	return removed
+}
+
+// findReplicaByID returns the replica with the given id, or nil.
+func (s *graphQLSource) findReplicaByID(id string) *graphQLReplica {
+	cur := s.replicas.Load()
+	if cur == nil || id == "" {
+		return nil
+	}
+	for _, r := range *cur {
+		if r.id == id {
+			return r
+		}
+	}
+	return nil
+}
+
+func (s *graphQLSource) replicaCount() int {
+	cur := s.replicas.Load()
+	if cur == nil {
+		return 0
+	}
+	return len(*cur)
 }
 
 // graphQLResponse is the wire shape of a remote GraphQL response.

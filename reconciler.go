@@ -134,7 +134,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addGraphQLSourceLocked(ns, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID)
+		err := g.addGraphQLSourceLocked(ns, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID)
 		g.mu.Unlock()
 		if err != nil {
 			g.cfg.cluster.Server.Warnf("reconciler: graphql %s: %v", ns, err)
@@ -193,10 +193,10 @@ func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 		g.mu.Unlock()
 		return
 	}
-	// GraphQL sources are also single-source-per-ns; one delete
-	// drops the whole entry.
+	// GraphQL sources support multi-replica too; drop the matching
+	// replica, source dies when last replica leaves.
 	if _, isGraphQL := g.graphQLSources[ns]; isGraphQL {
-		g.removeGraphQLSourceLocked(ns)
+		g.removeGraphQLReplicaByIDLocked(ns, replicaID)
 		g.mu.Unlock()
 		return
 	}
