@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
-    "schema": "curl -fsSL ${GATEWAY_URL:-http://localhost:18080}/api/schema/graphql -o schema.graphql",
+    "schema": "go run ../examples/multi/cmd/gateway --gen > schema.graphql",
     "codegen": "graphql-codegen --config codegen.ts",
     "gen": "pnpm run schema && pnpm run codegen"
   },
@@ -21,6 +21,7 @@
     "@tanstack/react-router": "^1.62.0",
     "graphql": "^16.9.0",
     "graphql-request": "^7.1.0",
+    "graphql-tag": "^2.12.6",
     "graphql-ws": "^6.0.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -33,7 +34,7 @@
     "@tanstack/router-plugin": "^1.62.0",
     "@types/react": "^18.3.10",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react-swc": "4.3.0",
     "typescript": "^5.6.2",
     "vite": "^5.4.7"
   }

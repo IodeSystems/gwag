@@ -31,6 +31,8 @@ import (
 	"syscall"
 	"time"
 
+	"net/http/httptest"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -88,7 +90,13 @@ func main() {
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
+	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
+
+	if *genMode {
+		emitSchemaSDL()
+		return
+	}
 
 	var mtls *tls.Config
 	if *tlsCert != "" || *tlsKey != "" || *tlsCA != "" {
@@ -249,4 +257,40 @@ func main() {
 
 	srv.GracefulStop()
 	cluster.Close()
+}
+
+// emitSchemaSDL is the --gen entry point. Constructs a fresh gateway
+// in-process (no cluster, no listeners), self-ingests the admin
+// huma-OpenAPI surface — same path the runtime gateway takes — and
+// renders the resulting SDL via the existing SchemaHandler. Output
+// goes to stdout so `pnpm run schema` can redirect it into
+// schema.graphql without standing up a live process.
+//
+// Logs are routed to stderr so stdout stays clean for the SDL bytes
+// the consumer will write to a file. The base URL passed to
+// AddOpenAPIBytes is "http://localhost/api" — purely a placeholder
+// since no dispatch happens in --gen mode, but a valid URL is
+// required by the OpenAPI ingest.
+func emitSchemaSDL() {
+	log.SetOutput(os.Stderr)
+	gw := gateway.New()
+	defer gw.Close()
+	_, adminSpec, err := gw.AdminHumaRouter()
+	if err != nil {
+		log.Fatalf("admin huma router: %v", err)
+	}
+	if err := gw.AddOpenAPIBytes(adminSpec,
+		gateway.As("admin"),
+		gateway.To("http://localhost/api")); err != nil {
+		log.Fatalf("self-ingest admin openapi: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/schema/graphql", nil)
+	gw.SchemaHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		log.Fatalf("schema render: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stdout.Write(rr.Body.Bytes()); err != nil {
+		log.Fatalf("write stdout: %v", err)
+	}
 }

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Single-entry build for the repo. Pipeline:
+#   1. UI deps + GraphQL codegen (uses gateway --gen, no live server)
+#   2. UI Vite build → ui/dist/  (embedded by ui/embed.go)
+#   3. Go build of every package (vet ↔ build is implicit)
+#
+# Idempotent. Skip-flags below let CI / dev re-runs avoid retreading
+# steps that haven't changed:
+#   --no-ui      skip steps 1+2 (when only Go code changed)
+#   --no-go      skip step 3 (when only the UI changed)
+#   --no-codegen skip the schema/codegen part of step 1 (faster
+#                during pure UI iteration once gateway.ts is fresh)
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR"
+
+DO_UI=1
+DO_GO=1
+DO_CODEGEN=1
+for arg; do
+    case $arg in
+        --no-ui) DO_UI=0 ;;
+        --no-go) DO_GO=0 ;;
+        --no-codegen) DO_CODEGEN=0 ;;
+        -h|--help)
+            sed -n '3,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | grep '^# ' | sed 's/^# //'
+            exit 0
+            ;;
+        *) echo "unknown arg: $arg" >&2; exit 1 ;;
+    esac
+done
+
+if [[ $DO_UI == 1 ]]; then
+    echo "==> ui: pnpm install"
+    (cd ui && pnpm install --frozen-lockfile 2>/dev/null || pnpm install)
+    if [[ $DO_CODEGEN == 1 ]]; then
+        echo "==> ui: pnpm run gen (gateway --gen → schema.graphql → codegen)"
+        (cd ui && pnpm run gen)
+    fi
+    echo "==> ui: pnpm run build"
+    (cd ui && pnpm run build)
+fi
+
+if [[ $DO_GO == 1 ]]; then
+    echo "==> go: build ./..."
+    go build ./...
+fi
+
+echo
+echo "build done."
