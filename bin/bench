@@ -19,21 +19,15 @@
 #                              existing NATS cluster via --nats-peer
 #   bench gw remove NAME      kill + clean up
 #
-# Backends (services that register against a gateway via control
-# plane — g1, g2, ...). "Peer" here = "peer of the gateway", i.e. a
-# downstream service. (Distinct from the gateway's own admin notion
-# of "peer", which means a cluster member — that's `bench gw`.)
-#   bench peer                            list live backends
-#   bench peer add KIND [--version vN] [--gateway GW] [--name N]
-#       KIND: greeter (a managed example process the bench spawns)
-#   bench peer remove NAME
-#
-# External services (the gateway dispatches to a URL you already
-# stand up — bench just owns the registration lifecycle):
-#   bench service add --name NS --baseurl URL --schema FILE_OR_URL
+# Services (anything registered against the gateway):
+#   bench service                    list live services
+#   bench service add KIND [--version vN] [--gateway GW] [--name N]
+#       KIND: greeter — managed example backend the bench spawns.
+#   bench service add --name N --baseurl URL --schema FILE_OR_URL
 #                     [--version vN] [--gateway GW]
-#       --schema: OpenAPI spec (auto-detected by JSON/YAML payload),
-#                 or a `graphql:URL` to ingest by introspection.
+#       External service the gateway dispatches to; bench owns the
+#       registration lifecycle. --schema is an OpenAPI spec (file or
+#       http(s) URL), or `graphql:URL` to ingest by introspection.
 #   bench service remove NAME
 #
 # Other:
@@ -189,18 +183,26 @@ cmd_gw() {
 }
 
 # -----------------------------------------------------------------
-# Peers (registered backend services)
+# Services (everything that registers against the gateway)
 # -----------------------------------------------------------------
+#
+# Two add modes share the same noun:
+#
+#   1. Managed example process the bench spawns.
+#      `bench service add greeter [--version vN] [--gateway GW] [--name N]`
+#      The greeter binary self-registers via the control plane and
+#      heartbeats while it's alive.
+#
+#   2. External service the bench just registers + heartbeats for.
+#      `bench service add --name N --baseurl URL --schema FILE_OR_URL`
+#      A small `bench/cmd/register` sidecar holds the registration
+#      open; the gateway dispatches to --baseurl directly.
+#
+# Both produce one .env in .run/backends/ — the table format
+# adapts to whichever fields are populated.
 
-# peer_add spawns a backend (today: greeter) bound to a chosen
-# gateway via --gateway / control-plane port. Self-registration
-# happens inside the backend; the gateway's reconciler then makes
-# the (namespace, version) pool visible to every gateway in the
-# cluster. The .env trail lets `peer remove` find the PID later.
-peer_add() {
-    ensure_dirs
-    local kind=${1:-}
-    [[ -n $kind ]] || { echo "peer add: missing KIND (try: greeter)" >&2; usage; }
+service_add_managed() {
+    local kind=$1
     shift
     local name="" version="v1" gateway=""
     while (($#)); do
@@ -221,16 +223,11 @@ peer_add() {
         name="g$idx"
     fi
     if [[ -e $BE_DIR/$name.env ]]; then
-        echo "peer $name already registered" >&2
+        echo "service $name already registered" >&2
         return 1
     fi
-    if [[ -z $gateway ]]; then
-        gateway=$(pick_gateway)
-        [[ -n $gateway ]] || { echo "no live gateway to bind against (start one first)" >&2; return 1; }
-    fi
-    local gw_env="$GW_DIR/$gateway.env"
-    [[ -e $gw_env ]] || { echo "gateway $gateway not registered" >&2; return 1; }
-    local cp_port; cp_port=$(load_env "$gw_env"; echo "$CP_PORT")
+    gateway=$(resolve_gateway "$gateway") || return 1
+    local cp_port; cp_port=$(load_env "$GW_DIR/$gateway.env"; echo "$CP_PORT")
     local port=$((BE_BASE + idx - 1))
 
     cat > "$BE_DIR/$name.env" <<EOF
@@ -241,51 +238,17 @@ VERSION=$version
 GATEWAY=$gateway
 PID=0
 EOF
-    echo "==> launching peer $name ($kind $version → gateway $gateway)"
+    echo "==> launching service $name ($kind $version → gateway $gateway)"
     "$BIN_DIR/$kind" \
         --addr ":$port" --advertise "localhost:$port" \
         --gateway "localhost:$cp_port" --version "$version" \
         > "$LOG_DIR/$name.log" 2>&1 &
     local pid=$!
     sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"
-    echo "    peer $name up on :$port"
+    echo "    service $name up on :$port"
 }
 
-peer_remove() {
-    local name=${1:-}
-    [[ -n $name ]] || { echo "peer remove needs NAME" >&2; usage; }
-    [[ -e $BE_DIR/$name.env ]] || { echo "peer $name not found" >&2; return 1; }
-    kill_env "$BE_DIR/$name.env"
-    echo "    peer $name removed"
-}
-
-peer_list() {
-    print_table "$BE_DIR"
-}
-
-cmd_peer() {
-    local sub=${1:-list}
-    shift || true
-    case "$sub" in
-        ""|list) peer_list ;;
-        add)     peer_add "$@" ;;
-        remove)  peer_remove "$@" ;;
-        -h|--help) usage 0 ;;
-        *) echo "unknown peer sub: $sub" >&2; usage ;;
-    esac
-}
-
-# -----------------------------------------------------------------
-# Services (external registrations)
-# -----------------------------------------------------------------
-
-# service_add spawns a small registration sidecar (bench/cmd/register)
-# that talks to the chosen gateway's control plane, registers an
-# OpenAPI / GraphQL service bound to --baseurl, and heartbeats
-# until killed. The .env trail records the chosen ports + spawned
-# PID so `service remove` can clean up.
-service_add() {
-    ensure_dirs
+service_add_external() {
     local name="" baseurl="" schema="" version="v1" gateway=""
     while (($#)); do
         case $1 in
@@ -304,22 +267,16 @@ service_add() {
         echo "service $name already registered" >&2
         return 1
     fi
-    if [[ -z $gateway ]]; then
-        gateway=$(pick_gateway)
-        [[ -n $gateway ]] || { echo "no live gateway to bind against (start one first)" >&2; return 1; }
-    fi
-    local gw_env="$GW_DIR/$gateway.env"
-    [[ -e $gw_env ]] || { echo "gateway $gateway not registered" >&2; return 1; }
-    local cp_port; cp_port=$(load_env "$gw_env"; echo "$CP_PORT")
+    gateway=$(resolve_gateway "$gateway") || return 1
+    local cp_port; cp_port=$(load_env "$GW_DIR/$gateway.env"; echo "$CP_PORT")
 
-    # Build the register binary on demand (it's small; rebuilds are fast).
     local bin="$BIN_DIR/register"
     if [[ ! -x $bin ]]; then
         echo "==> building register sidecar"
         (cd "$REPO_DIR" && go build -o "$bin" ./bench/cmd/register)
     fi
 
-    # Schema flag dispatch: graphql:<URL> means GraphQL ingest;
+    # Schema flag dispatch: `graphql:URL` means GraphQL ingest;
     # everything else is treated as an OpenAPI spec (file or URL).
     local schema_flag=""
     if [[ $schema == graphql:* ]]; then
@@ -331,14 +288,13 @@ service_add() {
 
     cat > "$BE_DIR/$name.env" <<EOF
 NAME=$name
-KIND=service
+KIND=external
 VERSION=$version
 GATEWAY=$gateway
 BASEURL=$baseurl
 SCHEMA=$schema
 PID=0
 EOF
-
     echo "==> registering service $name ($version → gateway $gateway, baseurl=$baseurl)"
     # shellcheck disable=SC2086
     "$bin" \
@@ -352,6 +308,43 @@ EOF
     echo "    service $name registered"
 }
 
+# resolve_gateway picks a gateway name: explicit arg if supplied,
+# otherwise the first live one. Echoes the name on success; emits
+# an error and returns non-zero when nothing's live.
+resolve_gateway() {
+    local explicit=${1:-}
+    if [[ -n $explicit ]]; then
+        if [[ ! -e $GW_DIR/$explicit.env ]]; then
+            echo "gateway $explicit not registered" >&2
+            return 1
+        fi
+        echo "$explicit"
+        return 0
+    fi
+    local picked; picked=$(pick_gateway)
+    if [[ -z $picked ]]; then
+        echo "no live gateway to bind against (try 'bench gw add' first)" >&2
+        return 1
+    fi
+    echo "$picked"
+}
+
+service_add() {
+    ensure_dirs
+    local first=${1:-}
+    if [[ -z $first ]]; then
+        echo "service add: missing KIND (e.g. 'greeter') or --name + --baseurl + --schema" >&2
+        usage
+    fi
+    if [[ $first == --* ]]; then
+        # External-service flag form.
+        service_add_external "$@"
+    else
+        # Managed-kind positional form.
+        service_add_managed "$@"
+    fi
+}
+
 service_remove() {
     local name=${1:-}
     [[ -n $name ]] || { echo "service remove needs NAME" >&2; usage; }
@@ -360,11 +353,15 @@ service_remove() {
     echo "    service $name removed"
 }
 
+service_list() {
+    print_table "$BE_DIR"
+}
+
 cmd_service() {
-    local sub=${1:-}
+    local sub=${1:-list}
     shift || true
     case "$sub" in
-        ""|list) peer_list ;;  # services share the BE_DIR table
+        ""|list) service_list ;;
         add)     service_add "$@" ;;
         remove)  service_remove "$@" ;;
         -h|--help) usage 0 ;;
@@ -427,8 +424,8 @@ cmd_status() {
     echo "=== gateways ==="
     gw_list
     echo
-    echo "=== peers ==="
-    peer_list
+    echo "=== services ==="
+    service_list
 }
 
 # -----------------------------------------------------------------
@@ -464,7 +461,6 @@ case "$sub" in
     down)     cmd_down "$@" ;;
     restart)  cmd_restart "$@" ;;
     gw)       cmd_gw "$@" ;;
-    peer)     cmd_peer "$@" ;;
     service)  cmd_service "$@" ;;
     status)   cmd_status ;;
     traffic)  cmd_traffic "$@" ;;
