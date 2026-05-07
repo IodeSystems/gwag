@@ -32,6 +32,17 @@ echo "==> starting prometheus + grafana (docker compose)"
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [[ -z $LAN_IP ]] && LAN_IP=localhost
 
+UI_HINT=""
+if [[ ! -d "$REPO_DIR/ui/dist/assets" || -z "$(ls -A "$REPO_DIR/ui/dist/assets" 2>/dev/null)" ]]; then
+    UI_HINT='
+NOTE: the gateway binary embeds whatever was last in ui/dist/. The
+committed placeholder is enough for /api/* and traffic gen, but the
+admin SPA (services / peers / schema / events panels) only renders
+in a browser if you build the UI:
+  cd ui && pnpm install && pnpm run build
+Then re-run bench/up.sh so the gateway re-embeds the fresh dist.'
+fi
+
 cat <<EOF
 
 bench up.
@@ -55,5 +66,5 @@ Scale + load:
 
 Tear down:
   bench/down.sh           # leaves binaries + nats data
-  bench/down.sh --purge   # also wipes .run/
+  bench/down.sh --purge   # also wipes .run/${UI_HINT}
 EOF
