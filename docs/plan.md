@@ -340,7 +340,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* downstream-GraphQL dynamic registration over the
+- `2afa1d5` downstream-GraphQL dynamic registration over the
   control plane. Mirrors `784430a` for OpenAPI:
   `ServiceBinding.graphql_endpoint` (proto field 6) joins
   `file_descriptor_set` and `openapi_spec` as a third mutually-
