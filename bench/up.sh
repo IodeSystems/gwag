@@ -11,6 +11,15 @@ source "$SCRIPT_DIR/lib.sh"
 echo "==> building binaries"
 build_binaries
 
+# Refuse to start on top of leftover state — would silently allocate
+# n2/n3 etc. and produce a confusing tree. The user almost always
+# wants down.sh first.
+existing=$(find "$GW_DIR" "$BE_DIR" -name '*.env' 2>/dev/null | head -n 1)
+if [[ -n $existing ]]; then
+    echo "leftover state in $RUN_DIR/{gateways,backends}; bench/down.sh --purge first" >&2
+    exit 1
+fi
+
 echo "==> starting gateway n1"
 "$SCRIPT_DIR/scale.sh" add-gateway
 
@@ -33,10 +42,18 @@ bench up.
   Prometheus  http://${LAN_IP}:19090
   Grafana     http://${LAN_IP}:3001  (admin / admin)
 
-Try:
+Quick sanity check (one greeter dispatch):
+  curl -s -X POST http://${LAN_IP}:18080/api/graphql \\
+    -H 'Content-Type: application/json' \\
+    -d '{"query":"{ greeter { hello(name:\\"world\\") { greeting } } }"}'
+
+Scale + load:
   bench/scale.sh status
   bench/scale.sh add-gateway
   bench/scale.sh add-backend greeter --version v2
   bench/.run/bin/traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
-  bench/down.sh
+
+Tear down:
+  bench/down.sh           # leaves binaries + nats data
+  bench/down.sh --purge   # also wipes .run/
 EOF
