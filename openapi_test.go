@@ -693,3 +693,215 @@ func getSDL(t *testing.T, gw *Gateway) string {
 	}
 	return rr.Body.String()
 }
+
+// petstoreOneOfSpec is an OpenAPI spec whose /pets/{id} response is a
+// oneOf Cat | Dog with a "kind" discriminator. Exercises the
+// happy-path Union projection for Phase 2.
+const petstoreOneOfSpec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "petstore", "version": "1.0.0"},
+  "paths": {
+    "/pets/{id}": {
+      "get": {
+        "operationId": "getPet",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Pet"}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Pet": {
+        "oneOf": [
+          {"$ref": "#/components/schemas/Cat"},
+          {"$ref": "#/components/schemas/Dog"}
+        ],
+        "discriminator": {"propertyName": "kind"}
+      },
+      "Cat": {
+        "type": "object",
+        "required": ["kind", "claws"],
+        "properties": {
+          "kind": {"type": "string"},
+          "name": {"type": "string"},
+          "claws": {"type": "integer"}
+        }
+      },
+      "Dog": {
+        "type": "object",
+        "required": ["kind", "barksPerMinute"],
+        "properties": {
+          "kind": {"type": "string"},
+          "name": {"type": "string"},
+          "barksPerMinute": {"type": "integer"}
+        }
+      }
+    }
+  }
+}`
+
+// TestOpenAPIE2E_OneOfDiscriminatedUnion covers the Phase 2 happy
+// path: oneOf with explicit discriminator.propertyName, every variant
+// resolves to a $ref'd Object. SDL surfaces "union test_Pet =
+// test_Cat | test_Dog"; the resolver picks the variant from the
+// "kind" property and Cat-specific fields are populated.
+func TestOpenAPIE2E_OneOfDiscriminatedUnion(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Cat","name":"whiskers","claws":9}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(petstoreOneOfSpec), To(backend.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	sdl := getSDL(t, gw)
+	for _, want := range []string{
+		"union test_Pet",
+		"test_Cat",
+		"test_Dog",
+	} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
+		}
+	}
+
+	h := gw.Handler()
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ test_getPet(id:\"x\") { __typename ... on test_Cat { name claws } ... on test_Dog { name barksPerMinute } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	var out struct {
+		Data struct {
+			GetPet map[string]any `json:"test_getPet"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v: %s", err, rr.Body.String())
+	}
+	if len(out.Errors) > 0 {
+		t.Fatalf("graphql errors: %v\nbody=%s", out.Errors, rr.Body.String())
+	}
+	if got := out.Data.GetPet["__typename"]; got != "test_Cat" {
+		t.Errorf("__typename=%v want test_Cat", got)
+	}
+	if got := out.Data.GetPet["claws"]; got == nil {
+		t.Errorf("Cat-specific claws missing; body=%s", rr.Body.String())
+	}
+}
+
+// TestOpenAPIE2E_OneOfNoDiscriminatorHeuristic — same shape but with
+// no discriminator. The resolver falls back to the
+// "all-required-properties-present" heuristic; Cat's required is
+// ["claws"], Dog's is ["barksPerMinute"], so the value
+// {"claws": 9, ...} resolves to Cat.
+func TestOpenAPIE2E_OneOfNoDiscriminatorHeuristic(t *testing.T) {
+	spec := `{
+  "openapi": "3.0.0",
+  "info": {"title": "petstore", "version": "1.0.0"},
+  "paths": {
+    "/pets/{id}": {
+      "get": {
+        "operationId": "getPet",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Pet"}}}
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Pet": {"oneOf": [{"$ref": "#/components/schemas/Cat"}, {"$ref": "#/components/schemas/Dog"}]},
+      "Cat": {"type": "object", "required": ["claws"], "properties": {"name": {"type":"string"}, "claws": {"type":"integer"}}},
+      "Dog": {"type": "object", "required": ["barksPerMinute"], "properties": {"name": {"type":"string"}, "barksPerMinute": {"type":"integer"}}}
+    }
+  }
+}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"whiskers","claws":9}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(spec), To(backend.URL), As("h")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	h := gw.Handler()
+	req := httptest.NewRequest(http.MethodPost, "/graphql",
+		strings.NewReader(`{"query":"{ h_getPet(id:\"x\") { __typename ... on h_Cat { claws } ... on h_Dog { barksPerMinute } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var hOut struct {
+		Data struct {
+			GetPet map[string]any `json:"h_getPet"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &hOut); err != nil {
+		t.Fatalf("decode: %v: %s", err, rr.Body.String())
+	}
+	if got := hOut.Data.GetPet["__typename"]; got != "h_Cat" {
+		t.Errorf("expected heuristic to pick h_Cat; got=%v body=%s", got, rr.Body.String())
+	}
+}
+
+// TestOpenAPIE2E_OneOfUnresolvableFallsBackToJSON — when a variant
+// isn't a clean object (here: a primitive string), the union project
+// bails to JSON scalar, same shape as the v1 fallback.
+func TestOpenAPIE2E_OneOfUnresolvableFallsBackToJSON(t *testing.T) {
+	spec := `{
+  "openapi": "3.0.0",
+  "info": {"title": "x", "version": "1.0.0"},
+  "paths": {
+    "/things": {
+      "get": {
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"oneOf": [{"$ref": "#/components/schemas/Item"}, {"type": "string"}]}}}
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Item": {"type": "object", "properties": {"id": {"type": "string"}}}
+    }
+  }
+}`
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(spec), To("http://localhost:0"), As("x")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	sdl := getSDL(t, gw)
+	if strings.Contains(sdl, "union x_") {
+		t.Errorf("expected JSON-scalar fallback (no union) when a variant isn't an object; SDL=%s", sdl)
+	}
+	if !strings.Contains(sdl, "JSON") {
+		t.Errorf("SDL must reference the JSON scalar fallback type; SDL=%s", sdl)
+	}
+}
