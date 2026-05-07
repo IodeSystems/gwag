@@ -98,6 +98,16 @@ message ServiceBinding {
   // RegisterRequest.addr is the HTTP base URL the gateway dispatches
   // to (e.g. "https://billing.internal" or "http://localhost:8080").
   bytes openapi_spec = 5;
+
+  // Endpoint URL of an upstream GraphQL service to ingest under this
+  // namespace. Mutually exclusive with `file_descriptor_set` and
+  // `openapi_spec`. The receiving gateway runs the canonical
+  // introspection query against this endpoint at Register time,
+  // mirrors every type with a `<namespace>_` prefix, and forwards
+  // dispatches back to the same endpoint. RegisterRequest.addr is
+  // ignored for GraphQL bindings — the endpoint URL carries the
+  // dispatch destination too.
+  string graphql_endpoint = 6;
 }
 
 message RegisterResponse {

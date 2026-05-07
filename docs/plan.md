@@ -30,16 +30,14 @@ by current leverage; the top items are realistic next picks for a
 fresh session.
 
 **Suggested pickups:**
-- *Architecturally interesting:* GraphQL **dynamic registration over
-  the control plane** (mirrors the OpenAPI pattern shipped in
-  `784430a`). All boot-time `AddGraphQL` glue now has dispatch metric
-  + classification + backpressure parity, so dynamic registration is
-  the natural next leverage point — adds `bytes graphql_introspection`
-  (or `string graphql_endpoint`) to `ServiceBinding`, plumbs through
-  reconciler.handlePut, plus `controlclient.Service.GraphQLEndpoint`.
-- *Architecturally interesting #2:* GraphQL **subscription forwarding**
+- *Architecturally interesting:* GraphQL **subscription forwarding**
   (graphql-ws upstream multiplexer). Closes the AddGraphQL story so
   remote Subscription roots aren't skipped at registration time.
+- *Operational:* GraphQL ingest **multi-replica** (matching what
+  OpenAPI has via `dfae181`). Today downstream-GraphQL is single-
+  replica per namespace; collisions error. Adding a replicas slice
+  + least-in-flight pickReplica would let multiple endpoints share
+  a namespace.
 
 ### Token rotation (kid in tokens)
 
@@ -64,13 +62,8 @@ The boot-time mirror handles queries + mutations (see commit
 
 ### Downstream GraphQL ingestion: dynamic registration
 
-`AddGraphQL` is boot-time only today. Mirror the dynamic OpenAPI
-path (`784430a`):
-- Add `bytes graphql_introspection = N` (or `string graphql_endpoint = N`
-  + on-server fetch) on `ServiceBinding`.
-- Reconciler.handlePut detects the GraphQL form and fetches /
-  parses introspection, then calls into the same mirror.
-- `controlclient.Service` gains a `GraphQLEndpoint string` field.
+Done — see Recently Shipped. Future work: GraphQL ingest
+multi-replica + load balancing (see suggested pickups).
 
 ### Downstream GraphQL ingestion: Interface / Union typed mirror
 
@@ -347,6 +340,27 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- *(uncommitted)* downstream-GraphQL dynamic registration over the
+  control plane. Mirrors `784430a` for OpenAPI:
+  `ServiceBinding.graphql_endpoint` (proto field 6) joins
+  `file_descriptor_set` and `openapi_spec` as a third mutually-
+  exclusive form. Receiving gateway runs the canonical introspection
+  query at Register time, hashes the bytes, and writes both the
+  endpoint and the introspection JSON into the registry KV value
+  (`registryValue.GraphQLEndpoint` + `GraphQLIntrospection`); other
+  peers' reconcilers parse from the cached bytes — no re-fetch.
+  `addGraphQLSourceLocked` is idempotent under hash equality (mirror
+  of `addOpenAPISourceLocked`). `removeGraphQLSourceLocked` /
+  `removeGraphQLSourcesByOwnerLocked` cover Deregister and reconciler
+  delete. `controlclient.Service` gains `GraphQLEndpoint string`,
+  mutually exclusive with `FileDescriptor` / `OpenAPISpec` (validated
+  client-side too). 5 new tests in `dynamic_graphql_test.go`:
+  standalone register → query → deregister; hash mismatch on second
+  register; three-form set rejection; namespace-required (no fallback
+  for GraphQL); cluster cross-gateway dispatch (register on A,
+  dispatch from B). Existing `TestGraphQLIngest_DuplicateNamespaceRejected`
+  renamed to `_Idempotent` to match the new behavior (same-hash
+  re-register is a no-op).
 - `45c0cd4` `SignSubscriptionToken` RPC kid in/out. Closes
   the rotation story for centrally-signed tokens (the open
   follow-up after `325aaf4`). `SignSubscriptionTokenRequest` gains

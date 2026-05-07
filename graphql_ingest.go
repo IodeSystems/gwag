@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,9 +50,13 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		httpClient = http.DefaultClient
 	}
 
-	intro, err := fetchIntrospection(context.Background(), httpClient, endpoint)
+	rawIntro, err := fetchIntrospectionBytes(context.Background(), httpClient, endpoint)
 	if err != nil {
 		return fmt.Errorf("gateway: AddGraphQL(%s): introspect: %w", endpoint, err)
+	}
+	intro, err := parseIntrospectionData(rawIntro)
+	if err != nil {
+		return fmt.Errorf("gateway: AddGraphQL(%s): parse introspection: %w", endpoint, err)
 	}
 	ns := sc.namespace
 	if ns == "" {
@@ -60,33 +65,123 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
+	hash := hashIntrospection(rawIntro)
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {
 		g.internal[ns] = true
 	}
+	return g.addGraphQLSourceLockedDirect(&graphQLSource{
+		namespace:        ns,
+		endpoint:         endpoint,
+		introspection:    intro,
+		rawIntrospection: rawIntro,
+		hash:             hash,
+		forwardHeaders:   sc.forwardHeaders,
+		httpClient:       httpClient,
+	})
+}
+
+// addGraphQLSourceLockedDirect installs `src` under its namespace.
+// Idempotent under hash equality (matches the OpenAPI source path):
+// re-adding the same ns with the same hash is a no-op; mismatched
+// hash is an error. Caller holds g.mu.
+func (g *Gateway) addGraphQLSourceLockedDirect(src *graphQLSource) error {
 	if g.graphQLSources == nil {
 		g.graphQLSources = map[string]*graphQLSource{}
 	}
-	if _, exists := g.graphQLSources[ns]; exists {
-		return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered", ns)
+	if existing, ok := g.graphQLSources[src.namespace]; ok {
+		if existing.hash != src.hash {
+			return fmt.Errorf("gateway: AddGraphQL: namespace %s already registered with different schema hash", src.namespace)
+		}
+		return nil
 	}
-	src := &graphQLSource{
-		namespace:      ns,
-		endpoint:       endpoint,
-		introspection:  intro,
-		forwardHeaders: sc.forwardHeaders,
-		httpClient:     httpClient,
-	}
-	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
+	if mi := g.cfg.backpressure.MaxInflight; mi > 0 && src.sem == nil {
 		src.sem = make(chan struct{}, mi)
 	}
-	g.graphQLSources[ns] = src
+	g.graphQLSources[src.namespace] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
 	return nil
+}
+
+// addGraphQLSourceLocked is the control-plane / reconciler entry
+// point. Builds a graphQLSource from raw introspection bytes the
+// receiving gateway already fetched (and cached in the registry KV)
+// and installs it. Idempotent under hash equality.
+func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, hash [32]byte, owner string) error {
+	if err := validateNS(ns); err != nil {
+		return fmt.Errorf("graphql: %w", err)
+	}
+	if endpoint == "" {
+		return fmt.Errorf("graphql: endpoint is required")
+	}
+	if existing, ok := g.graphQLSources[ns]; ok {
+		if existing.hash != hash {
+			return fmt.Errorf("graphql: namespace %s already registered with different schema hash", ns)
+		}
+		return nil
+	}
+	intro, err := parseIntrospectionData(rawIntro)
+	if err != nil {
+		return fmt.Errorf("graphql: parse introspection %s: %w", ns, err)
+	}
+	httpClient := g.cfg.openAPIHTTP
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return g.addGraphQLSourceLockedDirect(&graphQLSource{
+		namespace:        ns,
+		endpoint:         endpoint,
+		introspection:    intro,
+		rawIntrospection: append([]byte(nil), rawIntro...),
+		hash:             hash,
+		owner:            owner,
+		httpClient:       httpClient,
+	})
+}
+
+// removeGraphQLSourceLocked drops the source for ns entirely.
+// No-op when absent. Caller holds g.mu.
+func (g *Gateway) removeGraphQLSourceLocked(ns string) {
+	if _, ok := g.graphQLSources[ns]; !ok {
+		return
+	}
+	delete(g.graphQLSources, ns)
+	if g.schema.Load() != nil {
+		_ = g.assembleLocked()
+	}
+}
+
+// removeGraphQLSourcesByOwnerLocked drops every source whose owner
+// matches. Used by the standalone Deregister path. Returns the count
+// removed. Schema rebuilt once if any source was destroyed.
+func (g *Gateway) removeGraphQLSourcesByOwnerLocked(owner string) int {
+	if owner == "" {
+		return 0 // boot-time sources aren't evictable
+	}
+	removed := 0
+	for ns, s := range g.graphQLSources {
+		if s.owner != owner {
+			continue
+		}
+		delete(g.graphQLSources, ns)
+		removed++
+	}
+	if removed > 0 && g.schema.Load() != nil {
+		_ = g.assembleLocked()
+	}
+	return removed
+}
+
+// hashIntrospection produces a stable hash for a raw introspection
+// JSON. Same approach as hashOpenAPISpec — SHA256 of the bytes;
+// canonicalisation is a tier-2 follow-up if cluster hash drift from
+// formatting differences turns up.
+func hashIntrospection(b []byte) [32]byte {
+	return sha256.Sum256(b)
 }
 
 // graphQLSource is the gateway-internal handle on a registered
@@ -98,6 +193,19 @@ type graphQLSource struct {
 	introspection  *introspectionSchema
 	forwardHeaders []string     // nil → defaultForwardedHeaders
 	httpClient     *http.Client // nil → http.DefaultClient
+
+	// rawIntrospection is the JSON the receiving gateway fetched (and,
+	// in cluster mode, cached in the registry KV). Kept for cluster
+	// roundtrip and any future /schema/graphql-ingest re-emit.
+	rawIntrospection []byte
+
+	// hash is sha256(rawIntrospection); the idempotency key used by
+	// addGraphQLSourceLocked.
+	hash [32]byte
+
+	// owner is the registration ID for control-plane sources; "" for
+	// boot-time AddGraphQL sources (which aren't evictable by owner).
+	owner string
 
 	// sem caps simultaneous concurrent dispatches against this source.
 	// nil when MaxInflight is 0 (unbounded). Buffered channel; send to

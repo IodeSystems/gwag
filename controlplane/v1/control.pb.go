@@ -203,9 +203,18 @@ type ServiceBinding struct {
 	// either). Mutually exclusive with `file_descriptor_set`. When set,
 	// RegisterRequest.addr is the HTTP base URL the gateway dispatches
 	// to (e.g. "https://billing.internal" or "http://localhost:8080").
-	OpenapiSpec   []byte `protobuf:"bytes,5,opt,name=openapi_spec,json=openapiSpec,proto3" json:"openapi_spec,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	OpenapiSpec []byte `protobuf:"bytes,5,opt,name=openapi_spec,json=openapiSpec,proto3" json:"openapi_spec,omitempty"`
+	// Endpoint URL of an upstream GraphQL service to ingest under this
+	// namespace. Mutually exclusive with `file_descriptor_set` and
+	// `openapi_spec`. The receiving gateway runs the canonical
+	// introspection query against this endpoint at Register time,
+	// mirrors every type with a `<namespace>_` prefix, and forwards
+	// dispatches back to the same endpoint. RegisterRequest.addr is
+	// ignored for GraphQL bindings — the endpoint URL carries the
+	// dispatch destination too.
+	GraphqlEndpoint string `protobuf:"bytes,6,opt,name=graphql_endpoint,json=graphqlEndpoint,proto3" json:"graphql_endpoint,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ServiceBinding) Reset() {
@@ -271,6 +280,13 @@ func (x *ServiceBinding) GetOpenapiSpec() []byte {
 		return x.OpenapiSpec
 	}
 	return nil
+}
+
+func (x *ServiceBinding) GetGraphqlEndpoint() string {
+	if x != nil {
+		return x.GraphqlEndpoint
+	}
+	return ""
 }
 
 type RegisterResponse struct {
@@ -1236,13 +1252,14 @@ const file_controlplane_v1_control_proto_rawDesc = "" +
 	"\vttl_seconds\x18\x03 \x01(\rR\n" +
 	"ttlSeconds\x12\x1f\n" +
 	"\vinstance_id\x18\x04 \x01(\tR\n" +
-	"instanceId\"\xb8\x01\n" +
+	"instanceId\"\xe3\x01\n" +
 	"\x0eServiceBinding\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12.\n" +
 	"\x13file_descriptor_set\x18\x02 \x01(\fR\x11fileDescriptorSet\x12\x1b\n" +
 	"\tfile_name\x18\x03 \x01(\tR\bfileName\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12!\n" +
-	"\fopenapi_spec\x18\x05 \x01(\fR\vopenapiSpec\"\\\n" +
+	"\fopenapi_spec\x18\x05 \x01(\fR\vopenapiSpec\x12)\n" +
+	"\x10graphql_endpoint\x18\x06 \x01(\tR\x0fgraphqlEndpoint\"\\\n" +
 	"\x10RegisterResponse\x12'\n" +
 	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\rR\n" +
