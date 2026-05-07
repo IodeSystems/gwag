@@ -354,7 +354,7 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
-- *(uncommitted)* token rotation (kid in HMAC tokens). Verifier +
+- `325aaf4` token rotation (kid in HMAC tokens). Verifier +
   standalone signer half. `SubscriptionAuthOptions.Secrets
   map[string][]byte` joins the legacy `Secret []byte`; verifier
   reads an optional `kid: String` arg from subscribe payloads,
