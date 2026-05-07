@@ -420,3 +420,120 @@ func TestGraphQLIngest_SubscriptionForwarding(t *testing.T) {
 		t.Errorf("ticks = %s, want %s", got, want)
 	}
 }
+
+// fanoutMetrics tallies graphql-sub fanout open/close events and the
+// most recently observed active gauge, per namespace.
+type fanoutMetrics struct {
+	noopMetrics
+	mu     sync.Mutex
+	open   map[string]int
+	close  map[string]int
+	active map[string]int
+}
+
+func (f *fanoutMetrics) RecordGraphQLSubFanout(ns, event string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if event == "open" {
+		if f.open == nil {
+			f.open = map[string]int{}
+		}
+		f.open[ns]++
+	} else if event == "close" {
+		if f.close == nil {
+			f.close = map[string]int{}
+		}
+		f.close[ns]++
+	}
+}
+
+func (f *fanoutMetrics) SetGraphQLSubFanoutsActive(ns string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active == nil {
+		f.active = map[string]int{}
+	}
+	f.active[ns] = n
+}
+
+func (f *fanoutMetrics) snapshot(ns string) (open, closed, active int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.open[ns], f.close[ns], f.active[ns]
+}
+
+// TestGraphQLIngest_SubscriptionMultiplexerMetrics exercises the
+// per-fanout open/close counter and the active-by-namespace gauge.
+// Two local subscribers sharing one operation must trigger exactly
+// one open + active=1; tearing down upstream then drives close=1 +
+// active=0.
+func TestGraphQLIngest_SubscriptionMultiplexerMetrics(t *testing.T) {
+	upstream, stats := countingUpstreamGraphQLWSServer(t)
+
+	fm := &fanoutMetrics{}
+	gw := New(WithMetrics(fm), WithoutBackpressure(), WithoutSubscriptionAuth(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(upstream.URL, As("pets")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/graphql"
+
+	dialAndSubscribe := func() (*websocket.Conn, context.CancelFunc) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+			Subprotocols: []string{wsSubprotocol},
+		})
+		if err != nil {
+			cancel()
+			t.Fatalf("dial: %v", err)
+		}
+		if err := wsWriteJSON(ctx, conn, wsMessage{Type: msgConnInit}); err != nil {
+			t.Fatalf("connection_init: %v", err)
+		}
+		var m wsMessage
+		if err := wsReadJSON(ctx, conn, &m); err != nil || m.Type != msgConnAck {
+			t.Fatalf("connection_ack: %+v err=%v", m, err)
+		}
+		subPayload, _ := json.Marshal(subscribePayload{Query: `subscription { pets_tick }`})
+		if err := wsWriteJSON(ctx, conn, wsMessage{ID: "1", Type: msgSubscribe, Payload: subPayload}); err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		return conn, cancel
+	}
+
+	connA, cancelA := dialAndSubscribe()
+	defer cancelA()
+	defer connA.Close(websocket.StatusNormalClosure, "done")
+	connB, cancelB := dialAndSubscribe()
+	defer cancelB()
+	defer connB.Close(websocket.StatusNormalClosure, "done")
+
+	if !stats.waitFor(1, 5*time.Second) {
+		t.Fatal("upstream never received any subscribe")
+	}
+	// Single fanout, two consumers — one open, active=1.
+	open, closed, active := fm.snapshot("pets")
+	if open != 1 || closed != 0 || active != 1 {
+		t.Fatalf("after subscribe: open=%d close=%d active=%d, want 1/0/1", open, closed, active)
+	}
+
+	// Tear the fanout down from upstream — completes the sub which
+	// drives broker.dispatchComplete → removeFanout → close.
+	stats.complete()
+
+	// Drain the resulting `complete` frames so reads don't block test
+	// shutdown; assert the metric eventually reflects close=1, active=0.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, closed, active = fm.snapshot("pets")
+		if closed >= 1 && active == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if closed != 1 || active != 0 {
+		t.Fatalf("after complete: close=%d active=%d, want 1/0", closed, active)
+	}
+}

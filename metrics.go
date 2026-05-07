@@ -59,19 +59,35 @@ type Metrics interface {
 	// "denied_bearer" (no/wrong bearer + no delegate accept),
 	// "no_token_configured" (gateway has no boot token).
 	RecordAdminAuth(method, outcome string)
+
+	// RecordGraphQLSubFanout records a downstream-GraphQL
+	// subscription fanout transition. event is "open" (first local
+	// subscriber for an (operation, variables) tuple — broker created
+	// a new upstream subscription) or "close" (last local consumer
+	// left, upstream completed/errored, or broker tore down).
+	// Operation hash is intentionally not surfaced as a label —
+	// cardinality is namespace-only.
+	RecordGraphQLSubFanout(namespace, event string)
+
+	// SetGraphQLSubFanoutsActive reflects the current count of active
+	// downstream-GraphQL subscription fanouts (distinct upstream
+	// subscriptions) for a source.
+	SetGraphQLSubFanoutsActive(namespace string, active int)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
 type noopMetrics struct{}
 
 func (noopMetrics) RecordDispatch(string, string, string, time.Duration, error) {}
-func (noopMetrics) RecordDwell(string, string, string, string, time.Duration)    {}
-func (noopMetrics) RecordBackoff(string, string, string, string, string)         {}
-func (noopMetrics) SetQueueDepth(string, string, string, int)                    {}
-func (noopMetrics) SetStreamsInflight(string, string, int)                       {}
-func (noopMetrics) SetStreamsInflightTotal(int)                                  {}
-func (noopMetrics) RecordSubscribeAuth(string, string, string, string)           {}
-func (noopMetrics) RecordAdminAuth(string, string)                               {}
+func (noopMetrics) RecordDwell(string, string, string, string, time.Duration)   {}
+func (noopMetrics) RecordBackoff(string, string, string, string, string)        {}
+func (noopMetrics) SetQueueDepth(string, string, string, int)                   {}
+func (noopMetrics) SetStreamsInflight(string, string, int)                      {}
+func (noopMetrics) SetStreamsInflightTotal(int)                                 {}
+func (noopMetrics) RecordSubscribeAuth(string, string, string, string)          {}
+func (noopMetrics) RecordAdminAuth(string, string)                              {}
+func (noopMetrics) RecordGraphQLSubFanout(string, string)                       {}
+func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
 // Created by newPrometheusMetrics; the registry is exposed via
@@ -86,6 +102,8 @@ type prometheusMetrics struct {
 	streamsTotal prometheus.Gauge
 	subAuth      *prometheus.CounterVec
 	adminAuth    *prometheus.CounterVec
+	gqlSubFanout *prometheus.CounterVec
+	gqlSubActive *prometheus.GaugeVec
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -125,7 +143,15 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_admin_auth_total",
 		Help: "Outcomes of AdminMiddleware auth checks (delegate + boot-token bearer).",
 	}, []string{"method", "outcome"})
-	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, adminAuth)
+	gqlSubFanout := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_graphql_sub_fanout_total",
+		Help: "Downstream-GraphQL subscription fanout open/close events. One open per upstream subscribe; one close when the last local consumer leaves.",
+	}, []string{"namespace", "event"})
+	gqlSubActive := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "go_api_gateway_graphql_sub_fanouts_active",
+		Help: "Current count of active downstream-GraphQL subscription fanouts (distinct upstream subscriptions) per source.",
+	}, []string{"namespace"})
+	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, adminAuth, gqlSubFanout, gqlSubActive)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -136,6 +162,8 @@ func newPrometheusMetrics() *prometheusMetrics {
 		streamsTotal: streamsTotal,
 		subAuth:      subAuth,
 		adminAuth:    adminAuth,
+		gqlSubFanout: gqlSubFanout,
+		gqlSubActive: gqlSubActive,
 	}
 }
 
@@ -173,6 +201,14 @@ func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code
 
 func (m *prometheusMetrics) RecordAdminAuth(method, outcome string) {
 	m.adminAuth.WithLabelValues(method, outcome).Inc()
+}
+
+func (m *prometheusMetrics) RecordGraphQLSubFanout(namespace, event string) {
+	m.gqlSubFanout.WithLabelValues(namespace, event).Inc()
+}
+
+func (m *prometheusMetrics) SetGraphQLSubFanoutsActive(namespace string, active int) {
+	m.gqlSubActive.WithLabelValues(namespace).Set(float64(active))
 }
 
 // classifyError maps an error to a stable label value. gRPC status

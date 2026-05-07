@@ -26,7 +26,8 @@ import (
 // are serialized via writeMu (websocket.Conn isn't safe for concurrent
 // writes); reads come from one reader goroutine.
 type graphQLSubBroker struct {
-	src *graphQLSource
+	src     *graphQLSource
+	metrics Metrics
 
 	mu      sync.Mutex
 	conn    *websocket.Conn
@@ -46,17 +47,36 @@ type graphQLSubFanout struct {
 	key    string
 	broker *graphQLSubBroker
 
-	mu        sync.Mutex
-	nextID    uint64
-	targets   map[uint64]chan *upstreamSubFrame
-	terminal  bool // upstream sent complete/error or conn died
+	mu       sync.Mutex
+	nextID   uint64
+	targets  map[uint64]chan *upstreamSubFrame
+	terminal bool // upstream sent complete/error or conn died
 }
 
 func newGraphQLSubBroker(src *graphQLSource) *graphQLSubBroker {
+	m := src.metrics
+	if m == nil {
+		m = noopMetrics{}
+	}
 	return &graphQLSubBroker{
 		src:     src,
+		metrics: m,
 		fanouts: map[string]*graphQLSubFanout{},
 	}
+}
+
+// recordOpenLocked emits an "open" event + active gauge. Caller holds b.mu.
+func (b *graphQLSubBroker) recordOpenLocked() {
+	b.metrics.RecordGraphQLSubFanout(b.src.namespace, "open")
+	b.metrics.SetGraphQLSubFanoutsActive(b.src.namespace, len(b.fanouts))
+}
+
+// recordClosesLocked emits n "close" events + active gauge. Caller holds b.mu.
+func (b *graphQLSubBroker) recordClosesLocked(n int) {
+	for i := 0; i < n; i++ {
+		b.metrics.RecordGraphQLSubFanout(b.src.namespace, "close")
+	}
+	b.metrics.SetGraphQLSubFanoutsActive(b.src.namespace, len(b.fanouts))
 }
 
 // acquire registers a target on the fanout for (query, variables),
@@ -118,6 +138,7 @@ func (b *graphQLSubBroker) acquire(
 			targets: map[uint64]chan *upstreamSubFrame{},
 		}
 		b.fanouts[key] = f
+		b.recordOpenLocked()
 	}
 	b.mu.Unlock()
 
@@ -174,6 +195,7 @@ func (b *graphQLSubBroker) releaseTarget(f *graphQLSubFanout, id uint64) {
 	if cur, ok := b.fanouts[f.key]; ok && cur == f {
 		delete(b.fanouts, f.key)
 		_ = b.writeJSONLocked(context.Background(), wsMessage{ID: f.subID, Type: msgComplete})
+		b.recordClosesLocked(1)
 	}
 	last := len(b.fanouts) == 0 && b.conn != nil
 	b.mu.Unlock()
@@ -195,6 +217,7 @@ func (b *graphQLSubBroker) shutdown() {
 	fanouts := b.fanouts
 	b.fanouts = map[string]*graphQLSubFanout{}
 	b.conn = nil
+	b.recordClosesLocked(len(fanouts))
 	b.mu.Unlock()
 
 	if conn != nil {
@@ -362,6 +385,7 @@ func (b *graphQLSubBroker) removeFanout(f *graphQLSubFanout) {
 	b.mu.Lock()
 	if cur, ok := b.fanouts[f.key]; ok && cur == f {
 		delete(b.fanouts, f.key)
+		b.recordClosesLocked(1)
 	}
 	last := len(b.fanouts) == 0 && b.conn != nil
 	b.mu.Unlock()
@@ -384,6 +408,7 @@ func (b *graphQLSubBroker) failAll(err error) {
 	b.fanouts = map[string]*graphQLSubFanout{}
 	conn := b.conn
 	b.conn = nil
+	b.recordClosesLocked(len(fanouts))
 	b.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close(websocket.StatusAbnormalClosure, "read error")

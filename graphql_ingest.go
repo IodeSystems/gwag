@@ -92,6 +92,7 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		rawIntrospection: rawIntro,
 		hash:             hash,
 		forwardHeaders:   sc.forwardHeaders,
+		metrics:          g.cfg.metrics,
 	}
 	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
@@ -155,6 +156,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, endpoint string, rawIntro []byte, h
 		introspection:    intro,
 		rawIntrospection: append([]byte(nil), rawIntro...),
 		hash:             hash,
+		metrics:          g.cfg.metrics,
 	}
 	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
@@ -288,6 +290,11 @@ type graphQLSource struct {
 	// subscribingResolver call; closed when the last consumer leaves.
 	subBrokerOnce sync.Once
 	subBroker     *graphQLSubBroker
+
+	// metrics is the gateway's metrics sink, plumbed in so the
+	// subBroker can surface per-namespace fanout open/close +
+	// active-count without reaching back through the Gateway.
+	metrics Metrics
 }
 
 // getSubBroker returns the source's subscription multiplexer,
