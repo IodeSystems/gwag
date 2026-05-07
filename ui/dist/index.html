@@ -1,13 +1,33 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>go-api-gateway admin</title>
-    <script type="module" crossorigin src="/assets/index-5ohoczni.js"></script>
+    <title>go-api-gateway — UI bundle missing</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #222; }
+      code, pre { background: #f4f4f5; padding: 0.15em 0.35em; border-radius: 4px; font-size: 0.95em; }
+      pre { padding: 0.75em 1em; overflow-x: auto; }
+      .muted { color: #6b7280; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <h1>UI bundle not built</h1>
+    <p>
+      This is the placeholder the gateway binary embeds when no UI build
+      has been produced yet. To get the actual admin console, run:
+    </p>
+    <pre>cd ui
+pnpm install
+pnpm run build</pre>
+    <p>
+      then rebuild the gateway binary. The
+      <code>//go:embed all:dist</code> directive in
+      <code>ui/embed.go</code> will pick up the freshly-built assets.
+    </p>
+    <p class="muted">
+      Until then, the GraphQL surface still works — it lives under
+      <code>/api/graphql</code>.
+    </p>
   </body>
 </html>

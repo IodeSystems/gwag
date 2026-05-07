@@ -1,76 +1,18 @@
+# PLACEHOLDER. Real content is fetched by `pnpm run schema` from the
+# running gateway's /schema/graphql endpoint. graphql-codegen reads
+# this file when generating src/api/gateway.ts.
+#
+# To populate:
+#   1. Start the gateway:   cd examples/multi && ./run.sh
+#   2. Run:                 pnpm run gen
+#
+# Or override the endpoint:
+#   GATEWAY_URL=http://prod-gw.internal pnpm run gen
+
 schema {
   query: Query
-  mutation: Mutation
-}
-
-type Mutation {
-  admin_drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
-  admin_forgetPeer(nodeId: String!): admin_ForgetOutBody
-  admin_signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
 }
 
 type Query {
-  admin_listChannels: admin_ChannelsOutBody
-  admin_listPeers: admin_PeersOutBody
-  admin_listServices: admin_ServicesOutBody
-}
-
-type admin_ChannelInfo {
-  consumers: Int!
-  subject: String!
-}
-
-type admin_ChannelsOutBody {
-  channels: [admin_ChannelInfo]!
-}
-
-input admin_DrainInBodyInput {
-  timeoutSeconds: Int
-}
-
-type admin_DrainOutBody {
-  activeStreams: Int!
-  drained: Boolean!
-  reason: String
-}
-
-type admin_ForgetOutBody {
-  newReplicas: Int!
-  removed: Boolean!
-}
-
-type admin_PeerInfo {
-  joinedUnixMs: Int!
-  name: String
-  nodeId: String!
-}
-
-type admin_PeersOutBody {
-  peers: [admin_PeerInfo]!
-}
-
-type admin_ServiceInfo {
-  hashHex: String!
-  namespace: String!
-  replicaCount: Int!
-  version: String!
-}
-
-type admin_ServicesOutBody {
-  environment: String
-  services: [admin_ServiceInfo]!
-}
-
-input admin_SignInBodyInput {
-  channel: String!
-  kid: String
-  ttlSeconds: Int!
-}
-
-type admin_SignOutBody {
-  code: String!
-  hmac: String
-  kid: String
-  reason: String
-  timestampUnix: Int
+  _placeholder: String
 }
