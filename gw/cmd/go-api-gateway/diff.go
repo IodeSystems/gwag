@@ -127,6 +127,14 @@ func valueNodeString(v ast.Value) string {
 	return fmt.Sprintf("%v", v.GetValue())
 }
 
+// isRequiredType reports whether the SDL type ends with `!` at the
+// outermost wrapping (i.e. the value itself is non-null). `String!`
+// and `[String]!` are required; `String`, `[String!]`, and
+// `[String!]!` are inspected by the trailing-bang test alone.
+func isRequiredType(t string) bool {
+	return strings.HasSuffix(t, "!")
+}
+
 func hasDeprecated(dirs []*ast.Directive) bool {
 	for _, d := range dirs {
 		if d.Name.Value == "deprecated" {
@@ -240,10 +248,21 @@ func diffObject(name string, oo, no *objectType) []change {
 			// breaking because clients may have non-null typings.
 			out = append(out, change{"breaking", fmt.Sprintf("field type changed: %s.%s %s → %s", name, fn, of.typ, nf.typ)})
 		}
-		// Args
-		for an := range of.args {
-			if _, ok := nf.args[an]; !ok {
-				out = append(out, change{"breaking", fmt.Sprintf("arg removed: %s.%s(%s)", name, fn, an)})
+		// Args. Removed args split on the OLD node's nullability:
+		// required arg removal is breaking (callers who passed it get
+		// a validation error against the new schema); optional arg
+		// removal is info — callers who didn't pass it are unaffected,
+		// callers who did get a recoverable validation error. Workstream
+		// 5's caller-side usage tracking is the upgrade if a team wants
+		// the conservative policy back.
+		for an, oa := range of.args {
+			if _, ok := nf.args[an]; ok {
+				continue
+			}
+			if isRequiredType(oa.typ) {
+				out = append(out, change{"breaking", fmt.Sprintf("required arg removed: %s.%s(%s: %s)", name, fn, an, oa.typ)})
+			} else {
+				out = append(out, change{"info", fmt.Sprintf("optional arg removed: %s.%s(%s: %s)", name, fn, an, oa.typ)})
 			}
 		}
 		for an, na := range nf.args {
@@ -272,11 +291,18 @@ func diffObject(name string, oo, no *objectType) []change {
 
 func diffInput(name string, oi, ni *inputType) []change {
 	var out []change
-	// Removing a field from input is breaking only if clients passed
-	// it; we conservatively flag removal as breaking.
-	for fn := range oi.fields {
-		if _, ok := ni.fields[fn]; !ok {
-			out = append(out, change{"breaking", fmt.Sprintf("input field removed: %s.%s", name, fn)})
+	// Same split as args: required input-field removal is breaking;
+	// optional input-field removal is info (callers who didn't pass
+	// it are unaffected; callers who did get a recoverable validation
+	// error).
+	for fn, of := range oi.fields {
+		if _, ok := ni.fields[fn]; ok {
+			continue
+		}
+		if isRequiredType(of.typ) {
+			out = append(out, change{"breaking", fmt.Sprintf("required input field removed: %s.%s: %s", name, fn, of.typ)})
+		} else {
+			out = append(out, change{"info", fmt.Sprintf("optional input field removed: %s.%s: %s", name, fn, of.typ)})
 		}
 	}
 	for fn, nf := range ni.fields {

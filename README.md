@@ -211,8 +211,25 @@ $ go-api-gateway schema diff \
     --to   ./candidate.graphql --strict
 ```
 
-`--strict` fails on removals or required-arg changes. Adding
-deprecations is informational. Adding new fields is fine.
+`--strict` fails on changes that can break a working client query.
+The rules:
+
+- **Breaking** — exit non-zero: required arg / required input field
+  removed, output field removed (any nullability), output field type
+  changed, default value changed or removed, required arg / required
+  input field added without a default, type / enum value removed.
+- **Info** — printed but not a failure: optional arg / optional input
+  field removed (callers who didn't pass it are unaffected; callers
+  who did get a recoverable validation error), default value added,
+  optional arg / field added, deprecation flipped on, new types /
+  enums / fields.
+
+The conservative "any removal is breaking" policy is one Tier-2
+upgrade away — the planned **caller-side usage tracking** workstream
+turns "is anyone passing this optional arg?" into a queryable
+question. Until then, the relaxation matches the asymmetric reality
+that *adding* fields is always safe but *removing* fields is mostly
+safe for the optional ones.
 
 ### Retire
 
