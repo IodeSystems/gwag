@@ -52,8 +52,15 @@ func InjectType[T any](resolve func(ctx context.Context, current *T) (T, error),
 		schema = append(schema, NullableTypeRewrite{Name: irName})
 	}
 
-	runtime := protoInjectMiddlewareFor[T](cfg.hide, resolve)
-	return Transform{Schema: schema, Runtime: runtime}
+	rt := protoInjectMiddlewareFor[T](cfg.hide, resolve)
+	rec := InjectorRecord{
+		Kind:         InjectorKindType,
+		TypeName:     irName,
+		Hide:         cfg.hide,
+		Nullable:     cfg.nullable,
+		RegisteredAt: captureInjectorFrame(1),
+	}
+	return Transform{Schema: schema, Runtime: rt, Inventory: []InjectorRecord{rec}}
 }
 
 // protoInjectMiddlewareFor wires the runtime half of an InjectType
@@ -308,8 +315,15 @@ func InjectPath(path string, resolve func(ctx context.Context, current any) (any
 	if cfg.nullable {
 		schema = append(schema, NullablePathRewrite{Path: path})
 	}
-	runtime := injectPathMiddleware(path, cfg.hide, resolve)
-	return Transform{Schema: schema, Runtime: runtime}
+	rt := injectPathMiddleware(path, cfg.hide, resolve)
+	rec := InjectorRecord{
+		Kind:         InjectorKindPath,
+		Path:         path,
+		Hide:         cfg.hide,
+		Nullable:     cfg.nullable,
+		RegisteredAt: captureInjectorFrame(1),
+	}
+	return Transform{Schema: schema, Runtime: rt, Inventory: []InjectorRecord{rec}}
 }
 
 // injectPathMiddleware wires the runtime half of InjectPath. Returns
@@ -416,8 +430,15 @@ func InjectHeader(name string, resolve func(ctx context.Context, current *string
 	if cfg.nullable {
 		panic(fmt.Sprintf("gateway: InjectHeader(%q): Nullable(true) is rejected — headers aren't in the GraphQL schema", name))
 	}
+	rec := InjectorRecord{
+		Kind:         InjectorKindHeader,
+		HeaderName:   name,
+		Hide:         cfg.hide,
+		RegisteredAt: captureInjectorFrame(1),
+	}
 	return Transform{
-		Headers: []HeaderInjector{{Name: name, Hide: cfg.hide, Fn: resolve}},
+		Headers:   []HeaderInjector{{Name: name, Hide: cfg.hide, Fn: resolve}},
+		Inventory: []InjectorRecord{rec},
 	}
 }
 

@@ -45,6 +45,7 @@ export type AdminMutationNamespaceSignSubscriptionTokenArgs = {
 export type AdminQueryNamespace = {
   __typename?: 'AdminQueryNamespace';
   listChannels: Maybe<Admin_ChannelsOutBody>;
+  listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   v1: AdminV1QueryNamespace;
@@ -75,6 +76,7 @@ export type AdminV1MutationNamespaceSignSubscriptionTokenArgs = {
 export type AdminV1QueryNamespace = {
   __typename?: 'AdminV1QueryNamespace';
   listChannels: Maybe<Admin_ChannelsOutBody>;
+  listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
 };
@@ -117,6 +119,36 @@ export type Admin_ForgetOutBody = {
   removed: Scalars['Boolean']['output'];
 };
 
+export type Admin_InjectorInfo = {
+  __typename?: 'admin_InjectorInfo';
+  headerName: Maybe<Scalars['String']['output']>;
+  hide: Scalars['Boolean']['output'];
+  kind: Scalars['String']['output'];
+  landings: Array<Maybe<Admin_InjectorLandingInfo>>;
+  nullable: Scalars['Boolean']['output'];
+  path: Maybe<Scalars['String']['output']>;
+  registeredAt: Admin_RegisteredAtInfo;
+  state: Scalars['String']['output'];
+  typeName: Maybe<Scalars['String']['output']>;
+};
+
+export type Admin_InjectorLandingInfo = {
+  __typename?: 'admin_InjectorLandingInfo';
+  argName: Maybe<Scalars['String']['output']>;
+  fieldName: Maybe<Scalars['String']['output']>;
+  headerName: Maybe<Scalars['String']['output']>;
+  kind: Scalars['String']['output'];
+  namespace: Maybe<Scalars['String']['output']>;
+  op: Maybe<Scalars['String']['output']>;
+  typeName: Maybe<Scalars['String']['output']>;
+  version: Maybe<Scalars['String']['output']>;
+};
+
+export type Admin_InjectorsOutBody = {
+  __typename?: 'admin_InjectorsOutBody';
+  injectors: Array<Maybe<Admin_InjectorInfo>>;
+};
+
 export type Admin_PeerInfo = {
   __typename?: 'admin_PeerInfo';
   joinedUnixMs: Scalars['Long']['output'];
@@ -127,6 +159,13 @@ export type Admin_PeerInfo = {
 export type Admin_PeersOutBody = {
   __typename?: 'admin_PeersOutBody';
   peers: Array<Maybe<Admin_PeerInfo>>;
+};
+
+export type Admin_RegisteredAtInfo = {
+  __typename?: 'admin_RegisteredAtInfo';
+  file: Maybe<Scalars['String']['output']>;
+  function: Maybe<Scalars['String']['output']>;
+  line: Maybe<Scalars['Long']['output']>;
 };
 
 export type Admin_ServiceInfo = {
@@ -172,6 +211,11 @@ export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type PeersQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string, name: string | null, joinedUnixMs: any } | null> } | null } };
+
+export type InjectorsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type InjectorsQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listInjectors: { __typename?: 'admin_InjectorsOutBody', injectors: Array<{ __typename?: 'admin_InjectorInfo', kind: string, typeName: string | null, path: string | null, headerName: string | null, hide: boolean, nullable: boolean, state: string, registeredAt: { __typename?: 'admin_RegisteredAtInfo', file: string | null, line: any | null, function: string | null }, landings: Array<{ __typename?: 'admin_InjectorLandingInfo', kind: string, namespace: string | null, version: string | null, op: string | null, typeName: string | null, fieldName: string | null, argName: string | null, headerName: string | null } | null> } | null> } | null } };
 
 export type ForgetPeerMutationVariables = Exact<{
   nodeId: Scalars['String']['input'];
@@ -227,6 +271,38 @@ export const PeersDocument = gql`
   }
 }
     `;
+export const InjectorsDocument = gql`
+    query Injectors {
+  admin {
+    listInjectors {
+      injectors {
+        kind
+        typeName
+        path
+        headerName
+        hide
+        nullable
+        state
+        registeredAt {
+          file
+          line
+          function
+        }
+        landings {
+          kind
+          namespace
+          version
+          op
+          typeName
+          fieldName
+          argName
+          headerName
+        }
+      }
+    }
+  }
+}
+    `;
 export const ForgetPeerDocument = gql`
     mutation ForgetPeer($nodeId: String!) {
   admin {
@@ -253,6 +329,9 @@ export function getSdk(client: GraphQLClient, withWrapper: SdkFunctionWrapper = 
     },
     Peers(variables?: PeersQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<PeersQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<PeersQuery>({ document: PeersDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Peers', 'query', variables);
+    },
+    Injectors(variables?: InjectorsQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<InjectorsQuery> {
+      return withWrapper((wrappedRequestHeaders) => client.request<InjectorsQuery>({ document: InjectorsDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Injectors', 'query', variables);
     },
     ForgetPeer(variables: ForgetPeerMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ForgetPeerMutation> {
       return withWrapper((wrappedRequestHeaders) => client.request<ForgetPeerMutation>({ document: ForgetPeerDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'ForgetPeer', 'mutation', variables);

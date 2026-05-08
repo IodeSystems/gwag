@@ -20,6 +20,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import HubIcon from '@mui/icons-material/Hub';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import SchemaIcon from '@mui/icons-material/Schema';
+import InputIcon from '@mui/icons-material/Input';
 import SettingsIcon from '@mui/icons-material/Settings';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
@@ -32,6 +33,7 @@ const drawerWidth = 220;
 const nav = [
   { to: '/', label: 'Dashboard', icon: <DashboardIcon /> },
   { to: '/services', label: 'Services', icon: <AccountTreeIcon /> },
+  { to: '/injectors', label: 'Injectors', icon: <InputIcon /> },
   { to: '/peers', label: 'Peers', icon: <HubIcon /> },
   { to: '/schema', label: 'Schema', icon: <SchemaIcon /> },
 ];

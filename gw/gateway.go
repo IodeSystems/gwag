@@ -859,10 +859,16 @@ type Middleware func(next Handler) Handler
 // call: a list of typed schema rewrites (Schema, e.g. HideType), a
 // runtime middleware (Runtime), and a list of outbound header
 // injectors (Headers, e.g. InjectHeader). Empty halves no-op.
+//
+// Inventory records the high-level injector(s) this Transform
+// represents, captured at construction so the admin inventory endpoint
+// can surface what the operator registered without re-deriving it from
+// the SchemaRewrite / Headers shapes.
 type Transform struct {
-	Schema  []SchemaRewrite
-	Runtime Middleware
-	Headers []HeaderInjector
+	Schema    []SchemaRewrite
+	Runtime   Middleware
+	Headers   []HeaderInjector
+	Inventory []InjectorRecord
 }
 
 // HeaderInjector stamps one outbound header (HTTP, OpenAPI dispatch)

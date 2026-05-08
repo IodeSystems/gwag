@@ -52,6 +52,37 @@ query Peers {
   }
 }
 
+query Injectors {
+  admin {
+    listInjectors {
+      injectors {
+        kind
+        typeName
+        path
+        headerName
+        hide
+        nullable
+        state
+        registeredAt {
+          file
+          line
+          function
+        }
+        landings {
+          kind
+          namespace
+          version
+          op
+          typeName
+          fieldName
+          argName
+          headerName
+        }
+      }
+    }
+  }
+}
+
 mutation ForgetPeer($nodeId: String!) {
   admin {
     forgetPeer(nodeId: $nodeId) {

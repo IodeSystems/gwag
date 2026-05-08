@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SchemaRouteImport } from './routes/schema'
 import { Route as PeersRouteImport } from './routes/peers'
+import { Route as InjectorsRouteImport } from './routes/injectors'
 import { Route as IndexRouteImport } from './routes/index'
 
 const ServicesRoute = ServicesRouteImport.update({
@@ -29,6 +30,11 @@ const PeersRoute = PeersRouteImport.update({
   path: '/peers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InjectorsRoute = InjectorsRouteImport.update({
+  id: '/injectors',
+  path: '/injectors',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -37,12 +43,14 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/injectors': typeof InjectorsRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/injectors': typeof InjectorsRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -50,20 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/injectors': typeof InjectorsRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/peers' | '/schema' | '/services'
+  fullPaths: '/' | '/injectors' | '/peers' | '/schema' | '/services'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/peers' | '/schema' | '/services'
-  id: '__root__' | '/' | '/peers' | '/schema' | '/services'
+  to: '/' | '/injectors' | '/peers' | '/schema' | '/services'
+  id: '__root__' | '/' | '/injectors' | '/peers' | '/schema' | '/services'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  InjectorsRoute: typeof InjectorsRoute
   PeersRoute: typeof PeersRoute
   SchemaRoute: typeof SchemaRoute
   ServicesRoute: typeof ServicesRoute
@@ -92,6 +102,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PeersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/injectors': {
+      id: '/injectors'
+      path: '/injectors'
+      fullPath: '/injectors'
+      preLoaderRoute: typeof InjectorsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -104,6 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  InjectorsRoute: InjectorsRoute,
   PeersRoute: PeersRoute,
   SchemaRoute: SchemaRoute,
   ServicesRoute: ServicesRoute,

@@ -143,6 +143,51 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "listInjectors",
+		Method:      http.MethodGet,
+		Path:        "/admin/injectors",
+		Summary:     "List every InjectType / InjectPath / InjectHeader registration with its current schema landings.",
+	}, func(ctx context.Context, _ *struct{}) (*injectorsOut, error) {
+		entries, err := g.InjectorInventory()
+		if err != nil {
+			return nil, err
+		}
+		out := &injectorsOut{}
+		out.Body.Injectors = []injectorInfo{}
+		for _, e := range entries {
+			info := injectorInfo{
+				Kind:       string(e.Kind),
+				TypeName:   e.TypeName,
+				Path:       e.Path,
+				HeaderName: e.HeaderName,
+				Hide:       e.Hide,
+				Nullable:   e.Nullable,
+				State:      string(e.State),
+				RegisteredAt: registeredAtInfo{
+					File:     e.RegisteredAt.File,
+					Line:     e.RegisteredAt.Line,
+					Function: e.RegisteredAt.Function,
+				},
+				Landings: []injectorLandingInfo{},
+			}
+			for _, l := range e.Landings {
+				info.Landings = append(info.Landings, injectorLandingInfo{
+					Kind:       l.Kind,
+					Namespace:  l.Namespace,
+					Version:    l.Version,
+					Op:         l.Op,
+					TypeName:   l.TypeName,
+					FieldName:  l.FieldName,
+					ArgName:    l.ArgName,
+					HeaderName: l.HeaderName,
+				})
+			}
+			out.Body.Injectors = append(out.Body.Injectors, info)
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -253,5 +298,40 @@ type drainOut struct {
 		Drained       bool   `json:"drained"`
 		ActiveStreams int    `json:"activeStreams"`
 		Reason        string `json:"reason,omitempty"`
+	}
+}
+
+type registeredAtInfo struct {
+	File     string `json:"file,omitempty"`
+	Line     int    `json:"line,omitempty"`
+	Function string `json:"function,omitempty"`
+}
+
+type injectorLandingInfo struct {
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Op         string `json:"op,omitempty"`
+	TypeName   string `json:"typeName,omitempty"`
+	FieldName  string `json:"fieldName,omitempty"`
+	ArgName    string `json:"argName,omitempty"`
+	HeaderName string `json:"headerName,omitempty"`
+}
+
+type injectorInfo struct {
+	Kind         string                `json:"kind"`
+	TypeName     string                `json:"typeName,omitempty"`
+	Path         string                `json:"path,omitempty"`
+	HeaderName   string                `json:"headerName,omitempty"`
+	Hide         bool                  `json:"hide"`
+	Nullable     bool                  `json:"nullable"`
+	State        string                `json:"state"`
+	RegisteredAt registeredAtInfo      `json:"registeredAt"`
+	Landings     []injectorLandingInfo `json:"landings"`
+}
+
+type injectorsOut struct {
+	Body struct {
+		Injectors []injectorInfo `json:"injectors"`
 	}
 }

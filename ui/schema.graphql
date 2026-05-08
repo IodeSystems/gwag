@@ -12,6 +12,7 @@ type AdminMutationNamespace {
 
 type AdminQueryNamespace {
   listChannels: admin_ChannelsOutBody
+  listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   v1: AdminV1QueryNamespace!
@@ -25,6 +26,7 @@ type AdminV1MutationNamespace {
 
 type AdminV1QueryNamespace {
   listChannels: admin_ChannelsOutBody
+  listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
 }
@@ -64,6 +66,33 @@ type admin_ForgetOutBody {
   removed: Boolean!
 }
 
+type admin_InjectorInfo {
+  headerName: String
+  hide: Boolean!
+  kind: String!
+  landings: [admin_InjectorLandingInfo]!
+  nullable: Boolean!
+  path: String
+  registeredAt: admin_RegisteredAtInfo!
+  state: String!
+  typeName: String
+}
+
+type admin_InjectorLandingInfo {
+  argName: String
+  fieldName: String
+  headerName: String
+  kind: String!
+  namespace: String
+  op: String
+  typeName: String
+  version: String
+}
+
+type admin_InjectorsOutBody {
+  injectors: [admin_InjectorInfo]!
+}
+
 type admin_PeerInfo {
   joinedUnixMs: Long!
   name: String
@@ -72,6 +101,12 @@ type admin_PeerInfo {
 
 type admin_PeersOutBody {
   peers: [admin_PeerInfo]!
+}
+
+type admin_RegisteredAtInfo {
+  file: String
+  function: String
+  line: Long
 }
 
 type admin_ServiceInfo {
