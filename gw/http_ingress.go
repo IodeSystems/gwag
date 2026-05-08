@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
@@ -15,16 +19,36 @@ import (
 // rebuilt on every assembleLocked, so dispatcher churn doesn't strand
 // stale entries.
 //
-// Today only the proto-style shape is populated — POST against the
-// proto wire path /<pkg>.<Service>/<method> with a JSON body whose
-// fields are the canonical args. OpenAPI's HTTPMethod / HTTPPath
-// shape is the next commit.
+// Two shapes today:
+//
+//   - ingressShapeProtoPost: exact-match path; the request JSON body
+//     is the canonical args verbatim. Lookups go through
+//     ingressTable.exact.
+//   - ingressShapeOpenAPI: templated path (may contain {placeholders})
+//     plus declared param/body locations; canonical args are
+//     assembled from path segments, the URL query, and the JSON body.
+//     Lookups walk ingressTable.templated until segs match.
 type ingressRoute struct {
 	method     string
 	path       string // exact match for proto-style; "" when templated
 	schemaID   ir.SchemaID
 	dispatcher ir.Dispatcher
 	shape      ingressShape
+
+	// OpenAPI-only fields. segs is the parsed pathTemplate split by
+	// "/"; literal segments must equal the request, paramName segments
+	// capture into args. queryParamNames lists the declared query
+	// param names so single-valued matches land as strings (multi-
+	// valued land as []string). hasBody is true when the op declares
+	// a JSON request body — set args["body"] from the decoded payload.
+	segs            []routeSeg
+	queryParamNames []string
+	hasBody         bool
+}
+
+type routeSeg struct {
+	literal   string // empty when this segment captures
+	paramName string // empty when this segment is literal
 }
 
 type ingressShape int
@@ -32,29 +56,43 @@ type ingressShape int
 const (
 	// ingressShapeProtoPost: POST /<pkg>.<Service>/<method> with a
 	// JSON object whose top-level keys are the canonical args
-	// (lowerCamel of proto fields). Result is wrapped as
-	// {"result": <map>} so empty-object dispatches still produce
-	// well-formed JSON.
+	// (lowerCamel of proto fields).
 	ingressShapeProtoPost ingressShape = iota
+
+	// ingressShapeOpenAPI: route at the operation's declared
+	// HTTPMethod + HTTPPath. Path placeholders, query params, and
+	// the JSON body all flow into canonical args; the underlying
+	// openAPIDispatcher already knows which to send where on egress.
+	ingressShapeOpenAPI
 )
 
 // ingressTable holds the route set assembled for the current schema.
-// Lookups are O(1) by (method, path) for proto-style routes; templated
-// routes (OpenAPI) will plug into a separate slice scanned on miss.
+// Lookups are O(1) by (method, path) for exact-match routes (proto-
+// style and any OpenAPI ops with no `{placeholders}`); templated
+// routes are walked sequentially on exact-match miss. Per-method
+// indexing keeps the templated walk small even for service-heavy
+// gateways.
 type ingressTable struct {
-	exact map[string]*ingressRoute // key: METHOD + " " + path
+	exact     map[string]*ingressRoute   // key: METHOD + " " + path
+	templated map[string][]*ingressRoute // key: METHOD; ordered list, longest-segment-prefix first
 }
 
-// rebuildIngressLocked walks every proto pool's RPCs and emits one
-// ingressShapeProtoPost route per unary method, pointing at the
-// dispatcher already registered in g.dispatchers. Caller holds g.mu.
+// rebuildIngressLocked walks every proto pool's RPCs and every
+// OpenAPI source's operations, emitting one route per unary op
+// pointing at the dispatcher already registered in g.dispatchers.
+// Caller holds g.mu.
 //
 // Server-streaming methods are skipped — subscriptions live on a
 // separate transport (graphql-ws today; HTTP/SSE planned). Internal
 // namespaces (`_*` or AsInternal) are skipped just like the GraphQL
 // surface skips them.
 func (g *Gateway) rebuildIngressLocked() {
-	t := &ingressTable{exact: map[string]*ingressRoute{}}
+	t := &ingressTable{
+		exact:     map[string]*ingressRoute{},
+		templated: map[string][]*ingressRoute{},
+	}
+
+	// Proto-style: POST /<pkg>.<Service>/<method>
 	for _, p := range g.pools {
 		if g.isInternal(p.key.namespace) {
 			continue
@@ -84,21 +122,146 @@ func (g *Gateway) rebuildIngressLocked() {
 			}
 		}
 	}
+
+	// OpenAPI: route at each op's declared HTTPMethod/HTTPPath.
+	for k, src := range g.openAPISources {
+		if g.isInternal(k.namespace) {
+			continue
+		}
+		paths := src.doc.Paths
+		if paths == nil {
+			continue
+		}
+		for path, item := range paths.Map() {
+			if item == nil {
+				continue
+			}
+			for _, mop := range openAPIOpsForPath(item) {
+				// SchemaID is keyed on the same name IngestOpenAPI
+				// uses: OperationID when set, otherwise "<METHOD><path>".
+				opName := mop.op.OperationID
+				if opName == "" {
+					opName = mop.method + path
+				}
+				sid := ir.MakeSchemaID(k.namespace, k.version, opName)
+				d := g.dispatchers.Get(sid)
+				if d == nil {
+					continue
+				}
+				route := &ingressRoute{
+					method:     strings.ToUpper(mop.method),
+					path:       path,
+					schemaID:   sid,
+					dispatcher: d,
+					shape:      ingressShapeOpenAPI,
+				}
+				route.segs = parseRouteTemplate(path)
+				route.queryParamNames, route.hasBody = openAPIArgPlan(mop.op)
+				if hasParamSeg(route.segs) {
+					t.templated[route.method] = append(t.templated[route.method], route)
+				} else {
+					t.exact[route.method+" "+path] = route
+				}
+			}
+		}
+	}
+
 	g.ingressRoutes.Store(t)
 }
 
-// IngressHandler returns an http.Handler that accepts inbound requests
-// in the registered services' native shape — today, proto-style POSTs
-// at /<pkg>.<Service>/<method> with a JSON body that mirrors the
-// proto request message in canonical-args form. The handler dispatches
-// through the same ir.Dispatcher chain the GraphQL resolver does, so
-// runtime middleware (Hides, HideAndInject, user Pairs) and
-// per-pool backpressure apply identically.
+// openAPIMethodOp pairs a normalized HTTP method with the OpenAPI
+// operation found under it. Mirrors the verb table in
+// ir.ingestOpenAPIPath so the route builder picks up exactly the
+// ops IngestOpenAPI ingested.
+type openAPIMethodOp struct {
+	method string
+	op     *openapi3.Operation
+}
+
+func openAPIOpsForPath(item *openapi3.PathItem) []openAPIMethodOp {
+	out := make([]openAPIMethodOp, 0, 5)
+	if item.Get != nil {
+		out = append(out, openAPIMethodOp{"GET", item.Get})
+	}
+	if item.Post != nil {
+		out = append(out, openAPIMethodOp{"POST", item.Post})
+	}
+	if item.Put != nil {
+		out = append(out, openAPIMethodOp{"PUT", item.Put})
+	}
+	if item.Patch != nil {
+		out = append(out, openAPIMethodOp{"PATCH", item.Patch})
+	}
+	if item.Delete != nil {
+		out = append(out, openAPIMethodOp{"DELETE", item.Delete})
+	}
+	return out
+}
+
+// parseRouteTemplate splits "/things/{id}/items" into segments,
+// distinguishing literal vs placeholder. Trailing/leading slashes
+// are normalised away. An empty path yields a single empty literal
+// segment so it matches "/" but nothing else.
+func parseRouteTemplate(template string) []routeSeg {
+	parts := strings.Split(strings.Trim(template, "/"), "/")
+	out := make([]routeSeg, len(parts))
+	for i, p := range parts {
+		if len(p) >= 2 && p[0] == '{' && p[len(p)-1] == '}' {
+			out[i] = routeSeg{paramName: p[1 : len(p)-1]}
+		} else {
+			out[i] = routeSeg{literal: p}
+		}
+	}
+	return out
+}
+
+func hasParamSeg(segs []routeSeg) bool {
+	for _, s := range segs {
+		if s.paramName != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// openAPIArgPlan summarises the bits of an OpenAPI operation the
+// ingress arg extractor needs at request time: declared query param
+// names (so single-valued matches land as strings) and whether the
+// op accepts a JSON request body. Header / cookie params are out of
+// scope today — clients send the values, the egress dispatcher
+// doesn't yet read them off canonical args, and adding the round-
+// trip can wait for a real use case.
+func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool) {
+	for _, paramRef := range op.Parameters {
+		if paramRef == nil || paramRef.Value == nil {
+			continue
+		}
+		if paramRef.Value.In == "query" {
+			queryParams = append(queryParams, paramRef.Value.Name)
+		}
+	}
+	if op.RequestBody != nil && op.RequestBody.Value != nil {
+		if mt, ok := op.RequestBody.Value.Content["application/json"]; ok && mt != nil {
+			hasBody = true
+		}
+	}
+	return queryParams, hasBody
+}
+
+// IngressHandler returns an http.Handler that accepts inbound
+// requests in the registered services' native shapes:
 //
-// Mount alongside Handler() (e.g. on /api/grpc/* or as the catch-all
-// for the proto-style URL space). Unmatched paths return 404. The
-// handler is safe to call before Handler() — it triggers schema
-// assembly the same way.
+//   - Proto: POST /<pkg>.<Service>/<method> with a JSON body whose
+//     top-level fields are the canonical args.
+//   - OpenAPI: each operation's declared HTTPMethod + HTTPPath, with
+//     path / query / body decoded into canonical args.
+//
+// Both go through the same ir.Dispatcher chain the GraphQL resolver
+// uses, so runtime middleware (Hides, HideAndInject, user Pairs)
+// and per-pool backpressure apply identically.
+//
+// Unmatched paths return JSON 404. The handler is safe to call
+// before Handler() — schema assembly triggers the same way.
 func (g *Gateway) IngressHandler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
@@ -121,13 +284,14 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		writeIngressError(w, http.StatusNotFound, "no routes")
 		return
 	}
-	route, ok := t.exact[r.Method+" "+r.URL.Path]
-	if !ok {
+
+	route, pathParams := lookupIngressRoute(t, r.Method, r.URL.Path)
+	if route == nil {
 		writeIngressError(w, http.StatusNotFound, "no route for "+r.Method+" "+r.URL.Path)
 		return
 	}
 
-	args, err := decodeIngressArgs(r, route.shape)
+	args, err := buildIngressArgs(r, route, pathParams)
 	if err != nil {
 		writeIngressError(w, http.StatusBadRequest, err.Error())
 		return
@@ -144,39 +308,140 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		// Body already partially written by Encode if it got past the
-		// header; nothing useful to recover.
 		return
 	}
 }
 
-// decodeIngressArgs reads the request body for a proto-style POST and
-// returns the canonical args map. Empty body is allowed (zero args).
-// Bodies decoding to anything but a JSON object are rejected so the
-// dispatcher contract stays unambiguous.
-//
-// Content-Type is permissive: any application/json* variant is fine,
-// missing header is treated as JSON. The dispatcher's argsToMessage
-// will surface field-level mismatches as INVALID_ARGUMENT rejections.
-func decodeIngressArgs(r *http.Request, shape ingressShape) (map[string]any, error) {
-	switch shape {
-	case ingressShapeProtoPost:
-		const limit = 10 << 20 // 10 MiB
-		dec := json.NewDecoder(io.LimitReader(r.Body, limit+1))
-		dec.UseNumber()
-		var args map[string]any
-		if err := dec.Decode(&args); err != nil {
-			if err == io.EOF {
-				return map[string]any{}, nil
-			}
-			return nil, fmt.Errorf("decode body: %w", err)
+// lookupIngressRoute returns the matching route and any captured
+// path params. Exact-match wins over templated; templated routes
+// are walked in registration order.
+func lookupIngressRoute(t *ingressTable, method, path string) (*ingressRoute, map[string]string) {
+	if r, ok := t.exact[method+" "+path]; ok {
+		return r, nil
+	}
+	candidates := t.templated[method]
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for _, route := range candidates {
+		if len(route.segs) != len(parts) {
+			continue
 		}
-		if args == nil {
-			args = map[string]any{}
+		params, ok := matchSegs(route.segs, parts)
+		if !ok {
+			continue
+		}
+		return route, params
+	}
+	return nil, nil
+}
+
+// matchSegs matches a parsed request path against a route's
+// segments. Returns the captured params on match, or (nil, false)
+// when a literal segment differs.
+func matchSegs(segs []routeSeg, parts []string) (map[string]string, bool) {
+	var params map[string]string
+	for i, seg := range segs {
+		if seg.paramName != "" {
+			v, err := url.PathUnescape(parts[i])
+			if err != nil {
+				return nil, false
+			}
+			if params == nil {
+				params = make(map[string]string, len(segs))
+			}
+			params[seg.paramName] = v
+			continue
+		}
+		if seg.literal != parts[i] {
+			return nil, false
+		}
+	}
+	return params, true
+}
+
+// buildIngressArgs assembles the canonical args map for one
+// dispatch. Proto-style routes pull the body in verbatim; OpenAPI
+// routes mix path / query / body.
+func buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[string]string) (map[string]any, error) {
+	switch route.shape {
+	case ingressShapeProtoPost:
+		return decodeJSONObject(r.Body)
+	case ingressShapeOpenAPI:
+		args := map[string]any{}
+		for k, v := range pathParams {
+			args[k] = v
+		}
+		// Only declared query params land in args — the egress
+		// dispatcher only encodes declared ones, so passing extras
+		// through just bloats the canonical map. Multi-valued params
+		// are forwarded as []any (graphql-go's list shape).
+		q := r.URL.Query()
+		for _, name := range route.queryParamNames {
+			vs := q[name]
+			if len(vs) == 0 {
+				continue
+			}
+			if len(vs) == 1 {
+				args[name] = vs[0]
+			} else {
+				ifs := make([]any, len(vs))
+				for i, s := range vs {
+					ifs[i] = s
+				}
+				args[name] = ifs
+			}
+		}
+
+		if route.hasBody && r.ContentLength != 0 {
+			body, err := decodeJSONAny(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			if body != nil {
+				args["body"] = body
+			}
 		}
 		return args, nil
 	}
-	return nil, fmt.Errorf("unsupported ingress shape %d", shape)
+	return nil, fmt.Errorf("unsupported ingress shape %d", route.shape)
+}
+
+// decodeJSONObject reads up to 10 MiB of body and decodes a JSON
+// object into a map. Empty body / EOF returns an empty map. Bodies
+// that decode to a non-object are rejected.
+func decodeJSONObject(r io.Reader) (map[string]any, error) {
+	const limit = 10 << 20
+	dec := json.NewDecoder(io.LimitReader(r, limit+1))
+	dec.UseNumber()
+	var args map[string]any
+	if err := dec.Decode(&args); err != nil {
+		if errors.Is(err, io.EOF) {
+			return map[string]any{}, nil
+		}
+		return nil, fmt.Errorf("decode body: %w", err)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+// decodeJSONAny reads up to 10 MiB and decodes into any JSON value
+// (object, array, primitive). Empty body returns nil.
+func decodeJSONAny(r io.Reader) (any, error) {
+	const limit = 10 << 20
+	dec := json.NewDecoder(io.LimitReader(r, limit+1))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("decode body: %w", err)
+	}
+	return v, nil
 }
 
 // writeIngressError writes a JSON error envelope and the given status.
@@ -219,4 +484,3 @@ func codeToHTTPStatus(c Code) int {
 	}
 	return http.StatusInternalServerError
 }
-

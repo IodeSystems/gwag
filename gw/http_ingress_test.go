@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -179,5 +180,114 @@ func TestHTTPIngress_GraphQLAndIngressShareDispatcher(t *testing.T) {
 	}
 	if got := f.greeter.helloCalls.Load(); got != 2 {
 		t.Fatalf("hello calls=%d want=2 (ingress + graphql both reach the same backend)", got)
+	}
+}
+
+// openAPIIngressFixture wires the openAPIE2EFixture's backend +
+// gateway behind the IngressHandler so the same OpenAPI ops can be
+// exercised at their declared HTTPMethod/HTTPPath in addition to
+// the GraphQL surface.
+type openAPIIngressFixture struct {
+	*openAPIE2EFixture
+	server *httptest.Server
+}
+
+func newOpenAPIIngressFixture(t *testing.T) *openAPIIngressFixture {
+	t.Helper()
+	base := newOpenAPIE2EFixture(t)
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", base.graphql)
+	mux.Handle("/", base.gw.IngressHandler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &openAPIIngressFixture{openAPIE2EFixture: base, server: srv}
+}
+
+func TestHTTPIngress_OpenAPI_GETPathParam(t *testing.T) {
+	f := newOpenAPIIngressFixture(t)
+
+	resp, err := http.Get(f.server.URL + "/things/42")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	rec := f.lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if rec.Method != http.MethodGet || rec.Path != "/things/42" {
+		t.Fatalf("backend got %s %s want GET /things/42", rec.Method, rec.Path)
+	}
+}
+
+func TestHTTPIngress_OpenAPI_POSTBody(t *testing.T) {
+	f := newOpenAPIIngressFixture(t)
+
+	resp, err := http.Post(f.server.URL+"/things", "application/json", strings.NewReader(`{"name":"widget"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	rec := f.lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if rec.Method != http.MethodPost || rec.Path != "/things" {
+		t.Fatalf("backend got %s %s want POST /things", rec.Method, rec.Path)
+	}
+	var bodyJSON map[string]any
+	if err := json.Unmarshal(rec.Body, &bodyJSON); err != nil {
+		t.Fatalf("backend body not json: %v: %s", err, rec.Body)
+	}
+	if bodyJSON["name"] != "widget" {
+		t.Fatalf("backend body name=%v want widget", bodyJSON["name"])
+	}
+}
+
+func TestHTTPIngress_OpenAPI_MethodMismatchIs404(t *testing.T) {
+	// /things/{id} only declares GET; POST against the templated path
+	// should not route to it.
+	f := newOpenAPIIngressFixture(t)
+
+	resp, err := http.Post(f.server.URL+"/things/42", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d want=404", resp.StatusCode)
+	}
+}
+
+func TestHTTPIngress_OpenAPI_PathParamURLDecoded(t *testing.T) {
+	// Inbound %20 should round-trip cleanly: ingress URL-decodes the
+	// path segment into args["id"], the OpenAPI egress dispatcher
+	// re-encodes via url.PathEscape, and the backend's net/http
+	// decodes again — so r.URL.Path arrives as a literal space.
+	f := newOpenAPIIngressFixture(t)
+
+	resp, err := http.Get(f.server.URL + "/things/" + "hello%20world")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	rec := f.lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if rec.Path != "/things/hello world" {
+		t.Fatalf("backend path=%q want %q", rec.Path, "/things/hello world")
 	}
 }
