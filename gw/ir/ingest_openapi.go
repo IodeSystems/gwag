@@ -69,12 +69,12 @@ func ingestOpenAPISchemas(svc *Service, schemas openapi3.Schemas) {
 		if ref == nil || ref.Value == nil {
 			continue
 		}
-		t := openapiSchemaToType(k, ref)
+		t := openapiSchemaToType(svc, k, ref)
 		svc.Types[k] = t
 	}
 }
 
-func openapiSchemaToType(name string, ref *openapi3.SchemaRef) *Type {
+func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Type {
 	s := ref.Value
 	t := &Type{
 		Name:        name,
@@ -140,12 +140,12 @@ func openapiSchemaToType(name string, ref *openapi3.SchemaRef) *Type {
 		required[r] = true
 	}
 	for _, k := range keys {
-		t.Fields = append(t.Fields, openapiPropToField(k, props[k], required[k]))
+		t.Fields = append(t.Fields, openapiPropToField(svc, k, props[k], required[k]))
 	}
 	return t
 }
 
-func openapiPropToField(name string, ref *openapi3.SchemaRef, required bool) *Field {
+func openapiPropToField(svc *Service, name string, ref *openapi3.SchemaRef, required bool) *Field {
 	f := &Field{
 		Name:     name,
 		JSONName: name,
@@ -165,6 +165,15 @@ func openapiPropToField(name string, ref *openapi3.SchemaRef, required bool) *Fi
 	f.Description = s.Description
 	f.Format = s.Format
 	f.Pattern = s.Pattern
+	// Inline oneOf / anyOf with $ref'd variants: synthesise a
+	// deterministic union Type ("AOrB") in svc.Types and point the
+	// field at it. Anonymous (non-$ref) variants fall through to the
+	// scalar fallback below — IR has no synthesised-name story for
+	// them yet, so the renderer-side projection is JSON-shaped.
+	if name := synthesizeInlineUnion(svc, s); name != "" {
+		f.Type = TypeRef{Named: name}
+		return f
+	}
 	if pt := primaryOpenAPIType(s); pt != "" {
 		switch pt {
 		case "string":
@@ -195,7 +204,7 @@ func openapiPropToField(name string, ref *openapi3.SchemaRef, required bool) *Fi
 			}
 		case "object":
 			if s.AdditionalProperties.Schema != nil {
-				val := openapiPropToField("v", s.AdditionalProperties.Schema, false)
+				val := openapiPropToField(svc, "v", s.AdditionalProperties.Schema, false)
 				f.Type = TypeRef{Map: &MapType{
 					KeyType:   TypeRef{Builtin: ScalarString},
 					ValueType: val.Type,
@@ -206,6 +215,63 @@ func openapiPropToField(name string, ref *openapi3.SchemaRef, required bool) *Fi
 		}
 	}
 	return f
+}
+
+// synthesizeInlineUnion examines an inline schema for oneOf/anyOf
+// with $ref'd named variants. When all variants resolve to bare
+// schema names, registers a TypeUnion entry under a deterministic
+// "AOrB"-shaped synthesised name and returns that name; the caller
+// uses it as a TypeRef.Named. Returns "" when the schema isn't an
+// inline union, has no variants, or has any anonymous (non-$ref)
+// variant that the IR can't safely name.
+func synthesizeInlineUnion(svc *Service, s *openapi3.Schema) string {
+	if s == nil || svc == nil {
+		return ""
+	}
+	if len(s.OneOf) == 0 && len(s.AnyOf) == 0 {
+		return ""
+	}
+	variants := s.OneOf
+	if len(variants) == 0 {
+		variants = s.AnyOf
+	}
+	parts := make([]string, 0, len(variants))
+	for _, v := range variants {
+		if v == nil || v.Ref == "" {
+			return ""
+		}
+		segs := strings.Split(v.Ref, "/")
+		parts = append(parts, segs[len(segs)-1])
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	name := strings.Join(parts, "Or")
+	if existing, ok := svc.Types[name]; ok {
+		// Already synthesised (or a real component schema collides
+		// with the synthesised name — rare; defer to the existing
+		// entry rather than overwrite).
+		_ = existing
+		return name
+	}
+	t := &Type{
+		Name:       name,
+		TypeKind:   TypeUnion,
+		OriginKind: KindOpenAPI,
+		Variants:   parts,
+	}
+	if s.Discriminator != nil {
+		t.DiscriminatorProperty = s.Discriminator.PropertyName
+		if len(s.Discriminator.Mapping) > 0 {
+			t.DiscriminatorMapping = map[string]string{}
+			for k, ref := range s.Discriminator.Mapping {
+				segs := strings.Split(ref.Ref, "/")
+				t.DiscriminatorMapping[k] = segs[len(segs)-1]
+			}
+		}
+	}
+	svc.Types[name] = t
+	return name
 }
 
 // primaryOpenAPIType pulls the single non-null type out of an
@@ -242,11 +308,11 @@ func ingestOpenAPIPath(svc *Service, path string, item *openapi3.PathItem) {
 		if v.op == nil {
 			continue
 		}
-		svc.Operations = append(svc.Operations, ingestOpenAPIOp(v.method, path, v.op))
+		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, v.method, path, v.op))
 	}
 }
 
-func ingestOpenAPIOp(method, path string, op *openapi3.Operation) *Operation {
+func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) *Operation {
 	out := &Operation{
 		Name:        op.OperationID,
 		Description: op.Description,
@@ -279,7 +345,7 @@ func ingestOpenAPIOp(method, path string, op *openapi3.Operation) *Operation {
 			OpenAPILocation: p.In,
 		}
 		if p.Schema != nil && p.Schema.Value != nil {
-			arg.Type = openapiPropToField(p.Name, p.Schema, p.Required).Type
+			arg.Type = openapiPropToField(svc, p.Name, p.Schema, p.Required).Type
 		} else {
 			arg.Type = TypeRef{Builtin: ScalarString}
 		}
@@ -292,7 +358,7 @@ func ingestOpenAPIOp(method, path string, op *openapi3.Operation) *Operation {
 		if mt, ok := body.Content["application/json"]; ok && mt.Schema != nil {
 			out.Args = append(out.Args, &Arg{
 				Name:            "body",
-				Type:            openapiPropToField("body", mt.Schema, body.Required).Type,
+				Type:            openapiPropToField(svc, "body", mt.Schema, body.Required).Type,
 				Required:        body.Required,
 				Description:     body.Description,
 				OpenAPILocation: "body",
@@ -302,24 +368,24 @@ func ingestOpenAPIOp(method, path string, op *openapi3.Operation) *Operation {
 
 	// Response: prefer 200, then 201, then default. One TypeRef.
 	if op.Responses != nil {
-		out.Output = openapiResponseTypeRef(op.Responses)
+		out.Output = openapiResponseTypeRef(svc, op.Responses)
 	}
 	return out
 }
 
-func openapiResponseTypeRef(r *openapi3.Responses) *TypeRef {
+func openapiResponseTypeRef(svc *Service, r *openapi3.Responses) *TypeRef {
 	for _, code := range []string{"200", "201"} {
 		resp := r.Status(parseStatusCode(code))
 		if resp != nil && resp.Value != nil {
 			if mt, ok := resp.Value.Content["application/json"]; ok && mt.Schema != nil {
-				ref := openapiPropToField("response", mt.Schema, false).Type
+				ref := openapiPropToField(svc, "response", mt.Schema, false).Type
 				return &ref
 			}
 		}
 	}
 	if def := r.Default(); def != nil && def.Value != nil {
 		if mt, ok := def.Value.Content["application/json"]; ok && mt.Schema != nil {
-			ref := openapiPropToField("response", mt.Schema, false).Type
+			ref := openapiPropToField(svc, "response", mt.Schema, false).Type
 			return &ref
 		}
 	}
