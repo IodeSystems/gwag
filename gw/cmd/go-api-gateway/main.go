@@ -32,6 +32,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	gateway "github.com/iodesystems/go-api-gateway/gw"
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
@@ -281,9 +282,9 @@ func loadSchemaSource(src string) (string, error) {
 }
 
 // signCmd dispatches to the gateway's SignSubscriptionToken RPC. Two
-// modes: --gateway HOST:PORT consults the gateway (delegate-aware,
-// network round-trip); --secret HEX signs locally (pure crypto, no
-// gateway involvement, no delegate consultation).
+// modes: --gateway HOST:PORT goes over the wire (now bearer-gated,
+// see plan §2.1 — signer-secret OR admin token); --secret HEX signs
+// locally (pure crypto, no gateway involvement).
 func signCmd(args []string) int {
 	flags, _ := splitFlagsAndPositionals(args)
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
@@ -292,9 +293,10 @@ func signCmd(args []string) int {
 	ttl := fs.Int64("ttl", 60, "Token TTL in seconds (informational)")
 	secretHex := fs.String("secret", "", "Hex-encoded shared secret (local sign mode)")
 	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
+	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway sign --channel SUBJECT [--ttl 60] [--kid KID]")
-		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT")
+		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT --bearer HEX")
 		fmt.Fprintln(fs.Output(), "  Local:  --secret HEX")
 		fs.PrintDefaults()
 	}
@@ -306,6 +308,10 @@ func signCmd(args []string) int {
 		return 2
 	}
 	if *gwAddr != "" {
+		if *bearerHex == "" {
+			fmt.Fprintln(os.Stderr, "--bearer is required with --gateway (the sign endpoint is bearer-gated)")
+			return 2
+		}
 		conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -315,6 +321,7 @@ func signCmd(args []string) int {
 		client := cpv1.NewControlPlaneClient(conn)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+*bearerHex)
 		resp, err := client.SignSubscriptionToken(ctx, &cpv1.SignSubscriptionTokenRequest{
 			Channel:    *channel,
 			TtlSeconds: *ttl,
