@@ -96,6 +96,7 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
+	signerSecret []byte
 	openAPIHTTP  *http.Client
 }
 
@@ -254,6 +255,20 @@ func WithAdminToken(token []byte) Option {
 // can pass any writable path.
 func WithAdminDataDir(dir string) Option {
 	return func(cfg *config) { cfg.adminDataDir = dir }
+}
+
+// WithSignerSecret installs a sign-specific bearer for the gRPC
+// SignSubscriptionToken RPC. When set, remote callers must present
+// it in `authorization: Bearer <hex>` metadata; the admin/boot token
+// is the always-works fallback. When unset, gRPC SignSubscriptionToken
+// requires the admin token only. In-process callers (no gRPC peer in
+// ctx, e.g. the huma /admin/sign handler or library embedders calling
+// cp.SignSubscriptionToken directly) bypass the gate — they're past
+// the trust boundary.
+//
+// Pass raw bytes; the operator-presented form is hex.
+func WithSignerSecret(secret []byte) Option {
+	return func(cfg *config) { cfg.signerSecret = secret }
 }
 
 // WithOpenAPIClient sets the *http.Client every OpenAPI dispatch

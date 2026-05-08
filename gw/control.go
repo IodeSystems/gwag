@@ -690,7 +690,22 @@ const authorizerNamespace = "_events_auth"
 // SignSubscriptionToken mints an HMAC token for a subscription
 // channel, optionally consulting a registered SubscriptionAuthorizer
 // delegate before signing. Refer to the proto comment for the policy.
+//
+// Gated on remote (gRPC peer) calls: the caller must present the
+// signer secret (if WithSignerSecret was set) or the admin/boot token
+// in `authorization: Bearer <hex>` metadata. In-process callers
+// (huma /admin/sign handler, embedders, tests) bypass — the trust
+// boundary is the embedder, not the wire. Records every outcome on
+// go_api_gateway_sign_auth_total{code}.
 func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.SignSubscriptionTokenRequest) (*cpv1.SignSubscriptionTokenResponse, error) {
+	outcome, allow := cp.gw.checkSignAuth(ctx)
+	cp.gw.cfg.metrics.RecordSignAuth(outcome)
+	if !allow {
+		return &cpv1.SignSubscriptionTokenResponse{
+			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_DENIED,
+			Reason: "sign endpoint requires bearer auth",
+		}, nil
+	}
 	if req.GetChannel() == "" {
 		return nil, fmt.Errorf("controlplane: channel is required")
 	}

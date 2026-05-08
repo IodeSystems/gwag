@@ -52,6 +52,15 @@ type Metrics interface {
 	// (e.g. "SUBSCRIBE_AUTH_CODE_OK", "..._SIGNATURE_MISMATCH").
 	RecordSubscribeAuth(namespace, version, method, code string)
 
+	// RecordSignAuth records the outcome of the SignSubscriptionToken
+	// bearer check. code is one of: "in_process" (no gRPC peer; gate
+	// bypassed), "ok_signer" / "ok_bearer" (signer-secret or admin
+	// token matched), "denied_bearer" (bearer present but neither
+	// matched), "missing_bearer" (no Authorization metadata),
+	// "no_token_configured" (gateway has neither signer-secret nor
+	// admin token — shouldn't happen in normal use).
+	RecordSignAuth(code string)
+
 	// RecordAdminAuth records the outcome of an AdminMiddleware
 	// auth check. method is the HTTP method (POST/PUT/...). outcome
 	// is one of: "ok_delegate" (delegate said OK), "ok_bearer" (boot
@@ -85,6 +94,7 @@ func (noopMetrics) SetQueueDepth(string, string, string, int)                   
 func (noopMetrics) SetStreamsInflight(string, string, int)                      {}
 func (noopMetrics) SetStreamsInflightTotal(int)                                 {}
 func (noopMetrics) RecordSubscribeAuth(string, string, string, string)          {}
+func (noopMetrics) RecordSignAuth(string)                                       {}
 func (noopMetrics) RecordAdminAuth(string, string)                              {}
 func (noopMetrics) RecordGraphQLSubFanout(string, string)                       {}
 func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      {}
@@ -101,6 +111,7 @@ type prometheusMetrics struct {
 	streams      *prometheus.GaugeVec
 	streamsTotal prometheus.Gauge
 	subAuth      *prometheus.CounterVec
+	signAuth     *prometheus.CounterVec
 	adminAuth    *prometheus.CounterVec
 	gqlSubFanout *prometheus.CounterVec
 	gqlSubActive *prometheus.GaugeVec
@@ -139,6 +150,10 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_subscribe_auth_total",
 		Help: "Outcomes of subscribe-auth checks (HMAC verify and delegate).",
 	}, []string{"namespace", "version", "method", "code"})
+	signAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_sign_auth_total",
+		Help: "Outcomes of SignSubscriptionToken bearer checks (signer-secret + admin-token gate).",
+	}, []string{"code"})
 	adminAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "go_api_gateway_admin_auth_total",
 		Help: "Outcomes of AdminMiddleware auth checks (delegate + boot-token bearer).",
@@ -151,7 +166,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_graphql_sub_fanouts_active",
 		Help: "Current count of active downstream-GraphQL subscription fanouts (distinct upstream subscriptions) per source.",
 	}, []string{"namespace"})
-	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, adminAuth, gqlSubFanout, gqlSubActive)
+	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -161,6 +176,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 		streams:      streams,
 		streamsTotal: streamsTotal,
 		subAuth:      subAuth,
+		signAuth:     signAuth,
 		adminAuth:    adminAuth,
 		gqlSubFanout: gqlSubFanout,
 		gqlSubActive: gqlSubActive,
@@ -197,6 +213,10 @@ func (m *prometheusMetrics) SetStreamsInflightTotal(inflight int) {
 
 func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code string) {
 	m.subAuth.WithLabelValues(namespace, version, method, code).Inc()
+}
+
+func (m *prometheusMetrics) RecordSignAuth(code string) {
+	m.signAuth.WithLabelValues(code).Inc()
 }
 
 func (m *prometheusMetrics) RecordAdminAuth(method, outcome string) {

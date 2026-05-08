@@ -90,6 +90,7 @@ func main() {
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
+	signerSecret := flag.String("signer-secret", "", "Hex-encoded bearer for the gRPC SignSubscriptionToken RPC; admin token also works as fallback")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
 
@@ -163,6 +164,13 @@ func main() {
 			Secret:     secret,
 			SkewWindow: *subscribeSkew,
 		}))
+	}
+	if *signerSecret != "" {
+		secret, err := hex.DecodeString(*signerSecret)
+		if err != nil {
+			log.Fatalf("signer-secret must be hex: %v", err)
+		}
+		gwOpts = append(gwOpts, gateway.WithSignerSecret(secret))
 	}
 	gw := gateway.New(gwOpts...)
 

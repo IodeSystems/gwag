@@ -414,14 +414,24 @@ would need (user ID? IP? scope? custom claims?) and bake it into
 a delegate proto. With the signer-as-API model, the caller already
 has full request context — composition over prediction.
 
-**Protecting the signer.** Anyone who can reach `SignSubscriptionToken`
-can mint tokens, so put it behind whatever auth fits:
+**Protecting the signer.** Remote (gRPC peer) calls to
+`SignSubscriptionToken` require an `authorization: Bearer <hex>`
+metadata header. The accepted bearers are:
 
-- Reuse the boot/admin token (bearer).
-- A dedicated `--signer-secret` shared with trusted services
-  (planned; lower-blast-radius than handing out the admin token).
-- mTLS on the gateway's gRPC listener.
-- Network policy so only trusted pods can reach the port.
+- `--signer-secret <hex>` (or `WithSignerSecret(...)`) — sign-specific
+  bearer; rotate independently of the admin token. Lower blast radius
+  than handing out the admin/boot token.
+- The boot/admin token — always-works fallback.
+
+In-process callers (the huma `/admin/sign` handler, library embedders
+calling `cp.SignSubscriptionToken` directly) bypass the gate — the
+trust boundary is the embedder, not the wire. Outcomes land in
+`go_api_gateway_sign_auth_total{code}` with codes `in_process`,
+`ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`,
+`no_token_configured`.
+
+Stack mTLS on the gRPC listener and/or network policy on top for
+defense in depth.
 
 Tokens are minted via gRPC or the CLI:
 
