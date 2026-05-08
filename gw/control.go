@@ -681,22 +681,27 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	return resp, nil
 }
 
-// authorizerNamespace is the reserved registration namespace for the
-// SubscriptionAuthorizer delegate. A service implementing the
-// AuthorizeSign RPC registers under "_events_auth/v1" and the gateway
-// auto-routes SignSubscriptionToken consultations to it.
+// authorizerNamespace is the legacy SubscriptionAuthorizer delegate
+// namespace. Registrations under it now hit a deprecation warning at
+// pool-join time (see warnSubscribeDelegateDeprecated) and the
+// gateway no longer dispatches to them at sign time — the
+// signer-as-API model (WithSignerSecret) replaced the pull-delegate
+// pattern in plan §2.3. Kept as a const so the warning helper can
+// match the namespace string and so the parked
+// gw/proto/eventsauth/v1 package stays importable for one release.
 const authorizerNamespace = "_events_auth"
 
 // SignSubscriptionToken mints an HMAC token for a subscription
-// channel, optionally consulting a registered SubscriptionAuthorizer
-// delegate before signing. Refer to the proto comment for the policy.
+// channel. Refer to the proto comment for the response code policy.
 //
 // Gated on remote (gRPC peer) calls: the caller must present the
 // signer secret (if WithSignerSecret was set) or the admin/boot token
 // in `authorization: Bearer <hex>` metadata. In-process callers
 // (huma /admin/sign handler, embedders, tests) bypass — the trust
 // boundary is the embedder, not the wire. Records every outcome on
-// go_api_gateway_sign_auth_total{code}.
+// go_api_gateway_sign_auth_total{code}. The earlier
+// SubscriptionAuthorizer pull-delegate path was removed in plan §2.3
+// — callers do their own authz before invoking this RPC.
 func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.SignSubscriptionTokenRequest) (*cpv1.SignSubscriptionTokenResponse, error) {
 	outcome, allow := cp.gw.checkSignAuth(ctx)
 	cp.gw.cfg.metrics.RecordSignAuth(outcome)
@@ -736,19 +741,6 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 	}
 
 	timestamp := time.Now().Unix()
-
-	// If a delegate is registered under _events_auth/v1, ask it first.
-	// Absence of a delegate means "sign whatever's requested" — callers
-	// of SignSubscriptionToken should themselves be authenticated and
-	// authorized; the delegate is the additional gate when needed.
-	if code, reason, err := cp.gw.consultSubscribeDelegate(ctx, req.GetChannel(), timestamp, req.GetTtlSeconds()); err != nil {
-		return &cpv1.SignSubscriptionTokenResponse{
-			Code:   cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNAVAILABLE,
-			Reason: err.Error(),
-		}, nil
-	} else if code != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_UNSPECIFIED && code != cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK {
-		return &cpv1.SignSubscriptionTokenResponse{Code: code, Reason: reason}, nil
-	}
 
 	mac := computeSubscribeHMAC(secret, kid, req.GetChannel(), timestamp)
 	return &cpv1.SignSubscriptionTokenResponse{

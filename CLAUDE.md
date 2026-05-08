@@ -39,9 +39,10 @@ pub/sub with HMAC channel auth.
    reconcilers on every node sync local pool/source state from a KV
    watch (proto and OpenAPI bindings ride in the same value shape).
 5. Server-streaming RPCs become GraphQL subscription fields backed
-   by NATS pub/sub. HMAC verify on subscribe; delegate (registered
-   under `_events_auth/v1`) at sign time. The gateway also publishes
-   its own service-change events on `admin_events_watchServices`.
+   by NATS pub/sub. HMAC verify on subscribe; sign-side gate is the
+   admin/boot token plus optional `WithSignerSecret` (gRPC peer calls
+   only — in-process bypasses). The gateway also publishes its own
+   service-change events on `admin_events_watchServices`.
 
 ## Layout
 
@@ -79,7 +80,9 @@ gw/
   broker.go                Sub-fanout: shared NATS subs across N WebSockets
   subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
   auth_subscribe.go        HMAC verify + SubscribeAuthCode
-  auth_delegate.go         Calls _events_auth/v1 at SignSubscriptionToken
+  auth_signer.go           Bearer gate on cp.SignSubscriptionToken
+  auth_delegate_deprecation.go  One-time-per-(ns,ver) deprecation log
+                           when a service registers under _events_auth
   auth_admin.go            Boot-token gen/persist + AdminMiddleware
   auth_admin_delegate.go   Calls _admin_auth/v1 from AdminMiddleware
   admin_events.go          AddAdminEvents() + publishServiceChange (NATS)
@@ -103,6 +106,9 @@ gw/
   proto/                   Generated proto bindings:
     controlplane/v1/       Control plane proto + generated bindings
     eventsauth/v1/         SubscriptionAuthorizer delegate proto
+                           (parked — runtime path removed plan §2.3,
+                           generated code kept one release for
+                           importers)
     adminauth/v1/          AdminAuthorizer delegate proto
     adminevents/v1/        AdminEvents (service-change stream) proto
   controlclient/           Service-side: SelfRegister + heartbeat goroutine
