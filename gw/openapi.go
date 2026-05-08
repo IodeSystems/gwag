@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -520,7 +519,14 @@ func sanitizeNamespace(s string) string {
 // reason — same "latest is current; older addressable but discouraged"
 // shape proto pools use, expressed via name disambiguation rather than
 // nested namespace objects.
-func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
+//
+// One *IRTypeBuilder per source: each source's IR has its own
+// component schemas + synthesized inline types, and the per-source
+// naming closure prefixes them all by "<ns>_" (latest) or
+// "<ns>_<vN>_" (older). Long + JSON scalars are shared across every
+// per-source builder to avoid graphql-go's duplicate-scalar-name
+// rejection.
+func (g *Gateway) buildOpenAPIFields(filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
 	queries := graphql.Fields{}
 	mutations := graphql.Fields{}
 
@@ -535,12 +541,17 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter
 		}
 		byNS[k.namespace] = append(byNS[k.namespace], s)
 	}
+	if len(byNS) == 0 {
+		return queries, mutations, nil
+	}
 
 	nsNames := make([]string, 0, len(byNS))
 	for ns := range byNS {
 		nsNames = append(nsNames, ns)
 	}
 	sort.Strings(nsNames)
+
+	long, jsonScalar := openAPISharedScalars()
 
 	for _, ns := range nsNames {
 		sources := byNS[ns]
@@ -556,41 +567,31 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter
 				fieldPrefix = ns + "_" + src.version + "_"
 				typePrefix = ns + "_" + src.version + "_"
 			}
-			tb.withPrefix(typePrefix)
 
-			paths := src.doc.Paths
-			if paths == nil {
-				continue
-			}
-			pathKeys := make([]string, 0)
-			for k := range paths.Map() {
-				pathKeys = append(pathKeys, k)
-			}
-			sort.Strings(pathKeys)
-			for _, p := range pathKeys {
-				pathItem := paths.Map()[p]
-				for _, op := range listOperations(p, pathItem) {
-					opKey := openAPIFieldName("", op)
-					field, err := g.buildOpenAPIField(tb, src, op, opKey)
-					if err != nil {
-						return nil, nil, err
+			irSvc := ir.IngestOpenAPI(src.doc)
+			tb := newOpenAPISourceTypeBuilder(irSvc, typePrefix, long, jsonScalar)
+
+			for _, irOp := range irSvc.Operations {
+				opKey := lowerCamel(sanitizeNamespace(irOp.Name))
+				field, err := g.buildOpenAPIField(tb, src, irOp, opKey)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !isLatest {
+					field.DeprecationReason = latestReason
+				}
+				name := fieldPrefix + opKey
+				switch irOp.Kind {
+				case ir.OpQuery:
+					if _, exists := queries[name]; exists {
+						return nil, nil, fmt.Errorf("openapi field name collision (Query): %s", name)
 					}
-					if !isLatest {
-						field.DeprecationReason = latestReason
+					queries[name] = field
+				default:
+					if _, exists := mutations[name]; exists {
+						return nil, nil, fmt.Errorf("openapi field name collision (Mutation): %s", name)
 					}
-					name := fieldPrefix + opKey
-					switch strings.ToUpper(op.Method) {
-					case "GET":
-						if _, exists := queries[name]; exists {
-							return nil, nil, fmt.Errorf("openapi field name collision (Query): %s", name)
-						}
-						queries[name] = field
-					default:
-						if _, exists := mutations[name]; exists {
-							return nil, nil, fmt.Errorf("openapi field name collision (Mutation): %s", name)
-						}
-						mutations[name] = field
-					}
+					mutations[name] = field
 				}
 			}
 		}
@@ -598,104 +599,118 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter
 	return queries, mutations, nil
 }
 
-type openAPIOperation struct {
-	Method   string
-	Path     string
-	Op       *openapi3.Operation
-	PathItem *openapi3.PathItem
+// openAPISharedScalars constructs the Long + JSON scalars once per
+// schema build. Per-source IRTypeBuilders share these so the final
+// graphql.Schema sees one named instance — graphql-go rejects two
+// scalars sharing a Name even when they're equivalently shaped.
+func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
+	long := graphql.NewScalar(graphql.ScalarConfig{
+		Name: "Long",
+		Description: "64-bit integer encoded as a decimal string. " +
+			"OpenAPI integer fields with format=int64/uint64 land here; " +
+			"graphql-go's built-in Int is signed 32-bit and would lose " +
+			"precision (or null out entirely) for values above 2^31.",
+		Serialize: func(v any) any {
+			switch x := v.(type) {
+			case float64:
+				return strconv.FormatInt(int64(x), 10)
+			case int64:
+				return strconv.FormatInt(x, 10)
+			case uint64:
+				return strconv.FormatUint(x, 10)
+			case int:
+				return strconv.Itoa(x)
+			case string:
+				return x
+			case json.Number:
+				return x.String()
+			}
+			return nil
+		},
+		ParseValue: func(v any) any { return v },
+		ParseLiteral: func(v ast.Value) any {
+			switch x := v.(type) {
+			case *ast.StringValue:
+				return x.Value
+			case *ast.IntValue:
+				return x.Value
+			}
+			return nil
+		},
+	})
+	jsonScalar := graphql.NewScalar(graphql.ScalarConfig{
+		Name:         "JSON",
+		Description:  "Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly).",
+		Serialize:    func(v any) any { return v },
+		ParseValue:   func(v any) any { return v },
+		ParseLiteral: func(v ast.Value) any { return v },
+	})
+	return long, jsonScalar
 }
 
-func listOperations(path string, item *openapi3.PathItem) []openAPIOperation {
-	out := []openAPIOperation{}
-	verbs := []struct {
-		verb string
-		op   *openapi3.Operation
-	}{
-		{"GET", item.Get},
-		{"POST", item.Post},
-		{"PUT", item.Put},
-		{"PATCH", item.Patch},
-		{"DELETE", item.Delete},
+// newOpenAPISourceTypeBuilder constructs the per-source IRTypeBuilder
+// with the prefix-aware naming policy. typePrefix translates "Pet" →
+// "<ns>_Pet" or "<ns>_<vN>_Pet" so two versions of the same namespace
+// don't collide on type name.
+func newOpenAPISourceTypeBuilder(svc *ir.Service, typePrefix string, long, jsonScalar *graphql.Scalar) *IRTypeBuilder {
+	naming := IRTypeNaming{
+		ObjectName:    func(s string) string { return typePrefix + s },
+		InputName:     func(s string) string { return typePrefix + s + "Input" },
+		EnumName:      func(s string) string { return typePrefix + s },
+		UnionName:     func(s string) string { return typePrefix + s },
+		InterfaceName: func(s string) string { return typePrefix + s },
+		ScalarName:    func(s string) string { return typePrefix + s },
+		FieldName:     lowerCamel,
 	}
-	for _, v := range verbs {
-		if v.op == nil {
-			continue
-		}
-		out = append(out, openAPIOperation{Method: v.verb, Path: path, Op: v.op, PathItem: item})
-	}
-	return out
+	return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+		Int64Type:  long,
+		UInt64Type: long,
+		MapType:    jsonScalar,
+		JSONType:   jsonScalar,
+	})
 }
 
-// openAPIFieldName builds a GraphQL field name from an operation.
-// Prefers operationId (huma sets these); falls back to a method+path
-// slug. The caller passes the per-source prefix ("<ns>_" for the
-// latest version, "<ns>_<vN>_" for older) so cross-spec / cross-
-// version collisions are isolated by name.
-func openAPIFieldName(prefix string, op openAPIOperation) string {
-	id := op.Op.OperationID
-	if id == "" {
-		id = strings.ToLower(op.Method) + pathToSlug(op.Path)
-	}
-	return prefix + lowerCamel(sanitizeNamespace(id))
-}
-
-func pathToSlug(p string) string {
-	var b strings.Builder
-	for _, r := range p {
-		switch {
-		case r == '/' || r == '{' || r == '}':
-			b.WriteRune('_')
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-		}
-	}
-	return strings.Trim(b.String(), "_")
-}
-
-func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, op openAPIOperation, opKey string) (*graphql.Field, error) {
+// buildOpenAPIField wires args + return type via IRTypeBuilder, then
+// installs the dispatcher. Path / query parameters become named
+// graphql args; the JSON body lands as a single "body" arg with an
+// Input Object type. The dispatcher captures the original
+// *openapi3.Operation so parameter encoding (path templating, query
+// values, header forwarding) keeps using kin-openapi's shape — the IR
+// is the type contract; the OpenAPI doc is the wire contract.
+func (g *Gateway) buildOpenAPIField(tb *IRTypeBuilder, src *openAPISource, irOp *ir.Operation, opKey string) (*graphql.Field, error) {
 	args := graphql.FieldConfigArgument{}
 
-	// Path + query parameters → args.
-	for _, paramRef := range op.Op.Parameters {
-		if paramRef == nil || paramRef.Value == nil {
+	for _, a := range irOp.Args {
+		// Header / cookie locations skipped for v1 — same posture as
+		// pre-cutover. Body and path/query land as graphql args.
+		switch a.OpenAPILocation {
+		case "header", "cookie":
 			continue
 		}
-		p := paramRef.Value
-		if p.In != "path" && p.In != "query" {
-			continue // skip header/cookie for v1
-		}
-		t, err := tb.inputTypeFromSchema(p.Schema)
+		t, err := tb.Input(a.Type, a.Repeated, a.Required, a.ItemRequired)
 		if err != nil {
 			return nil, err
 		}
-		if p.Required {
-			t = graphql.NewNonNull(t)
+		args[a.Name] = &graphql.ArgumentConfig{Type: t}
+	}
+
+	var out graphql.Output = tb.options.JSONType
+	if irOp.Output != nil {
+		o, err := tb.Output(*irOp.Output, irOp.OutputRepeated, irOp.OutputRequired, irOp.OutputItemRequired)
+		if err != nil {
+			return nil, err
 		}
-		args[p.Name] = &graphql.ArgumentConfig{Type: t}
+		out = o
 	}
 
-	// Request body → 'body' arg (input object).
-	if op.Op.RequestBody != nil && op.Op.RequestBody.Value != nil {
-		body := op.Op.RequestBody.Value
-		if mt, ok := body.Content["application/json"]; ok && mt.Schema != nil {
-			t, err := tb.inputTypeFromSchema(mt.Schema)
-			if err != nil {
-				return nil, err
-			}
-			if body.Required {
-				t = graphql.NewNonNull(t)
-			}
-			args["body"] = &graphql.ArgumentConfig{Type: t}
-		}
+	// op.Origin holds the *openapi3.Operation captured at ingest, used
+	// for parameter resolution by dispatchOpenAPI.
+	openAPIOp, _ := irOp.Origin.(*openapi3.Operation)
+	if openAPIOp == nil {
+		return nil, fmt.Errorf("openapi: ingest dropped op origin for %s", irOp.Name)
 	}
 
-	// Response: prefer 200, then 201, then 'default'.
-	out, err := tb.responseType(op.Op)
-	if err != nil {
-		return nil, err
-	}
-
-	core := newOpenAPIDispatcher(src, op.Op, op.Method, op.Path, g.cfg.metrics)
+	core := newOpenAPIDispatcher(src, openAPIOp, irOp.HTTPMethod, irOp.HTTPPath, g.cfg.metrics)
 	dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, g.cfg.metrics, g.cfg.backpressure))(core)
 	sid := ir.MakeSchemaID(src.namespace, src.version, opKey)
 	g.dispatchers.Set(sid, dispatcher)
@@ -850,501 +865,3 @@ func forwardOpenAPIHeaders(ctx context.Context, out *http.Request, allow []strin
 	}
 }
 
-// ---------------------------------------------------------------------
-// Type mapper: JSON Schema → GraphQL.
-// ---------------------------------------------------------------------
-
-type openAPITypeBuilder struct {
-	mu sync.Mutex
-	// typePrefix is the per-source prefix (e.g. "petstore_" for the
-	// latest version, "petstore_v1_" for older). Object/Enum/Input
-	// names are this prefix + schemaName so two versions of the same
-	// namespace produce distinct GraphQL types.
-	typePrefix string
-	objects    map[string]*graphql.Object
-	inputs     map[string]*graphql.InputObject
-	enums      map[string]*graphql.Enum
-	unions     map[string]*graphql.Union
-	jsonScalar *graphql.Scalar
-	longScalar *graphql.Scalar
-}
-
-func newOpenAPITypeBuilder() *openAPITypeBuilder {
-	return &openAPITypeBuilder{
-		objects: map[string]*graphql.Object{},
-		inputs:  map[string]*graphql.InputObject{},
-		enums:   map[string]*graphql.Enum{},
-		unions:  map[string]*graphql.Union{},
-		jsonScalar: graphql.NewScalar(graphql.ScalarConfig{
-			Name:         "JSON",
-			Description:  "Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly).",
-			Serialize:    func(v any) any { return v },
-			ParseValue:   func(v any) any { return v },
-			ParseLiteral: func(v ast.Value) any { return v },
-		}),
-		longScalar: graphql.NewScalar(graphql.ScalarConfig{
-			Name: "Long",
-			Description: "64-bit integer encoded as a decimal string. " +
-				"OpenAPI integer fields with format=int64/uint64 land here; " +
-				"graphql-go's built-in Int is signed 32-bit and would lose " +
-				"precision (or null out entirely) for values above 2^31.",
-			Serialize: func(v any) any {
-				switch x := v.(type) {
-				case float64:
-					// json.Unmarshal turns numeric responses into float64.
-					// strconv.FormatFloat with -1 precision avoids the "%v"
-					// scientific notation graphql.String falls into.
-					return strconv.FormatInt(int64(x), 10)
-				case int64:
-					return strconv.FormatInt(x, 10)
-				case uint64:
-					return strconv.FormatUint(x, 10)
-				case int:
-					return strconv.Itoa(x)
-				case string:
-					return x
-				case json.Number:
-					return x.String()
-				}
-				return nil
-			},
-			ParseValue: func(v any) any { return v },
-			ParseLiteral: func(v ast.Value) any {
-				switch x := v.(type) {
-				case *ast.StringValue:
-					return x.Value
-				case *ast.IntValue:
-					return x.Value
-				}
-				return nil
-			},
-		}),
-	}
-}
-
-// withPrefix scopes type-name caching for the next batch of fields.
-// Callers set this per-source (latest = "<ns>_", older = "<ns>_<vN>_")
-// before invoking outputTypeFromSchema / inputTypeFromSchema, so two
-// versions of the same namespace get distinct Object / Enum / Input
-// types even when their underlying schemas share a name like "Pet".
-func (tb *openAPITypeBuilder) withPrefix(p string) {
-	tb.typePrefix = p
-}
-
-// primaryType strips "null" from an OpenAPI 3.1 multi-type
-// declaration, returning the single non-null type. Returns "" if the
-// schema has zero or multiple non-null types (we treat those as
-// opaque JSON).
-func primaryType(s *openapi3.Schema) string {
-	if s == nil || s.Type == nil {
-		return ""
-	}
-	var primaries []string
-	for _, t := range *s.Type {
-		if t != "null" {
-			primaries = append(primaries, t)
-		}
-	}
-	if len(primaries) == 1 {
-		return primaries[0]
-	}
-	return ""
-}
-
-// outputTypeFromSchema returns a GraphQL output Type for the given
-// OpenAPI schema. Unsupported shapes (allOf, mixed types) fall back
-// to the JSON scalar. oneOf / anyOf project to graphql.NewUnion when
-// every variant resolves to a known Object; otherwise fall back.
-func (tb *openAPITypeBuilder) outputTypeFromSchema(ref *openapi3.SchemaRef) (graphql.Output, error) {
-	if ref == nil || ref.Value == nil {
-		return tb.jsonScalar, nil
-	}
-	s := ref.Value
-	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
-		return tb.unionFromVariants(ref, s)
-	}
-	if pt := primaryType(s); pt != "" {
-		switch pt {
-		case "string":
-			if len(s.Enum) > 0 {
-				return tb.enumFor(ref, s)
-			}
-			return graphql.String, nil
-		case "integer":
-			return tb.integerType(s), nil
-		case "number":
-			return graphql.Float, nil
-		case "boolean":
-			return graphql.Boolean, nil
-		case "array":
-			elem, err := tb.outputTypeFromSchema(s.Items)
-			if err != nil {
-				return nil, err
-			}
-			return graphql.NewList(elem), nil
-		case "object":
-			return tb.objectFor(ref, s)
-		}
-	}
-	return tb.jsonScalar, nil
-}
-
-// integerType picks a GraphQL output for an OpenAPI `integer` schema
-// based on its declared format. graphql-go's `Int` is signed 32-bit,
-// so any int64-shaped value (Unix-ms timestamps, large IDs, ...)
-// silently coerces to nil and trips a NonNull error on the wire.
-// Mirrors gw/types.go's proto-side mapping where Int64Kind also
-// becomes a string-encoded representation. Returns the per-builder
-// `Long` scalar (decimal-formatted on serialize) for int64 / uint64
-// formats; plain integer stays graphql.Int.
-func (tb *openAPITypeBuilder) integerType(s *openapi3.Schema) graphql.Output {
-	switch s.Format {
-	case "int64", "uint64":
-		return tb.longScalar
-	}
-	return graphql.Int
-}
-
-// unionFromVariants projects an OpenAPI oneOf / anyOf into a
-// graphql.NewUnion when every variant resolves to a known Object.
-// Falls back to the JSON scalar when:
-//   - a variant doesn't resolve to an Object (primitive / array / nested
-//     union / unnamed inline schema we can't synthesize a name for);
-//   - the union itself has no stable name (not a $ref, no title, and
-//     fewer than two named variants to compose from);
-//   - the variant list is empty.
-//
-// ResolveType uses the spec's `discriminator.propertyName` when present
-// (with `discriminator.mapping` overriding the default schema-name
-// mapping); falls back to a "first variant whose required props are
-// all set on the value" heuristic; returns nil when nothing matches
-// (graphql-go surfaces that as a runtime error so the operator notices).
-func (tb *openAPITypeBuilder) unionFromVariants(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Output, error) {
-	variants := s.OneOf
-	if len(variants) == 0 {
-		variants = s.AnyOf
-	}
-	if len(variants) == 0 {
-		return tb.jsonScalar, nil
-	}
-
-	// Resolve each variant; bail to JSON scalar if any isn't a clean Object.
-	type resolvedVariant struct {
-		name     string // un-prefixed schema name (the Object's local key)
-		obj      *graphql.Object
-		schema   *openapi3.Schema
-		required []string
-	}
-	resolved := make([]resolvedVariant, 0, len(variants))
-	for _, v := range variants {
-		if v == nil || v.Value == nil {
-			return tb.jsonScalar, nil
-		}
-		// Each variant must resolve to an OBJECT.
-		if pt := primaryType(v.Value); pt != "" && pt != "object" {
-			return tb.jsonScalar, nil
-		}
-		out, err := tb.objectFor(v, v.Value)
-		if err != nil {
-			return tb.jsonScalar, nil
-		}
-		obj, ok := out.(*graphql.Object)
-		if !ok {
-			return tb.jsonScalar, nil
-		}
-		resolved = append(resolved, resolvedVariant{
-			name:     schemaName(v, v.Value, "Object"),
-			obj:      obj,
-			schema:   v.Value,
-			required: v.Value.Required,
-		})
-	}
-
-	unionLocalName := schemaName(ref, s, "")
-	if unionLocalName == "" {
-		// Synthesize a name from the variants — "AOrB". Only safe when
-		// every variant has a stable name itself.
-		parts := make([]string, len(resolved))
-		for i, v := range resolved {
-			if v.name == "" {
-				return tb.jsonScalar, nil
-			}
-			parts[i] = v.name
-		}
-		unionLocalName = strings.Join(parts, "Or")
-	}
-	name := tb.typePrefix + unionLocalName
-	if u, ok := tb.unions[name]; ok {
-		return u, nil
-	}
-
-	// Discriminator is on s, not on the variant. Build the value→Object
-	// lookup once and close over it.
-	byVariantName := map[string]*graphql.Object{}
-	for _, v := range resolved {
-		byVariantName[v.name] = v.obj
-	}
-	mapping := map[string]*graphql.Object{}
-	if s.Discriminator != nil {
-		for k, ref := range s.Discriminator.Mapping {
-			// Mapping values are typically "#/components/schemas/Foo"
-			// — kin-openapi exposes the raw string via .Ref. Plain
-			// schema names ("Foo") survive the split unchanged.
-			parts := strings.Split(ref.Ref, "/")
-			leaf := parts[len(parts)-1]
-			if obj, ok := byVariantName[leaf]; ok {
-				mapping[k] = obj
-			}
-		}
-	}
-	discriminatorProp := ""
-	if s.Discriminator != nil {
-		discriminatorProp = s.Discriminator.PropertyName
-	}
-
-	types := make([]*graphql.Object, len(resolved))
-	for i, v := range resolved {
-		types[i] = v.obj
-	}
-	u := graphql.NewUnion(graphql.UnionConfig{
-		Name:        name,
-		Description: s.Description,
-		Types:       types,
-		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
-			m, ok := p.Value.(map[string]any)
-			if !ok {
-				return nil
-			}
-			if discriminatorProp != "" {
-				if d, ok := m[discriminatorProp].(string); ok {
-					if obj, ok := mapping[d]; ok {
-						return obj
-					}
-					if obj, ok := byVariantName[d]; ok {
-						return obj
-					}
-				}
-			}
-			// Heuristic: first variant whose required properties are
-			// all present on the value. Falls through to nil when no
-			// variant matches — graphql-go surfaces that to the client.
-			for _, v := range resolved {
-				ok := true
-				for _, req := range v.required {
-					if _, present := m[req]; !present {
-						ok = false
-						break
-					}
-				}
-				if ok {
-					return v.obj
-				}
-			}
-			return nil
-		},
-	})
-	tb.unions[name] = u
-	return u, nil
-}
-
-func (tb *openAPITypeBuilder) inputTypeFromSchema(ref *openapi3.SchemaRef) (graphql.Input, error) {
-	if ref == nil || ref.Value == nil {
-		return tb.jsonScalar, nil
-	}
-	s := ref.Value
-	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
-		return tb.jsonScalar, nil
-	}
-	if pt := primaryType(s); pt != "" {
-		switch pt {
-		case "string":
-			if len(s.Enum) > 0 {
-				e, err := tb.enumFor(ref, s)
-				if err != nil {
-					return nil, err
-				}
-				return e, nil
-			}
-			return graphql.String, nil
-		case "integer":
-			// Same int64-overflow concern as the output path; clients
-			// pass large ints through the same Long scalar.
-			if s.Format == "int64" || s.Format == "uint64" {
-				return tb.longScalar, nil
-			}
-			return graphql.Int, nil
-		case "number":
-			return graphql.Float, nil
-		case "boolean":
-			return graphql.Boolean, nil
-		case "array":
-			elem, err := tb.inputTypeFromSchema(s.Items)
-			if err != nil {
-				return nil, err
-			}
-			return graphql.NewList(elem), nil
-		case "object":
-			return tb.inputObjectFor(ref, s)
-		}
-	}
-	return tb.jsonScalar, nil
-}
-
-func (tb *openAPITypeBuilder) responseType(op *openapi3.Operation) (graphql.Output, error) {
-	if op.Responses == nil {
-		return tb.jsonScalar, nil
-	}
-	for _, code := range []string{"200", "201"} {
-		r := op.Responses.Status(parseStatus(code))
-		if r != nil && r.Value != nil {
-			if mt, ok := r.Value.Content["application/json"]; ok && mt.Schema != nil {
-				return tb.outputTypeFromSchema(mt.Schema)
-			}
-		}
-	}
-	if r := op.Responses.Default(); r != nil && r.Value != nil {
-		if mt, ok := r.Value.Content["application/json"]; ok && mt.Schema != nil {
-			return tb.outputTypeFromSchema(mt.Schema)
-		}
-	}
-	return tb.jsonScalar, nil
-}
-
-func parseStatus(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
-func (tb *openAPITypeBuilder) objectFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Output, error) {
-	name := tb.typePrefix + schemaName(ref, s, "Object")
-	if obj, ok := tb.objects[name]; ok {
-		return obj, nil
-	}
-	// Pre-register an empty Object to handle recursive refs.
-	obj := graphql.NewObject(graphql.ObjectConfig{
-		Name: name,
-		Fields: graphql.FieldsThunk(func() graphql.Fields {
-			fields := graphql.Fields{}
-			propNames := make([]string, 0, len(s.Properties))
-			for k := range s.Properties {
-				propNames = append(propNames, k)
-			}
-			sort.Strings(propNames)
-			for _, k := range propNames {
-				if !validGraphQLName(k) {
-					continue // e.g. $schema (JSON Schema metaschema)
-				}
-				p := s.Properties[k]
-				t, err := tb.outputTypeFromSchema(p)
-				if err != nil {
-					continue
-				}
-				if isRequired(s.Required, k) {
-					t = graphql.NewNonNull(t)
-				}
-				fields[lowerCamel(k)] = &graphql.Field{Type: t}
-			}
-			if len(fields) == 0 {
-				fields["_void"] = &graphql.Field{Type: graphql.String}
-			}
-			return fields
-		}),
-	})
-	tb.objects[name] = obj
-	return obj, nil
-}
-
-func (tb *openAPITypeBuilder) inputObjectFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (graphql.Input, error) {
-	name := tb.typePrefix + schemaName(ref, s, "Input") + "Input"
-	if io, ok := tb.inputs[name]; ok {
-		return io, nil
-	}
-	io := graphql.NewInputObject(graphql.InputObjectConfig{
-		Name: name,
-		Fields: graphql.InputObjectConfigFieldMapThunk(func() graphql.InputObjectConfigFieldMap {
-			fields := graphql.InputObjectConfigFieldMap{}
-			propNames := make([]string, 0, len(s.Properties))
-			for k := range s.Properties {
-				propNames = append(propNames, k)
-			}
-			sort.Strings(propNames)
-			for _, k := range propNames {
-				if !validGraphQLName(k) {
-					continue
-				}
-				p := s.Properties[k]
-				t, err := tb.inputTypeFromSchema(p)
-				if err != nil {
-					continue
-				}
-				if isRequired(s.Required, k) {
-					t = graphql.NewNonNull(t)
-				}
-				fields[lowerCamel(k)] = &graphql.InputObjectFieldConfig{Type: t}
-			}
-			if len(fields) == 0 {
-				fields["_void"] = &graphql.InputObjectFieldConfig{Type: graphql.String}
-			}
-			return fields
-		}),
-	})
-	tb.inputs[name] = io
-	return io, nil
-}
-
-// validGraphQLName matches /^[_A-Za-z][_A-Za-z0-9]*$/. JSON Schema
-// allows things like "$schema" that GraphQL forbids; skip those at
-// type-build time.
-func validGraphQLName(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i, r := range s {
-		if i == 0 {
-			if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
-				return false
-			}
-			continue
-		}
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			return false
-		}
-	}
-	return true
-}
-
-func (tb *openAPITypeBuilder) enumFor(ref *openapi3.SchemaRef, s *openapi3.Schema) (*graphql.Enum, error) {
-	name := tb.typePrefix + schemaName(ref, s, "Enum")
-	if e, ok := tb.enums[name]; ok {
-		return e, nil
-	}
-	values := graphql.EnumValueConfigMap{}
-	for _, v := range s.Enum {
-		vs := fmt.Sprintf("%v", v)
-		values[sanitizeNamespace(vs)] = &graphql.EnumValueConfig{Value: vs}
-	}
-	e := graphql.NewEnum(graphql.EnumConfig{Name: name, Values: values})
-	tb.enums[name] = e
-	return e, nil
-}
-
-func schemaName(ref *openapi3.SchemaRef, s *openapi3.Schema, fallback string) string {
-	if ref != nil && ref.Ref != "" {
-		// "#/components/schemas/Pet" → "Pet"
-		parts := strings.Split(ref.Ref, "/")
-		return sanitizeNamespace(parts[len(parts)-1])
-	}
-	if s != nil && s.Title != "" {
-		return sanitizeNamespace(s.Title)
-	}
-	return fallback
-}
-
-func isRequired(req []string, name string) bool {
-	for _, r := range req {
-		if r == name {
-			return true
-		}
-	}
-	return false
-}

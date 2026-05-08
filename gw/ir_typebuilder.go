@@ -48,6 +48,14 @@ type IRTypeBuilderOptions struct {
 	// their own type here.
 	MapType graphql.Output
 
+	// JSONType is the fallback used when an outputBase / inputBase
+	// path hits a Map (input position) or an unknown named ref. When
+	// nil the builder lazily constructs a private "JSON" scalar; pass
+	// a shared scalar here when multiple per-source builders feed the
+	// same graphql.Schema (graphql-go forbids two scalars sharing a
+	// name).
+	JSONType *graphql.Scalar
+
 	// IDType renders TypeRef.Builtin = ScalarID. Default graphql.ID.
 	IDType graphql.Output
 }
@@ -132,9 +140,13 @@ func NewIRTypeBuilder(svc *ir.Service, naming IRTypeNaming, opts IRTypeBuilderOp
 func identityName(s string) string { return s }
 
 // jsonScalar lazily constructs a JSON scalar shared across the
-// builder's lifetime — kept opt-in so the caller's MapType override
-// avoids constructing it at all.
+// builder's lifetime — or returns the caller-supplied one when
+// IRTypeBuilderOptions.JSONType is set (so multi-builder schemas
+// can avoid the duplicate-scalar-name conflict).
 func (b *IRTypeBuilder) jsonScalar() *graphql.Scalar {
+	if b.options.JSONType != nil {
+		return b.options.JSONType
+	}
 	if b.jsonOnce {
 		return b.jsonValue
 	}
@@ -392,16 +404,23 @@ func (b *IRTypeBuilder) enumFor(t *ir.Type) *graphql.Enum {
 // dropped; an empty result falls back to a JSON scalar so the field
 // still surfaces.
 //
-// ResolveType prefers the IR Type's DiscriminatorProperty (OpenAPI's
-// schema.discriminator.propertyName) when set: read the property off
-// the runtime value, then look the value up in
-// DiscriminatorMapping (falling through to a variant-name identity
-// match if no mapping entry exists). Falls back to the GraphQL
-// `__typename` convention when no discriminator is declared.
+// ResolveType priority:
+//  1. DiscriminatorProperty (OpenAPI's schema.discriminator.propertyName)
+//     consulted when set: lookup via DiscriminatorMapping, fall through
+//     to a variant-name identity match.
+//  2. GraphQL `__typename` convention.
+//  3. "First variant whose required fields are all present" heuristic
+//     — matches the legacy openAPITypeBuilder behavior so payloads
+//     without a discriminator still resolve.
 func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 	if u, ok := b.unions[t.Name]; ok {
 		return u, nil
 	}
+	type variantInfo struct {
+		obj      *graphql.Object
+		required []string
+	}
+	variants := []variantInfo{}
 	types := []*graphql.Object{}
 	byName := map[string]*graphql.Object{}
 	for _, v := range t.Variants {
@@ -410,6 +429,13 @@ func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 			continue
 		}
 		obj := b.objectFor(variantType)
+		req := []string{}
+		for _, f := range variantType.Fields {
+			if f.Required {
+				req = append(req, f.Name)
+			}
+		}
+		variants = append(variants, variantInfo{obj: obj, required: req})
 		types = append(types, obj)
 		byName[v] = obj
 		// Also key by the rendered Object name so __typename matches
@@ -445,6 +471,18 @@ func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 			if name, ok := m["__typename"].(string); ok {
 				if obj, ok := byName[name]; ok {
 					return obj
+				}
+			}
+			for _, v := range variants {
+				ok := true
+				for _, name := range v.required {
+					if _, present := m[name]; !present {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					return v.obj
 				}
 			}
 			return nil
@@ -486,6 +524,14 @@ func (b *IRTypeBuilder) scalar(s ir.ScalarKind) (graphql.Output, error) {
 	case ir.ScalarID:
 		return b.options.IDType, nil
 	case ir.ScalarUnknown:
+		// OpenAPI ingest emits a zero TypeRef when a schema doesn't
+		// classify cleanly (mixed-kind oneOf, missing fields). Project
+		// to JSONType when the caller wired one — that matches the
+		// legacy openAPITypeBuilder fallback. Proto callers leave
+		// JSONType nil, so they keep the previous String behavior.
+		if b.options.JSONType != nil {
+			return b.options.JSONType, nil
+		}
 		return graphql.String, nil
 	}
 	return nil, fmt.Errorf("ir typebuilder: unknown ScalarKind %v", s)
