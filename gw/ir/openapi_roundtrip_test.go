@@ -405,6 +405,114 @@ func TestOpenAPIIngest_InlineOneOf(t *testing.T) {
 	}
 }
 
+// TestOpenAPIIngest_InlineObject covers the inline-object ingest
+// path: anonymous body / response / nested object schemas get
+// deterministic synthesised names in svc.Types so the runtime
+// type-builder can resolve them via TypeRef.Named.
+func TestOpenAPIIngest_InlineObject(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "things", "version": "1.0.0"},
+  "paths": {
+    "/things/{id}": {
+      "get": {
+        "operationId": "getThing",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "properties": {
+                "id":   {"type": "string"},
+                "name": {"type": "string"}
+              }
+            }}}
+          }
+        }
+      }
+    },
+    "/things": {
+      "post": {
+        "operationId": "createThing",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"}
+            }
+          }}}
+        },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "properties": {
+                "id":   {"type": "string"},
+                "name": {"type": "string"}
+              }
+            }}}
+          }
+        }
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+
+	for _, want := range []string{"getThingResponse", "createThingBody", "createThingResponse"} {
+		typ, ok := svc.Types[want]
+		if !ok {
+			keys := []string{}
+			for k := range svc.Types {
+				keys = append(keys, k)
+			}
+			t.Errorf("missing synthesised %s; types = %v", want, keys)
+			continue
+		}
+		if typ.TypeKind != TypeObject {
+			t.Errorf("%s TypeKind = %v, want TypeObject", want, typ.TypeKind)
+		}
+	}
+
+	// Operations route their body / response refs at the synthesised names.
+	byName := map[string]*Operation{}
+	for _, op := range svc.Operations {
+		byName[op.Name] = op
+	}
+	if op := byName["getThing"]; op == nil || op.Output == nil || op.Output.Named != "getThingResponse" {
+		t.Errorf("getThing.Output Named = %#v, want getThingResponse", op.Output)
+	}
+	create := byName["createThing"]
+	if create == nil {
+		t.Fatal("createThing missing")
+	}
+	bodyArg := (*Arg)(nil)
+	for _, a := range create.Args {
+		if a.Name == "body" {
+			bodyArg = a
+		}
+	}
+	if bodyArg == nil || bodyArg.Type.Named != "createThingBody" {
+		t.Errorf("createThing body Type.Named = %#v, want createThingBody", bodyArg)
+	}
+	if create.Output == nil || create.Output.Named != "createThingResponse" {
+		t.Errorf("createThing.Output Named = %#v, want createThingResponse", create.Output)
+	}
+}
+
 // TestOpenAPIRoundtripSynthesis_OneOf exercises the cross-kind
 // render: clear Origin so the renderer takes the synthesis path,
 // then verify oneOf comes back out with $ref-shaped variants.

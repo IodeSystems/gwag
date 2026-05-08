@@ -82,6 +82,10 @@ func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Ty
 		OriginKind:  KindOpenAPI,
 		Origin:      ref,
 	}
+	// Pre-register so recursive openapiPropToField calls that synthesize
+	// inline objects naming themselves "<name>_<field>" don't see the
+	// containing type as missing and re-enter ingest.
+	svc.Types[name] = t
 	// oneOf / anyOf at the schema root → TypeUnion with named
 	// variants. Inline (non-$ref) variants are skipped since the IR
 	// has no native synthesized-name story for them — operators
@@ -140,12 +144,19 @@ func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Ty
 		required[r] = true
 	}
 	for _, k := range keys {
-		t.Fields = append(t.Fields, openapiPropToField(svc, k, props[k], required[k]))
+		childHint := name + pascalIdent(k)
+		t.Fields = append(t.Fields, openapiPropToField(svc, childHint, k, props[k], required[k]))
 	}
 	return t
 }
 
-func openapiPropToField(svc *Service, name string, ref *openapi3.SchemaRef, required bool) *Field {
+// openapiPropToField projects a schema slot (property, parameter,
+// body, response) into a Field. pathHint is the deterministic name
+// the synthesizer uses if the slot is an anonymous inline object —
+// callers compute it from the surrounding context (operationId+
+// "Body", parent type name + property name, etc.) so synthesized
+// names are stable across runs and human-debuggable.
+func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.SchemaRef, required bool) *Field {
 	f := &Field{
 		Name:     name,
 		JSONName: name,
@@ -177,7 +188,11 @@ func openapiPropToField(svc *Service, name string, ref *openapi3.SchemaRef, requ
 	if pt := primaryOpenAPIType(s); pt != "" {
 		switch pt {
 		case "string":
-			f.Type = TypeRef{Builtin: ScalarString}
+			if len(s.Enum) > 0 {
+				f.Type = TypeRef{Named: synthesizeInlineEnum(svc, pathHint, s)}
+			} else {
+				f.Type = TypeRef{Builtin: ScalarString}
+			}
 		case "boolean":
 			f.Type = TypeRef{Builtin: ScalarBool}
 		case "integer":
@@ -199,22 +214,115 @@ func openapiPropToField(svc *Service, name string, ref *openapi3.SchemaRef, requ
 			if s.Items != nil && s.Items.Ref != "" {
 				parts := strings.Split(s.Items.Ref, "/")
 				f.Type = TypeRef{Named: parts[len(parts)-1]}
+			} else if s.Items != nil {
+				item := openapiPropToField(svc, pathHint+"Item", "item", s.Items, false)
+				f.Type = item.Type
 			} else {
 				f.Type = TypeRef{Builtin: ScalarString}
 			}
 		case "object":
 			if s.AdditionalProperties.Schema != nil {
-				val := openapiPropToField(svc, "v", s.AdditionalProperties.Schema, false)
+				val := openapiPropToField(svc, pathHint+"Value", "v", s.AdditionalProperties.Schema, false)
 				f.Type = TypeRef{Map: &MapType{
 					KeyType:   TypeRef{Builtin: ScalarString},
 					ValueType: val.Type,
 				}}
+			} else if len(s.Properties) > 0 {
+				f.Type = TypeRef{Named: synthesizeInlineObject(svc, pathHint, s)}
 			} else {
 				f.Type = TypeRef{Builtin: ScalarString}
 			}
 		}
 	}
 	return f
+}
+
+// synthesizeInlineObject registers a TypeObject for an anonymous
+// inline schema under the supplied name and returns that name.
+// Pre-registers the placeholder before recursing so cyclic property
+// shapes (rare in OpenAPI but possible) terminate.
+func synthesizeInlineObject(svc *Service, name string, s *openapi3.Schema) string {
+	if name == "" {
+		name = "AnonymousObject"
+	}
+	if existing, ok := svc.Types[name]; ok && existing.TypeKind == TypeObject {
+		return name
+	}
+	t := &Type{
+		Name:        name,
+		TypeKind:    TypeObject,
+		Description: s.Description,
+		OriginKind:  KindOpenAPI,
+	}
+	svc.Types[name] = t
+	keys := make([]string, 0, len(s.Properties))
+	for k := range s.Properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	required := make(map[string]bool, len(s.Required))
+	for _, r := range s.Required {
+		required[r] = true
+	}
+	for _, k := range keys {
+		childHint := name + pascalIdent(k)
+		t.Fields = append(t.Fields, openapiPropToField(svc, childHint, k, s.Properties[k], required[k]))
+	}
+	return name
+}
+
+// synthesizeInlineEnum registers a TypeEnum for an anonymous inline
+// string-with-enum schema and returns the chosen name.
+func synthesizeInlineEnum(svc *Service, name string, s *openapi3.Schema) string {
+	if name == "" {
+		name = "AnonymousEnum"
+	}
+	if existing, ok := svc.Types[name]; ok && existing.TypeKind == TypeEnum {
+		return name
+	}
+	t := &Type{
+		Name:        name,
+		TypeKind:    TypeEnum,
+		Description: s.Description,
+		OriginKind:  KindOpenAPI,
+	}
+	for _, v := range s.Enum {
+		if str, ok := v.(string); ok {
+			t.Enum = append(t.Enum, EnumValue{Name: str})
+		}
+	}
+	svc.Types[name] = t
+	return name
+}
+
+// pascalIdent uppercases the leading rune of an identifier and strips
+// non-alphanumeric runes. Used to compose synthesized inline-type
+// names from parent + child path segments ("createThing" + "Body" →
+// "createThingBody"). Multi-word camelCase inputs aren't normalized;
+// matches the IR convention of carrying source-format names verbatim.
+func pascalIdent(s string) string {
+	clean := sanitizeIdent(s)
+	if clean == "" {
+		return ""
+	}
+	r := []rune(clean)
+	if r[0] >= 'a' && r[0] <= 'z' {
+		r[0] = r[0] - 'a' + 'A'
+	}
+	return string(r)
+}
+
+// sanitizeIdent keeps the leading-case of s intact while stripping
+// runes that aren't valid in identifiers. Used to project an
+// operationId into a synthesized-type-name root segment.
+func sanitizeIdent(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			out = append(out, r)
+		}
+	}
+	return string(out)
 }
 
 // synthesizeInlineUnion examines an inline schema for oneOf/anyOf
@@ -332,7 +440,10 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 		out.Kind = OpMutation
 	}
 
-	// Path/query/header/cookie params → Args.
+	// Path/query/header/cookie params → Args. pathHint is built from
+	// the operation name so synthesized inline schemas land under
+	// stable, traceable names.
+	opHint := sanitizeIdent(out.Name)
 	for _, paramRef := range op.Parameters {
 		if paramRef == nil || paramRef.Value == nil {
 			continue
@@ -345,7 +456,7 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 			OpenAPILocation: p.In,
 		}
 		if p.Schema != nil && p.Schema.Value != nil {
-			arg.Type = openapiPropToField(svc, p.Name, p.Schema, p.Required).Type
+			arg.Type = openapiPropToField(svc, opHint+pascalIdent(p.Name), p.Name, p.Schema, p.Required).Type
 		} else {
 			arg.Type = TypeRef{Builtin: ScalarString}
 		}
@@ -358,7 +469,7 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 		if mt, ok := body.Content["application/json"]; ok && mt.Schema != nil {
 			out.Args = append(out.Args, &Arg{
 				Name:            "body",
-				Type:            openapiPropToField(svc, "body", mt.Schema, body.Required).Type,
+				Type:            openapiPropToField(svc, opHint+"Body", "body", mt.Schema, body.Required).Type,
 				Required:        body.Required,
 				Description:     body.Description,
 				OpenAPILocation: "body",
@@ -368,24 +479,24 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 
 	// Response: prefer 200, then 201, then default. One TypeRef.
 	if op.Responses != nil {
-		out.Output = openapiResponseTypeRef(svc, op.Responses)
+		out.Output = openapiResponseTypeRef(svc, opHint, op.Responses)
 	}
 	return out
 }
 
-func openapiResponseTypeRef(svc *Service, r *openapi3.Responses) *TypeRef {
+func openapiResponseTypeRef(svc *Service, opHint string, r *openapi3.Responses) *TypeRef {
 	for _, code := range []string{"200", "201"} {
 		resp := r.Status(parseStatusCode(code))
 		if resp != nil && resp.Value != nil {
 			if mt, ok := resp.Value.Content["application/json"]; ok && mt.Schema != nil {
-				ref := openapiPropToField(svc, "response", mt.Schema, false).Type
+				ref := openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false).Type
 				return &ref
 			}
 		}
 	}
 	if def := r.Default(); def != nil && def.Value != nil {
 		if mt, ok := def.Value.Content["application/json"]; ok && mt.Schema != nil {
-			ref := openapiPropToField(svc, "response", mt.Schema, false).Type
+			ref := openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false).Type
 			return &ref
 		}
 	}
