@@ -19,33 +19,74 @@ export type Scalars = {
   Long: { input: any; output: any; }
 };
 
-export type Mutation = {
-  __typename?: 'Mutation';
-  admin_drain: Maybe<Admin_DrainOutBody>;
-  admin_forgetPeer: Maybe<Admin_ForgetOutBody>;
-  admin_signSubscriptionToken: Maybe<Admin_SignOutBody>;
+export type AdminMutationNamespace = {
+  __typename?: 'AdminMutationNamespace';
+  drain: Maybe<Admin_DrainOutBody>;
+  forgetPeer: Maybe<Admin_ForgetOutBody>;
+  signSubscriptionToken: Maybe<Admin_SignOutBody>;
+  v1: AdminV1MutationNamespace;
 };
 
 
-export type MutationAdmin_DrainArgs = {
+export type AdminMutationNamespaceDrainArgs = {
   body: Admin_DrainInBodyInput;
 };
 
 
-export type MutationAdmin_ForgetPeerArgs = {
+export type AdminMutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
 };
 
 
-export type MutationAdmin_SignSubscriptionTokenArgs = {
+export type AdminMutationNamespaceSignSubscriptionTokenArgs = {
   body: Admin_SignInBodyInput;
+};
+
+export type AdminQueryNamespace = {
+  __typename?: 'AdminQueryNamespace';
+  listChannels: Maybe<Admin_ChannelsOutBody>;
+  listPeers: Maybe<Admin_PeersOutBody>;
+  listServices: Maybe<Admin_ServicesOutBody>;
+  v1: AdminV1QueryNamespace;
+};
+
+export type AdminV1MutationNamespace = {
+  __typename?: 'AdminV1MutationNamespace';
+  drain: Maybe<Admin_DrainOutBody>;
+  forgetPeer: Maybe<Admin_ForgetOutBody>;
+  signSubscriptionToken: Maybe<Admin_SignOutBody>;
+};
+
+
+export type AdminV1MutationNamespaceDrainArgs = {
+  body: Admin_DrainInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceForgetPeerArgs = {
+  nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminV1MutationNamespaceSignSubscriptionTokenArgs = {
+  body: Admin_SignInBodyInput;
+};
+
+export type AdminV1QueryNamespace = {
+  __typename?: 'AdminV1QueryNamespace';
+  listChannels: Maybe<Admin_ChannelsOutBody>;
+  listPeers: Maybe<Admin_PeersOutBody>;
+  listServices: Maybe<Admin_ServicesOutBody>;
+};
+
+export type Mutation = {
+  __typename?: 'Mutation';
+  admin: AdminMutationNamespace;
 };
 
 export type Query = {
   __typename?: 'Query';
-  admin_listChannels: Maybe<Admin_ChannelsOutBody>;
-  admin_listPeers: Maybe<Admin_PeersOutBody>;
-  admin_listServices: Maybe<Admin_ServicesOutBody>;
+  admin: AdminQueryNamespace;
 };
 
 export type Admin_ChannelInfo = {
@@ -120,71 +161,79 @@ export type Admin_SignOutBody = {
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DashboardQuery = { __typename?: 'Query', admin_listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string } | null> } | null, admin_listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string } | null> } | null };
+export type DashboardQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string } | null> } | null, listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string } | null> } | null } };
 
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { __typename?: 'Query', admin_listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null };
+export type ServicesQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
 
 export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type PeersQuery = { __typename?: 'Query', admin_listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string, name: string | null, joinedUnixMs: any } | null> } | null };
+export type PeersQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string, name: string | null, joinedUnixMs: any } | null> } | null } };
 
 export type ForgetPeerMutationVariables = Exact<{
   nodeId: Scalars['String']['input'];
 }>;
 
 
-export type ForgetPeerMutation = { __typename?: 'Mutation', admin_forgetPeer: { __typename?: 'admin_ForgetOutBody', removed: boolean, newReplicas: number } | null };
+export type ForgetPeerMutation = { __typename?: 'Mutation', admin: { __typename?: 'AdminMutationNamespace', forgetPeer: { __typename?: 'admin_ForgetOutBody', removed: boolean, newReplicas: number } | null } };
 
 
 export const DashboardDocument = gql`
     query Dashboard {
-  admin_listPeers {
-    peers {
-      nodeId
+  admin {
+    listPeers {
+      peers {
+        nodeId
+      }
     }
-  }
-  admin_listServices {
-    environment
-    services {
-      namespace
-      version
+    listServices {
+      environment
+      services {
+        namespace
+        version
+      }
     }
   }
 }
     `;
 export const ServicesDocument = gql`
     query Services {
-  admin_listServices {
-    environment
-    services {
-      namespace
-      version
-      hashHex
-      replicaCount
+  admin {
+    listServices {
+      environment
+      services {
+        namespace
+        version
+        hashHex
+        replicaCount
+      }
     }
   }
 }
     `;
 export const PeersDocument = gql`
     query Peers {
-  admin_listPeers {
-    peers {
-      nodeId
-      name
-      joinedUnixMs
+  admin {
+    listPeers {
+      peers {
+        nodeId
+        name
+        joinedUnixMs
+      }
     }
   }
 }
     `;
 export const ForgetPeerDocument = gql`
     mutation ForgetPeer($nodeId: String!) {
-  admin_forgetPeer(nodeId: $nodeId) {
-    removed
-    newReplicas
+  admin {
+    forgetPeer(nodeId: $nodeId) {
+      removed
+      newReplicas
+    }
   }
 }
     `;

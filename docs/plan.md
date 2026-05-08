@@ -170,12 +170,25 @@ is canonical for every code path.
   `subFanout.deliver`, not the schema-build code the plan's
   original layout described. Dispatcher internals
   (`dispatchOpenAPI`, `subscribeNATS`) stay as designed.
-- [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` →
-  `admin.listPeers`, `admin_forgetPeer` (Mutation) →
-  `admin.forgetPeer`. Multi-version OpenAPI sources change too:
-  `pets_v1_getPet` → `pets.v1.getPet`. UI admin pages + any typed
-  query consumer need migration (graphql-codegen regenerates from
-  the new SDL). Triggered by step 4. ~0.5-1 day.
+- [x] **UI rewrite.** `ui/src/queries.graphql` migrated from flat
+  `admin_listPeers` / `admin_listServices` / `admin_forgetPeer`
+  shape to nested `admin { listPeers { ... } }` / `admin { forgetPeer(nodeId: $nodeId) { ... } }`;
+  graphql-codegen regenerated `ui/src/api/gateway.ts` against the
+  new SDL. tsx call sites updated (`data.admin_listPeers.peers` →
+  `data.admin.listPeers.peers` across `routes/index.tsx`,
+  `routes/peers.tsx`, `routes/services.tsx`,
+  `routes/schema.tsx`). Subscription field
+  `admin_events_watchServices` stays flat — graphql-go forbids
+  nested objects under Subscription. **Drive-by fix:** `pnpm run schema`
+  was failing because huma v2's `$schema` JSON-Schema dialect
+  property on response bodies leaked into IRTypeBuilder as a field
+  name graphql-go rejects (`Names must match /^[_a-zA-Z]…/`). Added
+  `isValidGraphQLIdent` filter in `gw/ir_typebuilder.go`'s
+  `objectFor`/`inputObjectFor` so any source-format field whose
+  post-FieldName key isn't a legal GraphQL identifier is silently
+  dropped. Same posture as the existing empty-object/empty-enum
+  guards. `pnpm run build` (vite + tsc) passes; gateway tests
+  unchanged.
 - [ ] **Test churn.** ~70 tests assert flat field names; most need
   rewriting. Trickles through steps 3-5; this is the final
   cleanup pass after step 7. ~1-2 days.

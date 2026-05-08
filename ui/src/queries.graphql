@@ -2,47 +2,61 @@
 # along with src/**/*.tsx and emits typed functions in
 # src/api/gateway.ts. Add new operations here, run `pnpm run codegen`,
 # then import sdk.<OperationName> from '@/api/client'.
+#
+# Admin operations live under the `admin` namespace container — the
+# IR renderer nests every Query/Mutation namespace, so the `admin`
+# field on Query / Mutation returns an Admin{Query,Mutation}Namespace
+# object whose fields are the actual operations. Subscriptions stay
+# flat (graphql-go forbids nested objects under Subscription).
 
 query Dashboard {
-  admin_listPeers {
-    peers {
-      nodeId
+  admin {
+    listPeers {
+      peers {
+        nodeId
+      }
     }
-  }
-  admin_listServices {
-    environment
-    services {
-      namespace
-      version
+    listServices {
+      environment
+      services {
+        namespace
+        version
+      }
     }
   }
 }
 
 query Services {
-  admin_listServices {
-    environment
-    services {
-      namespace
-      version
-      hashHex
-      replicaCount
+  admin {
+    listServices {
+      environment
+      services {
+        namespace
+        version
+        hashHex
+        replicaCount
+      }
     }
   }
 }
 
 query Peers {
-  admin_listPeers {
-    peers {
-      nodeId
-      name
-      joinedUnixMs
+  admin {
+    listPeers {
+      peers {
+        nodeId
+        name
+        joinedUnixMs
+      }
     }
   }
 }
 
 mutation ForgetPeer($nodeId: String!) {
-  admin_forgetPeer(nodeId: $nodeId) {
-    removed
-    newReplicas
+  admin {
+    forgetPeer(nodeId: $nodeId) {
+      removed
+      newReplicas
+    }
   }
 }
