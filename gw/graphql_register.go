@@ -32,9 +32,7 @@ func (g *Gateway) graphQLServicesAsIRLocked(filter schemaFilter) ([]*ir.Service,
 		out = append(out, svc)
 	}
 	out = ir.HideInternal(out)
-	if hide := g.hidesSet(); len(hide) > 0 {
-		ir.Hides(out, hide)
-	}
+	g.applySchemaRewrites(out)
 	for _, svc := range out {
 		ir.PopulateSchemaIDs(svc)
 	}

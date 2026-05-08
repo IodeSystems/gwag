@@ -67,17 +67,17 @@ func HideInternal(svcs []*Service) []*Service {
 }
 
 // Hides strips Fields whose Type.Named is in the hide-set from
-// every Object/Input Type across the input services. Mirrors the
-// gateway's HideAndInject middleware Pair.Hides set. Mutates the
-// services in place — caller is responsible for not sharing them
-// with code that expected the un-stripped shape.
+// every Object/Input Type across the input services. Drives the
+// gateway's HideType schema rewrite. Mutates the services in place —
+// caller is responsible for not sharing them with code that expected
+// the un-stripped shape.
 //
 // Operation.Args also get filtered: proto's flat-args-from-input-
 // message ingest path turns the input message's fields into Args
-// directly, bypassing Type.Fields, so a HideAndInject for type X
-// would leak X-shaped args into the schema if the transform only
-// walked Types. Walks Service.Operations plus every Operation
-// transitively under Service.Groups.
+// directly, bypassing Type.Fields, so a HideType for type X would
+// leak X-shaped args into the schema if the transform only walked
+// Types. Walks Service.Operations plus every Operation transitively
+// under Service.Groups.
 //
 // Hides also rewrites the type's Origin to nil if it was present,
 // since the descriptor is no longer faithful to the canonical

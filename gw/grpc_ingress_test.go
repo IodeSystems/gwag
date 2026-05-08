@@ -311,7 +311,7 @@ func TestGRPCIngress_RuntimeMiddlewareApplies(t *testing.T) {
 	var middlewareHits atomic.Int32
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
 	t.Cleanup(gw.Close)
-	gw.Use(Pair{Runtime: countingMiddleware(&middlewareHits)})
+	gw.Use(Transform{Runtime: countingMiddleware(&middlewareHits)})
 
 	if err := gw.AddProtoDescriptor(
 		greeterv1.File_greeter_proto,

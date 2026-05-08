@@ -58,7 +58,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 // but doesn't take g.mu (caller holds it) and stays scoped to the
 // proto cutover — OpenAPI / GraphQL remain on their own field
 // builders until steps 4 & 5. Internal namespaces drop via
-// HideInternal; per-Pair Hides strip hidden message fields.
+// HideInternal; per-Transform schema rewrites strip hidden message fields.
 //
 // Each returned Service has Namespace / Version / Internal stamped
 // before HideInternal + Filter run, and SchemaIDs populated last so
@@ -80,9 +80,7 @@ func (g *Gateway) protoServicesAsIRLocked(filter schemaFilter) ([]*ir.Service, e
 		}
 	}
 	out = ir.HideInternal(out)
-	if hide := g.hidesSet(); len(hide) > 0 {
-		ir.Hides(out, hide)
-	}
+	g.applySchemaRewrites(out)
 	for _, svc := range out {
 		injectProtoSubscriptionAuthArgs(svc)
 		ir.PopulateSchemaIDs(svc)

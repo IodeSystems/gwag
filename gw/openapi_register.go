@@ -10,10 +10,10 @@ import (
 
 // openAPIServicesAsIRLocked distills the OpenAPI sources matching
 // `filter` into ir.Services. Sibling of protoServicesAsIRLocked —
-// caller already holds g.mu, transforms (HideInternal + Hides) run
-// in the same order as gatewayServicesAsIR, and SchemaIDs are
-// stamped last so RenderGraphQLRuntime can resolve dispatchers by
-// op.SchemaID at request time.
+// caller already holds g.mu, transforms (HideInternal + schema
+// rewrites) run in the same order as gatewayServicesAsIR, and
+// SchemaIDs are stamped last so RenderGraphQLRuntime can resolve
+// dispatchers by op.SchemaID at request time.
 //
 // Caller holds g.mu.
 func (g *Gateway) openAPIServicesAsIRLocked(filter schemaFilter) ([]*ir.Service, error) {
@@ -29,9 +29,7 @@ func (g *Gateway) openAPIServicesAsIRLocked(filter schemaFilter) ([]*ir.Service,
 		out = append(out, svc)
 	}
 	out = ir.HideInternal(out)
-	if hide := g.hidesSet(); len(hide) > 0 {
-		ir.Hides(out, hide)
-	}
+	g.applySchemaRewrites(out)
 	for _, svc := range out {
 		ir.PopulateSchemaIDs(svc)
 	}

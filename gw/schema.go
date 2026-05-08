@@ -42,7 +42,10 @@ func (g *Gateway) assembleLocked() error {
 //
 // Caller holds g.mu. Returns the built schema; does NOT store it.
 func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
-	hidesSet := g.hidesSet()
+	hidesSet := map[string]bool{}
+	for _, name := range g.hiddenTypeNames() {
+		hidesSet[name] = true
+	}
 
 	// Share one *IRTypeBuilder across every proto pool so cyclic
 	// message refs collapse to a single *graphql.Object across Query,
@@ -163,14 +166,14 @@ func waitForSlot(ctx context.Context, sem chan struct{}, maxWait time.Duration) 
 	}
 }
 
-// runtimeChain returns the composed Middleware for runtime hooks. Pairs
-// without a Runtime half are skipped.
+// runtimeChain returns the composed Middleware for runtime hooks.
+// Transforms without a Runtime half are skipped.
 func (g *Gateway) runtimeChain() Middleware {
 	return func(next Handler) Handler {
 		h := next
-		for i := len(g.pairs) - 1; i >= 0; i-- {
-			if g.pairs[i].Runtime != nil {
-				h = g.pairs[i].Runtime(h)
+		for i := len(g.transforms) - 1; i >= 0; i-- {
+			if g.transforms[i].Runtime != nil {
+				h = g.transforms[i].Runtime(h)
 			}
 		}
 		return h

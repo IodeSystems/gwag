@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"iter"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -29,7 +28,7 @@ type Gateway struct {
 	mu             sync.Mutex
 	pools          map[poolKey]*pool
 	internal       map[string]bool // namespaces hidden from the public schema
-	pairs          []Pair
+	transforms     []Transform
 	schema         atomic.Pointer[graphql.Schema]
 	cfg            *config
 	cp             *controlPlane
@@ -700,13 +699,13 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 	return removed, nil
 }
 
-// Use appends middleware to both pipelines. Pair-shaped middleware
-// populates both halves; single-shaped middleware fills one and no-ops
-// the other.
-func (g *Gateway) Use(pairs ...Pair) {
+// Use appends Transforms to the gateway. Each Transform may carry any
+// combination of schema-rewrite rules (Schema) and runtime middleware
+// (Runtime); empty halves no-op.
+func (g *Gateway) Use(transforms ...Transform) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.pairs = append(g.pairs, pairs...)
+	g.transforms = append(g.transforms, transforms...)
 }
 
 // Handler returns the http.Handler that serves the GraphQL schema.
@@ -856,29 +855,22 @@ func errorHandler(err error) http.Handler {
 type Handler func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error)
 type Middleware func(next Handler) Handler
 
-type StreamHandler func(ctx context.Context, in iter.Seq2[protoreflect.ProtoMessage, error]) iter.Seq2[protoreflect.ProtoMessage, error]
-type StreamMiddleware func(next StreamHandler) StreamHandler
-
-type Pair struct {
-	// Hides lists proto message types that should be stripped from
-	// every input position in the external schema. The runtime half is
-	// expected to populate any field whose type appears here.
-	Hides []protoreflect.FullName
-
-	Schema  SchemaMiddleware
+// Transform bundles every reshaping concern that lands per gateway-Use
+// call: a list of typed schema rewrites (Schema, e.g. HideType) and a
+// runtime middleware (Runtime). Empty halves no-op.
+type Transform struct {
+	Schema  []SchemaRewrite
 	Runtime Middleware
-	Stream  StreamMiddleware
 }
 
-// Schema and SchemaMiddleware are reserved for forward use (custom
-// schema rewrites that don't fit the Hides model). The current built-in
-// case is HideAndInject, which does not need them.
-type Schema struct {
-	GraphQL *graphql.Schema
+// SchemaRewrite mutates IR services in place to reshape the external
+// surface — strip fields, flip nullability, etc. Concrete rewrites are
+// constructed via HideType and friends; renderers that need rewrite-
+// specific data (e.g. the proto FDS exporter pulling out hidden type
+// names) type-assert to the concrete struct.
+type SchemaRewrite interface {
+	apply(svcs []*ir.Service)
 }
-
-type SchemaHandler func(*Schema) (*Schema, error)
-type SchemaMiddleware func(next SchemaHandler) SchemaHandler
 
 // ---------------------------------------------------------------------
 // Reject — short-circuit error

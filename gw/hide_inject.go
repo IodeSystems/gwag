@@ -14,11 +14,11 @@ import (
 // resolve(ctx). The two halves are paired by construction so they
 // cannot drift; resolve is called once per request per type and cached
 // on the request context.
-func HideAndInject[T proto.Message](resolve func(context.Context) (T, error)) Pair {
+func HideAndInject[T proto.Message](resolve func(context.Context) (T, error)) Transform {
 	var zero T
 	target := zero.ProtoReflect().Descriptor().FullName()
-	return Pair{
-		Hides: []protoreflect.FullName{target},
+	return Transform{
+		Schema: []SchemaRewrite{HideTypeRewrite{Name: string(target)}},
 		Runtime: injectFieldsOfType(target, func(ctx context.Context) (proto.Message, error) {
 			return resolve(ctx)
 		}),

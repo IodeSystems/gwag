@@ -78,10 +78,8 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 		// type imports.)
 		g.mu.Lock()
 		hides := map[protoreflect.FullName]bool{}
-		for _, p := range g.pairs {
-			for _, t := range p.Hides {
-				hides[t] = true
-			}
+		for _, name := range g.hiddenTypeNames() {
+			hides[protoreflect.FullName(name)] = true
 		}
 		g.mu.Unlock()
 		if len(hides) > 0 {

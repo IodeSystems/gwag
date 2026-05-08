@@ -7,13 +7,12 @@ import (
 // gatewayServicesAsIR walks the gateway's three source registries —
 // proto pools, OpenAPI sources, GraphQL ingest sources — and
 // distills each into an ir.Service. Selectors filter the result;
-// internal namespaces are dropped; Pair.Hides is applied to strip
-// hidden fields. Every entry's Origin is the source descriptor /
-// spec, so a same-kind render reproduces the original verbatim.
+// internal namespaces are dropped; every Transform.Schema rewrite is
+// applied (e.g. HideType strips hidden fields). Every entry's Origin
+// is the source descriptor / spec, so a same-kind render reproduces
+// the original verbatim.
 //
-// Caller passes the ParseSelectors output (or nil for "all"). Hides
-// is read from g.pairs to match the existing runtime middleware
-// surface.
+// Caller passes the ParseSelectors output (or nil for "all").
 func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -53,14 +52,12 @@ func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, e
 		out = append(out, svc)
 	}
 
-	// Apply transforms. Order matters: Hides shouldn't drop fields
-	// from internal-only services we'll filter out anyway, but it
-	// also doesn't hurt; HideInternal first cuts the working set.
+	// Apply transforms. Order matters: schema rewrites shouldn't drop
+	// fields from internal-only services we'll filter out anyway, but
+	// it also doesn't hurt; HideInternal first cuts the working set.
 	out = ir.HideInternal(out)
 	out = ir.Filter(out, selectors)
-	if hide := g.hidesSet(); len(hide) > 0 {
-		ir.Hides(out, hide)
-	}
+	g.applySchemaRewrites(out)
 
 	// Stamp SchemaIDs once Namespace/Version are set and the working
 	// set is final. Renderers that build runtime resolvers look up
@@ -71,18 +68,6 @@ func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, e
 		ir.PopulateSchemaIDs(svc)
 	}
 	return out, nil
-}
-
-// hidesSet collects every Pair.Hides entry into a string-keyed set
-// the IR's Hides transform consumes. Caller holds g.mu.
-func (g *Gateway) hidesSet() map[string]bool {
-	out := map[string]bool{}
-	for _, p := range g.pairs {
-		for _, t := range p.Hides {
-			out[string(t)] = true
-		}
-	}
-	return out
 }
 
 // irSelectorsFromSchema converts a parsed []serviceSelector (the
