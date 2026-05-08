@@ -1,35 +1,123 @@
 # go-api-gateway
 
-A small Go library for fronting gRPC services with a GraphQL surface.
-Hand it a list of `.proto` files and gRPC destinations; it gives back an
-`http.Handler` that serves a namespaced GraphQL API. Layer middleware on
-top to add auth, rate limiting, transforms, and field hiding without
-touching the underlying services.
+A high throughput, high availability, company-wide api aggregator and transformation library for organizations with lots 
+of small services who want typed clients in multiple request and service provider formats (supports: `graphql`, `proto`, `openapi`).
 
-Status: **early v0.** Unary gRPC calls work end-to-end; `HideAndInject`
-strips fields from the public schema and injects them at runtime;
-dynamic registration via the control plane lets services self-register
-at runtime with graceful deregister and heartbeat-failure eviction;
-multi-gateway clusters share a JetStream KV registry over embedded
-NATS so any node dispatches to any registered service, with optional
-mTLS on cluster routes; the [`go-api-gateway` CLI](./cmd/go-api-gateway)
-ships as a no-Go-needed entry point for static configs and operator
-peer management. Streaming and the broader `SchemaMiddleware` story
-are stubbed; rough edges throughout.
+Register every service once — in whichever protocol it already speaks  — and the gateway publishes a single, 
+consolidated, typed surface that *clients* and *other services* both consume:
 
-## Examples
+- **Browser / mobile / TS clients** consume one unified (or any compositionally filtered) **GraphQL** endpoint.
+- **Backend services in any language** consume **proto**, **OpenAPI**, or **GraphQL** generated clients pointed at the 
+  gateway, regardless of the published protocol.
 
-- [`examples/multi`](./examples/multi) — three separate processes
-  (gateway + greeter + library) wired via the control plane. The
-  schema rebuilds in place as services join and leave.
-- [`examples/auth`](./examples/auth) — `HideAndInject[*authpb.Context]`
-  hiding auth fields globally and filling them from a registered
-  internal service.
+Same schema, two transports. The gateway routes, transforms,
+handles backpressure, meters, rate limits, and provides a single high availability gateway with service teams keep owning
+their own services; registering, updating, deprecating, and removing versions of their service in a responsible manner. 
 
-## Dynamic registration
+## Who it's for
 
-Services self-register with the gateway over a gRPC control plane and
-heartbeat to stay alive:
+You have N small backend services and M client teams. Each service
+has its own auth, its own logging, its own deprecation policy, and
+its own idea of how to surface itself to the world. Pain points
+this is built for:
+
+- Frontend teams want one schema, not N. A new TS hire shouldn't
+  need to learn five service URLs and three auth schemes.
+- Backend teams calling each other want **typed** clients, not
+  hand-rolled HTTP. Whatever their language ecosystem prefers —
+  proto for Go/Java/Rust/Python, OpenAPI for TS/C#/anything else.
+- Platform teams want auth and logging applied centrally as
+  middleware, not re-implemented in every service.
+- SREs want overload protection, health checks, and graceful drain
+  without each service inventing its own answer.
+- Schema owners want to **deprecate and retire** old versions
+  without hurting active callers.
+
+## What you get
+
+| | |
+|---|---|
+| **Single GraphQL surface** | One `/api/graphql` for clients. Query / mutation / subscription. |
+| **Multi-protocol ingest** | Services register over `.proto`, OpenAPI 3.x JSON/YAML, or downstream GraphQL stitching. |
+| **Multi-protocol egress** | Same registry re-exposed as proto FDS (`/api/schema/proto`), OpenAPI (`/api/schema/openapi`), and GraphQL SDL (`/api/schema/graphql`) — codegen typed clients for any language. |
+| **Multi-protocol *ingress*** | Clients can hit the gateway over GraphQL **or** proto-style HTTP/JSON **or** native gRPC. Same dispatcher, same middleware, same backpressure. |
+| **Tier-based versioning** | Three tiers per namespace: `unstable` (mutable trunk, always-overwrites), `stable` (alias to the most-recent cut), `vN` (pinned historical cuts, auto-`@deprecated` as newer cuts arrive). Per-gateway `--allow-tier` policy gates which tiers can register. Schema diff in CI catches breaking changes. |
+| **Auth & logging as middleware** | One declaration applies everywhere — see `HideAndInject` for the canonical "hide auth fields, fill them from context" pattern. |
+| **Per-pool backpressure** | Slow service X can't gate dispatches to service Y. Per-replica caps too. |
+| **HA cluster** | Embedded NATS + JetStream KV registry. Any node dispatches to any service registered with any peer. |
+| **Subscriptions over NATS** | `rpc Foo(F) returns (stream E)` becomes a flat GraphQL subscription field. Services publish to NATS subjects; gateway fans out to WebSockets. |
+| **Health, drain, metrics** | `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus surface. |
+
+## The shape end-to-end
+
+```
+                     ┌──────────────────────────┐
+TS / mobile clients ─┤                          │
+                     │                          │
+Java / Python / Go ──┤      go-api-gateway      ├── auth-svc       (.proto)
+service-to-service   │                          ├── billing-svc    (OpenAPI)
+                     │   one schema, many       ├── inventory-svc  (.proto)
+                     │   protocols              ├── legacy-svc     (downstream GraphQL)
+                     │                          ├── ...
+                     └──────────────────────────┘
+```
+
+Services register at runtime via the control-plane gRPC (or boot-time
+via `AddProto` / `AddOpenAPI` / `AddGraphQL`). The gateway hashes the
+schema into a JetStream KV bucket; every peer's reconciler picks it
+up and starts dispatching. Schema rebuild is automatic and atomic —
+clients see the new fields the moment registration completes.
+
+## Quick start
+
+```go
+gw := gateway.New()
+gw.AddProto("./protos/auth.proto",   gateway.To("authsvc:50051"))
+gw.AddProto("./protos/user.proto",   gateway.To("usersvc:50051"))
+gw.AddOpenAPI("./billing-openapi.json",
+    gateway.As("billing"),
+    gateway.To("https://billing.internal"))
+http.ListenAndServe(":8080", gw.Handler())
+```
+
+GraphQL surface for clients:
+
+```graphql
+query {
+  auth    { whoami { ... } }
+  user    { profile(id: "...") { ... } }
+  billing { invoice(id: "...") { ... } }
+}
+```
+
+Proto surface for service-to-service callers (compiled into your
+language's grpc client):
+
+```bash
+$ curl https://gw.internal/api/schema/proto?service=billing > billing.fds
+$ buf generate --template buf.gen.yaml billing.fds   # or protoc, etc.
+```
+
+OpenAPI surface for the same backend, for TS/C#/anything that prefers
+it:
+
+```bash
+$ curl https://gw.internal/api/schema/openapi?service=billing > billing.json
+$ openapi-generator-cli generate -i billing.json -g typescript-axios -o ./gen
+```
+
+## Service lifecycle
+
+Services don't just appear and vanish — they're version-tagged,
+deprecated with warnings, and retired only after their callers move
+off. The gateway's job is to make every step of that visible.
+
+### Register
+
+Services self-register over the gRPC control plane and heartbeat
+to stay alive. One Register call can carry many services on one
+address (multiple RPCs in one binary). Heartbeats every TTL/3;
+missed heartbeats past TTL evict.
 
 ```go
 import (
@@ -47,29 +135,113 @@ reg, _ := controlclient.SelfRegister(ctx, controlclient.Options{
 defer reg.Close(ctx) // graceful deregister
 ```
 
-One Register call can carry many services on one address (multiple
-RPCs in one binary). Heartbeats every TTL/3; missed heartbeats past
-TTL evict. The control-plane API is in
+OpenAPI services use the same struct with `OpenAPISpec` instead of
+`FileDescriptor`. The control-plane API is in
 [`gw/proto/controlplane/v1/control.proto`](./gw/proto/controlplane/v1/control.proto).
 
-OpenAPI services register the same way — the `Service` struct takes
-either `FileDescriptor` (proto) or `OpenAPISpec` (raw OpenAPI 3.x
-bytes), not both:
+### Version
 
-```go
-specBytes, _ := os.ReadFile("billing-openapi.json")
-reg, _ := controlclient.SelfRegister(ctx, controlclient.Options{
-    GatewayAddr: "gateway:50090",
-    ServiceAddr: "https://billing.internal",  // HTTP base URL for OpenAPI
-    Services: []controlclient.Service{
-        {Namespace: "billing", OpenAPISpec: specBytes},
-    },
-})
+A service can register at one of three **tiers** per namespace:
+
+| Tier | What it is | Mutability | Deprecation |
+|---|---|---|---|
+| `unstable` | Trunk-tip; published on every push from CI | Always overwrites the prior `unstable` | Pinning to it lights up `@deprecated(reason: "unstable — pin to stable or vN for releases")` so codegen flags it in IDE/lint |
+| `stable` | Alias to the most-recent numbered cut | Auto-rolls when a new `vN` is registered | Never deprecated |
+| `vN` (`v1`, `v2`, …) | Pinned historical cuts | Immutable | Auto-`@deprecated` when a newer `vN` exists |
+
+```graphql
+type UserQuery {
+  unstable: UserUnstableQuery @deprecated(reason: "unstable — pin to stable or vN for releases")
+  stable:   UserV2Query        # alias to the latest cut (currently v2)
+  v1:       UserV1Query @deprecated(reason: "use v2")
+  v2:       UserV2Query
+  # newest fields hoisted to the top
+  profile(id: ID!): Profile     # from stable / v2
+}
 ```
 
-The gateway hashes the spec, writes to the registry KV, and every
-peer's reconciler picks it up. `billing_*` GraphQL fields appear
-cluster-wide.
+The flow that makes this earn its keep:
+
+1. **Trunk publishes to `unstable`.** Every CI green re-registers the service at `unstable`. Schema rebuilds, but the slot is mutable — no `vN` churn, no deprecated noise. Backend teams *building against* a dep can opt into its `unstable` for fast iteration.
+2. **Cut a release → freeze the current `unstable` into a new `vN` and `stable` rolls forward.** The team that owns the service decides when to cut. Existing numbered cuts stay callable but `vN-1` and earlier get `@deprecated` automatically.
+3. **Caller-side lint forces dependency negotiation.** `controlclient.WithBuildTag(...)` (planned) refuses to register `unstable` when the calling binary carries a release tag. So a service that cuts a release *can't* depend on its dependencies' `unstable` — it must pin `stable` or a numbered `vN`. If a dep's `unstable` has diverged from its `stable` with breaking changes, you can't cut your release until that dep cuts theirs (or you adopt their breakage). The schema becomes a forcing function for upstream/downstream cut coordination, not just an artifact of past decisions.
+
+Generated clients propagate `@deprecated` through their normal
+codegen channels: `protoc-gen-go` emits `// Deprecated: ...` from
+`option deprecated = true;`; graphql-codegen emits JSDoc
+`@deprecated` on TS hooks; openapi-generator marks operations
+deprecated. So consumers see the warning in their IDE / linter
+without anyone telling them.
+
+### Per-tier policy
+
+Each gateway boots with `--allow-tier` controlling which tiers can
+register against it:
+
+```bash
+# trunk-friendly gateway: anything goes
+$ go-api-gateway --allow-tier unstable,stable,vN
+
+# release-track gateway: no unstable
+$ go-api-gateway --allow-tier stable,vN
+
+# locked-down gateway: pinned cuts only (or stable+vN if you want evergreen)
+$ go-api-gateway --allow-tier vN
+```
+
+A service that tries to register a disallowed tier is rejected at
+the control plane with a clear error code. Operators who need
+physical isolation between deployments (PCI/HIPAA, blast-radius
+separation) run multiple gateways with distinct cluster names — that
+side of the picture is a deployment concern, not something the
+gateway needs to model.
+
+### Deprecate
+
+Two paths:
+
+1. **Auto-deprecation on version fold.** Older `vN` get `@deprecated` automatically when newer cuts register; `unstable` carries a fixed deprecation reason any time it's queried. Free.
+2. **Manual deprecate / undeprecate.** Operators can flip a `deprecated` bit on any `(namespace, version)` from the admin UI or RPC, with a reason string. Useful for sunsetting a still-current `vN` ahead of cutting `vN+1`, or for un-deprecating in a rollback. (Planned — see `docs/plan.md` §8.)
+
+CI gate with `schema diff --strict`:
+
+```bash
+$ go-api-gateway schema diff \
+    --from https://gw.internal/schema \
+    --to   ./candidate.graphql --strict
+```
+
+`--strict` fails on removals or required-arg changes. Adding
+deprecations is informational. Adding new fields is fine.
+
+### Retire
+
+Stop heartbeating; the gateway evicts after TTL. The schema
+rebuilds; the field disappears.
+
+### What this *doesn't* (yet) tell you
+
+You can't currently ask the gateway *who's still calling a deprecated
+operation*. The metrics carry `namespace, version, method, code` —
+not caller identity. Operators today have to read upstream service
+logs to find the laggards.
+
+A planned **call-site usage tracking** workstream adds an inbound
+caller dimension (request-tagged `User-Agent` or service-account
+identity, propagated to the metric label set), with a UI panel
+listing recent callers per deprecated operation. See
+[`docs/plan.md`](./docs/plan.md). Until it ships, deprecation is
+"announce, wait, retire" — same as without the gateway, except the
+schema-side warnings are at least automatic.
+
+## Examples
+
+- [`examples/multi`](./examples/multi) — three separate processes
+  (gateway + greeter + library) wired via the control plane.
+  Schema rebuilds in place as services join and leave.
+- [`examples/auth`](./examples/auth) — `HideAndInject[*authpb.Context]`
+  hiding auth fields globally and filling them from a registered
+  internal service.
 
 ## Cluster mode
 
@@ -91,20 +263,20 @@ defer cluster.Close()
 gw := gateway.New(gateway.WithCluster(cluster))
 ```
 
-- **Bootstrap.** The first node in a fresh cluster runs in standalone
+- **Bootstrap.** First node in a fresh cluster runs in standalone
   JetStream (R=1) when `Peers` is empty. To scale beyond one node,
   every node — including the seed — must start with at least one
-  `Peers` entry; nodes route to each other via NATS gossip.
+  `Peers` entry.
 - **Replicas auto-bump.** As peers join, the registry KV's replica
   count rises monotonically toward `min(peers, 3)`. Killing a peer
-  does *not* shrink R automatically; that path is operator-driven via
-  `peer forget` (see CLI).
+  does *not* shrink R automatically; that path is operator-driven
+  via `peer forget` (see CLI).
 - **Cross-gateway dispatch.** A reconciler on every gateway watches
   the registry KV and dials services it sees, regardless of which
   gateway received the registration.
-- **Optional mTLS.** Pass a `*tls.Config` from `gateway.LoadMTLSConfig`
-  via `ClusterOptions.TLS` and `gateway.WithTLS` to require mutual TLS
-  on both NATS cluster routes and the gateway's outbound gRPC dials.
+- **Optional mTLS.** `gateway.LoadMTLSConfig` + `ClusterOptions.TLS`
+  + `gateway.WithTLS` requires mutual TLS on both NATS cluster
+  routes and outbound gRPC dials.
 - **Forget disconnected peers.** `ForgetPeer` (RPC + CLI) drops a
   peer that has TTL-expired and shrinks the registry replica count
   if appropriate. Refuses to forget a still-alive peer.
@@ -135,8 +307,8 @@ $ go-api-gateway peer forget --gateway gw1.internal:50090 NODE_ID
 
 $ go-api-gateway services list --gateway gw1.internal:50090
 $ go-api-gateway schema fetch  --endpoint https://gw.internal/schema > schema.graphql
-$ go-api-gateway schema diff   --from https://prod-gw.internal/schema \
-                                --to   https://staging-gw.internal/schema --strict
+$ go-api-gateway schema diff   --from https://gw1.internal/schema \
+                                --to   https://gw2.internal/schema --strict
 $ go-api-gateway sign          --gateway gw1.internal:50090 \
                                 --channel events.UserEvents.UserCreated.42 --ttl 60
 ```
@@ -145,8 +317,7 @@ $ go-api-gateway sign          --gateway gw1.internal:50090 \
   expired (safe shrink); `peer list` shows live entries.
 - `services list` returns `(namespace, version, hash, replica_count)`
   for cross-cluster parity checks — identical hashes across two
-  clusters mean identical proto bytes, the foundation for safe
-  promotion.
+  clusters mean identical proto bytes.
 - `schema fetch` GETs the gateway's `/schema` endpoint as SDL (or
   introspection JSON via `--json`) for client codegen.
 - `schema diff --strict` fails CI when a candidate schema would break
@@ -206,18 +377,53 @@ const { data } = useSubscription(gql`
 
 ### HMAC channel auth
 
-Three modes (operator picks at gateway boot):
+The gateway owns the HMAC secret and is responsible for two things:
+**verifying** tokens on subscribe and **minting** them on demand. It
+does *not* try to be the policy authority. Business authz (which user
+can subscribe to which channel) lives in whatever service has the
+request context — the gateway just signs.
+
+Verification modes (operator picks at gateway boot):
 
 - `--insecure-subscribe` — bypass verification (dev only).
 - `--subscribe-secret <hex>` — gateway holds a shared secret;
   verifies HMAC-SHA256(secret, "<channel>\n<timestamp>") base64 on
   every subscribe. Default `--subscribe-skew 5m`.
-- Plus, optionally, a registered `SubscriptionAuthorizer` delegate
-  (gRPC service registered under namespace `_events_auth/v1`) that
-  the gateway consults at *sign* time. The delegate decides whether
-  to authorize signing a token for `(channel, timestamp, ttl)`.
 
-Tokens are minted via the gateway's gRPC `SignSubscriptionToken`:
+**Signing is an exposed endpoint, not a delegated decision.** The
+gateway publishes `SignSubscriptionToken` (gRPC + the
+`go-api-gateway sign` CLI). A downstream service that already
+authenticates the end user — your auth service, the service that
+owns the events stream, your BFF, whatever — does its own
+permission check, then calls Sign to mint a token for the client:
+
+```
+client subscribes via service-X →
+service-X authenticates the user (its own session/JWT/whatever) →
+service-X checks "may this user read events.UserEvents.UserCreated.42?" →
+service-X calls gateway.SignSubscriptionToken(channel, ttl) →
+service-X returns {hmac, ts} to the client →
+client opens the WebSocket with hmac/ts as subscription args →
+gateway verifies HMAC and accepts.
+```
+
+This inverts the earlier "authorizer delegate" framing where the
+gateway tried to call back out to a registered service at sign
+time. That model forced us to guess what context the authorizer
+would need (user ID? IP? scope? custom claims?) and bake it into
+a delegate proto. With the signer-as-API model, the caller already
+has full request context — composition over prediction.
+
+**Protecting the signer.** Anyone who can reach `SignSubscriptionToken`
+can mint tokens, so put it behind whatever auth fits:
+
+- Reuse the boot/admin token (bearer).
+- A dedicated `--signer-secret` shared with trusted services
+  (planned; lower-blast-radius than handing out the admin token).
+- mTLS on the gateway's gRPC listener.
+- Network policy so only trusted pods can reach the port.
+
+Tokens are minted via gRPC or the CLI:
 
 ```
 $ go-api-gateway sign --gateway gw1.internal:50090 \
@@ -226,7 +432,8 @@ hmac=md6l2SVJ...
 ts=1778092482
 ```
 
-Or signed locally if you hold the secret yourself:
+Or signed locally if you hold the secret yourself (operator tooling,
+break-glass):
 
 ```
 $ go-api-gateway sign --secret <hex> --channel events.... --ttl 60
@@ -289,20 +496,7 @@ every protected request:
 
 The boot token is the always-works emergency hatch. A delegate that
 crashes, mis-deploys, or DOS's cannot lock operators out — only an
-explicit `DENIED` short-circuits. Service registration is the same
-shape any other internal service takes:
-
-```go
-// In your authz service:
-controlclient.SelfRegister(ctx, controlclient.Options{
-    GatewayAddr: "gateway:50090",
-    ServiceAddr: "myauth:50051",
-    Services: []controlclient.Service{{
-        Namespace:      "_admin_auth",
-        FileDescriptor: adminauthv1.File_adminauth_v1_adminauth_proto,
-    }},
-})
-```
+explicit `DENIED` short-circuits.
 
 Admin auth is unrelated to outbound auth to OpenAPI backends. For
 that, see the next section.
@@ -340,7 +534,7 @@ When neither is set, dispatches use `http.DefaultClient`.
 `gw.HealthHandler()` mounts a `/health` endpoint that returns:
 
 ```json
-{"status":"serving","active_streams":0,"environment":"prod","node_id":"NA..."}
+{"status":"serving","active_streams":0,"node_id":"NA..."}
 ```
 
 with HTTP 200 normally, or HTTP 503 once `gw.Drain(ctx)` has been called.
@@ -403,8 +597,6 @@ go_api_gateway_subscribe_auth_total{namespace,version,method,code}
   failure, or a `Reject` code when middleware short-circuits.
 - `kind` is `unary` or `stream` — splits queries from subscriptions
   on the same backpressure metrics.
-- `code` (subscribe_auth) is the `SubscribeAuthCode` enum
-  (`SUBSCRIBE_AUTH_CODE_OK`, `..._TOO_OLD`, etc.).
 
 Mount alongside the GraphQL endpoint:
 
@@ -424,73 +616,43 @@ gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 
 ## Promotion path
 
-Cross-cluster promotion is the combination of these tools:
+Promotion runs along the **version axis**: `unstable` → `stable` →
+`vN`. The combination of:
 
-1. Each cluster carries an `--environment` label (`dev`, `staging`,
-   `prod`). The label becomes part of the NATS cluster name so two
-   environments cannot accidentally federate.
-2. `services list` exposes hashes; CI diffs the hash sets between two
-   environments to confirm the bytes match for every `(ns, ver)` you
-   intend to promote.
-3. `/schema` exposes the SDL; `schema diff --strict` is the
-   client-perspective gate — additions are fine, removals/required-arg
-   changes fail the build.
-4. The version system (multiple `vN` per namespace) lets you stage a
-   new version alongside the old one, migrate clients gradually, then
-   drain the old version.
+1. **Trunk publishes to `unstable`.** CI green → re-register at
+   `unstable`. Mutable, always-overwrites; no `vN` churn for
+   in-flight work.
+2. **Cut a release → freeze `unstable` into the next `vN`.**
+   `stable` auto-rolls to point at it. Older `vN` carry
+   `@deprecated` automatically.
+3. **Caller-side lint** (`controlclient.WithBuildTag(...)`) refuses
+   to register `unstable` from a binary built with a release tag —
+   so a release of A *can't* depend on its dependencies' `unstable`.
+   That's the forcing function: if `B.unstable` has diverged from
+   `B.stable`, the team cutting A can't ship without first
+   negotiating the cut with B's team. Schema becomes the contract,
+   not just the documentation.
+4. **`services list`** exposes hashes; CI diffs the hash sets across
+   gateways to confirm the bytes match for every `(ns, tier|version)`
+   you intend to promote between clusters (if you run more than one).
+5. **`/schema` + `schema diff --strict`** is the client-perspective
+   gate — additions are fine, removals or required-arg changes fail
+   the build.
 
-Single-cluster drift is already prevented by the canonical hash gate
-in the pool: a replica with a mismatched proto can't join an existing
-`(ns, ver)` pool.
-
-## Why another gateway
-
-There are plenty of API gateways. This one is a *library*, not a
-binary. The intent is small composable tools: this library does
-gRPC→GraphQL with a middleware story; it does not own service
-discovery, deploy automation, observability backends, or auth policy.
-You compose it with whatever you already have.
-
-It also intentionally does not require codegen for the simplest path.
-Drop in `.proto` files and run; reach for a sibling protoc plugin
-([`grpc-graphql-gateway`](https://github.com/iodesystems/grpc-graphql-gateway))
-when you want typed handles for power-user middleware.
-
-## The thirty-second tour
-
-```go
-gw := gateway.New()
-
-gw.AddProto("./protos/auth.proto", gateway.To("authsvc:50051"))
-gw.AddProto("./protos/user.proto", gateway.To("usersvc:50051"))
-// namespaces default to "auth" and "user" (filename stems)
-
-http.ListenAndServe(":8080", gw.Handler())
-```
-
-GraphQL surface:
-
-```graphql
-query {
-  auth { ... }   # auth.proto's RPCs
-  user { ... }   # user.proto's RPCs
-}
-```
-
-Override the default namespace, or share a connection pool:
-
-```go
-conn, _ := grpc.NewClient("billing.svc.cluster:50051", opts...)
-gw.AddProto("./protos/billing.proto",
-    gateway.As("commerce"),
-    gateway.To(conn),
-)
-```
+Per-cluster drift is prevented by the canonical hash gate in the
+pool: a replica with a mismatched proto can't join an existing
+`(ns, version)` pool.
 
 ## Middleware
 
-One primitive shape, three idioms — same `next()` chain you've seen in
-every Go middleware library, applied at two layers.
+Two pipelines, paired in one declaration. The shape is the same
+`next()` chain you've seen in every Go middleware library, applied
+at two layers:
+
+1. **Schema** — runs once at gateway boot, rewrites the GraphQL
+   schema (hide types, hide fields, rename, restrict).
+2. **Runtime** — runs per request, transforms requests and
+   responses.
 
 ```go
 mw := func(next gateway.Handler) gateway.Handler {
@@ -518,18 +680,9 @@ Reads as `for req, err := range in { ... yield(...) }`. Errors flow
 inline; cancellation rides `ctx`. Two interfaces (unary +
 stream) because forcing `iter.Seq2` on single-shot RPCs is annoying.
 
-## Two layers, paired declarations
-
-There are *two* middleware pipelines:
-
-1. **Schema** — runs once at gateway boot, rewrites the GraphQL schema (hide types, hide fields, rename, restrict).
-2. **Runtime** — runs per request, transforms requests and responses.
-
-They are separate pipelines because they run at different times, but
-they often need to stay in sync. Hiding `userID` from the external
-schema is meaningless without a runtime hook to fill it from
-context, and vice versa. The library bundles paired rules into a single
-declaration so the two halves can't drift:
+Schema and Runtime often need to stay in sync — hiding `userID` from
+the external schema is meaningless without a runtime hook to fill it
+from context. The library bundles paired rules into one declaration:
 
 ```go
 type Pair struct {
@@ -549,12 +702,11 @@ One declaration; the invariant is enforced by construction.
 Single-purpose middleware (logging, rate limit) just fills one half of
 `Pair` and no-ops the other.
 
-## The auth case end-to-end
+### The auth case end-to-end
 
 The shape that drove the API: globally hide auth fields, fill them from
 a registered auth service, and hide that service from the external
-schema too. See [`examples/auth`](./examples/auth) for runnable code; the
-shape is:
+schema too. See [`examples/auth`](./examples/auth):
 
 ```go
 gw := gateway.New()
@@ -562,7 +714,7 @@ gw := gateway.New()
 // Internal: not exposed in the GraphQL surface, but callable by hooks.
 gw.AddProto("./protos/auth.proto",
     gateway.To(authConn),
-    gateway.AsInternal(), // (planned) hide from public schema
+    gateway.AsInternal(),
 )
 
 // Public services.
@@ -584,41 +736,131 @@ per request.
 
 ## Design notes
 
-- **Runtime proto parsing.** `.proto` files are parsed at boot via
-  `bufbuild/protocompile` + `jhump/protoreflect`; gRPC calls go out via
-  `dynamicpb`. No codegen step required for the simplest path.
+- **Reflection is the default forever.** `.proto` and OpenAPI specs
+  parse at boot via `bufbuild/protocompile` / `kin-openapi`; gRPC
+  calls go out via `dynamicpb`; HTTP calls assemble via the spec.
+  No codegen step required for the simplest path. Codegen and plugin
+  paths are *opt-in upgrades*, never gates on getting started.
 - **Path-based identity.** Namespaces default to filename stems;
   collisions across registered files are an error, not silent
   overwrite.
-- **Static destinations first.** `To(addr string)` and
-  `To(conn *grpc.ClientConn)` ship on day one. A `Resolver` interface
-  for service-discovery shaped destinations (NATS, DNS) is intentionally
-  deferred until something pulls on it.
-- **Two registries.** Public schema view vs internal callable registry.
-  Internal-only services live in the callable registry but not the
-  external schema; hooks (auth resolver, etc.) call them.
+- **Two registries.** Public schema view vs internal callable
+  registry. Internal-only services live in the callable registry but
+  not the external schema; hooks (auth resolver, etc.) call them.
 - **Caching is library-side.** A naive auth resolver gets called once
   per field per request; the library memoises per-(request, type) so
-  users don't reinvent it. Distributed cache backends are pluggable
-  later but the API doesn't preclude them.
+  users don't reinvent it.
 - **`Reject(code, msg)` for short-circuits.** Plain errors are mapped
   to opaque internal errors; typed rejections become the right GraphQL
   error code (and gRPC status when bridged outbound).
+- **Auto-internal `_*` namespaces.** Any namespace starting with `_`
+  is hidden from the public schema. `_events_auth`, `_admin_auth`,
+  `_admin_events`, etc. — operators don't have to remember a flag.
+- **Dogfood the OpenAPI path.** The gateway's own admin operations
+  are defined via huma → OpenAPI → self-ingested → surfaced as
+  `admin_*` GraphQL fields. Same path any external service takes.
+
+## Why this vs. service discovery, service meshes, or other API gateways
+
+Three reasonable questions any new reader will have. The short
+answer in each case is **different scope** — these systems sit at
+different layers and you'll typically run more than one.
+
+### "Isn't k8s service discovery / Consul / etcd enough?"
+
+Service discovery routes *bytes* — `auth-svc.cluster.local:50051`
+resolves to a pod IP. It doesn't know what the service offers,
+whether it's deprecated, what its schema is, or whether your client
+is using an out-of-date version of it. You still hand-write or
+hand-wire the client.
+
+This gateway sits *above* discovery. Discovery answers *"where is
+the auth service?"*; the gateway answers *"what does the auth
+service expose, in what shape, and how do I codegen a typed client
+for my language?"* Both layers coexist — discovery routes within
+the cluster; the gateway is the schema-aware aggregator.
+
+### "Isn't a service mesh enough?"
+
+Meshes (Istio, Linkerd, Consul Connect) own L7 wire concerns: mTLS,
+retries, traffic shifting by percentage, circuit-breaking. Their
+observability is wire-shaped — bytes/sec, request counts by HTTP
+status code.
+
+This gateway owns *schema* concerns: typed dispatch, versioning,
+deprecation propagation through to client codegen, schema diff in
+CI, hide-and-inject middleware, per-method backpressure. Its
+observability is schema-shaped —
+`dispatch_duration_seconds{namespace,version,method}`, p95 latency
+per replica per version, recent callers per deprecated method.
+
+Run both. Mesh for the wire, gateway for the contract.
+
+### "Isn't Kong / APIGee / AWS API Gateway / Apollo Federation enough?"
+
+Most edge-style API gateways are HTTP-routing-shaped: path rewrite,
+auth-header injection, rate-limit, send to a backend. Single
+inbound protocol, single outbound protocol, no schema unification
+across formats.
+
+Apollo Federation is the closest peer for the unified-GraphQL
+story, but federation only ingests GraphQL — you can't drop a
+`.proto` or an OpenAPI spec on it.
+
+The axes that differ:
+
+| Concern | Kong / APIGee / etc. | Apollo Federation | go-api-gateway |
+|---|---|---|---|
+| **Ingest formats** | HTTP/REST (some gRPC plugin) | GraphQL only | `.proto`, OpenAPI 3.x, GraphQL stitching |
+| **Codegen targets** | None — operators bring their own | GraphQL SDL only | Proto FDS + OpenAPI + GraphQL SDL, simultaneously |
+| **Versioning** | Per-route metadata; manual | Per-subgraph; manual | Tier model (`unstable` / `stable` / `vN`); auto-deprecation; dependency-negotiation forcing function |
+| **Metrics shape** | Wire-shaped (status, RPS) | GraphQL-shaped (operation, type) | Schema-aware: per-pool, per-replica, per-method, per-tier |
+| **Custom transforms** | Plugins, often language-locked | Schema directives + custom resolvers | Go middleware `Pair` — one declaration applies across all protocols |
+| **HA story** | External LB | Stateless; depends on subgraphs | Embedded NATS + JetStream KV; any node dispatches to any service |
+
+### Where this is specifically strong
+
+- **API unification across protocols.** One declaration of a
+  service in `.proto` is usable by TS clients via graphql-codegen,
+  Go/Java/Python services via proto, and C#/TS services that prefer
+  OpenAPI via openapi-generator. No re-implementation per language.
+- **Codegen targets in any language.** The consolidated registry
+  publishes as proto FDS and OpenAPI 3.x alongside SDL. Pick
+  whatever your toolchain prefers; the bytes match because they're
+  derived from the same internal IR.
+- **Enhanced, schema-aware metrics.** Per-pool, per-replica,
+  per-method dispatch latency and queue dwell, with deprecation
+  visibility built in. You can answer *"who's still calling
+  deprecated `users.v1.list`?"* — a question wire-level metrics
+  fundamentally can't.
+- **Custom transforms as a Pair.** Hide a field from the public
+  schema *and* fill it from request context, in one declaration
+  the library guarantees can't drift. Same code applies whether the
+  underlying service is proto, OpenAPI, or downstream GraphQL.
+
+### What it doesn't replace
+
+- **Service discovery.** Use k8s Services / Consul / DNS / whatever
+  you already have. Bridge into the gateway via the gRPC control
+  plane.
+- **Service mesh, mTLS, traffic shifting at the wire.** Sibling
+  layer; run a mesh.
+- **Observability backends.** Metrics export Prometheus; pick your
+  scraper, alerting, and dashboards.
+- **CI/CD and deploy automation.** The control plane lets you wire
+  register/deregister into your deploy pipeline; the pipeline
+  itself is yours.
 
 ## What's not in here
 
-- External service discovery (Consul, etcd, k8s service watching). The
-  built-in story is "services self-register over the gRPC control plane,
-  and gateways share a JetStream KV registry"; bridge to other systems
-  via the same control plane.
-- Rolling deploy / hot reload. (Out of scope; gateway can be run
-  blue/green like any other binary, or scaled by adding peers.)
-- Multi-protocol ingest (OpenAPI, gRPC-Web, etc.). On the roadmap, not
-  on day one.
-- Observability backends. The middleware shape is the integration
-  point; pick your tracer and write a five-line `Pair`.
-- Kubernetes / docker-compose example deployments. The cluster code
-  is the building block; packaging follows.
+- Rolling deploy / hot reload of the gateway itself. Run blue/green
+  like any other binary, or scale by adding peers.
+- Caller-side usage tracking on deprecated operations. (Roadmap —
+  see *Service lifecycle* / `docs/plan.md`.)
+- Apollo Federation. Stitching covers the common case; federation's
+  entity-merging is overkill for most teams.
+- AsyncAPI export. GraphQL SDL with Subscription types covers TS
+  codegen; AsyncAPI's TS tooling is patchier with little payoff.
 
 ## License
 
