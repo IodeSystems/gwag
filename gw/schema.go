@@ -52,12 +52,12 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 
 	rootFields := graphql.Fields{}
 
-	// Proto + OpenAPI both go through RenderGraphQLRuntimeFields in a
-	// single call so the multi-version fold sees every service in a
-	// namespace together (avoiding two render calls that would each
-	// emit a `<ns>` Query/Mutation root field and collide on merge).
-	// Per-kind dispatcher registration runs first, then service
-	// distillation, then the render.
+	// Proto + OpenAPI + GraphQL ingest all go through
+	// RenderGraphQLRuntimeFields in a single call so the multi-version
+	// fold sees every service in a namespace together (avoiding
+	// separate render calls that would each emit a `<ns>` root field
+	// and collide on merge). Per-kind dispatcher registration runs
+	// first, then service distillation, then the render.
 	g.registerProtoDispatchersLocked(filter)
 	protoSvcs, err := g.protoServicesAsIRLocked(filter)
 	if err != nil {
@@ -70,11 +70,19 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	if err := g.registerOpenAPIDispatchersLocked(openSvcs); err != nil {
 		return nil, err
 	}
+	gqlSvcs, err := g.graphQLServicesAsIRLocked(filter)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.registerGraphQLDispatchersLocked(gqlSvcs); err != nil {
+		return nil, err
+	}
 	long, jsonScalar := openAPISharedScalars()
-	allSvcs := make([]*ir.Service, 0, len(protoSvcs)+len(openSvcs))
+	allSvcs := make([]*ir.Service, 0, len(protoSvcs)+len(openSvcs)+len(gqlSvcs))
 	allSvcs = append(allSvcs, protoSvcs...)
 	allSvcs = append(allSvcs, openSvcs...)
-	queries, mutations, _, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
+	allSvcs = append(allSvcs, gqlSvcs...)
+	queries, mutations, runtimeSubs, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,
@@ -83,18 +91,6 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		return nil, fmt.Errorf("runtime render: %w", err)
 	}
 	for k, v := range queries {
-		rootFields[k] = v
-	}
-
-	// Merge downstream-GraphQL ingest fields. Same collision rules.
-	gqlQueries, gqlMutations, gqlSubs, err := g.buildGraphQLFields(filter)
-	if err != nil {
-		return nil, err
-	}
-	for k, v := range gqlQueries {
-		if _, exists := rootFields[k]; exists {
-			return nil, fmt.Errorf("graphql ingest field collision in Query: %s", k)
-		}
 		rootFields[k] = v
 	}
 
@@ -115,15 +111,6 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	cfg := graphql.SchemaConfig{Query: queryObj}
 
 	mutationFields := mutations
-	for k, v := range gqlMutations {
-		if mutationFields == nil {
-			mutationFields = graphql.Fields{}
-		}
-		if _, exists := mutationFields[k]; exists {
-			return nil, fmt.Errorf("graphql ingest field collision in Mutation: %s", k)
-		}
-		mutationFields[k] = v
-	}
 	if len(mutationFields) > 0 {
 		cfg.Mutation = graphql.NewObject(graphql.ObjectConfig{
 			Name:   "Mutation",
@@ -131,21 +118,20 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		})
 	}
 
-	// Subscription root: one flat field per (namespace, server-streaming
-	// method) across all pools. Args = request fields + injected hmac
-	// (String!) + timestamp (Int!). Subscribe resolver is a no-op stub
-	// until the WebSocket transport lands; SDL still surfaces them so
-	// codegen pipelines can generate typed subscriptions today.
+	// Subscription root: server-streaming proto methods come through
+	// the legacy buildSubscriptionFields walker (step 6 unifies it);
+	// graphql-ingest subscriptions ride on runtimeSubs from the IR
+	// renderer above.
 	subFields, err := g.buildSubscriptionFields(protoTB, hidesSet, filter)
 	if err != nil {
 		return nil, err
 	}
-	for name, f := range gqlSubs {
+	for name, f := range runtimeSubs {
 		if subFields == nil {
 			subFields = graphql.Fields{}
 		}
 		if _, exists := subFields[name]; exists {
-			return nil, fmt.Errorf("graphql ingest field collision in Subscription: %s", name)
+			return nil, fmt.Errorf("runtime/proto field collision in Subscription: %s", name)
 		}
 		subFields[name] = f
 	}

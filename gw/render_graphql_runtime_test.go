@@ -401,12 +401,16 @@ func TestRuntime_QueryAndMutationSiblingGroups(t *testing.T) {
 // across multi-version: latest emits `<ns>_<op>`, older emits
 // `<ns>_<vN>_<op>`. Subscription Groups recursively flatten with
 // `_`-joined names.
+//
+// Uses KindGraphQL because proto subscriptions stay on the legacy
+// buildSubscriptionFields path until step 6 — the renderer skips
+// KindProto subscription operations to avoid double-emission.
 func TestRuntime_SubscriptionFlattenAcrossVersions(t *testing.T) {
 	mk := func(ver string) *ir.Service {
 		s := &ir.Service{
 			Namespace:  "events",
 			Version:    ver,
-			OriginKind: ir.KindProto,
+			OriginKind: ir.KindGraphQL,
 			Types:      map[string]*ir.Type{},
 			Operations: []*ir.Operation{{
 				Name: "tick", Kind: ir.OpSubscription,

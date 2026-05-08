@@ -44,16 +44,18 @@ func graphQLForwardInfoFrom(ctx context.Context) *graphql.ResolveInfo {
 type graphQLDispatcher struct {
 	mirror          *graphQLMirror
 	remoteFieldName string
+	opLabel         string // "query" / "mutation" / "subscription"
 	metrics         Metrics
 	ns              string
 	ver             string
-	label           string // "<query|mutation> <remoteFieldName>"
+	label           string // "<opLabel> <remoteFieldName>"
 }
 
 func newGraphQLDispatcher(m *graphQLMirror, remoteFieldName, opLabel string, metrics Metrics) *graphQLDispatcher {
 	return &graphQLDispatcher{
 		mirror:          m,
 		remoteFieldName: remoteFieldName,
+		opLabel:         opLabel,
 		metrics:         metrics,
 		ns:              m.src.namespace,
 		ver:             m.src.version,
@@ -62,6 +64,13 @@ func newGraphQLDispatcher(m *graphQLMirror, remoteFieldName, opLabel string, met
 }
 
 func (d *graphQLDispatcher) Dispatch(ctx context.Context, _ map[string]any) (any, error) {
+	if d.opLabel == "subscription" {
+		return d.dispatchSubscribe(ctx)
+	}
+	return d.dispatchUnary(ctx)
+}
+
+func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
 	start := time.Now()
 	record := func(err error) error {
 		d.metrics.RecordDispatch(d.ns, d.ver, d.label, time.Since(start), err)
@@ -121,6 +130,96 @@ func (d *graphQLDispatcher) Dispatch(ctx context.Context, _ map[string]any) (any
 	}
 	record(nil)
 	return data[d.remoteFieldName], nil
+}
+
+// dispatchSubscribe opens a multiplexed subscription against the
+// upstream and returns a chan any of pre-plucked frames. The
+// renderer's Subscribe path treats the dispatcher result as the
+// subscribe channel; its Resolve closure surfaces rp.Source directly,
+// so this goroutine plucks `frame.Result[remoteFieldName]` before
+// emitting (matching the pre-cutover subscribingResolver shape where
+// the local Resolve picked the field out of the data envelope).
+//
+// Backpressure middleware is intentionally not wrapped around the
+// subscribe path — src.sem is per-source unary capacity, not stream
+// lifetime. The pre-cutover subscribingResolver bypassed
+// BackpressureMiddleware for the same reason; the multiplexer broker
+// is the rate-control story for streams.
+func (d *graphQLDispatcher) dispatchSubscribe(ctx context.Context) (any, error) {
+	info := graphQLForwardInfoFrom(ctx)
+	if info == nil || len(info.FieldASTs) == 0 {
+		return nil, fmt.Errorf("graphql ingest: no AST for subscription %s", d.remoteFieldName)
+	}
+	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           ast.OperationTypeSubscription,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{rewritten},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	printed, ok := raw.(string)
+	if !ok {
+		return nil, fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
+	}
+
+	src := d.mirror.src
+	r := src.pickReplica()
+	if r == nil {
+		return nil, fmt.Errorf("graphql ingest: no live replicas for %s", src.namespace)
+	}
+	broker := src.getSubBroker()
+	upstream, release, err := broker.acquire(ctx, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan any, 8)
+	remote := d.remoteFieldName
+	go func() {
+		defer close(out)
+		defer release()
+		for {
+			select {
+			case f, ok := <-upstream:
+				if !ok {
+					return
+				}
+				if f == nil {
+					continue
+				}
+				if len(f.Errors) > 0 {
+					select {
+					case out <- fmt.Errorf("graphql remote: %s", f.Errors[0]):
+					case <-ctx.Done():
+						return
+					}
+					if f.Done {
+						return
+					}
+					continue
+				}
+				if f.Result != nil {
+					select {
+					case out <- f.Result[remote]:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if f.Done {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // graphQLBackpressureConfig bundles a graphql source's per-dispatch
