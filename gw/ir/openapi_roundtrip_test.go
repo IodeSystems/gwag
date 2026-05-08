@@ -332,6 +332,79 @@ func TestOpenAPIIngest_DiscriminatorMapping(t *testing.T) {
 	}
 }
 
+// TestOpenAPIIngest_InlineOneOf covers the inline-union ingest path:
+// a property whose schema is `{oneOf: [Foo, Bar]}` (not a top-level
+// component) gets a synthesised "FooOrBar" TypeUnion in svc.Types
+// and the property's Type points at it. Anonymous (non-$ref)
+// variants still fall through to scalar — IR has no name story.
+func TestOpenAPIIngest_InlineOneOf(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Dog": {"type": "object", "properties": {"bark": {"type": "boolean"}}},
+      "Kennel": {
+        "type": "object",
+        "properties": {
+          "occupant": {
+            "oneOf": [
+              {"$ref": "#/components/schemas/Cat"},
+              {"$ref": "#/components/schemas/Dog"}
+            ]
+          }
+        }
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+
+	// Synthesised name registered in svc.Types.
+	syn, ok := svc.Types["CatOrDog"]
+	if !ok {
+		keys := []string{}
+		for k := range svc.Types {
+			keys = append(keys, k)
+		}
+		t.Fatalf("missing synthesised CatOrDog; types = %v", keys)
+	}
+	if syn.TypeKind != TypeUnion {
+		t.Errorf("CatOrDog kind = %v, want TypeUnion", syn.TypeKind)
+	}
+	if got, want := syn.Variants, []string{"Cat", "Dog"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("CatOrDog variants = %v, want %v", got, want)
+	}
+
+	// Field `occupant` on Kennel points at the synthesised name.
+	kennel, ok := svc.Types["Kennel"]
+	if !ok {
+		t.Fatal("Kennel missing")
+	}
+	var occupant *Field
+	for _, f := range kennel.Fields {
+		if f.Name == "occupant" {
+			occupant = f
+		}
+	}
+	if occupant == nil {
+		t.Fatal("Kennel.occupant missing")
+	}
+	if got, want := occupant.Type.Named, "CatOrDog"; got != want {
+		t.Errorf("occupant.Type.Named = %q, want %q", got, want)
+	}
+}
+
 // TestOpenAPIRoundtripSynthesis_OneOf exercises the cross-kind
 // render: clear Origin so the renderer takes the synthesis path,
 // then verify oneOf comes back out with $ref-shaped variants.
