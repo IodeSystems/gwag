@@ -147,13 +147,29 @@ is canonical for every code path.
   step 7's broader sweep). Tests:
   `subscriptions_test.go` (greeter HMAC + admin\_events round-trip)
   and `admin_events_test.go` pass unchanged. ~0.5 day actual.
-- [ ] **Step 7: Delete dead converters.** Remove `gw/convert.go`,
-  `buildPoolRPCs` + `buildPoolMethodField`, `buildOpenAPIFields`,
-  `buildGraphQLFields`, `graphQLMirror.build`,
-  `newOpenAPISourceTypeBuilder`, `newGraphQLSourceTypeBuilder`.
-  Dispatcher internals (`dispatchOpenAPI`,
-  `(m *graphQLMirror).forwardingResolver`, `subscribeNATS`) stay —
-  orthogonal to render-side. ~0.5 day.
+- [x] **Step 7: Delete dead converters.** Six files trimmed; ~330
+  lines net deleted. `gw/schema.go` lost `buildPoolRPCs` +
+  `buildPoolMethodField`. `gw/proto_typebuilder.go` lost
+  `protoArgsFromMessage` / `protoOutputObject` /
+  `protoMessageHidden` / `protoFieldTypeRef` (only
+  `newProtoIRTypeBuilder` survives). `gw/openapi.go` lost
+  `buildOpenAPIFields` / `newOpenAPISourceTypeBuilder` /
+  `buildOpenAPIField` (kept `openAPISharedScalars` — `schema.go`
+  still calls it through `RuntimeOptions`). `gw/graphql_ingest.go`
+  lost `buildGraphQLFields`. `gw/graphql_mirror.go` collapsed from
+  719 → 124 lines: only the AST helpers
+  (`rewriteFieldForRemote` / `rewriteSelectionSet` /
+  `unprefixTypeName`) plus `jsonUnmarshalLoose` survive — those
+  back the graphQLDispatcher's selection-preserving forwarding,
+  which can't reconstruct an upstream query from canonical args
+  alone. `graphQLMirror` struct slimmed to `{src, isLatest}`;
+  `newGraphQLMirror` takes only `*graphQLSource`. **Note:**
+  `gw/convert.go` survives — its contents (`argsToMessage` /
+  `messageToMap` and helpers) are the runtime args↔dynamicpb
+  adapter still called from `protoDispatcher.Dispatch` and
+  `subFanout.deliver`, not the schema-build code the plan's
+  original layout described. Dispatcher internals
+  (`dispatchOpenAPI`, `subscribeNATS`) stay as designed.
 - [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` →
   `admin.listPeers`, `admin_forgetPeer` (Mutation) →
   `admin.forgetPeer`. Multi-version OpenAPI sources change too:

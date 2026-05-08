@@ -8,12 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/graphql-go/graphql"
 )
 
 // AddGraphQL ingests a remote GraphQL service into the local schema
@@ -481,85 +478,3 @@ func dispatchGraphQL(
 	return &out, nil
 }
 
-// buildGraphQLFields walks every registered downstream GraphQL source
-// and emits namespace-prefixed Query / Mutation / Subscription field
-// maps. Type mirroring is done lazily inside graphql.NewObject thunks
-// to handle recursive type references without needing topological
-// sort.
-//
-// Multi-version: sources are grouped by namespace and sorted by
-// versionN. The latest version's fields use the bare "<ns>_<remote>"
-// naming and bare "<ns>_<TypeName>" type names (back-compat with the
-// single-version case). Older versions use "<ns>_<vN>_<remote>" /
-// "<ns>_<vN>_<TypeName>" with GraphQL @deprecated stamped on every
-// emitted field.
-func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graphql.Fields, graphql.Fields, error) {
-	queries := graphql.Fields{}
-	mutations := graphql.Fields{}
-	subscriptions := graphql.Fields{}
-
-	byNS := map[string][]*graphQLSource{}
-	for k, s := range g.graphQLSources {
-		if g.isInternal(k.namespace) {
-			continue
-		}
-		if !filter.matchPool(k) {
-			continue
-		}
-		byNS[k.namespace] = append(byNS[k.namespace], s)
-	}
-
-	nsNames := make([]string, 0, len(byNS))
-	for ns := range byNS {
-		nsNames = append(nsNames, ns)
-	}
-	sort.Strings(nsNames)
-
-	// Shared JSON scalar across every per-source IRTypeBuilder —
-	// graphql-go forbids two scalars sharing a Name in one schema, and
-	// each source can independently fall back to JSON for a degenerate
-	// abstract type or a map.
-	var jsonScalar *graphql.Scalar
-	if len(byNS) > 0 {
-		jsonScalar = newGraphQLIngestJSONScalar()
-	}
-
-	for _, ns := range nsNames {
-		sources := byNS[ns]
-		sort.Slice(sources, func(i, j int) bool { return sources[i].versionN < sources[j].versionN })
-		latest := sources[len(sources)-1]
-		latestReason := fmt.Sprintf("%s is current", latest.version)
-
-		for _, src := range sources {
-			isLatest := src.versionN == latest.versionN
-			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure, g.dispatchers, jsonScalar)
-			mb.isLatest = isLatest
-			if !isLatest {
-				mb.deprecationReason = latestReason
-			}
-			q, m, s, err := mb.build()
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: %w", ns, src.version, err)
-			}
-			for name, f := range q {
-				if _, exists := queries[name]; exists {
-					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Query field %s collides", ns, src.version, name)
-				}
-				queries[name] = f
-			}
-			for name, f := range m {
-				if _, exists := mutations[name]; exists {
-					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Mutation field %s collides", ns, src.version, name)
-				}
-				mutations[name] = f
-			}
-			for name, f := range s {
-				if _, exists := subscriptions[name]; exists {
-					return nil, nil, nil, fmt.Errorf("graphql ingest %s/%s: Subscription field %s collides", ns, src.version, name)
-				}
-				subscriptions[name] = f
-			}
-		}
-	}
-	return queries, mutations, subscriptions, nil
-}

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,8 +17,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
-
-	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 // AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape
@@ -504,101 +501,6 @@ func sanitizeNamespace(s string) string {
 	return out
 }
 
-// ---------------------------------------------------------------------
-// Schema assembly: walk operations, add Query/Mutation fields.
-// ---------------------------------------------------------------------
-
-// buildOpenAPIFields walks every registered OpenAPI source and builds
-// query and mutation fields. Returns (queries, mutations). Conflicting
-// field names within the same root error.
-//
-// Multi-version: sources are grouped by namespace and sorted by
-// versionN. The latest version's fields use the unprefixed
-// "<ns>_<op>" naming (back-compat with the single-version case). Older
-// versions are surfaced as "<ns>_<vN>_<op>" with a GraphQL deprecation
-// reason — same "latest is current; older addressable but discouraged"
-// shape proto pools use, expressed via name disambiguation rather than
-// nested namespace objects.
-//
-// One *IRTypeBuilder per source: each source's IR has its own
-// component schemas + synthesized inline types, and the per-source
-// naming closure prefixes them all by "<ns>_" (latest) or
-// "<ns>_<vN>_" (older). Long + JSON scalars are shared across every
-// per-source builder to avoid graphql-go's duplicate-scalar-name
-// rejection.
-func (g *Gateway) buildOpenAPIFields(filter schemaFilter) (graphql.Fields, graphql.Fields, error) {
-	queries := graphql.Fields{}
-	mutations := graphql.Fields{}
-
-	// Group sources by namespace, applying the selector filter.
-	byNS := map[string][]*openAPISource{}
-	for k, s := range g.openAPISources {
-		if g.isInternal(k.namespace) {
-			continue
-		}
-		if !filter.matchPool(k) {
-			continue
-		}
-		byNS[k.namespace] = append(byNS[k.namespace], s)
-	}
-	if len(byNS) == 0 {
-		return queries, mutations, nil
-	}
-
-	nsNames := make([]string, 0, len(byNS))
-	for ns := range byNS {
-		nsNames = append(nsNames, ns)
-	}
-	sort.Strings(nsNames)
-
-	long, jsonScalar := openAPISharedScalars()
-
-	for _, ns := range nsNames {
-		sources := byNS[ns]
-		sort.Slice(sources, func(i, j int) bool { return sources[i].versionN < sources[j].versionN })
-		latest := sources[len(sources)-1]
-		latestReason := fmt.Sprintf("%s is current", latest.version)
-
-		for _, src := range sources {
-			isLatest := src.versionN == latest.versionN
-			fieldPrefix := ns + "_"
-			typePrefix := ns + "_"
-			if !isLatest {
-				fieldPrefix = ns + "_" + src.version + "_"
-				typePrefix = ns + "_" + src.version + "_"
-			}
-
-			irSvc := ir.IngestOpenAPI(src.doc)
-			tb := newOpenAPISourceTypeBuilder(irSvc, typePrefix, long, jsonScalar)
-
-			for _, irOp := range irSvc.Operations {
-				opKey := lowerCamel(sanitizeNamespace(irOp.Name))
-				field, err := g.buildOpenAPIField(tb, src, irOp, opKey)
-				if err != nil {
-					return nil, nil, err
-				}
-				if !isLatest {
-					field.DeprecationReason = latestReason
-				}
-				name := fieldPrefix + opKey
-				switch irOp.Kind {
-				case ir.OpQuery:
-					if _, exists := queries[name]; exists {
-						return nil, nil, fmt.Errorf("openapi field name collision (Query): %s", name)
-					}
-					queries[name] = field
-				default:
-					if _, exists := mutations[name]; exists {
-						return nil, nil, fmt.Errorf("openapi field name collision (Mutation): %s", name)
-					}
-					mutations[name] = field
-				}
-			}
-		}
-	}
-	return queries, mutations, nil
-}
-
 // openAPISharedScalars constructs the Long + JSON scalars once per
 // schema build. Per-source IRTypeBuilders share these so the final
 // graphql.Schema sees one named instance — graphql-go rejects two
@@ -646,86 +548,6 @@ func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
 		ParseLiteral: func(v ast.Value) any { return v },
 	})
 	return long, jsonScalar
-}
-
-// newOpenAPISourceTypeBuilder constructs the per-source IRTypeBuilder
-// with the prefix-aware naming policy. typePrefix translates "Pet" →
-// "<ns>_Pet" or "<ns>_<vN>_Pet" so two versions of the same namespace
-// don't collide on type name.
-func newOpenAPISourceTypeBuilder(svc *ir.Service, typePrefix string, long, jsonScalar *graphql.Scalar) *IRTypeBuilder {
-	naming := IRTypeNaming{
-		ObjectName:    func(s string) string { return typePrefix + s },
-		InputName:     func(s string) string { return typePrefix + s + "Input" },
-		EnumName:      func(s string) string { return typePrefix + s },
-		UnionName:     func(s string) string { return typePrefix + s },
-		InterfaceName: func(s string) string { return typePrefix + s },
-		ScalarName:    func(s string) string { return typePrefix + s },
-		FieldName:     lowerCamel,
-	}
-	return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-		Int64Type:  long,
-		UInt64Type: long,
-		MapType:    jsonScalar,
-		JSONType:   jsonScalar,
-	})
-}
-
-// buildOpenAPIField wires args + return type via IRTypeBuilder, then
-// installs the dispatcher. Path / query parameters become named
-// graphql args; the JSON body lands as a single "body" arg with an
-// Input Object type. The dispatcher captures the original
-// *openapi3.Operation so parameter encoding (path templating, query
-// values, header forwarding) keeps using kin-openapi's shape — the IR
-// is the type contract; the OpenAPI doc is the wire contract.
-func (g *Gateway) buildOpenAPIField(tb *IRTypeBuilder, src *openAPISource, irOp *ir.Operation, opKey string) (*graphql.Field, error) {
-	args := graphql.FieldConfigArgument{}
-
-	for _, a := range irOp.Args {
-		// Header / cookie locations skipped for v1 — same posture as
-		// pre-cutover. Body and path/query land as graphql args.
-		switch a.OpenAPILocation {
-		case "header", "cookie":
-			continue
-		}
-		t, err := tb.Input(a.Type, a.Repeated, a.Required, a.ItemRequired)
-		if err != nil {
-			return nil, err
-		}
-		args[a.Name] = &graphql.ArgumentConfig{Type: t}
-	}
-
-	var out graphql.Output = tb.options.JSONType
-	if irOp.Output != nil {
-		o, err := tb.Output(*irOp.Output, irOp.OutputRepeated, irOp.OutputRequired, irOp.OutputItemRequired)
-		if err != nil {
-			return nil, err
-		}
-		out = o
-	}
-
-	// op.Origin holds the *openapi3.Operation captured at ingest, used
-	// for parameter resolution by dispatchOpenAPI.
-	openAPIOp, _ := irOp.Origin.(*openapi3.Operation)
-	if openAPIOp == nil {
-		return nil, fmt.Errorf("openapi: ingest dropped op origin for %s", irOp.Name)
-	}
-
-	core := newOpenAPIDispatcher(src, openAPIOp, irOp.HTTPMethod, irOp.HTTPPath, g.cfg.metrics)
-	dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, g.cfg.metrics, g.cfg.backpressure))(core)
-	sid := ir.MakeSchemaID(src.namespace, src.version, opKey)
-	g.dispatchers.Set(sid, dispatcher)
-
-	return &graphql.Field{
-		Type: out,
-		Args: args,
-		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			d := g.dispatchers.Get(sid)
-			if d == nil {
-				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
-			}
-			return d.Dispatch(rp.Context, rp.Args)
-		},
-	}, nil
 }
 
 // dispatchOpenAPI substitutes path params, encodes query + body, sends

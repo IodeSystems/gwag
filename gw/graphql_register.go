@@ -95,7 +95,7 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		if src == nil {
 			continue
 		}
-		mirror := newGraphQLMirror(src, metrics, bp, g.dispatchers, nil)
+		mirror := newGraphQLMirror(src)
 		mirror.isLatest = src.versionN == latestByNS[svc.Namespace]
 		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp)
 		for _, grp := range svc.Groups {

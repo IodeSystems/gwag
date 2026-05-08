@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
@@ -134,77 +133,6 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		return nil, fmt.Errorf("graphql.NewSchema: %w", err)
 	}
 	return &schema, nil
-}
-
-// buildPoolRPCs returns one graphql.Field per RPC method declared in
-// the pool's proto. Each field's Resolve closure looks up its
-// dispatcher by SchemaID at call time — the dispatcher itself is
-// registered in `registry` here, keyed by
-// `<namespace>/<version>/<flatPrefix><lowerCamelMethodName>`.
-//
-// flatPrefix is empty for the namespace-flat alias and `<version>_`
-// for the versioned sub-object alias. Both aliases register the
-// same dispatcher under different keys so a query selecting
-// `greeter.hello` and `greeter.v1.hello` both resolve.
-func buildPoolRPCs(registry *ir.DispatchRegistry, tb *IRTypeBuilder, hides map[string]bool, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions, flatPrefix string) (graphql.Fields, error) {
-	out := graphql.Fields{}
-	services := p.file.Services()
-	for i := 0; i < services.Len(); i++ {
-		sd := services.Get(i)
-		methods := sd.Methods()
-		for j := 0; j < methods.Len(); j++ {
-			md := methods.Get(j)
-			if md.IsStreamingClient() || md.IsStreamingServer() {
-				continue
-			}
-			field, err := buildPoolMethodField(registry, tb, hides, p, sd, md, chain, metrics, bp, flatPrefix)
-			if err != nil {
-				return nil, err
-			}
-			out[lowerCamel(string(md.Name()))] = field
-		}
-	}
-	return out, nil
-}
-
-func buildPoolMethodField(
-	registry *ir.DispatchRegistry,
-	tb *IRTypeBuilder,
-	hides map[string]bool,
-	p *pool,
-	sd protoreflect.ServiceDescriptor,
-	md protoreflect.MethodDescriptor,
-	chain Middleware,
-	metrics Metrics,
-	bp BackpressureOptions,
-	flatPrefix string,
-) (*graphql.Field, error) {
-	args, err := protoArgsFromMessage(tb, md.Input(), hides)
-	if err != nil {
-		return nil, err
-	}
-	outputType, err := protoOutputObject(tb, md.Output())
-	if err != nil {
-		return nil, err
-	}
-
-	label := methodLabel(sd, md)
-	core := newProtoDispatcher(p, sd, md, chain, metrics)
-	dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
-	sid := ir.MakeSchemaID(p.key.namespace, p.key.version, flatPrefix+lowerCamel(string(md.Name())))
-	registry.Set(sid, dispatcher)
-
-	return &graphql.Field{
-		Type: outputType,
-		Args: args,
-		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			d := registry.Get(sid)
-			if d == nil {
-				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
-			}
-			return d.Dispatch(rp.Context, rp.Args)
-		},
-	}, nil
 }
 
 // waitForSlot blocks until sem has capacity or the per-dispatch
