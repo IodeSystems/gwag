@@ -78,3 +78,55 @@ func TestHidesStripFieldsByType(t *testing.T) {
 	}
 }
 
+// TestHidesStripsOperationArgs covers the proto-flatten case: an
+// input message that referenced a hidden type ends up with the
+// hidden type as a flat Arg. ir.Hides must strip those too, else
+// HideAndInject would leak the auth-context arg into the public
+// schema.
+func TestHidesStripsOperationArgs(t *testing.T) {
+	svc := mkService("svc", "v1")
+	svc.Operations = []*Operation{
+		{
+			Name: "doThing",
+			Args: []*Arg{
+				{Name: "name", Type: TypeRef{Builtin: ScalarString}},
+				{Name: "auth", Type: TypeRef{Named: "AuthContext"}},
+				{Name: "limit", Type: TypeRef{Builtin: ScalarInt32}},
+			},
+		},
+	}
+	// Operation under a nested Group exercises the recursion.
+	svc.Groups = []*OperationGroup{
+		{
+			Name: "admin", Kind: OpMutation,
+			Operations: []*Operation{
+				{Name: "purge", Args: []*Arg{
+					{Name: "auth", Type: TypeRef{Named: "AuthContext"}},
+					{Name: "force", Type: TypeRef{Builtin: ScalarBool}},
+				}},
+			},
+		},
+	}
+
+	Hides([]*Service{svc}, map[string]bool{"AuthContext": true})
+
+	op := svc.Operations[0]
+	if got := len(op.Args); got != 2 {
+		t.Fatalf("doThing has %d args after Hides, want 2", got)
+	}
+	for _, a := range op.Args {
+		if a.Type.IsNamed() && a.Type.Named == "AuthContext" {
+			t.Errorf("AuthContext arg still present on doThing")
+		}
+	}
+	purge := svc.Groups[0].Operations[0]
+	if got := len(purge.Args); got != 1 {
+		t.Fatalf("admin.purge has %d args after Hides, want 1", got)
+	}
+	for _, a := range purge.Args {
+		if a.Type.Named == "AuthContext" {
+			t.Errorf("AuthContext arg still present on admin.purge")
+		}
+	}
+}
+
