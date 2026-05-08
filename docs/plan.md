@@ -33,15 +33,45 @@ fresh session.
 
 ### IR runtime cutover (the active workstream)
 
-Half-done. Schema EXPORT is wired through `gw/ir` — `/api/schema/openapi`
-and `/api/schema/proto` ingest from the registry, transform, and render
-to target format (cross-kind synthesis works, e.g. greeter shows in
-the OpenAPI tab). The runtime path (`g.schema` + `/api/graphql`
-dispatch + `/api/schema/graphql`) still uses the old per-format
-converters in `gw/{convert,openapi,graphql_mirror,schema}.go`.
+Schema EXPORT is wired through `gw/ir` — `/api/schema/openapi`,
+`/api/schema/proto`, and (cross-kind) synthesis all flow
+ingest → transform → render. The runtime path (`g.schema` +
+`/api/graphql` dispatch + `/api/schema/graphql`) still uses the old
+per-format converters in `gw/{convert,openapi,graphql_mirror,schema}.go`.
 
 Transforms are duplicated: `Hides` / `HideInternal` / `Filter` exist
 in `gw/ir/transform.go` AND inline in `buildSchemaLocked`.
+
+**IR is now a tree.** `Service.Operations` is the flat list of
+top-level ops; `Service.Groups []*OperationGroup` carries nested
+namespaces (graphql ingest builds these from object-typed fields
+whose return type recursively contains a field-with-args).
+`Service.FlatOperations()` walks the tree depth-first and joins
+names with `_` for renderers that can't nest (proto / openapi).
+
+**Render conventions** (in `gw/ir/render_graphql.go`):
+- Nested-namespace render: GraphQL keeps the tree.
+- Container type names: `<PathPascal><Kind>Namespace`. Top-level
+  `greeter` (Query) → `GreeterQueryNamespace`; sub `v1` →
+  `GreeterQueryV1Namespace`. Same group name under Mutation gets
+  a `MutationNamespace` suffix so collisions don't happen.
+- Subscription groups flatten to `<group>_<op>` because graphql-go
+  doesn't support nested types under Subscription
+  (`gw/schema.go:231` comment).
+- Single Group is bound to one `OpKind`. A namespace with both
+  queries and mutations (e.g. `admin`) emits as two sibling
+  Groups under Service — one per kind.
+
+**Multi-version composition is unimplemented.** Today's renderer
+emits each Service's groups independently; if two Services share
+a namespace at v1 + v2, the SDL gets two top-level fields
+(`greeterV1`, `greeterV2`) rather than `Query.greeter` (latest)
++ `Query.greeter.v1` (older). The runtime cutover needs a
+render-side composition step that folds same-namespace services
+into one synthesized group whose latest version's ops sit at the
+top + non-latest versions become `vN` sub-groups. `MultiVersionPrefix`
+was deleted (no production callers); its replacement is this
+render-side fold.
 
 Remaining work to make IR the single source of truth, in commit-sized
 chunks:
@@ -55,24 +85,35 @@ chunks:
    render time. ~1 day.
 4. **`openAPIDispatcher`** + **`graphQLDispatcher`** — same shape.
    ~1 day each.
-5. **`RenderGraphQLRuntime(svcs, registry)`** walks IR + registry,
-   builds `*graphql.Schema` with resolvers that look up Dispatchers
-   via SchemaID. Cuts over `buildSchemaLocked`; deletes old converters.
-   ~1-2 days. Highest risk: schema parity (multi-version naming,
-   subscription field collisions, hide-and-inject middleware all
-   need to behave identically).
-6. **Test churn.** ~1-2 days for ~70 existing tests.
+5. **Multi-version render-side fold + `RenderGraphQLRuntime(svcs, registry)`**
+   — walks IR + registry, composes same-namespace services into a
+   single synthesized Group tree (latest at top, older as `vN` sub-
+   groups), builds `*graphql.Schema` with resolvers that look up
+   Dispatchers via SchemaID. Cuts over `buildSchemaLocked`; deletes
+   old converters. ~1-2 days. Highest risk: parity for hide-and-inject
+   middleware and subscription field collisions.
+6. **UI rewrite.** Going nested-everywhere means `admin_listPeers` →
+   `admin.listPeers`, `admin_forgetPeer` (Mutation) → `admin.forgetPeer`.
+   Multi-version OpenAPI ingest sources change too:
+   `pets_v1_getPet` → `pets.v1.getPet`. UI's admin pages + any
+   typed query consumer needs migration (graphql-codegen will
+   regenerate from the new SDL). ~0.5-1 day.
+7. **Test churn.** ~1-2 days for ~70 existing tests — most assertions
+   on flat field names (`admin_listPeers` etc.) need rewriting.
 
-Behavior decision needed for step 5: today proto pools render as
-**nested namespace objects** (`Query.greeter.hello`, `Query.greeter.v1.hello`)
-while OpenAPI/GraphQL ingest render flat (`Query.admin_listPeers`).
-The IR's `MultiVersionPrefix` only does flat. Two options:
+**Decision settled:** GraphQL render is nested everywhere; proto and
+OpenAPI flatten via `FlatOperations`. The IR was extended to model
+the nesting structurally rather than picking a flat-vs-nested fork
+at the renderer. The user's mental model: "IR has the structure;
+each format honors it as far as the format permits."
 
-- **(A) Same-behavior:** encode both strategies in the renderer
-  (~5-6 days total). Existing UI / consumers unchanged.
-- **(B) Simplify to flat-everywhere:** delete the proto nested-
-  object code; ~2 days total but **breaks the UI's existing
-  queries** (`{ greeter { hello } }` → `{ greeter_hello }`).
+**Test gap:** there's no SDL→introspection conversion, so the
+graphql round-trip test (`TestGraphQLIngest_NestedNamespaces` /
+`TestGraphQLRender_NestedNamespaces`) checks ingest → render in
+two halves rather than a true wire round-trip. If a real upstream
+graphql server emitted the gateway's nested-namespace SDL and the
+gateway introspected it back, the existing logic works (heuristic
+recognizes the nested shape) — just untested end-to-end.
 
 ### Bidirectional canonical-message gateway (long-term vision)
 
@@ -392,422 +433,3 @@ viewer. Vite proxies `/graphql`, `/schema`, `/health` to the gateway.
 UI-side tier-2 work is tracked under the Tier 2 heading: token
 entry/storage, dist embed.
 
-## Recently shipped
-
-(Last n commits worth knowing about for context. Update on commit; trim
-older entries when they get stale.)
-
-- `bc13f77` IR phase 6: wire `/api/schema/openapi` + `/api/schema/proto`
-  through IR. Greeter (proto) shows up in the OpenAPI tab as a
-  synthesized spec; admin (huma OpenAPI) shows up in proto SDL. New
-  `gw/schema_ir.go::gatewayServicesAsIR` helper composes ingest +
-  transforms; both endpoints use it.
-- `b053241` IR phase 4-5: transforms (Filter, HideInternal, Hides,
-  MultiVersionPrefix) + cross-kind render tests.
-- `26f4384` IR phase 2-3: OpenAPI + GraphQL ingest/render with
-  round-trips. Slot-wrapping refinements (Repeated / Required /
-  ItemRequired on Field/Arg/Operation) so GraphQL's `[T!]!` survives.
-- `debae40` IR phase 1: types (Service / Operation / Type / Field as
-  superset) + proto ingest/render with round-trip via Origin
-  shortcut. `gw/ir/` package, decoupled from `gw/`.
-- `bench/` — local benchmark + demo stack (history above this).
-- *(uncommitted)* `bench/` — local benchmark + demo stack.
-  `up.sh` boots a 1-gateway + 1-greeter cluster with Prometheus
-  (`:19090`, picked above the common port range so it doesn't
-  clash with a host's existing Prometheus) and Grafana (`:3001`)
-  via docker-compose with `network_mode: host`. `scale.sh`
-  add-gateway / add-backend / rm / status mutates the stack at
-  runtime — gateways auto-join the NATS cluster via `--nats-peer`
-  flags; Prometheus's scrape targets track via file_sd reading
-  `bench/.run/targets.json` (rewritten on every change). State
-  lives in per-node .env files under `.run/{gateways,backends}`
-  so Bash can read it via plain `source`. New `bench/cmd/traffic`
-  Go binary fires GraphQL POSTs at configurable RPS / concurrency
-  / duration, spreads across N targets, and prints client-side
-  count / err / p50/p95/p99 per target. Provisioned Grafana
-  dashboard surfaces dispatch RPS + p99 + quantiles + errors-by-code
-  + queue depth + backoff + streams in-flight + graphql-sub
-  fanouts. README documents the layout, scaling moves, and known
-  limits (single host; greeter gRPC backends only — OpenAPI +
-  downstream-GraphQL bench backends noted as a follow-up).
-- `20e4453` OpenAPI **oneOf/anyOf → graphql.NewUnion**.
-  Closes the second polymorphism gap. When every variant in a
-  oneOf/anyOf resolves to a known Object, `outputTypeFromSchema`
-  emits a `graphql.NewUnion` named from the schema's $ref/title
-  (or synthesised "AOrB" from variant names when the union itself
-  has no name). ResolveType: discriminator-first
-  (`discriminator.propertyName` + optional `discriminator.mapping`,
-  which kin-openapi exposes as `MappingRef.Ref`); falls through to
-  a required-properties heuristic so a value carrying every
-  variant's required props lands on the first match. Variants that
-  aren't clean Objects (primitives, mixed arrays) keep the
-  JSON-scalar fallback. Input side stays JSON scalar (GraphQL has
-  no input unions). The JSON scalar gained a `ParseLiteral` (no-op
-  passthrough) so graphql-go's schema validator accepts it when
-  any field actually references the fallback. 3 new tests in
-  openapi_test.go: discriminated happy path, no-discriminator
-  heuristic, primitive-variant fallback.
-- `6ca385c` downstream-GraphQL Interface/Union typed mirror.
-  Replaces the JSON-scalar fallback with a `graphql.NewUnion`
-  projection of introspected `possibleTypes`. Both INTERFACE and
-  UNION become a local Union — the gateway is a forwarder, not an
-  executor of shared interface fields. ResolveType reads
-  `__typename` off the per-value map. The AST rewriter
-  (rewriteFieldForRemote / rewriteSelectionSet) became a method on
-  `*graphQLMirror` and recurses into `ast.InlineFragment` so
-  TypeCondition is un-prefixed on the wire (`... on pets_Cat` →
-  `... on Cat`). Bug fix uncovered by the test:
-  `jsonUnmarshalLoose` used `dec.UseNumber`, which decodes ints as
-  `json.Number` (typed-string). graphql-go's `coerceInt` only
-  matches the bare `string` case for the type-switch, so Int fields
-  silently became null. Dropped UseNumber. Introspection parser
-  also captures `interfaces` + `possibleTypes` (the canonical query
-  already requested them — data was just being thrown away).
-  1 new test (`TestGraphQLIngest_UnionTypedMirror`).
-- `1ad86dd` OpenAPI + downstream-GraphQL **multi-version**.
-  Sources now key on `(namespace, version)` instead of just
-  namespace; both register paths honor `Version("vN")` ServiceOption
-  (default v1) and the wire-format `ServiceBinding.version` field
-  (previously documented as "ignored" for OpenAPI). Schema build
-  groups sources by namespace, sorts by versionN, and emits the
-  latest's fields under the existing flat naming
-  (`<ns>_<op>` / `<ns>_<TypeName>`) — back-compat with the
-  single-version case — while older versions disambiguate via
-  `<ns>_<vN>_<op>` / `<ns>_<vN>_<TypeName>` and stamp GraphQL
-  `@deprecated(reason: "<latest> is current")` on every emitted
-  field. Type-name caching in `openAPITypeBuilder` and
-  `graphQLMirror` is per-source-prefix so two versions sharing a
-  schema name like `Pet` produce distinct types. Dispatch metric
-  labels drop the hardcoded `"v1"` and use `src.version`.
-  `/schema/openapi` re-emits as `{"<ns>": {"<vN>": <spec>, ...}}`.
-  Reconciler's `handlePut` / `handleDelete` thread `ver` through to
-  `addOpenAPISourceLocked` / `addGraphQLSourceLocked` and the
-  remove-by-id helpers. Control plane proto comment updated;
-  `gw/proto/controlplane/v1/control.pb.go` regenerated. 2 new tests
-  (`TestOpenAPIE2E_TwoVersions`, `TestGraphQLIngest_TwoVersions`):
-  v1 + v2 backends, latest field hits v2, versioned field hits v1,
-  SDL contains both fields with `@deprecated` on older + distinct
-  type names.
-- `3a5bdd0` downstream-GraphQL subscription fanout
-  open/close metric. Closes the multiplexer observability gap left
-  by the suggested-pickup item: the broker doesn't fire RecordDispatch
-  on per-frame deliveries (per-call dispatch shape doesn't apply to
-  streams), but every fanout creation/teardown is now a
-  `go_api_gateway_graphql_sub_fanout_total{namespace,event}` counter
-  tick (event="open"|"close") plus a per-namespace
-  `go_api_gateway_graphql_sub_fanouts_active{namespace}` gauge. New
-  `Metrics.RecordGraphQLSubFanout(ns, event)` +
-  `SetGraphQLSubFanoutsActive(ns, n)`; noop / Prometheus impls + a
-  `metrics` field on `graphQLSource` set in both creation paths
-  (boot-time `AddGraphQL` and reconciler `addGraphQLSourceLocked`).
-  Open emits in `acquire` when a new fanout is added to the broker
-  map; close emits at the four removal sites (last-consumer
-  `releaseTarget`, upstream-driven `removeFanout` from complete /
-  error, transport `failAll`, broker `shutdown`) — wholesale clears
-  emit one close per snapshotted fanout. Active gauge is
-  `len(b.fanouts)` after each transition under `b.mu`. 1 new test
-  (`TestGraphQLIngest_SubscriptionMultiplexerMetrics`): two
-  subscribers same op → open=1 active=1; upstream complete →
-  close=1 active=0.
-- `659fa7c` downstream-GraphQL subscription multiplexer.
-  Per-source upstream graphql-transport-ws connection pool with
-  operation-level fanout — same shape as `broker.go` for local
-  NATS subs. New `graphql_sub_broker.go`: lazy-dialed shared WS,
-  fanouts keyed by SHA256 of (printed-query + canonical-JSON of
-  variables). Concurrent local subscribers issuing the same
-  operation share one upstream subscribe and each receive every
-  `next` payload (non-blocking fanout — slow consumer drops, same
-  policy as broker.go). Reader pump dispatches frames by upstream
-  subID. Last-consumer-leaves teardown: `complete` upstream, drop
-  fanout, close WS when broker has no remaining fanouts. The
-  `subscribingResolver` now acquires through the broker rather
-  than calling `subscribeUpstreamGraphQL` (now removed; helpers
-  retained for tests). 1 new test
-  (`TestGraphQLIngest_SubscriptionMultiplexer`): two local
-  subscribers with the same op → upstream sees exactly 1
-  connection + 1 subscribe; both receive a pushed `tick:7`.
-- `6e07e07` downstream-GraphQL subscription forwarding.
-  Closes the AddGraphQL story so remote Subscription roots no
-  longer skip at registration with a "not yet supported" log line.
-  New `graphql_subscribe.go` implements an upstream
-  graphql-transport-ws client: dial → connection_init →
-  connection_ack → subscribe → pump `next` / `error` /
-  `complete` frames into a Go channel. The mirror's
-  `buildSubscriptionRootFields` walks `intro.SubscriptionTypeName`
-  and emits one `<namespace>_<remoteName>` field per upstream
-  subscription. Each field's `Subscribe` opens an upstream WS
-  (one per local subscriber for v1; multiplexing across N local
-  subs is a tier-3 follow-up); `Resolve` plucks the remote field
-  out of each `next` payload's `data` envelope so consumers see
-  the field's value directly. ForwardHeaders is honored on the
-  upstream WS upgrade. `buildGraphQLFields` returns
-  `(queries, mutations, subscriptions)`; schema.go merges them
-  into the existing Subscription root with the same collision
-  rules. 1 new test (`TestGraphQLIngest_SubscriptionForwarding`):
-  fake upstream WS server emits 3 `tick` frames + complete; the
-  test dials the gateway WS, subscribes to `pets_tick`, observes
-  the values 1/2/3 and the terminating `complete`.
-- `5f03354` downstream-GraphQL multi-replica + load
-  balancing. Mirrors `dfae181` for OpenAPI: one source per
-  namespace, N replicas. `graphQLSource` collapses
-  `endpoint`+`httpClient`+`owner` into
-  `replicas atomic.Pointer[[]*graphQLReplica]` plus a `pickHint`
-  for round-robin tiebreaking; `graphQLReplica` carries id,
-  endpoint, owner, httpClient, inflight. `pickReplica` returns
-  lowest-in-flight (round-robin among ties so serial low-traffic
-  dispatch spreads across replicas instead of stacking on the
-  first). Same hash → idempotent multi-replica add; mismatched
-  hash still rejects. Granular replica delete via
-  `removeGraphQLReplicaByIDLocked` (source dies when last replica
-  leaves) for the cluster reconciler path; owner-based eviction
-  via `removeGraphQLSourcesByOwnerLocked` for standalone
-  Deregister + boot rollback. The forwarding resolver in
-  `graphql_mirror.go` now picks per call and inflight-bumps with
-  defer, the same shape as the OpenAPI resolver.
-  control.Register's standalone-rollback path simplified to
-  owner-walk every kind of source instead of tracking
-  per-namespace add lists. 1 new test
-  (`TestDynamicGraphQL_MultiReplica`): two backends, alternating
-  dispatch over 10 calls, deregister-A → all 5 follow-ups land
-  on B, replicaCount goes 2→1.
-- `2afa1d5` downstream-GraphQL dynamic registration over the
-  control plane. Mirrors `784430a` for OpenAPI:
-  `ServiceBinding.graphql_endpoint` (proto field 6) joins
-  `file_descriptor_set` and `openapi_spec` as a third mutually-
-  exclusive form. Receiving gateway runs the canonical introspection
-  query at Register time, hashes the bytes, and writes both the
-  endpoint and the introspection JSON into the registry KV value
-  (`registryValue.GraphQLEndpoint` + `GraphQLIntrospection`); other
-  peers' reconcilers parse from the cached bytes — no re-fetch.
-  `addGraphQLSourceLocked` is idempotent under hash equality (mirror
-  of `addOpenAPISourceLocked`). `removeGraphQLSourceLocked` /
-  `removeGraphQLSourcesByOwnerLocked` cover Deregister and reconciler
-  delete. `controlclient.Service` gains `GraphQLEndpoint string`,
-  mutually exclusive with `FileDescriptor` / `OpenAPISpec` (validated
-  client-side too). 5 new tests in `dynamic_graphql_test.go`:
-  standalone register → query → deregister; hash mismatch on second
-  register; three-form set rejection; namespace-required (no fallback
-  for GraphQL); cluster cross-gateway dispatch (register on A,
-  dispatch from B). Existing `TestGraphQLIngest_DuplicateNamespaceRejected`
-  renamed to `_Idempotent` to match the new behavior (same-hash
-  re-register is a no-op).
-- `45c0cd4` `SignSubscriptionToken` RPC kid in/out. Closes
-  the rotation story for centrally-signed tokens (the open
-  follow-up after `325aaf4`). `SignSubscriptionTokenRequest` gains
-  `string kid = 3`; `SignSubscriptionTokenResponse` gains
-  `string kid = 5`. Handler routes through the same
-  `lookupSecret(kid)` helper as the verifier — empty kid +
-  configured Secret stays on the legacy single-key payload (back-
-  compat); non-empty kid signs the rotated payload via
-  `computeSubscribeHMAC(secret, kid, channel, ts)`. UNKNOWN_KID is
-  surfaced when the gateway has no entry for the requested kid.
-  Admin huma route (`signIn` / `signOut` JSON shapes) and the CLI
-  `sign` subcommand both gained `--kid` (input) + `kid=` (output);
-  CLI's local-sign path now uses `SignSubscribeTokenWithKid`. 3
-  new unit tests in `auth_subscribe_test.go` cover RPC happy path
-  (rotated kid round-trips through verify), UNKNOWN_KID, and the
-  legacy default-kid back-compat path.
-- `325aaf4` token rotation (kid in HMAC tokens). Verifier +
-  standalone signer half. `SubscriptionAuthOptions.Secrets
-  map[string][]byte` joins the legacy `Secret []byte`; verifier
-  reads an optional `kid: String` arg from subscribe payloads,
-  resolves it via `lookupSecret(kid)` (legacy `Secret` wins for
-  kid=""; `Secrets[kid]` otherwise), and emits `UNKNOWN_KID` when
-  unmapped. HMAC payload bound to kid: empty kid stays on the
-  legacy `<channel>\n<ts>` payload (back-compat); non-empty kid
-  signs `<kid>\n<channel>\n<ts>` so a token can't be replayed by
-  changing the kid arg on the wire. SDL gains optional `kid: String`
-  on every Subscription field. New public helper
-  `SignSubscribeTokenWithKid(secret, kid, channel, ttl) (hmacB64,
-  kidOut, ts)`; the original `SignSubscribeToken` is preserved as
-  a kid="" wrapper. The `SignSubscriptionToken` RPC continues to
-  sign with the default secret (kid="") for back-compat — extending
-  the RPC proto with `kid` in/out is the documented follow-up.
-  7 new unit tests in `auth_subscribe_test.go`: legacy still
-  verifies, rotated verifies, unknown kid → UNKNOWN_KID, cross-kid
-  replay → SIGNATURE_MISMATCH, legacy + rotated coexist, no-secret
-  → NOT_CONFIGURED, kid wrong type → MALFORMED.
-- `2c1f58d` downstream-GraphQL backpressure. Closes the
-  per-source semaphore parity with the proto and OpenAPI paths.
-  `graphQLSource` gains `sem chan struct{}` + `queueing
-  atomic.Int32`, sized at registration from
-  `BackpressureOptions.MaxInflight` (gateway-wide config — same
-  knob OpenAPI / proto pools use). Forwarding resolver acquires
-  before any AST work, observes dwell + queue-depth, fast-rejects
-  with `Reject(ResourceExhausted)` when `MaxWaitTime` expires
-  (back-stamped through the same `record` closure that fires
-  `RecordDispatch`). Dwell / queue-depth / backoff metrics fire
-  with `kind="unary"`, version `"v1"`. `BackpressureOptions` is
-  passed through from `Gateway.buildGraphQLFields` →
-  `newGraphQLMirror` so the resolver closure has it without
-  reaching back into the gateway. 1 new test
-  (`TestGraphQLIngest_BackpressureTimesOutAndRejects`): blocking
-  backend + `MaxInflight=1` + `MaxWaitTime=50ms` → second
-  concurrent dispatch rejects with RESOURCE_EXHAUSTED. Same shape
-  as `TestOpenAPIE2E_BackpressureTimesOutAndRejects`.
-- `448d86b` downstream-GraphQL dispatch metric + error
-  classification. Mirrors the OpenAPI pair (`e88d158`/`cf115c1`):
-  `graphQLMirror` now carries a `Metrics` reference (passed in via
-  `g.cfg.metrics`) and `forwardingResolver` records start time +
-  calls `metrics.RecordDispatch(ns, "v1", "<query|mutation>
-  <remoteFieldName>", elapsed, err)` on every exit (no-AST,
-  printer error, dispatch return, remote-errors envelope, decode
-  failure). `dispatchGraphQL` and the no-FieldASTs / printer / no-
-  data branches now return `Reject(Code, msg)` so the `code` label
-  on the dispatch metric (and GraphQL `extensions.code`) reflects
-  the failure shape: HTTP statuses go through the same
-  `httpStatusToCode` helper added for OpenAPI; remote GraphQL
-  errors classify as `INTERNAL` (no portable status in the GraphQL
-  error envelope); transport / decode → `INTERNAL`; marshal /
-  request-build → `INVALID_ARGUMENT`. Histogram help text +
-  `Metrics.RecordDispatch` godoc updated to call out the third
-  dispatch path. 2 new tests in `graphql_ingest_test.go`:
-  `TestGraphQLIngest_RecordDispatchFires` (label parity) and
-  `TestGraphQLIngest_ErrorClassification` (HTTP 401 / 404 / 500 +
-  remote-errors envelope).
-- `cf115c1` OpenAPI dispatch error classification.
-  `dispatchOpenAPI` and the resolver's no-live-replicas branch now
-  return `Reject(Code, msg)` instead of plain `fmt.Errorf` so
-  `classifyError` (used by both `RecordDispatch`'s `code` label and
-  GraphQL `extensions.code`) picks up a meaningful enum: HTTP 400 →
-  `INVALID_ARGUMENT`, 401 → `UNAUTHENTICATED`, 403 →
-  `PERMISSION_DENIED`, 404 → `NOT_FOUND`, 429 →
-  `RESOURCE_EXHAUSTED`, 5xx → `INTERNAL`, transport / decode /
-  no-live-replicas → `INTERNAL`, body-marshal / request-build →
-  `INVALID_ARGUMENT`. New `httpStatusToCode` helper lives in
-  `openapi.go` with a comment pointing at gRPC's HTTP-mapping
-  conventions. 2 new tests
-  (`TestOpenAPIE2E_ErrorClassification` table-test across 7 status
-  codes, `TestOpenAPIE2E_TransportErrorClassifiesAsInternal`).
-- `e88d158` OpenAPI dispatch RecordDispatch parity. Resolver
-  in `buildOpenAPIField` records `start := time.Now()` and calls
-  `metrics.RecordDispatch(ns, "v1", "<METHOD> <pathTemplate>",
-  elapsed, err)` on every exit path — backpressure rejection, no-
-  live-replicas, and the dispatchOpenAPI return — so
-  `go_api_gateway_dispatch_duration_seconds` covers HTTP sources, not
-  just gRPC pools. Histogram help text + `Metrics.RecordDispatch`
-  godoc updated to reflect dual-transport coverage. 1 new test
-  (`TestOpenAPIE2E_RecordDispatchFires`): asserts label parity
-  (namespace="test", version="v1", method="GET /things/{id}") and
-  err nil/non-nil across happy + 500 paths.
-- `340f73b` `/schema/graphql` selector support. The endpoint
-  now accepts the same `?service=ns[:ver][,...]` grammar as
-  `/schema/proto` and `/schema/openapi`. Refactored
-  `assembleLocked` into `buildSchemaLocked(filter schemaFilter)` —
-  unfiltered builds populate `g.schema` (cached, atomic swap);
-  filtered requests build a fresh schema per call and discard.
-  `schemaFilter.matchPool(poolKey)` covers proto pools (ns + ver);
-  `schemaFilter.matchNS(ns)` covers OpenAPI / downstream-GraphQL
-  sources (no version axis). Filter threaded through
-  `buildOpenAPIFields`, `buildGraphQLFields`,
-  `buildSubscriptionFields`. 1 new test
-  (`TestSchemaHandler_ServiceSelectorFiltersSDL` in
-  `schema_rebuild_test.go`): two protos registered, unfiltered SDL
-  carries both, `?service=greeter` carries only greeter, malformed
-  selector → 400.
-- `cc44855` OpenAPI HTTP backpressure. Per-source semaphore +
-  queue gauge mirroring the proto pool path: `openAPISource` gains
-  `sem chan struct{}` + `queueing atomic.Int32`, sized by
-  `BackpressureOptions.MaxInflight` (gateway-wide config — same knob
-  as proto pools). Resolver acquires before `pickReplica`,
-  fast-rejects with `Reject(ResourceExhausted)` when `MaxWaitTime`
-  expires. Dwell + queue-depth + backoff metrics fire under the
-  same labels as the proto path (`kind="unary"`, version pinned to
-  `v1` since OpenAPI sources have no version axis). Method label is
-  `<HTTP_METHOD> <pathTemplate>`. 1 new test
-  (`TestOpenAPIE2E_BackpressureTimesOutAndRejects` in
-  `openapi_test.go`): blocking backend + `MaxInflight=1` +
-  `MaxWaitTime=50ms` → second concurrent dispatch rejects with
-  RESOURCE_EXHAUSTED.
-- `3517273` downstream GraphQL ingestion (boot-time, queries +
-  mutations). `gw.AddGraphQL(endpoint, opts...)` runs the canonical
-  introspection query, parses into a typed model, mirrors every
-  custom type with a `<ns>_` prefix (built-in scalars stay
-  unprefixed), and registers Query/Mutation fields. Forwarding
-  resolver rewrites the AST to drop the prefix from the top-level
-  field name, prints via graphql-go's printer, and POSTs to the
-  remote with the same auth/header pass-through OpenAPI uses.
-  Interfaces/Unions fall back to a JSON scalar (logged); subscriptions
-  not yet supported. New files: `graphql_ingest.go`,
-  `graphql_introspect.go`, `graphql_mirror.go`. 4 new tests
-  (`graphql_ingest_test.go`).
-- `dfae181` OpenAPI multi-replica + load balancing.
-  `openAPISource.baseURL` and `httpClient` collapse into a slice of
-  `openAPIReplica`s (atomic.Pointer like proto pools), each with its
-  own baseURL + in-flight counter + per-replica client.
-  `pickReplica` picks lowest in-flight with a round-robin tiebreaker
-  (serial low-traffic dispatch now spreads across replicas instead
-  of stacking on the first). Multi-replica registration: identical
-  spec hash + different addr appends a new replica; mismatched hash
-  still rejects. Granular reconciler delete (per replicaID); source
-  dies when last replica leaves. 1 new test
-  (`TestDynamicOpenAPI_MultiReplica`): two backends, alternating
-  dispatch, deregister-A → all traffic shifts to B.
-- `01b1a3a` admin-auth follow-ups pack: (1) auto-internal
-  `_*` namespaces — anything starting with underscore is hidden
-  from the public schema regardless of `AsInternal()`. Centralised
-  via a new `g.isInternal(ns)` helper; the explicit map still
-  works. (2) `go_api_gateway_admin_auth_total{method, outcome}`
-  counter mirroring the subscribe-auth metric. Outcomes:
-  `ok_delegate` / `ok_bearer` / `denied_delegate` / `denied_bearer`
-  / `no_token_configured`. Public reads never increment.
-  Destructive-read opt-in remains parked. 2 new tests
-  (`schema_rebuild_test.go`, `auth_admin_test.go`).
-- `784430a` dynamic OpenAPI registration through the
-  control plane. New `ServiceBinding.openapi_spec` (proto field 5)
-  alongside the existing `file_descriptor_set`; mutually exclusive.
-  `controlPlane.Register` routes by which form was sent —
-  proto-shaped goes through the existing pool / dial path, OpenAPI
-  goes through new `addOpenAPISourceLocked` (idempotent under hash
-  equality). Cluster mode: spec bytes ride in the registry KV
-  value alongside the FileDescriptorSet field; `reconciler.handlePut`
-  detects via the new `registryValue.IsOpenAPI()` and creates the
-  source on every peer. `controlclient.Service` gains an
-  `OpenAPISpec []byte` field so external services can self-register
-  OpenAPI bindings the same way they register proto. 5 new tests
-  (`dynamic_openapi_test.go`) covering standalone, hash-mismatch,
-  both-set + neither-set rejection, and cluster cross-gateway.
-- `cc57458` `WithOpenAPIClient(*http.Client)` gateway option
-  + `OpenAPIClient(c)` per-source `ServiceOption`. Per-source beats
-  gateway-wide; both fall back to `http.DefaultClient`. Threaded
-  through `dispatchOpenAPI`. Closed the cheapest tier-2 outbound-
-  auth fork.
-- `58b6ff9` admin\_events end-to-end: `adminevents/v1` proto
-  (`AdminEvents.WatchServices` server-streaming) + `gw.AddAdminEvents()`
-  registers it under `admin_events/v1`. Registry hooks publish
-  `ServiceChange` to `events.admin_events.WatchServices.<ns>` on
-  every join/leave; the existing NATS pub/sub fanout delivers it to
-  WebSocket subscribers as `admin_events_watchServices`. The UI's
-  `EventsProvider` auto-subscribes; new toasts pop bottom-right and
-  events also land in the tray. Fixed two pre-existing bugs uncovered
-  by this work: schema rebuild crashed when a namespace had only
-  streaming RPCs (now skips the empty Query sub-object), and proto
-  enums were serialised as strings but graphql-go matches enum
-  values by typed equality (now returns int32). 2 new tests
-  (`admin_events_test.go`) + 1 WS e2e
-  (`subscriptions_test.go::AdminEventsWatchServices`).
-- `70ebaf2` UI events provider. `<EventsProvider>` wraps the
-  Layout, holds a graphql-ws client (`ui/src/api/events.ts`) and a
-  global ring buffer (50 events). Pages opt in via
-  `useSubscribe({ id, query, variables, onData })`. Bell icon in
-  the AppBar with unread badge opens an `EventsTray` drawer that
-  renders the feed (subject, timestamp, JSON payload preview, error
-  framing). Lazy WS — connection opens on first subscribe, closes
-  after the last unsubscribe. graphql-ws@6 dependency added.
-- `3968c69` More huma admin routes: `GET /admin/channels`
-  (active subscription subjects + per-subject consumer count via
-  new `gw.ActiveSubjects()`), `POST /admin/drain` (operator-driven
-  graceful drain with configurable timeout, requires bearer),
-  `GET /admin/openapi.json` (huma's OpenAPI spec repointed under
-  /admin/ so it's reachable via the gateway's mount). All
-  self-ingest as `admin_*` GraphQL fields automatically. 5 new
-  tests in `admin_huma_test.go`.
-Older commits (`/api/*` split + embedded UI bundle `06b1fc2`, UI admin
-token entry `813b055`, cluster cross-gateway dispatch e2e `778559d`,
-ForgetPeer tests `9f498eb`, schema rebuild tests `4a5b203`, gRPC
-unary dispatch e2e `aabdc21`, subscription e2e, OpenAPI dispatch e2e,
-AdminAuthorizer delegate, ForwardHeaders, admin boot-token, huma
-self-ingest, schema export family, AddOpenAPI ingestion, /health +
-Drain, graphql-ws transport + NATS bridge, cluster KV, peers KV,
-embedded NATS, mTLS, schema diff, Prometheus, etc.) are in the git
-log — they're not referenced by current decisions any more.
