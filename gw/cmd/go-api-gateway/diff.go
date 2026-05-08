@@ -260,6 +260,7 @@ func diffObject(name string, oo, no *objectType) []change {
 			if oa.typ != na.typ {
 				out = append(out, change{"breaking", fmt.Sprintf("arg type changed: %s.%s(%s) %s → %s", name, fn, an, oa.typ, na.typ)})
 			}
+			out = append(out, diffDefault(fmt.Sprintf("%s.%s(%s)", name, fn, an), "arg", oa.hasDefault, oa.defaultValue, na.hasDefault, na.defaultValue)...)
 		}
 		// Deprecation flips are informational.
 		if !of.dep && nf.dep {
@@ -292,6 +293,26 @@ func diffInput(name string, oi, ni *inputType) []change {
 		if of.typ != nf.typ {
 			out = append(out, change{"breaking", fmt.Sprintf("input field type changed: %s.%s %s → %s", name, fn, of.typ, nf.typ)})
 		}
+		out = append(out, diffDefault(fmt.Sprintf("%s.%s", name, fn), "input field", of.hasDefault, of.defaultValue, nf.hasDefault, nf.defaultValue)...)
 	}
 	return out
+}
+
+// diffDefault emits transitions for default-value changes. label is
+// the human-readable target ("arg" or "input field"); subject is the
+// already-formatted location (e.g. `Query.users(limit)` or `User.role`).
+//
+//	old has default, new differs   → breaking ("default changed")
+//	old has default, new has none  → breaking ("default removed")
+//	old has no default, new has    → info     ("default added")
+func diffDefault(subject, label string, oldHas bool, oldVal string, newHas bool, newVal string) []change {
+	switch {
+	case oldHas && newHas && oldVal != newVal:
+		return []change{{"breaking", fmt.Sprintf("%s default changed: %s %q → %q", label, subject, oldVal, newVal)}}
+	case oldHas && !newHas:
+		return []change{{"breaking", fmt.Sprintf("%s default removed: %s (was %q)", label, subject, oldVal)}}
+	case !oldHas && newHas:
+		return []change{{"info", fmt.Sprintf("%s default added: %s = %q", label, subject, newVal)}}
+	}
+	return nil
 }
