@@ -6,9 +6,10 @@
 //   - user.v1.UserService — public service whose RPCs embed an
 //     auth.v1.Context input field.
 //
-// HideAndInject[*authv1.Context] strips the auth field from the
-// external GraphQL surface and populates it at request time by calling
-// AuthService.Resolve once per request, cached on the request context.
+// InjectType[*authv1.Context] strips the auth field from the external
+// GraphQL surface (Hide(true) is the default) and populates it at
+// request time by calling AuthService.Resolve once per request,
+// cached on the request context.
 //
 //	go run .   # starts both services + gateway on :8080
 //	curl -H 'Authorization: Bearer alice' \
@@ -65,8 +66,10 @@ func main() {
 
 	// One declaration; the schema half hides every input field of type
 	// *authv1.Context, the runtime half fills them. The gateway calls
-	// the resolver once per request and caches by type.
-	gw.Use(gateway.HideAndInject[*authv1.Context](func(ctx context.Context) (*authv1.Context, error) {
+	// the resolver once per request and caches by type. `current` is
+	// always nil here because Hide(true) means the arg never reaches
+	// the wire.
+	gw.Use(gateway.InjectType[*authv1.Context](func(ctx context.Context, _ **authv1.Context) (*authv1.Context, error) {
 		token := bearerFromContext(ctx)
 		if token == "" {
 			return nil, gateway.Reject(gateway.CodeUnauthenticated, "missing bearer token")

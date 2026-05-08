@@ -81,7 +81,7 @@ func TestHidesStripFieldsByType(t *testing.T) {
 // TestHidesStripsOperationArgs covers the proto-flatten case: an
 // input message that referenced a hidden type ends up with the
 // hidden type as a flat Arg. ir.Hides must strip those too, else
-// HideAndInject would leak the auth-context arg into the public
+// InjectType would leak the auth-context arg into the public
 // schema.
 func TestHidesStripsOperationArgs(t *testing.T) {
 	svc := mkService("svc", "v1")

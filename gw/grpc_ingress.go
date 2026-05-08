@@ -124,8 +124,8 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 //
 // Unary RPCs decode wire bytes into a dynamicpb.Message of the target
 // method's input descriptor, apply per-pool backpressure, and run the
-// chained Handler the canonical protoDispatcher uses (so HideAndInject
-// / Hides / user runtime middleware all apply). Skipping canonical
+// chained Handler the canonical protoDispatcher uses (so InjectType /
+// HideType / user runtime middleware all apply). Skipping canonical
 // args avoids two map↔message conversions on the proto→proto path.
 //
 // Server-streaming RPCs route through the canonical-args

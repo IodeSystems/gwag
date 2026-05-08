@@ -287,8 +287,8 @@ func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool)
 //     path / query / body decoded into canonical args.
 //
 // All shapes go through the same ir.Dispatcher chain the GraphQL
-// resolver uses, so runtime middleware (Hides, HideAndInject, user
-// Pairs) and per-pool backpressure apply identically.
+// resolver uses, so runtime middleware (HideType, InjectType, user
+// Transforms) and per-pool backpressure apply identically.
 //
 // Unmatched paths return JSON 404. The handler is safe to call
 // before Handler() — schema assembly triggers the same way.
