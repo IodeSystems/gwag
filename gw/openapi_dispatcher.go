@@ -26,12 +26,13 @@ type openAPIDispatcher struct {
 	pathTemplate   string
 	forwardHeaders []string
 	metrics        Metrics
+	bp             BackpressureOptions
 	ns             string
 	ver            string
 	label          string // "<METHOD> <pathTemplate>" — proto-side metric parity
 }
 
-func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, metrics Metrics) *openAPIDispatcher {
+func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
 	return &openAPIDispatcher{
 		src:            src,
 		op:             op,
@@ -39,6 +40,7 @@ func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pa
 		pathTemplate:   pathTemplate,
 		forwardHeaders: src.forwardHeaders,
 		metrics:        metrics,
+		bp:             bp,
 		ns:             src.namespace,
 		ver:            src.version,
 		label:          method + " " + pathTemplate,
@@ -53,6 +55,13 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 		d.metrics.RecordDispatch(d.ns, d.ver, d.label, time.Since(start), err)
 		return nil, err
 	}
+	releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, d.src, d.label, d.metrics, d.bp)
+	if err != nil {
+		d.metrics.RecordDispatch(d.ns, d.ver, d.label, time.Since(start), err)
+		return nil, err
+	}
+	defer releaseInstance()
+
 	r.inflight.Add(1)
 	defer r.inflight.Add(-1)
 	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, r.httpClient)
@@ -61,6 +70,27 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 		return nil, err
 	}
 	return resp, nil
+}
+
+// acquireOpenAPIReplicaSlot is the per-instance counterpart to
+// acquireBackpressureSlot for OpenAPI sources. Same shape as the
+// proto-side acquireReplicaSlot (kept distinct because pool and
+// openAPISource have separate sem fields and metric namespaces).
+func acquireOpenAPIReplicaSlot(ctx context.Context, r *openAPIReplica, src *openAPISource, label string, metrics Metrics, bp BackpressureOptions) (release func(), err error) {
+	if r.sem == nil {
+		return func() {}, nil
+	}
+	cfg := BackpressureConfig{
+		Sem:         r.sem,
+		Queueing:    &r.queueing,
+		MaxWaitTime: bp.MaxWaitTime,
+		Metrics:     metrics,
+		Namespace:   src.namespace,
+		Version:     src.version,
+		Label:       label,
+		Kind:        "unary_instance",
+	}
+	return acquireBackpressureSlot(ctx, cfg)
 }
 
 // openAPIBackpressureConfig bundles a source's per-dispatch knobs

@@ -1,0 +1,217 @@
+package gateway
+
+import (
+	"context"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+
+	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+)
+
+// TestMaxConcurrency_PerService_RejectsOnOverflow verifies that the
+// per-service cap (set via MaxConcurrency) gates simultaneous unary
+// dispatches at the registration's declared ceiling — not the
+// gateway-wide BackpressureOptions default.
+func TestMaxConcurrency_PerService_RejectsOnOverflow(t *testing.T) {
+	// One slow backend that blocks until the test releases it.
+	release := make(chan struct{})
+	defer close(release)
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{
+		helloFn: func(ctx context.Context, _ *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+			select {
+			case <-release:
+				return &greeterv1.HelloResponse{Greeting: "ok"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, greeter)
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
+	// Gateway with MaxInflight=64 default but the registration caps
+	// the service at 2. Wait budget is short so the third request
+	// fast-rejects rather than blocking the test.
+	gw := New(
+		WithoutMetrics(),
+		WithBackpressure(BackpressureOptions{MaxInflight: 64, MaxWaitTime: 50 * time.Millisecond}),
+		WithAdminToken([]byte("ignored")),
+	)
+	t.Cleanup(gw.Close)
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(beLis.Addr().String()),
+		As("greeter"),
+		MaxConcurrency(2),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+	_ = gw.Handler() // trigger schema assembly so dispatchers populate
+
+	d := gw.dispatchers.Get("greeter/v1/Hello")
+	if d == nil {
+		t.Fatal("Hello dispatcher not registered")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Saturate the cap with two slow dispatches.
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = d.Dispatch(ctx, map[string]any{})
+		}()
+	}
+
+	// Wait for both to be in-flight at the backend (cap is now full).
+	deadline := time.Now().Add(2 * time.Second)
+	for greeter.helloCalls.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d in flight after 2s", greeter.helloCalls.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Third dispatch should fast-reject within MaxWaitTime budget.
+	start := time.Now()
+	_, err = d.Dispatch(ctx, map[string]any{})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected ResourceExhausted reject, got nil")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("third dispatch took %v — backpressure didn't fast-reject", elapsed)
+	}
+}
+
+// TestMaxConcurrencyPerInstance_GatesSingleReplica verifies the
+// per-replica cap blocks at the instance ceiling even when the
+// service-level cap has plenty of room.
+func TestMaxConcurrencyPerInstance_GatesSingleReplica(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{
+		helloFn: func(ctx context.Context, _ *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+			select {
+			case <-release:
+				return &greeterv1.HelloResponse{Greeting: "ok"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, greeter)
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
+	gw := New(
+		WithoutMetrics(),
+		WithBackpressure(BackpressureOptions{MaxInflight: 64, MaxWaitTime: 50 * time.Millisecond}),
+		WithAdminToken([]byte("ignored")),
+	)
+	t.Cleanup(gw.Close)
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(beLis.Addr().String()),
+		As("greeter"),
+		MaxConcurrencyPerInstance(1),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+	_ = gw.Handler()
+
+	d := gw.dispatchers.Get("greeter/v1/Hello")
+	if d == nil {
+		t.Fatal("Hello dispatcher not registered")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First dispatch saturates the single-replica instance cap.
+	var rejected atomic.Int32
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = d.Dispatch(ctx, map[string]any{})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for greeter.helloCalls.Load() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("first dispatch never reached backend")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Second dispatch should fast-reject (per-instance cap = 1).
+	start := time.Now()
+	_, err = d.Dispatch(ctx, map[string]any{})
+	if err != nil {
+		rejected.Add(1)
+	}
+	if rejected.Load() != 1 {
+		t.Fatalf("expected per-instance cap to reject, got nil error")
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("second dispatch took %v — per-instance backpressure didn't fast-reject", took)
+	}
+}
+
+// TestMaxConcurrency_MismatchAcrossReplicasRejected ensures registration
+// drift surfaces loudly: a second AddProto call that uses a different
+// MaxConcurrency value than the first must fail rather than silently
+// adopt the new cap (or worse, mix two interpretations).
+func TestMaxConcurrency_MismatchAcrossReplicasRejected(t *testing.T) {
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, &fakeGreeterServer{})
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(beLis.Addr().String()),
+		As("greeter"),
+		MaxConcurrency(8),
+	); err != nil {
+		t.Fatalf("first AddProtoDescriptor: %v", err)
+	}
+	err = gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(beLis.Addr().String()),
+		As("greeter"),
+		MaxConcurrency(16),
+	)
+	if err == nil {
+		t.Fatal("expected mismatched MaxConcurrency to be rejected")
+	}
+}

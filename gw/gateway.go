@@ -326,6 +326,18 @@ type serviceConfig struct {
 	internal       bool
 	forwardHeaders []string
 	httpClient     *http.Client
+
+	// maxConcurrency caps simultaneous unary dispatches against this
+	// service (pool / openAPISource). 0 → fall back to the gateway-
+	// wide default (BackpressureOptions.MaxInflight). Negative is
+	// rejected at registration.
+	maxConcurrency int
+
+	// maxConcurrencyPerInstance caps simultaneous unary dispatches
+	// against any single replica. 0 → unbounded per replica
+	// (concurrency limited only by the service-level cap above).
+	// Negative is rejected at registration.
+	maxConcurrencyPerInstance int
 }
 
 // isInternal reports whether ns is hidden from the public GraphQL
@@ -402,6 +414,32 @@ func ForwardHeaders(headers ...string) ServiceOption {
 	}
 }
 
+// MaxConcurrency caps simultaneous unary dispatches against this
+// service. Overrides the gateway-wide
+// BackpressureOptions.MaxInflight default for this one registration
+// — a heavy backend can declare 64 in-flight while light backends
+// stay at the gateway default. 0 → fall back to the gateway default.
+//
+// Applies to AddProto / AddProtoDescriptor (per-pool sem) and
+// AddOpenAPI / AddOpenAPIBytes (per-source sem). No-op for
+// AddGraphQL (downstream-GraphQL stitching has no per-source sem).
+func MaxConcurrency(n int) ServiceOption {
+	return func(c *serviceConfig) { c.maxConcurrency = n }
+}
+
+// MaxConcurrencyPerInstance caps simultaneous unary dispatches
+// against any single replica behind a service. New axis: the
+// service-level cap (MaxConcurrency / gateway default) bounds the
+// pool, this bounds each replica individually, so a 3-replica
+// service with MaxConcurrencyPerInstance(50) holds at most
+// 150 in-flight even if MaxConcurrency / the gateway default is
+// higher. 0 → unbounded per replica (only the service cap applies).
+//
+// Same applicability as MaxConcurrency.
+func MaxConcurrencyPerInstance(n int) ServiceOption {
+	return func(c *serviceConfig) { c.maxConcurrencyPerInstance = n }
+}
+
 // OpenAPIClient overrides the *http.Client used for outbound
 // dispatches against this OpenAPI source. Beats the gateway-wide
 // default set by `WithOpenAPIClient(...)`.
@@ -448,13 +486,15 @@ func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...Ser
 		g.internal[ns] = true
 	}
 	return g.joinPoolLocked(poolEntry{
-		namespace: ns,
-		version:   "v1",
-		hash:      hash,
-		file:      fd,
-		addr:      addr,
-		conn:      sc.conn,
-		owner:     "",
+		namespace:                 ns,
+		version:                   "v1",
+		hash:                      hash,
+		file:                      fd,
+		addr:                      addr,
+		conn:                      sc.conn,
+		owner:                     "",
+		maxConcurrency:            sc.maxConcurrency,
+		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
 	})
 }
 
@@ -493,13 +533,15 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 		g.internal[ns] = true
 	}
 	return g.joinPoolLocked(poolEntry{
-		namespace: ns,
-		version:   "v1",
-		hash:      hash,
-		file:      fd,
-		addr:      addr,
-		conn:      sc.conn,
-		owner:     "", // boot-time, never evicted
+		namespace:                 ns,
+		version:                   "v1",
+		hash:                      hash,
+		file:                      fd,
+		addr:                      addr,
+		conn:                      sc.conn,
+		owner:                     "", // boot-time, never evicted
+		maxConcurrency:            sc.maxConcurrency,
+		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
 	})
 }
 
@@ -514,19 +556,43 @@ type poolEntry struct {
 	conn      grpc.ClientConnInterface
 	owner     string
 	replicaID string // KV-side replica id, "" for boot-time AddProto
+
+	// maxConcurrency / maxConcurrencyPerInstance are captured on the
+	// FIRST registration of a (namespace, version) pool — sizing the
+	// service-level sem and the per-replica sem respectively. Later
+	// joins must agree on both, like proto hash. 0 means "use the
+	// gateway default" (service) or "unbounded" (instance). Negative
+	// is rejected upstream.
+	maxConcurrency            int
+	maxConcurrencyPerInstance int
 }
 
 // joinPoolLocked finds or creates the pool for (namespace, version) and
 // adds a replica. Pool creation triggers a schema rebuild; replica
 // churn within an existing pool does not. Caller must hold g.mu.
 func (g *Gateway) joinPoolLocked(e poolEntry) error {
+	if e.maxConcurrency < 0 {
+		return fmt.Errorf("gateway: pool %s/%s: max_concurrency must be ≥ 0", e.namespace, e.version)
+	}
+	if e.maxConcurrencyPerInstance < 0 {
+		return fmt.Errorf("gateway: pool %s/%s: max_concurrency_per_instance must be ≥ 0", e.namespace, e.version)
+	}
 	key := poolKey{namespace: e.namespace, version: e.version}
 	p, exists := g.pools[key]
 	if exists {
 		if p.hash != e.hash {
 			return fmt.Errorf("gateway: pool %s/%s exists with different proto hash", e.namespace, e.version)
 		}
-		p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
+		// Concurrency caps are captured on first-create and frozen for
+		// the pool's lifetime — later joins must agree. Mismatched
+		// caps mean either a control-plane misconfiguration or a
+		// rolling deploy that changed the registration shape; surface
+		// loudly so it doesn't silently drift.
+		if e.maxConcurrency != p.maxConcurrency || e.maxConcurrencyPerInstance != p.maxConcurrencyPerInstance {
+			return fmt.Errorf("gateway: pool %s/%s exists with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
+				e.namespace, e.version, p.maxConcurrency, p.maxConcurrencyPerInstance, e.maxConcurrency, e.maxConcurrencyPerInstance)
+		}
+		p.addReplica(g.newReplica(p, e))
 		g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 		return nil
 	}
@@ -535,18 +601,26 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		return fmt.Errorf("gateway: %w", err)
 	}
 	p = &pool{
-		key:      key,
-		versionN: n,
-		file:     e.file,
-		hash:     e.hash,
+		key:                       key,
+		versionN:                  n,
+		file:                      e.file,
+		hash:                      e.hash,
+		maxConcurrency:            e.maxConcurrency,
+		maxConcurrencyPerInstance: e.maxConcurrencyPerInstance,
 	}
-	if g.cfg.backpressure.MaxInflight > 0 {
-		p.sem = make(chan struct{}, g.cfg.backpressure.MaxInflight)
+	// Service-level cap: registration override beats gateway default.
+	// 0 → fall back to default; default of 0 → unbounded.
+	semSize := e.maxConcurrency
+	if semSize == 0 {
+		semSize = g.cfg.backpressure.MaxInflight
+	}
+	if semSize > 0 {
+		p.sem = make(chan struct{}, semSize)
 	}
 	if g.cfg.backpressure.MaxStreams > 0 {
 		p.streamSem = make(chan struct{}, g.cfg.backpressure.MaxStreams)
 	}
-	p.addReplica(&replica{id: e.replicaID, addr: e.addr, owner: e.owner, conn: e.conn})
+	p.addReplica(g.newReplica(p, e))
 	g.pools[key] = p
 	g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 	if g.schema.Load() != nil {
@@ -556,6 +630,22 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		return g.assembleLocked()
 	}
 	return nil
+}
+
+// newReplica constructs a replica with its per-instance sem sized
+// against the pool's MaxConcurrencyPerInstance setting (nil sem when
+// unset → unbounded per replica).
+func (g *Gateway) newReplica(p *pool, e poolEntry) *replica {
+	r := &replica{
+		id:    e.replicaID,
+		addr:  e.addr,
+		owner: e.owner,
+		conn:  e.conn,
+	}
+	if p.maxConcurrencyPerInstance > 0 {
+		r.sem = make(chan struct{}, p.maxConcurrencyPerInstance)
+	}
+	return r
 }
 
 // removeReplicaByIDLocked finds and drops the single replica matching

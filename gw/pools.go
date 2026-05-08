@@ -62,14 +62,22 @@ type pool struct {
 	file     protoreflect.FileDescriptor
 	hash     [32]byte
 
+	// maxConcurrency / maxConcurrencyPerInstance are captured at first
+	// registration and frozen for the pool's lifetime; later joins
+	// must agree (joinPoolLocked rejects mismatches). 0 → use
+	// gateway default for service-level, unbounded per replica.
+	maxConcurrency            int
+	maxConcurrencyPerInstance int
+
 	// replicas slice is replaced (not mutated in place) on add/remove
 	// so dispatch closures snapshotting it never see partial mutation.
 	// Reads via Load() in pickReplica.
 	replicas atomic.Pointer[[]*replica]
 
-	// sem caps simultaneous unary dispatches against this pool. nil
-	// when MaxInflight is 0 (unbounded). Buffered channel; send to
-	// acquire, receive to release.
+	// sem caps simultaneous unary dispatches against this pool. Sized
+	// at create time by max(registration's MaxConcurrency, gateway
+	// default); nil when both are 0 (unbounded). Buffered channel:
+	// send to acquire, receive to release.
 	sem chan struct{}
 
 	// streamSem caps simultaneous active subscription streams. nil
@@ -94,6 +102,16 @@ type replica struct {
 	owner    string // registration ID
 	conn     grpc.ClientConnInterface
 	inflight atomic.Int32
+
+	// sem caps simultaneous unary dispatches against this single
+	// replica. Sized by pool.maxConcurrencyPerInstance; nil when
+	// unbounded. The dispatch path acquires it AFTER pickReplica so
+	// the pool-level sem still bounds the aggregate.
+	sem chan struct{}
+
+	// queueing tracks waiters on the per-replica sem (instance-level
+	// queue depth, distinct from pool.queueing).
+	queueing atomic.Int32
 }
 
 // pickReplica returns the replica with the lowest in-flight count.

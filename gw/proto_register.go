@@ -45,7 +45,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 					continue
 				}
 				label := methodLabel(sd, md)
-				core := newProtoDispatcher(p, sd, md, chain, metrics)
+				core := newProtoDispatcher(p, sd, md, chain, metrics, bp)
 				dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
 				g.dispatchers.Set(sid, dispatcher)
 			}

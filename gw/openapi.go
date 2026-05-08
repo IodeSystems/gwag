@@ -85,6 +85,12 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI: %w", err)
 	}
+	if sc.maxConcurrency < 0 {
+		return fmt.Errorf("gateway: AddOpenAPI(%s): MaxConcurrency must be ≥ 0", label)
+	}
+	if sc.maxConcurrencyPerInstance < 0 {
+		return fmt.Errorf("gateway: AddOpenAPI(%s): MaxConcurrencyPerInstance must be ≥ 0", label)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {
@@ -105,33 +111,69 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		if existing.hash != hash {
 			return fmt.Errorf("gateway: AddOpenAPI: %s/%s already registered with different spec hash", ns, ver)
 		}
-		existing.addReplica(&openAPIReplica{
+		if sc.maxConcurrency != existing.maxConcurrency || sc.maxConcurrencyPerInstance != existing.maxConcurrencyPerInstance {
+			return fmt.Errorf("gateway: AddOpenAPI: %s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
+				ns, ver, existing.maxConcurrency, existing.maxConcurrencyPerInstance, sc.maxConcurrency, sc.maxConcurrencyPerInstance)
+		}
+		existing.addReplica(newOpenAPIReplica(existing, openAPIReplicaInit{
 			baseURL:    addr,
 			httpClient: httpClient,
-		})
+		}))
 		return nil
 	}
 	src := &openAPISource{
-		namespace:      ns,
-		version:        ver,
-		versionN:       verN,
-		doc:            doc,
-		hash:           hash,
-		forwardHeaders: sc.forwardHeaders,
-		rawSpec:        append([]byte(nil), specBytes...),
+		namespace:                 ns,
+		version:                   ver,
+		versionN:                  verN,
+		doc:                       doc,
+		hash:                      hash,
+		forwardHeaders:            sc.forwardHeaders,
+		rawSpec:                   append([]byte(nil), specBytes...),
+		maxConcurrency:            sc.maxConcurrency,
+		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
 	}
-	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
-		src.sem = make(chan struct{}, mi)
+	semSize := sc.maxConcurrency
+	if semSize == 0 {
+		semSize = g.cfg.backpressure.MaxInflight
 	}
-	src.addReplica(&openAPIReplica{
+	if semSize > 0 {
+		src.sem = make(chan struct{}, semSize)
+	}
+	src.addReplica(newOpenAPIReplica(src, openAPIReplicaInit{
 		baseURL:    addr,
 		httpClient: httpClient,
-	})
+	}))
 	g.openAPISources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
 	return nil
+}
+
+// openAPIReplicaInit is the per-replica init bag used by every
+// addReplica call site (boot-time, control-plane standalone,
+// reconciler in cluster mode). Mirrors poolEntry's role for proto.
+type openAPIReplicaInit struct {
+	id         string
+	baseURL    string
+	owner      string
+	httpClient *http.Client
+}
+
+// newOpenAPIReplica constructs a replica with its per-instance sem
+// sized against the source's MaxConcurrencyPerInstance setting (nil
+// sem when unset → unbounded per replica).
+func newOpenAPIReplica(src *openAPISource, init openAPIReplicaInit) *openAPIReplica {
+	r := &openAPIReplica{
+		id:         init.id,
+		baseURL:    init.baseURL,
+		owner:      init.owner,
+		httpClient: init.httpClient,
+	}
+	if src.maxConcurrencyPerInstance > 0 {
+		r.sem = make(chan struct{}, src.maxConcurrencyPerInstance)
+	}
+	return r
 }
 
 // openAPISource is what AddOpenAPI stores. One source per
@@ -146,6 +188,11 @@ type openAPISource struct {
 	doc            *openapi3.T
 	hash           [32]byte
 	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
+
+	// maxConcurrency / maxConcurrencyPerInstance frozen at first
+	// registration; later joins must agree.
+	maxConcurrency            int
+	maxConcurrencyPerInstance int
 
 	// rawSpec is kept for /schema/openapi re-emit and (cluster mode)
 	// for the reconciler to write back into KV when shape changes.
@@ -164,8 +211,9 @@ type openAPISource struct {
 	pickHint atomic.Uint64
 
 	// sem caps simultaneous concurrent dispatches against this source.
-	// nil when MaxInflight is 0 (unbounded). Buffered channel; send to
-	// acquire, receive to release. HTTP analogue of pool.sem.
+	// Sized at create time by max(registration's MaxConcurrency,
+	// gateway default); nil when both are 0 (unbounded). HTTP analogue
+	// of pool.sem.
 	sem chan struct{}
 
 	// queueing tracks waiters on the semaphore for the queue-depth
@@ -184,6 +232,14 @@ type openAPIReplica struct {
 	owner      string       // registration ID; "" for boot-time
 	httpClient *http.Client // nil → fall back to gateway-wide default → http.DefaultClient
 	inflight   atomic.Int32
+
+	// sem caps simultaneous concurrent dispatches against this single
+	// replica. Sized by source.maxConcurrencyPerInstance; nil when
+	// unbounded.
+	sem chan struct{}
+
+	// queueing tracks waiters on the per-replica sem.
+	queueing atomic.Int32
 }
 
 // pickReplica returns the replica with the lowest in-flight count,
@@ -330,12 +386,12 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
 			return nil
 		}
-		existing.addReplica(&openAPIReplica{
+		existing.addReplica(newOpenAPIReplica(existing, openAPIReplicaInit{
 			id:         replicaID,
 			baseURL:    addr,
 			owner:      owner,
 			httpClient: g.cfg.openAPIHTTP,
-		})
+		}))
 		return nil
 	}
 	loader := openapi3.NewLoader()
@@ -347,6 +403,10 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if err := doc.Validate(loader.Context); err != nil {
 		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
+	// Control-plane registrations don't carry concurrency caps yet
+	// (cpv1.ServiceBinding fields land in a follow-up commit);
+	// sources created here use the gateway default. Boot-time
+	// AddOpenAPI carries explicit caps via serviceConfig.
 	src := &openAPISource{
 		namespace: ns,
 		version:   ver,
@@ -358,12 +418,12 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
 	}
-	src.addReplica(&openAPIReplica{
+	src.addReplica(newOpenAPIReplica(src, openAPIReplicaInit{
 		id:         replicaID,
 		baseURL:    addr,
 		owner:      owner,
 		httpClient: g.cfg.openAPIHTTP,
-	})
+	}))
 	g.openAPISources[key] = src
 	if g.schema.Load() != nil {
 		return g.assembleLocked()

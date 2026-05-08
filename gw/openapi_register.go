@@ -69,7 +69,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 			if openAPIOp == nil {
 				return fmt.Errorf("openapi: ingest dropped op origin for %s/%s/%s", svc.Namespace, svc.Version, op.Name)
 			}
-			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, metrics)
+			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, metrics, bp)
 			dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
 			g.dispatchers.Set(op.SchemaID, dispatcher)
 		}

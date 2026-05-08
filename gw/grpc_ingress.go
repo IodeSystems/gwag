@@ -100,7 +100,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 					}
 					continue
 				}
-				inner := newProtoInvocationHandler(p, sd, md, metrics)
+				inner := newProtoInvocationHandler(p, sd, md, metrics, bpOpts)
 				label := methodLabel(sd, md)
 				t.routes[path] = &grpcIngressRoute{
 					pool:       p,

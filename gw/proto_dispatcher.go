@@ -41,7 +41,7 @@ type protoDispatcher struct {
 // to the wire (stream.SendMsg). On Invoke error the handler returns
 // the message to the pool itself — `nil, err` doesn't dangle a
 // pooled allocation.
-func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, metrics Metrics) Handler {
+func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, metrics Metrics, bpOpts BackpressureOptions) Handler {
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 	outputDesc := md.Output()
 	ns, ver := p.key.namespace, p.key.version
@@ -53,10 +53,22 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
 			return nil, err
 		}
+		// Per-instance cap: acquired AFTER pickReplica because the
+		// per-instance sem is keyed on a specific replica. Service-
+		// level backpressure already gated entry above (in
+		// BackpressureMiddleware on the canonical-args path; in the
+		// gRPC ingress prologue otherwise).
+		releaseInstance, err := acquireReplicaSlot(ctx, r, p, method, metrics, bpOpts)
+		if err != nil {
+			metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
+			return nil, err
+		}
+		defer releaseInstance()
+
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
 		resp := acquireDynamicMessage(outputDesc)
-		err := r.conn.Invoke(ctx, method, req, resp)
+		err = r.conn.Invoke(ctx, method, req, resp)
 		metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
 		if err != nil {
 			releaseDynamicMessage(outputDesc, resp)
@@ -75,8 +87,8 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 // time; with BackpressureMiddleware now the outer layer the dwell
 // metric carries the queue portion separately. No test asserts on
 // the prior shape.
-func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, metrics Metrics) *protoDispatcher {
-	inner := newProtoInvocationHandler(p, sd, md, metrics)
+func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
+	inner := newProtoInvocationHandler(p, sd, md, metrics, bpOpts)
 	return &protoDispatcher{
 		inputDesc: md.Input(),
 		handler:   chain(inner),
@@ -129,6 +141,31 @@ func poolBackpressureConfig(p *pool, label string, metrics Metrics, bp Backpress
 		Label:       label,
 		Kind:        "unary",
 	}
+}
+
+// acquireReplicaSlot is the per-instance counterpart to
+// acquireBackpressureSlot — acquires the replica's own sem, with the
+// same MaxWaitTime budget and queue-depth tracking. The pool's
+// MaxConcurrencyPerInstance setting drives the sem size; nil sem
+// (unbounded per replica) returns a no-op release.
+//
+// Metrics use a separate "unary_instance" Kind so per-replica queue
+// depth doesn't blur into the service-level "unary" counter.
+func acquireReplicaSlot(ctx context.Context, r *replica, p *pool, label string, metrics Metrics, bp BackpressureOptions) (release func(), err error) {
+	if r.sem == nil {
+		return func() {}, nil
+	}
+	cfg := BackpressureConfig{
+		Sem:         r.sem,
+		Queueing:    &r.queueing,
+		MaxWaitTime: bp.MaxWaitTime,
+		Metrics:     metrics,
+		Namespace:   p.key.namespace,
+		Version:     p.key.version,
+		Label:       label,
+		Kind:        "unary_instance",
+	}
+	return acquireBackpressureSlot(ctx, cfg)
 }
 
 // Compile-time assertion: protoDispatcher implements ir.Dispatcher.
