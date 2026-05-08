@@ -6,17 +6,17 @@ import (
 
 // registerProtoDispatchersLocked walks every proto pool matching
 // `filter`, builds a backpressure-wrapped protoDispatcher per unary
-// RPC, and registers each one in g.dispatchers under
+// RPC (and a protoSubscriptionDispatcher per server-streaming RPC),
+// and registers each one in g.dispatchers under
 // MakeSchemaID(ns, ver, methodName). The methodName is the wire-level
-// PascalCase name (e.g. "Hello") to match what IR's IngestProto +
-// PopulateSchemaIDs stamp on op.SchemaID — RenderGraphQLRuntime's
-// resolvers resolve dispatchers by op.SchemaID at call time, so the
-// two sides have to agree on the key shape.
+// PascalCase name (e.g. "Hello", "Greetings") to match what IR's
+// IngestProto + PopulateSchemaIDs stamp on op.SchemaID —
+// RenderGraphQLRuntime's resolvers look up dispatchers by op.SchemaID
+// at call time, so the two sides have to agree on the key shape.
 //
-// Streaming RPCs are skipped: server-streaming methods go through the
-// legacy buildSubscriptionFields path until step 6 unifies that
-// surface; client-streaming / bidi are filtered out at registration
-// time (control.go) so they never reach a pool.
+// Client-streaming / bidi RPCs are filtered out at registration
+// time (control.go) so they never reach a pool — no dispatcher is
+// emitted for them here.
 //
 // Caller holds g.mu.
 func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
@@ -36,13 +36,17 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 			methods := sd.Methods()
 			for j := 0; j < methods.Len(); j++ {
 				md := methods.Get(j)
-				if md.IsStreamingClient() || md.IsStreamingServer() {
+				if md.IsStreamingClient() {
+					continue
+				}
+				sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
+				if md.IsStreamingServer() {
+					g.dispatchers.Set(sid, newProtoSubscriptionDispatcher(g, p.key.namespace, p.key.version, string(md.Name()), md.Output()))
 					continue
 				}
 				label := methodLabel(sd, md)
 				core := newProtoDispatcher(p, sd, md, chain, metrics)
 				dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
-				sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
 				g.dispatchers.Set(sid, dispatcher)
 			}
 		}
@@ -80,7 +84,31 @@ func (g *Gateway) protoServicesAsIRLocked(filter schemaFilter) ([]*ir.Service, e
 		ir.Hides(out, hide)
 	}
 	for _, svc := range out {
+		injectProtoSubscriptionAuthArgs(svc)
 		ir.PopulateSchemaIDs(svc)
 	}
 	return out, nil
+}
+
+// injectProtoSubscriptionAuthArgs appends the gateway's HMAC-auth
+// arguments (hmac, timestamp, kid) to every server-streaming proto
+// op so the rendered SDL surfaces them and the WS auth verifier sees
+// them in args. The legacy buildSubscriptionField stamped the same
+// triple inline; doing it here keeps the IR canonical for the
+// renderer.
+//
+// hmac + timestamp are required (NonNull); kid is optional and used
+// only when the gateway runs SubscriptionAuthOptions.Secrets for key
+// rotation.
+func injectProtoSubscriptionAuthArgs(svc *ir.Service) {
+	for _, op := range svc.Operations {
+		if op.Kind != ir.OpSubscription {
+			continue
+		}
+		op.Args = append(op.Args,
+			&ir.Arg{Name: "hmac", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
+			&ir.Arg{Name: "timestamp", Type: ir.TypeRef{Builtin: ir.ScalarInt32}, Required: true},
+			&ir.Arg{Name: "kid", Type: ir.TypeRef{Builtin: ir.ScalarString}},
+		)
+	}
 }

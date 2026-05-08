@@ -183,16 +183,12 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 		}
 
 		// Subscriptions flatten — graphql-go's executor doesn't
-		// support nested Object types under Subscription.
-		//
-		// Proto subscriptions stay on the legacy buildSubscriptionFields
-		// path until step 6 (so this renderer + that path don't both
-		// emit the same `<ns>_<method>` field and collide). OpenAPI has
-		// no subscription Operations to begin with.
+		// support nested Object types under Subscription. Every
+		// origin-kind walks the same path; OpenAPI typically has no
+		// subscription ops, proto contributes server-streaming RPCs
+		// (with auth args injected by the gateway's IR step), and
+		// graphql-ingest contributes mirror subscriptions.
 		for _, svc := range services {
-			if svc.OriginKind == ir.KindProto {
-				continue
-			}
 			isLatest := svc == latest
 			depReason := ""
 			if !isLatest {

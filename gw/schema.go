@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/graphql-go/graphql"
@@ -44,10 +43,12 @@ func (g *Gateway) assembleLocked() error {
 func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
 	hidesSet := g.hidesSet()
 
-	// Subscription path still walks pool descriptors directly; share
-	// one *IRTypeBuilder so cyclic message refs collapse to a single
-	// *graphql.Object across Query (proto IR render) and Subscription
-	// roots. Step 6 unifies subscriptions through the same IR render.
+	// Share one *IRTypeBuilder across every proto pool so cyclic
+	// message refs collapse to a single *graphql.Object across Query,
+	// Mutation, and Subscription roots — and so v1 + v2 of the same
+	// proto package don't trip graphql-go's duplicate-named-type
+	// rejection (proto FullNames are globally unique, so a single
+	// merged Types map is collision-free).
 	protoTB := newProtoIRTypeBuilder(g.pools, hidesSet)
 
 	rootFields := graphql.Fields{}
@@ -118,27 +119,13 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		})
 	}
 
-	// Subscription root: server-streaming proto methods come through
-	// the legacy buildSubscriptionFields walker (step 6 unifies it);
-	// graphql-ingest subscriptions ride on runtimeSubs from the IR
-	// renderer above.
-	subFields, err := g.buildSubscriptionFields(protoTB, hidesSet, filter)
-	if err != nil {
-		return nil, err
-	}
-	for name, f := range runtimeSubs {
-		if subFields == nil {
-			subFields = graphql.Fields{}
-		}
-		if _, exists := subFields[name]; exists {
-			return nil, fmt.Errorf("runtime/proto field collision in Subscription: %s", name)
-		}
-		subFields[name] = f
-	}
-	if len(subFields) > 0 {
+	// Subscriptions: every kind (proto server-streaming, graphql-ingest
+	// subscriptions) renders through RenderGraphQLRuntimeFields above.
+	// OpenAPI has no subscription concept.
+	if len(runtimeSubs) > 0 {
 		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{
 			Name:   "Subscription",
-			Fields: subFields,
+			Fields: runtimeSubs,
 		})
 	}
 
@@ -147,122 +134,6 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		return nil, fmt.Errorf("graphql.NewSchema: %w", err)
 	}
 	return &schema, nil
-}
-
-// buildSubscriptionFields walks every non-internal pool, finds
-// server-streaming RPCs (one request → many responses), and returns
-// a graphql.Fields map. Client-streaming and bidi are NOT promoted;
-// they're filtered with a warning at registration time (see
-// control.go).
-//
-// Multi-version: sources are grouped by namespace and sorted by
-// versionN. The latest version's subscription methods use the flat
-// "<ns>_<method>" naming (back-compat with the single-version case).
-// Older versions disambiguate via "<ns>_<vN>_<method>" and stamp
-// GraphQL @deprecated. Same shape as buildOpenAPIFields /
-// buildGraphQLFields — Subscription is flat (graphql-go doesn't
-// support nested namespace objects under Subscription), so we
-// disambiguate by name rather than by structure.
-func (g *Gateway) buildSubscriptionFields(tb *IRTypeBuilder, hides map[string]bool, filter schemaFilter) (graphql.Fields, error) {
-	out := graphql.Fields{}
-
-	byNS := map[string][]*pool{}
-	for _, p := range g.pools {
-		if g.isInternal(p.key.namespace) {
-			continue
-		}
-		if !filter.matchPool(p.key) {
-			continue
-		}
-		byNS[p.key.namespace] = append(byNS[p.key.namespace], p)
-	}
-
-	nsNames := make([]string, 0, len(byNS))
-	for ns := range byNS {
-		nsNames = append(nsNames, ns)
-	}
-	sort.Strings(nsNames)
-
-	for _, ns := range nsNames {
-		pools := byNS[ns]
-		sort.Slice(pools, func(i, j int) bool { return pools[i].versionN < pools[j].versionN })
-		latest := pools[len(pools)-1]
-		latestReason := fmt.Sprintf("%s is current", latest.key.version)
-
-		for _, p := range pools {
-			isLatest := p.versionN == latest.versionN
-			services := p.file.Services()
-			for i := 0; i < services.Len(); i++ {
-				sd := services.Get(i)
-				methods := sd.Methods()
-				for j := 0; j < methods.Len(); j++ {
-					md := methods.Get(j)
-					if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
-						continue
-					}
-					field, err := g.buildSubscriptionField(tb, hides, p, sd, md)
-					if err != nil {
-						return nil, err
-					}
-					var name string
-					if isLatest {
-						name = ns + "_" + lowerCamel(string(md.Name()))
-					} else {
-						name = ns + "_" + p.key.version + "_" + lowerCamel(string(md.Name()))
-						field.DeprecationReason = latestReason
-					}
-					if _, exists := out[name]; exists {
-						return nil, fmt.Errorf("subscription field name collision: %s", name)
-					}
-					out[name] = field
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-func (g *Gateway) buildSubscriptionField(
-	tb *IRTypeBuilder,
-	hides map[string]bool,
-	p *pool,
-	sd protoreflect.ServiceDescriptor,
-	md protoreflect.MethodDescriptor,
-) (*graphql.Field, error) {
-	args, err := protoArgsFromMessage(tb, md.Input(), hides)
-	if err != nil {
-		return nil, err
-	}
-	// Auto-injected auth args. Surface in SDL so codegen pipelines see
-	// them; gateway transport will populate/verify at subscribe time.
-	args["hmac"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)}
-	args["timestamp"] = &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.Int)}
-	// Optional key id for token rotation. Clients targeting the legacy
-	// single-key Secret leave it null (or omit it). Clients targeting a
-	// rotated key from SubscriptionAuthOptions.Secrets pass the kid here
-	// — the verifier uses it both to select the secret and as part of
-	// the signed payload.
-	args["kid"] = &graphql.ArgumentConfig{Type: graphql.String}
-
-	outputType, err := protoOutputObject(tb, md.Output())
-	if err != nil {
-		return nil, err
-	}
-
-	outputDesc := md.Output()
-	ns, ver := p.key.namespace, p.key.version
-	methodName := string(md.Name())
-
-	return &graphql.Field{
-		Type: outputType,
-		Args: args,
-		Subscribe: func(rp graphql.ResolveParams) (any, error) {
-			return g.subscribeNATS(rp.Context, ns, ver, methodName, rp.Args, outputDesc)
-		},
-		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return rp.Source, nil
-		},
-	}, nil
 }
 
 // buildPoolRPCs returns one graphql.Field per RPC method declared in

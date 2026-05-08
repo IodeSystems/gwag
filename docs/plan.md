@@ -122,17 +122,38 @@ is canonical for every code path.
 - [x] **Step 5: Cut over GraphQL ingest path.** Same deal for
   graphql-mirror. Inline-fragment AST rewriting stays put
   (orthogonal — internal to `forwardingResolver`). ~0.5-1 day.
-- [ ] **Step 6: Subscription unification.** Move
-  `buildSubscriptionFields` into RenderGraphQLRuntime. Subs still
-  flatten (graphql-go limitation) but the whole render path is
-  one walk. Closes the parity-for-subscription-field-collisions
-  risk called out as "highest risk" in the original push. ~0.5 day.
+- [x] **Step 6: Subscription unification.** Server-streaming proto
+  RPCs now ride through `RenderGraphQLRuntime` like every other op.
+  `gw/proto_subscription_dispatcher.go` is the new
+  `ir.Dispatcher` that wraps `g.subscribeNATS` (returns the broker's
+  `chan any`); `registerProtoDispatchersLocked` registers one per
+  server-streaming RPC under `MakeSchemaID(ns, ver, MethodName)`
+  (matching what `IngestProto` + `PopulateSchemaIDs` stamp).
+  `protoServicesAsIRLocked` now calls
+  `injectProtoSubscriptionAuthArgs` after `Hides` runs to append
+  the gateway's HMAC auth args (`hmac` / `timestamp` non-null,
+  `kid` optional) onto every `OpSubscription` op so the renderer
+  surfaces them in SDL the same way the legacy
+  `buildSubscriptionField` did. The `if svc.OriginKind == ir.KindProto`
+  skip in `addSubscriptionFlat` is gone; `buildSchemaLocked` no
+  longer calls `buildSubscriptionFields` and just merges
+  `runtimeSubs` into the Subscription root. **Behaviour
+  preservation:** subscription field paths stay flat
+  (`<ns>_<method>` for latest, `<ns>_<vN>_<method>` for older with
+  `@deprecated`) — graphql-go forbids nested objects under
+  Subscription, and the renderer flattens accordingly. The legacy
+  `buildSubscriptionFields` / `buildSubscriptionField` functions
+  are deleted (`buildPoolRPCs` / `buildPoolMethodField` left for
+  step 7's broader sweep). Tests:
+  `subscriptions_test.go` (greeter HMAC + admin\_events round-trip)
+  and `admin_events_test.go` pass unchanged. ~0.5 day actual.
 - [ ] **Step 7: Delete dead converters.** Remove `gw/convert.go`,
-  `buildPoolRPCs`, `buildOpenAPIFields`, `buildGraphQLFields`,
-  `graphQLMirror.build`, `newOpenAPISourceTypeBuilder`,
-  `newGraphQLSourceTypeBuilder`. Dispatcher internals
-  (`dispatchOpenAPI`, `(m *graphQLMirror).forwardingResolver`,
-  `subscribeNATS`) stay — orthogonal to render-side. ~0.5 day.
+  `buildPoolRPCs` + `buildPoolMethodField`, `buildOpenAPIFields`,
+  `buildGraphQLFields`, `graphQLMirror.build`,
+  `newOpenAPISourceTypeBuilder`, `newGraphQLSourceTypeBuilder`.
+  Dispatcher internals (`dispatchOpenAPI`,
+  `(m *graphQLMirror).forwardingResolver`, `subscribeNATS`) stay —
+  orthogonal to render-side. ~0.5 day.
 - [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` →
   `admin.listPeers`, `admin_forgetPeer` (Mutation) →
   `admin.forgetPeer`. Multi-version OpenAPI sources change too:
