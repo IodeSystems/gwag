@@ -189,9 +189,18 @@ is canonical for every code path.
   dropped. Same posture as the existing empty-object/empty-enum
   guards. `pnpm run build` (vite + tsc) passes; gateway tests
   unchanged.
-- [ ] **Test churn.** ~70 tests assert flat field names; most need
-  rewriting. Trickles through steps 3-5; this is the final
-  cleanup pass after step 7. ~1-2 days.
+- [x] **Test churn.** Steps 3-5 each migrated their respective tests
+  to nested-namespace shape inline; step 6 didn't move any test
+  field paths; step 7 was delete-only. Audited the remaining flat
+  references after step 7: every `<ns>_<vN>_<x>` survival is either
+  a type-name assertion (intentionally flat per the conventions),
+  a Subscription field-name assertion (graphql-go forbids nested
+  types under Subscription), a proto file-path constant, or
+  descriptive prose. No stale assertions found that step 7 would
+  have caught but steps 3-5 missed. Drive-by: removed the stale
+  step-6-vintage comment in `render_graphql_runtime_test.go` that
+  claimed the runtime renderer skips `KindProto` subscriptions —
+  step 6 deleted that skip.
 - [ ] **Allocation + cache-friendliness pass on dispatchers.**
   Baselines captured (see done list); per-call hot path is small
   enough to profile. Look for: arg unmarshal allocations
@@ -201,6 +210,40 @@ is canonical for every code path.
   codegen path (`go:generate` from IR) only if reflection-based
   is leaving meaningful headroom. Independent of steps 1-7;
   pickable in parallel. ~2-3 days, scope-dependent.
+  - **Step A (landed): per-descriptor field-name cache.**
+    `gw/convert.go` memoises `[]protoFieldInfo{fd, lowerCamel(name)}`
+    per `MessageDescriptor` via sync.Map. `argsToMessage` /
+    `messageToMap` walk the cache instead of recomputing
+    `lowerCamel(string(fd.Name()))` per dispatch; `messageToMap`
+    pre-sizes its output map from the cached length. Profile-driven:
+    pprof showed ~98K alloc-objs in `lowerCamel` ≈ 4 allocs per
+    dispatch. Bench delta on greeter (1-field i/o): proto 178 → 174
+    allocs/op (−2.3%); ns/op unchanged at noise floor (~185 µs,
+    gRPC client/server internals dominate). OpenAPI bench unchanged
+    at 86 allocs as expected — the cache is proto-only.
+    **Cache-key gotcha:** keying by `protoreflect.FullName` (string)
+    breaks `TestClusterE2E_CrossGatewayDispatch` because two
+    gateways in the same process register the same .proto and hold
+    distinct `MessageDescriptor` instances with identical FullNames;
+    dynamicpb.Set rejects a FieldDescriptor whose parent doesn't
+    match the receiver. Keying by descriptor identity (the
+    interface value) fixes it; the `convert.go` comment captures
+    this so it doesn't get re-broken.
+  - **Open: dynamicpb churn.** `dynamicpb.NewMessage(d.inputDesc)` is
+    ~4 allocs/call that a sync.Pool of pre-cleared messages could
+    absorb (`proto.Reset` is `m.ProtoReflect().Clear()`, safe to
+    reuse after the grpc client has marshalled into wire bytes).
+    Output messages are also poolable since `messageToMap` flattens
+    to native Go types before returning. Defer until benchmarking
+    shows the surrounding work has dropped enough to make the
+    residual visible — for greeter today, gRPC client allocs
+    (~110/op) swamp it.
+  - **Open: per-schema codegen.** Reflection-based dispatch is at
+    174/86 allocs (proto/openapi); hand-written would be ~10-20.
+    Going further requires either (a) generating concrete accessor
+    / marshal code per schema build (significant machinery, IR → Go
+    AST), or (b) caching protoreflect operations further. Park
+    until a real workload shows the perf gap matters.
 
 **Conventions** (settled, see `gw/ir/render_graphql.go`):
 - GraphQL renders nested everywhere; proto / OpenAPI flatten via `FlatOperations`. IR carries the structure; each format honors it as far as the format permits.
