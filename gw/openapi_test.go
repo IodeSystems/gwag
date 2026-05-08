@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -307,6 +308,131 @@ func TestOpenAPIE2E_HTTPClient_PerSourceBeatsGatewayWide(t *testing.T) {
 	}
 	if got := rec.Headers.Get("X-Via"); got != "per-source" {
 		t.Errorf("X-Via = %q, want per-source", got)
+	}
+}
+
+// TestOpenAPIE2E_InjectHeader_HideTrue confirms an InjectHeader
+// registration stamps the resolver-returned value on the outbound
+// HTTP request, with no inbound visibility (Hide(true) default).
+func TestOpenAPIE2E_InjectHeader_HideTrue(t *testing.T) {
+	var lastReq atomic.Pointer[capturedRequest]
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastReq.Store(&capturedRequest{Method: r.Method, Path: r.URL.Path, Headers: r.Header.Clone()})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(be.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	gw.Use(InjectHeader("X-Source-IP", func(_ context.Context, current *string) (string, error) {
+		if current != nil {
+			t.Fatalf("Hide(true) resolver got non-nil current=%q", *current)
+		}
+		return "10.0.0.1", nil
+	}))
+
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	gqlH := gw.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql",
+		strings.NewReader(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Source-IP", "203.0.113.7") // caller-supplied; should be overridden
+	rr := httptest.NewRecorder()
+	gqlH.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rec := lastReq.Load()
+	if rec == nil {
+		t.Fatal("backend not called")
+	}
+	if got := rec.Headers.Get("X-Source-IP"); got != "10.0.0.1" {
+		t.Fatalf("X-Source-IP=%q, want 10.0.0.1 (injector should win)", got)
+	}
+}
+
+// TestOpenAPIE2E_InjectHeader_HideFalseInspects — Hide(false) lets
+// the resolver inspect the inbound header and decide what to write.
+func TestOpenAPIE2E_InjectHeader_HideFalseInspects(t *testing.T) {
+	var lastReq atomic.Pointer[capturedRequest]
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastReq.Store(&capturedRequest{Method: r.Method, Path: r.URL.Path, Headers: r.Header.Clone()})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(be.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	gw.Use(InjectHeader("X-Caller", func(_ context.Context, current *string) (string, error) {
+		if current == nil {
+			return "anonymous", nil
+		}
+		return "verified:" + *current, nil
+	}, Hide(false)))
+
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("test"), ForwardHeaders("X-Caller")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	gqlH := gw.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql",
+		strings.NewReader(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Caller", "alice")
+	rr := httptest.NewRecorder()
+	gqlH.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rec := lastReq.Load()
+	if got := rec.Headers.Get("X-Caller"); got != "verified:alice" {
+		t.Fatalf("X-Caller=%q, want verified:alice (injector overrides forwarded)", got)
+	}
+}
+
+// TestOpenAPIE2E_InjectHeader_EmptyResolverSkips — returning ""
+// leaves the header off the outbound request entirely.
+func TestOpenAPIE2E_InjectHeader_EmptyResolverSkips(t *testing.T) {
+	var lastReq atomic.Pointer[capturedRequest]
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastReq.Store(&capturedRequest{Method: r.Method, Path: r.URL.Path, Headers: r.Header.Clone()})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(be.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	gw.Use(InjectHeader("X-Optional", func(_ context.Context, _ *string) (string, error) {
+		return "", nil
+	}))
+
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	gqlH := gw.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql",
+		strings.NewReader(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	gqlH.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := lastReq.Load().Headers.Get("X-Optional"); got != "" {
+		t.Fatalf("X-Optional=%q, want empty (resolver returned skip sentinel)", got)
 	}
 }
 

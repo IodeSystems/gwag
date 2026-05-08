@@ -54,6 +54,7 @@ func (g *Gateway) openAPIServicesAsIRLocked(filter schemaFilter) ([]*ir.Service,
 func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
+	headers := g.headerInjectorSnapshot()
 	for _, svc := range svcs {
 		if svc.OriginKind != ir.KindOpenAPI {
 			continue
@@ -67,7 +68,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 			if openAPIOp == nil {
 				return fmt.Errorf("openapi: ingest dropped op origin for %s/%s/%s", svc.Namespace, svc.Version, op.Name)
 			}
-			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, metrics, bp)
+			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp)
 			dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
 			g.dispatchers.Set(op.SchemaID, dispatcher)
 		}

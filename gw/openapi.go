@@ -636,6 +636,7 @@ func dispatchOpenAPI(
 	op *openapi3.Operation,
 	gqlArgs map[string]any,
 	forwardHeaders []string,
+	headerInjectors []HeaderInjector,
 	httpClient *http.Client,
 ) (any, error) {
 	resolvedPath := pathTemplate
@@ -681,6 +682,13 @@ func dispatchOpenAPI(
 	}
 	req.Header.Set("Accept", "application/json")
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
+	injected, err := applyHeaderInjectors(ctx, headerInjectors)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range injected {
+		req.Header.Set(k, v)
+	}
 
 	client := httpClient
 	if client == nil {

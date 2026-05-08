@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
@@ -168,6 +169,72 @@ func TestGRPCE2E_BackendErrorSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(body, "simulated backend failure") {
 		t.Fatalf("backend error not surfaced, got %s", body)
+	}
+}
+
+// TestGRPCE2E_InjectHeader_StampsOutgoingMetadata confirms an
+// InjectHeader registered before AddProtoDescriptor reaches the
+// upstream gRPC server as outgoing metadata. The fakeGreeterServer
+// reads metadata.FromIncomingContext on the inbound side.
+func TestGRPCE2E_InjectHeader_StampsOutgoingMetadata(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{}
+	var seenSourceIP atomic.Pointer[string]
+	var seenCaller atomic.Pointer[string]
+	greeter.helloFn = func(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		if v := md.Get("x-source-ip"); len(v) > 0 {
+			s := v[0]
+			seenSourceIP.Store(&s)
+		}
+		if v := md.Get("x-caller"); len(v) > 0 {
+			s := v[0]
+			seenCaller.Store(&s)
+		}
+		return &greeterv1.HelloResponse{Greeting: "hi"}, nil
+	}
+	grpcSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(grpcSrv, greeter)
+	go func() { _ = grpcSrv.Serve(lis) }()
+	t.Cleanup(grpcSrv.Stop)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(gw.Close)
+
+	gw.Use(InjectHeader("X-Source-IP", func(_ context.Context, _ *string) (string, error) {
+		return "10.0.0.1", nil
+	}))
+	gw.Use(InjectHeader("X-Caller", func(_ context.Context, current *string) (string, error) {
+		if current == nil {
+			return "anonymous", nil
+		}
+		return "verified:" + *current, nil
+	}, Hide(false)))
+
+	if err := gw.AddProtoDescriptor(greeterv1.File_greeter_proto, To(lis.Addr().String()), As("greeter")); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/graphql",
+		strings.NewReader(`{"query":"{ greeter { hello(name:\"world\") { greeting } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Caller", "alice")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := seenSourceIP.Load(); got == nil || *got != "10.0.0.1" {
+		t.Fatalf("upstream X-Source-IP=%v, want 10.0.0.1", got)
+	}
+	if got := seenCaller.Load(); got == nil || *got != "verified:alice" {
+		t.Fatalf("upstream X-Caller=%v, want verified:alice", got)
 	}
 }
 

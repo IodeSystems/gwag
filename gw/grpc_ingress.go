@@ -66,6 +66,7 @@ type grpcIngressTable struct {
 // Caller holds g.mu.
 func (g *Gateway) rebuildGRPCIngressLocked() {
 	chain := g.runtimeChain()
+	headers := g.headerInjectorSnapshot()
 	metrics := g.cfg.metrics
 	bpOpts := g.cfg.backpressure
 	t := &grpcIngressTable{routes: map[string]*grpcIngressRoute{}}
@@ -100,7 +101,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 					}
 					continue
 				}
-				inner := newProtoInvocationHandler(p, sd, md, metrics, bpOpts)
+				inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
 				label := methodLabel(sd, md)
 				t.routes[path] = &grpcIngressRoute{
 					pool:       p,

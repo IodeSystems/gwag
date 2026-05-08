@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -511,5 +512,121 @@ func TestInjectType_RuntimeFillsHiddenField(t *testing.T) {
 	}
 	if got.GetTenantId() != "t_resolved" {
 		t.Fatalf("TenantId=%q, want %q", got.GetTenantId(), "t_resolved")
+	}
+}
+
+// TestInjectHeader_DefaultsToHideTrue confirms the constructor stamps
+// Hide=true by default and surfaces only the Headers slot — no
+// Schema or Runtime halves.
+func TestInjectHeader_DefaultsToHideTrue(t *testing.T) {
+	tx := InjectHeader("X-Source-IP", func(_ context.Context, _ *string) (string, error) {
+		return "1.2.3.4", nil
+	})
+	if len(tx.Schema) != 0 {
+		t.Fatalf("len(Schema)=%d, want 0 (headers aren't in the GraphQL schema)", len(tx.Schema))
+	}
+	if tx.Runtime != nil {
+		t.Fatal("Runtime non-nil; want nil for InjectHeader")
+	}
+	if got := len(tx.Headers); got != 1 {
+		t.Fatalf("len(Headers)=%d, want 1", got)
+	}
+	h := tx.Headers[0]
+	if h.Name != "X-Source-IP" {
+		t.Fatalf("Name=%q, want X-Source-IP", h.Name)
+	}
+	if !h.Hide {
+		t.Fatal("Hide=false; want true (default)")
+	}
+	if h.Fn == nil {
+		t.Fatal("Fn=nil")
+	}
+}
+
+// TestInjectHeader_HideFalsePropagates confirms Hide(false) opt-in
+// reaches the HeaderInjector unchanged.
+func TestInjectHeader_HideFalsePropagates(t *testing.T) {
+	tx := InjectHeader("X-Caller", func(_ context.Context, _ *string) (string, error) {
+		return "", nil
+	}, Hide(false))
+	if tx.Headers[0].Hide {
+		t.Fatal("Hide=true; want false")
+	}
+}
+
+// TestInjectHeader_EmptyNamePanics — the name is the routing key for
+// both HTTP and gRPC metadata; empty is meaningless and should fail
+// loudly at registration.
+func TestInjectHeader_EmptyNamePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("InjectHeader(\"\") did not panic")
+		}
+	}()
+	_ = InjectHeader("", func(_ context.Context, _ *string) (string, error) { return "", nil })
+}
+
+// TestInjectHeader_NullableRejected — Nullable applies to schema
+// rewrites; headers aren't in the schema, so this is a misuse worth
+// surfacing at the call site.
+func TestInjectHeader_NullableRejected(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("InjectHeader+Nullable(true) did not panic")
+		}
+	}()
+	_ = InjectHeader("X-Foo", func(_ context.Context, _ *string) (string, error) { return "", nil }, Nullable(true))
+}
+
+// TestApplyHeaderInjectors_SkipsEmptyResolverResults — returning ""
+// from the resolver opts out of writing the header, mirroring the
+// "skip" intent (HTTP gives empty headers no useful semantics).
+func TestApplyHeaderInjectors_SkipsEmptyResolverResults(t *testing.T) {
+	injectors := []HeaderInjector{
+		{Name: "X-Keep", Hide: true, Fn: func(_ context.Context, _ *string) (string, error) { return "yes", nil }},
+		{Name: "X-Skip", Hide: true, Fn: func(_ context.Context, _ *string) (string, error) { return "", nil }},
+	}
+	out, err := applyHeaderInjectors(withInjectCache(context.Background()), injectors)
+	if err != nil {
+		t.Fatalf("applyHeaderInjectors: %v", err)
+	}
+	if out["X-Keep"] != "yes" {
+		t.Fatalf("X-Keep=%q, want yes", out["X-Keep"])
+	}
+	if _, ok := out["X-Skip"]; ok {
+		t.Fatalf("X-Skip should be omitted, got %q", out["X-Skip"])
+	}
+}
+
+// TestApplyHeaderInjectors_HideFalseSeesInboundHeader — under
+// Hide(false), the resolver receives a *string pointing at the
+// inbound HTTP request's header value (when present).
+func TestApplyHeaderInjectors_HideFalseSeesInboundHeader(t *testing.T) {
+	var seen *string
+	injectors := []HeaderInjector{{
+		Name: "X-Caller",
+		Hide: false,
+		Fn: func(_ context.Context, current *string) (string, error) {
+			seen = current
+			if current != nil {
+				return "echo:" + *current, nil
+			}
+			return "", nil
+		},
+	}}
+
+	r, _ := http.NewRequest("POST", "/", nil)
+	r.Header.Set("X-Caller", "alice")
+	ctx := WithHTTPRequest(withInjectCache(context.Background()), r)
+
+	out, err := applyHeaderInjectors(ctx, injectors)
+	if err != nil {
+		t.Fatalf("applyHeaderInjectors: %v", err)
+	}
+	if seen == nil {
+		t.Fatal("Hide(false) resolver did not see inbound header")
+	}
+	if out["X-Caller"] != "echo:alice" {
+		t.Fatalf("X-Caller=%q", out["X-Caller"])
 	}
 }

@@ -180,3 +180,26 @@ func (g *Gateway) runtimeChain() Middleware {
 	}
 }
 
+// headerInjectorSnapshot returns the flat list of header injectors
+// across every Transform, in registration order. Captured at schema
+// build time and baked into each dispatcher; rebuilds on Use.
+//
+// Caller holds g.mu.
+func (g *Gateway) headerInjectorSnapshot() []HeaderInjector {
+	if len(g.transforms) == 0 {
+		return nil
+	}
+	var n int
+	for _, t := range g.transforms {
+		n += len(t.Headers)
+	}
+	if n == 0 {
+		return nil
+	}
+	out := make([]HeaderInjector, 0, n)
+	for _, t := range g.transforms {
+		out = append(out, t.Headers...)
+	}
+	return out
+}
+

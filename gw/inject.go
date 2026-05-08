@@ -215,11 +215,12 @@ func resolveCachedProto(
 }
 
 // cacheKey identifies one inject-resolver entry on the per-request
-// cache. Exactly one of `name` (InjectType) and `path` (InjectPath)
-// is populated; the other stays zero.
+// cache. Exactly one of `name` (InjectType), `path` (InjectPath), or
+// `header` (InjectHeader) is populated; the others stay zero.
 type cacheKey struct {
-	name protoreflect.FullName
-	path string
+	name   protoreflect.FullName
+	path   string
+	header string
 }
 
 type cachedResult struct {
@@ -379,5 +380,106 @@ func resolveCachedPath(
 type cachedPathResult struct {
 	once sync.Once
 	val  any
+	err  error
+}
+
+// InjectHeader returns a Transform that stamps one outbound header
+// (OpenAPI HTTP dispatch) or gRPC metadata key (proto dispatch) on
+// every dispatch the gateway sends. ForwardHeaders' inbound
+// allowlist is unaffected — header injection writes through directly,
+// and runs after forwarded headers so injectors override.
+//
+// Resolver:
+//
+//	func(ctx context.Context, current *string) (string, error)
+//
+// `current` is nil under Hide(true) (the inbound value is ignored);
+// under Hide(false) it's the inbound HTTP header value (nil when
+// absent or when the call didn't come in over HTTP). Returning ""
+// skips the header for this dispatch — there's no separate skip
+// sentinel, since an empty header has no useful HTTP meaning.
+//
+// Nullable(true) is rejected at registration: headers aren't part of
+// the GraphQL schema, so nullability is moot.
+//
+// Coverage: every outbound dispatch (proto + OpenAPI). gRPC ingress
+// (a service calling the gateway's gRPC ingress to reach another
+// proto pool) also fires the injectors on its outbound leg.
+func InjectHeader(name string, resolve func(ctx context.Context, current *string) (string, error), opts ...InjectOption) Transform {
+	if name == "" {
+		panic("gateway: InjectHeader: empty header name")
+	}
+	cfg := injectConfig{hide: true}
+	for _, o := range opts {
+		o.applyInject(&cfg)
+	}
+	if cfg.nullable {
+		panic(fmt.Sprintf("gateway: InjectHeader(%q): Nullable(true) is rejected — headers aren't in the GraphQL schema", name))
+	}
+	return Transform{
+		Headers: []HeaderInjector{{Name: name, Hide: cfg.hide, Fn: resolve}},
+	}
+}
+
+// applyHeaderInjectors runs each injector once and returns the
+// header values to stamp on the outbound dispatch. Empty results are
+// skipped. The per-request cache memoises Hide(true) results across
+// sibling dispatches in one GraphQL operation; Hide(false) bypasses
+// the cache because `current` varies per call site (though for
+// headers it's the same inbound HTTP request — kept symmetric with
+// InjectType / InjectPath for one mental model).
+func applyHeaderInjectors(ctx context.Context, injectors []HeaderInjector) (map[string]string, error) {
+	if len(injectors) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(injectors))
+	for _, inj := range injectors {
+		var current *string
+		if !inj.Hide {
+			if r := HTTPRequestFromContext(ctx); r != nil {
+				if v := r.Header.Get(inj.Name); v != "" {
+					current = &v
+				}
+			}
+		}
+		v, err := resolveCachedHeader(ctx, inj.Name, current, inj.Fn)
+		if err != nil {
+			return nil, err
+		}
+		if v == "" {
+			continue
+		}
+		out[inj.Name] = v
+	}
+	return out, nil
+}
+
+// resolveCachedHeader memoises header-resolver output per request,
+// keyed on header name. Cache only applies when current is nil — a
+// per-call-site current (Hide(false) with an inbound value) bypasses.
+func resolveCachedHeader(
+	ctx context.Context,
+	name string,
+	current *string,
+	resolve func(ctx context.Context, current *string) (string, error),
+) (string, error) {
+	if current != nil {
+		return resolve(ctx, current)
+	}
+	cache, ok := ctx.Value(injectCacheCtxKey{}).(*sync.Map)
+	if !ok {
+		return resolve(ctx, nil)
+	}
+	entry, _ := cache.LoadOrStore(cacheKey{header: name}, &cachedHeaderResult{})
+	cr := entry.(*cachedHeaderResult)
+	cr.once.Do(func() {
+		cr.val, cr.err = resolve(ctx, nil)
+	})
+	return cr.val, cr.err
+}
+
+type cachedHeaderResult struct {
+	once sync.Once
+	val  string
 	err  error
 }

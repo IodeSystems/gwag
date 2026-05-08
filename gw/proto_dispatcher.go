@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
@@ -44,7 +45,7 @@ type protoDispatcher struct {
 // to the wire (stream.SendMsg). On Invoke error the handler returns
 // the message to the pool itself — `nil, err` doesn't dangle a
 // pooled allocation.
-func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, metrics Metrics, bpOpts BackpressureOptions) Handler {
+func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, headers []HeaderInjector, metrics Metrics, bpOpts BackpressureOptions) Handler {
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 	outputDesc := md.Output()
 	ns, ver := p.key.namespace, p.key.version
@@ -68,6 +69,21 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		}
 		defer releaseInstance()
 
+		if len(headers) > 0 {
+			injected, err := applyHeaderInjectors(ctx, headers)
+			if err != nil {
+				metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
+				return nil, err
+			}
+			if len(injected) > 0 {
+				kvs := make([]string, 0, 2*len(injected))
+				for k, v := range injected {
+					kvs = append(kvs, k, v)
+				}
+				ctx = metadata.AppendToOutgoingContext(ctx, kvs...)
+			}
+		}
+
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
 		resp := acquireDynamicMessage(outputDesc)
@@ -90,8 +106,8 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 // time; with BackpressureMiddleware now the outer layer the dwell
 // metric carries the queue portion separately. No test asserts on
 // the prior shape.
-func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
-	inner := newProtoInvocationHandler(p, sd, md, metrics, bpOpts)
+func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, headers []HeaderInjector, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
+	inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
 	return &protoDispatcher{
 		inputDesc: md.Input(),
 		handler:   chain(inner),

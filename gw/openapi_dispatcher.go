@@ -20,30 +20,32 @@ import (
 // labels live for the lifetime of the source — the dispatcher is
 // short-lived only across schema rebuilds.
 type openAPIDispatcher struct {
-	src            *openAPISource
-	op             *openapi3.Operation
-	method         string
-	pathTemplate   string
-	forwardHeaders []string
-	metrics        Metrics
-	bp             BackpressureOptions
-	ns             string
-	ver            string
-	label          string // "<METHOD> <pathTemplate>" — proto-side metric parity
+	src             *openAPISource
+	op              *openapi3.Operation
+	method          string
+	pathTemplate    string
+	forwardHeaders  []string
+	headerInjectors []HeaderInjector
+	metrics         Metrics
+	bp              BackpressureOptions
+	ns              string
+	ver             string
+	label           string // "<METHOD> <pathTemplate>" — proto-side metric parity
 }
 
-func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
+func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []HeaderInjector, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
 	return &openAPIDispatcher{
-		src:            src,
-		op:             op,
-		method:         method,
-		pathTemplate:   pathTemplate,
-		forwardHeaders: src.forwardHeaders,
-		metrics:        metrics,
-		bp:             bp,
-		ns:             src.namespace,
-		ver:            src.version,
-		label:          method + " " + pathTemplate,
+		src:             src,
+		op:              op,
+		method:          method,
+		pathTemplate:    pathTemplate,
+		forwardHeaders:  src.forwardHeaders,
+		headerInjectors: headers,
+		metrics:         metrics,
+		bp:              bp,
+		ns:              src.namespace,
+		ver:             src.version,
+		label:           method + " " + pathTemplate,
 	}
 }
 
@@ -64,7 +66,7 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 
 	r.inflight.Add(1)
 	defer r.inflight.Add(-1)
-	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, r.httpClient)
+	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient)
 	d.metrics.RecordDispatch(d.ns, d.ver, d.label, time.Since(start), err)
 	if err != nil {
 		return nil, err

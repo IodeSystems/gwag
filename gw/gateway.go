@@ -856,11 +856,28 @@ type Handler func(ctx context.Context, req protoreflect.ProtoMessage) (protorefl
 type Middleware func(next Handler) Handler
 
 // Transform bundles every reshaping concern that lands per gateway-Use
-// call: a list of typed schema rewrites (Schema, e.g. HideType) and a
-// runtime middleware (Runtime). Empty halves no-op.
+// call: a list of typed schema rewrites (Schema, e.g. HideType), a
+// runtime middleware (Runtime), and a list of outbound header
+// injectors (Headers, e.g. InjectHeader). Empty halves no-op.
 type Transform struct {
 	Schema  []SchemaRewrite
 	Runtime Middleware
+	Headers []HeaderInjector
+}
+
+// HeaderInjector stamps one outbound header (HTTP, OpenAPI dispatch)
+// or gRPC metadata key (proto dispatch) on every dispatch the gateway
+// sends. Constructed via InjectHeader. ForwardHeaders' inbound
+// allowlist is unaffected — header injection writes through directly.
+//
+// Hide(true): Fn always sees current=nil. Hide(false): Fn sees the
+// inbound HTTP request's value for Name (nil when absent or when the
+// request isn't HTTP). Returning "" skips the header for this
+// dispatch.
+type HeaderInjector struct {
+	Name string
+	Hide bool
+	Fn   func(ctx context.Context, current *string) (string, error)
 }
 
 // SchemaRewrite mutates IR services in place to reshape the external

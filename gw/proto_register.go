@@ -21,6 +21,7 @@ import (
 // Caller holds g.mu.
 func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 	chain := g.runtimeChain()
+	headers := g.headerInjectorSnapshot()
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
 	for _, p := range g.pools {
@@ -45,7 +46,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 					continue
 				}
 				label := methodLabel(sd, md)
-				core := newProtoDispatcher(p, sd, md, chain, metrics, bp)
+				core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp)
 				dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
 				g.dispatchers.Set(sid, dispatcher)
 			}
