@@ -44,96 +44,33 @@ func (g *Gateway) assembleLocked() error {
 func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
 	hidesSet := g.hidesSet()
 
-	// One *IRTypeBuilder serves every proto pool — proto FullNames
-	// are globally unique, so a merged Types map is collision-free
-	// and a shared builder dedupes *graphql.Object instances across
-	// pools (same Object reused under Query and Subscription roots).
+	// Subscription path still walks pool descriptors directly; share
+	// one *IRTypeBuilder so cyclic message refs collapse to a single
+	// *graphql.Object across Query (proto IR render) and Subscription
+	// roots. Step 6 unifies subscriptions through the same IR render.
 	protoTB := newProtoIRTypeBuilder(g.pools, hidesSet)
 
-	chain := g.runtimeChain()
 	rootFields := graphql.Fields{}
 
-	// Group pools by namespace, applying the selector filter.
-	byNS := map[string][]*pool{}
-	for _, p := range g.pools {
-		if !filter.matchPool(p.key) {
-			continue
-		}
-		byNS[p.key.namespace] = append(byNS[p.key.namespace], p)
+	// Proto path goes through IR. Register the unary dispatchers
+	// keyed by IR-aligned SchemaID, distill pools into ir.Service via
+	// the same ingest path the export endpoints use, then let
+	// RenderGraphQLRuntimeFields walk the result. Subscriptions are
+	// dropped here (subFields below still emits them via the legacy
+	// pool walk) — step 6 retires that path.
+	g.registerProtoDispatchersLocked(filter)
+	protoSvcs, err := g.protoServicesAsIRLocked(filter)
+	if err != nil {
+		return nil, err
 	}
-
-	for ns, pools := range byNS {
-		if g.isInternal(ns) {
-			continue
-		}
-		// Sort versions ascending for stable iteration; latest = last.
-		sort.Slice(pools, func(i, j int) bool { return pools[i].versionN < pools[j].versionN })
-		latest := pools[len(pools)-1]
-		latestReason := fmt.Sprintf("%s is current", latest.key.version)
-
-		nsFields := graphql.Fields{}
-
-		// Latest version's RPCs flat under the namespace — what
-		// version-agnostic clients see. SchemaIDs for the flat-at-top
-		// names use the bare RPC name (no version prefix); the
-		// versioned sub-objects below register additional aliases
-		// (`<vN>_<rpc>`) so both surfaces resolve through the same
-		// dispatcher.
-		latestRPCs, err := buildPoolRPCs(g.dispatchers, protoTB, hidesSet, latest, chain, g.cfg.metrics, g.cfg.backpressure, "")
-		if err != nil {
-			return nil, err
-		}
-		for name, f := range latestRPCs {
-			nsFields[name] = f
-		}
-
-		// Every version (including latest) addressable as a sub-object —
-		// unless it has zero unary RPCs, in which case the sub-object
-		// would be empty and graphql-go rejects empty Object types.
-		// (Subscription-only namespaces hit this; their fields land on
-		// the Subscription root instead.)
-		for _, p := range pools {
-			versionedRPCs, err := buildPoolRPCs(g.dispatchers, protoTB, hidesSet, p, chain, g.cfg.metrics, g.cfg.backpressure, p.key.version+"_")
-			if err != nil {
-				return nil, err
-			}
-			if len(versionedRPCs) == 0 {
-				continue
-			}
-			vName := exportedName(ns) + "_" + exportedName(p.key.version)
-			vObj := graphql.NewObject(graphql.ObjectConfig{
-				Name:   vName,
-				Fields: versionedRPCs,
-			})
-			subField := &graphql.Field{
-				Type: vObj,
-				Resolve: func(rp graphql.ResolveParams) (any, error) {
-					return struct{}{}, nil
-				},
-			}
-			if p.versionN != latest.versionN {
-				subField.DeprecationReason = latestReason
-			}
-			nsFields[p.key.version] = subField
-		}
-
-		// Namespace with only streaming RPCs (e.g. admin_events) has
-		// no Query-side surface; skip the top-level field. Subscription
-		// fields are still emitted by buildSubscriptionFields below.
-		if len(nsFields) == 0 {
-			continue
-		}
-
-		nsObj := graphql.NewObject(graphql.ObjectConfig{
-			Name:   exportedName(ns) + "Namespace",
-			Fields: nsFields,
-		})
-		rootFields[ns] = &graphql.Field{
-			Type: nsObj,
-			Resolve: func(rp graphql.ResolveParams) (any, error) {
-				return struct{}{}, nil
-			},
-		}
+	protoQueries, protoMutations, _, err := RenderGraphQLRuntimeFields(protoSvcs, g.dispatchers, RuntimeOptions{
+		SharedProtoBuilder: protoTB,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("proto runtime render: %w", err)
+	}
+	for k, v := range protoQueries {
+		rootFields[k] = v
 	}
 
 	// Merge OpenAPI fields into the Query and Mutation roots.
@@ -177,6 +114,15 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	cfg := graphql.SchemaConfig{Query: queryObj}
 
 	mutationFields := openMutations
+	for k, v := range protoMutations {
+		if mutationFields == nil {
+			mutationFields = graphql.Fields{}
+		}
+		if _, exists := mutationFields[k]; exists {
+			return nil, fmt.Errorf("proto/openapi field collision in Mutation: %s", k)
+		}
+		mutationFields[k] = v
+	}
 	for k, v := range gqlMutations {
 		if mutationFields == nil {
 			mutationFields = graphql.Fields{}

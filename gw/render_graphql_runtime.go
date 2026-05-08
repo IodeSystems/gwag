@@ -29,6 +29,18 @@ type RuntimeOptions struct {
 	// for OpenAPI-origin services. nil = builder mints its own per
 	// service (collides if multiple OpenAPI sources share a schema).
 	LongType *graphql.Scalar
+
+	// SharedProtoBuilder, when non-nil, is reused for every
+	// KindProto service in svcs instead of constructing one per
+	// service. Required when the schema has multiple proto pools
+	// that share message types (e.g. v1 and v2 of the same package)
+	// — proto FullNames are globally unique, so a single builder
+	// over a merged Types map deduplicates *graphql.Object
+	// instances across versions and avoids graphql-go's duplicate-
+	// named-type rejection. Construct via newProtoIRTypeBuilder
+	// with the gateway's full pool map. nil = per-service (safe for
+	// single-pool fixtures).
+	SharedProtoBuilder *IRTypeBuilder
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired
@@ -75,8 +87,52 @@ type RuntimeOptions struct {
 // Lives side-by-side with buildSchemaLocked in step 2; cutover
 // begins in step 3.
 func RenderGraphQLRuntime(svcs []*ir.Service, registry *ir.DispatchRegistry, opts RuntimeOptions) (*graphql.Schema, error) {
+	queries, mutations, subs, err := RenderGraphQLRuntimeFields(svcs, registry, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(queries) == 0 {
+		queries["_status"] = &graphql.Field{
+			Type: graphql.String,
+			Resolve: func(p graphql.ResolveParams) (any, error) {
+				return "no services registered", nil
+			},
+		}
+	}
+
+	cfg := graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{Name: "Query", Fields: queries}),
+	}
+	if len(mutations) > 0 {
+		cfg.Mutation = graphql.NewObject(graphql.ObjectConfig{Name: "Mutation", Fields: mutations})
+	}
+	if len(subs) > 0 {
+		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{Name: "Subscription", Fields: subs})
+	}
+	schema, err := graphql.NewSchema(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: graphql.NewSchema: %w", err)
+	}
+	return &schema, nil
+}
+
+// RenderGraphQLRuntimeFields returns the Query / Mutation /
+// Subscription field maps RenderGraphQLRuntime would assemble into
+// a Schema. Step 3+ callers merge these into the gateway's
+// rootFields alongside fields from non-IR sources (OpenAPI mirror,
+// downstream GraphQL ingest) under a single Schema, so exposing
+// the maps is required during the incremental cutover. Once every
+// path is IR-driven (step 6) the wrapper above is the only caller.
+//
+// Behaviour matches RenderGraphQLRuntime: services grouped by
+// namespace, sorted by versionN, latest's content flat at top of
+// the namespace container, older versions wrapped under `vN`
+// sub-fields with @deprecated. Subscriptions flatten under
+// `<ns>_<op>` (latest) / `<ns>_<vN>_<op>` (older).
+func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistry, opts RuntimeOptions) (graphql.Fields, graphql.Fields, graphql.Fields, error) {
 	if registry == nil {
-		return nil, fmt.Errorf("runtime: nil DispatchRegistry")
+		return nil, nil, nil, fmt.Errorf("runtime: nil DispatchRegistry")
 	}
 
 	byNS := map[string][]*ir.Service{}
@@ -105,7 +161,7 @@ func RenderGraphQLRuntime(svcs []*ir.Service, registry *ir.DispatchRegistry, opt
 		for _, svc := range services {
 			tb, err := newRuntimeTypeBuilder(svc, opts, svc == latest)
 			if err != nil {
-				return nil, err
+				return nil, nil, nil, err
 			}
 			builders[svc] = tb
 		}
@@ -113,7 +169,7 @@ func RenderGraphQLRuntime(svcs []*ir.Service, registry *ir.DispatchRegistry, opt
 		for _, kind := range []ir.OpKind{ir.OpQuery, ir.OpMutation} {
 			field, err := buildNamespaceFold(ns, services, latest, latestReason, builders, kind, registry)
 			if err != nil {
-				return nil, fmt.Errorf("runtime: ns %s kind %v: %w", ns, kind, err)
+				return nil, nil, nil, fmt.Errorf("runtime: ns %s kind %v: %w", ns, kind, err)
 			}
 			if field == nil {
 				continue
@@ -139,34 +195,12 @@ func RenderGraphQLRuntime(svcs []*ir.Service, registry *ir.DispatchRegistry, opt
 				prefix = ns + "_" + svc.Version + "_"
 			}
 			if err := addSubscriptionFlat(subs, svc, builders[svc], prefix, depReason, registry); err != nil {
-				return nil, fmt.Errorf("runtime: ns %s subscription: %w", ns, err)
+				return nil, nil, nil, fmt.Errorf("runtime: ns %s subscription: %w", ns, err)
 			}
 		}
 	}
 
-	if len(queries) == 0 {
-		queries["_status"] = &graphql.Field{
-			Type: graphql.String,
-			Resolve: func(p graphql.ResolveParams) (any, error) {
-				return "no services registered", nil
-			},
-		}
-	}
-
-	cfg := graphql.SchemaConfig{
-		Query: graphql.NewObject(graphql.ObjectConfig{Name: "Query", Fields: queries}),
-	}
-	if len(mutations) > 0 {
-		cfg.Mutation = graphql.NewObject(graphql.ObjectConfig{Name: "Mutation", Fields: mutations})
-	}
-	if len(subs) > 0 {
-		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{Name: "Subscription", Fields: subs})
-	}
-	schema, err := graphql.NewSchema(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("runtime: graphql.NewSchema: %w", err)
-	}
-	return &schema, nil
+	return queries, mutations, subs, nil
 }
 
 // buildNamespaceFold synthesises one Query/Mutation root field for
@@ -235,11 +269,12 @@ func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, l
 // suffix and "Namespace" are appended. depReason, when non-empty,
 // stamps onto every emitted field.
 func addServiceContent(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder, kind ir.OpKind, parentPath, depReason string, registry *ir.DispatchRegistry) error {
+	rename := opNameForRuntime(svc)
 	for _, op := range svc.Operations {
 		if op.Kind != kind {
 			continue
 		}
-		if err := emitOperation(dst, op, tb, depReason, registry); err != nil {
+		if err := emitOperation(dst, op, tb, depReason, registry, rename); err != nil {
 			return err
 		}
 	}
@@ -247,7 +282,7 @@ func addServiceContent(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder, k
 		if g.Kind != kind {
 			continue
 		}
-		if err := emitGroupContainer(dst, g, tb, kind, parentPath, depReason, registry); err != nil {
+		if err := emitGroupContainer(dst, g, tb, kind, parentPath, depReason, registry, rename); err != nil {
 			return err
 		}
 	}
@@ -257,16 +292,16 @@ func addServiceContent(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder, k
 // emitGroupContainer renders one Group as a synthesized container
 // Object and adds it to dst under the group's Name. Recursive on
 // sub-groups; the synthesized type name path-joins the parent.
-func emitGroupContainer(dst graphql.Fields, g *ir.OperationGroup, tb *IRTypeBuilder, kind ir.OpKind, parentPath, depReason string, registry *ir.DispatchRegistry) error {
+func emitGroupContainer(dst graphql.Fields, g *ir.OperationGroup, tb *IRTypeBuilder, kind ir.OpKind, parentPath, depReason string, registry *ir.DispatchRegistry, rename func(string) string) error {
 	childPath := parentPath + pascalCaseRuntime(g.Name)
 	fields := graphql.Fields{}
 	for _, op := range g.Operations {
-		if err := emitOperation(fields, op, tb, depReason, registry); err != nil {
+		if err := emitOperation(fields, op, tb, depReason, registry, rename); err != nil {
 			return fmt.Errorf("group %s: %w", g.Name, err)
 		}
 	}
 	for _, sub := range g.Groups {
-		if err := emitGroupContainer(fields, sub, tb, kind, childPath, depReason, registry); err != nil {
+		if err := emitGroupContainer(fields, sub, tb, kind, childPath, depReason, registry, rename); err != nil {
 			return err
 		}
 	}
@@ -294,11 +329,14 @@ func emitGroupContainer(dst graphql.Fields, g *ir.OperationGroup, tb *IRTypeBuil
 }
 
 // emitOperation builds a graphql.Field for op and adds it to dst
-// keyed by op.Name. depReason, when non-empty, overrides the op's
-// own Deprecated string with the version-fold deprecation message
-// — non-latest version sub-groups stamp the same reason on every
-// nested field.
-func emitOperation(dst graphql.Fields, op *ir.Operation, tb *IRTypeBuilder, depReason string, registry *ir.DispatchRegistry) error {
+// keyed by rename(op.Name). depReason, when non-empty, overrides the
+// op's own Deprecated string with the version-fold deprecation
+// message — non-latest version sub-groups stamp the same reason on
+// every nested field. rename converts the IR-canonical op name into
+// the format-native field key (lowerCamel for proto so wire RPC
+// "Hello" surfaces as "hello"; identity for OpenAPI/GraphQL whose
+// operation names already follow the target convention).
+func emitOperation(dst graphql.Fields, op *ir.Operation, tb *IRTypeBuilder, depReason string, registry *ir.DispatchRegistry, rename func(string) string) error {
 	field, err := buildRuntimeOperation(tb, op, registry)
 	if err != nil {
 		return fmt.Errorf("op %s: %w", op.Name, err)
@@ -306,10 +344,11 @@ func emitOperation(dst graphql.Fields, op *ir.Operation, tb *IRTypeBuilder, depR
 	if depReason != "" {
 		field.DeprecationReason = depReason
 	}
-	if _, exists := dst[op.Name]; exists {
-		return fmt.Errorf("op field collision: %s", op.Name)
+	name := rename(op.Name)
+	if _, exists := dst[name]; exists {
+		return fmt.Errorf("op field collision: %s", name)
 	}
-	dst[op.Name] = field
+	dst[name] = field
 	return nil
 }
 
@@ -374,6 +413,7 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *ir.Operation, registry *ir.Dis
 // surfaces them flat — same convention as the existing
 // buildSubscriptionFields.
 func addSubscriptionFlat(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder, prefix, depReason string, registry *ir.DispatchRegistry) error {
+	rename := opNameForRuntime(svc)
 	for _, op := range svc.Operations {
 		if op.Kind != ir.OpSubscription {
 			continue
@@ -385,7 +425,7 @@ func addSubscriptionFlat(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder,
 		if depReason != "" {
 			f.DeprecationReason = depReason
 		}
-		name := prefix + op.Name
+		name := prefix + rename(op.Name)
 		if _, exists := dst[name]; exists {
 			return fmt.Errorf("subscription field collision: %s", name)
 		}
@@ -395,7 +435,7 @@ func addSubscriptionFlat(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder,
 		if g.Kind != ir.OpSubscription {
 			continue
 		}
-		if err := flattenSubGroupWithPrefix(dst, g, prefix, depReason, registry, tb); err != nil {
+		if err := flattenSubGroupWithPrefix(dst, g, prefix, depReason, registry, tb, rename); err != nil {
 			return err
 		}
 	}
@@ -404,9 +444,10 @@ func addSubscriptionFlat(dst graphql.Fields, svc *ir.Service, tb *IRTypeBuilder,
 
 // flattenSubGroupWithPrefix walks one subscription-rooted Group and
 // emits its operations into dst with name `prefix + group + "_" +
-// op` (recursing through sub-groups). Matches the SDL renderer's
-// flattenSubscriptionGroup convention.
-func flattenSubGroupWithPrefix(dst graphql.Fields, g *ir.OperationGroup, prefix, depReason string, registry *ir.DispatchRegistry, tb *IRTypeBuilder) error {
+// rename(op)` (recursing through sub-groups). Matches the SDL
+// renderer's flattenSubscriptionGroup convention; rename applies the
+// per-kind op-name policy (lowerCamel for proto, identity otherwise).
+func flattenSubGroupWithPrefix(dst graphql.Fields, g *ir.OperationGroup, prefix, depReason string, registry *ir.DispatchRegistry, tb *IRTypeBuilder, rename func(string) string) error {
 	pre := prefix + g.Name + "_"
 	for _, op := range g.Operations {
 		f, err := buildRuntimeOperation(tb, op, registry)
@@ -416,18 +457,32 @@ func flattenSubGroupWithPrefix(dst graphql.Fields, g *ir.OperationGroup, prefix,
 		if depReason != "" {
 			f.DeprecationReason = depReason
 		}
-		name := pre + op.Name
+		name := pre + rename(op.Name)
 		if _, exists := dst[name]; exists {
 			return fmt.Errorf("subscription field collision: %s", name)
 		}
 		dst[name] = f
 	}
 	for _, sub := range g.Groups {
-		if err := flattenSubGroupWithPrefix(dst, sub, pre, depReason, registry, tb); err != nil {
+		if err := flattenSubGroupWithPrefix(dst, sub, pre, depReason, registry, tb, rename); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// opNameForRuntime returns the op-name transform for svc.OriginKind.
+// Proto wire RPCs are PascalCase ("Hello"); GraphQL convention wants
+// lowerCamel ("hello") — applied at field-key emission only, so the
+// IR canonical op.Name and op.SchemaID stay wire-native (matching
+// what PopulateSchemaIDs stamps and what the dispatcher registry
+// expects). OpenAPI / GraphQL ingest already use the target
+// convention in their op.Name, so identity preserves them.
+func opNameForRuntime(svc *ir.Service) func(string) string {
+	if svc.OriginKind == ir.KindProto {
+		return lowerCamel
+	}
+	return identityName
 }
 
 // newRuntimeTypeBuilder picks the IRTypeNaming + IRTypeBuilderOptions
@@ -445,6 +500,9 @@ func flattenSubGroupWithPrefix(dst graphql.Fields, g *ir.OperationGroup, prefix,
 func newRuntimeTypeBuilder(svc *ir.Service, opts RuntimeOptions, isLatest bool) (*IRTypeBuilder, error) {
 	switch svc.OriginKind {
 	case ir.KindProto:
+		if opts.SharedProtoBuilder != nil {
+			return opts.SharedProtoBuilder, nil
+		}
 		return NewIRTypeBuilder(svc, IRTypeNaming{
 			ObjectName: exportedName,
 			EnumName:   exportedName,

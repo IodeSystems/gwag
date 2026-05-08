@@ -37,7 +37,7 @@ func BenchmarkProtoDispatcher_Dispatch(b *testing.B) {
 	gw, _, cleanup := newProtoBenchGateway(b)
 	defer cleanup()
 
-	disp := gw.dispatchers.Get(ir.MakeSchemaID("greeter", "v1", "hello"))
+	disp := gw.dispatchers.Get(ir.MakeSchemaID("greeter", "v1", "Hello"))
 	if disp == nil {
 		b.Fatal("greeter dispatcher missing")
 	}
