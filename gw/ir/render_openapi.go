@@ -158,7 +158,9 @@ func renderOpenAPIObject(t *Type) *openapi3.SchemaRef {
 // renderOpenAPIUnion projects a TypeUnion into an OpenAPI oneOf
 // schema with one $ref per Variant. Same-kind shortcut returns the
 // captured *openapi3.SchemaRef when present so discriminator
-// metadata round-trips verbatim.
+// metadata round-trips verbatim. On the synthesis path the canonical
+// DiscriminatorProperty / DiscriminatorMapping fields populate
+// schema.discriminator.
 func renderOpenAPIUnion(t *Type) *openapi3.SchemaRef {
 	if t.OriginKind == KindOpenAPI {
 		if r, ok := t.Origin.(*openapi3.SchemaRef); ok && r != nil {
@@ -169,12 +171,21 @@ func renderOpenAPIUnion(t *Type) *openapi3.SchemaRef {
 	for _, v := range t.Variants {
 		refs = append(refs, &openapi3.SchemaRef{Ref: "#/components/schemas/" + v})
 	}
-	return &openapi3.SchemaRef{
-		Value: &openapi3.Schema{
-			Description: t.Description,
-			OneOf:       refs,
-		},
+	schema := &openapi3.Schema{
+		Description: t.Description,
+		OneOf:       refs,
 	}
+	if t.DiscriminatorProperty != "" {
+		d := &openapi3.Discriminator{PropertyName: t.DiscriminatorProperty}
+		if len(t.DiscriminatorMapping) > 0 {
+			d.Mapping = openapi3.StringMap[openapi3.MappingRef]{}
+			for k, name := range t.DiscriminatorMapping {
+				d.Mapping[k] = openapi3.MappingRef{Ref: "#/components/schemas/" + name}
+			}
+		}
+		schema.Discriminator = d
+	}
+	return &openapi3.SchemaRef{Value: schema}
 }
 
 func renderOpenAPIEnum(t *Type) *openapi3.SchemaRef {

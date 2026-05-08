@@ -220,6 +220,22 @@ type Type struct {
 	// Service.Types.
 	Variants []string
 
+	// DiscriminatorProperty (Union types only) names a field on the
+	// runtime value that carries the variant tag — OpenAPI's
+	// `schema.discriminator.propertyName`. Renderers building runtime
+	// type-resolvers (e.g. IRTypeBuilder.unionFor) consult this when
+	// non-empty; empty means fall through to the format-native
+	// convention (e.g. GraphQL's `__typename`).
+	DiscriminatorProperty string
+
+	// DiscriminatorMapping maps wire-level discriminator values to
+	// variant Type names. OpenAPI populates this from
+	// `schema.discriminator.mapping` (with $ref leaves stripped to
+	// the bare schema name); GraphQL ingest leaves it nil. Renderers
+	// fall back to a "discriminator-value == variant-name" identity
+	// match when a value isn't in the mapping.
+	DiscriminatorMapping map[string]string
+
 	OriginKind Kind
 	// Origin is one of:
 	//   *descriptorpb.DescriptorProto      (object, KindProto)

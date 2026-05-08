@@ -277,6 +277,59 @@ func TestOpenAPIIngest_OneOf(t *testing.T) {
 	if got, want := animal.Variants, []string{"Cat", "Dog"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("Animal Variants = %v, want %v", got, want)
 	}
+	if animal.DiscriminatorProperty != "kind" {
+		t.Errorf("Animal DiscriminatorProperty = %q, want %q", animal.DiscriminatorProperty, "kind")
+	}
+}
+
+// TestOpenAPIIngest_DiscriminatorMapping covers the mapping-shaped
+// path: $ref-style mapping values get stripped to bare schema names
+// so the canonical DiscriminatorMapping holds variant identifiers,
+// not URIs.
+func TestOpenAPIIngest_DiscriminatorMapping(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Dog": {"type": "object", "properties": {"bark": {"type": "boolean"}}},
+      "Animal": {
+        "oneOf": [
+          {"$ref": "#/components/schemas/Cat"},
+          {"$ref": "#/components/schemas/Dog"}
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "feline": "#/components/schemas/Cat",
+            "canine": "Dog"
+          }
+        }
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+	animal := svc.Types["Animal"]
+	if animal == nil {
+		t.Fatal("Animal missing")
+	}
+	if got, want := animal.DiscriminatorMapping["feline"], "Cat"; got != want {
+		t.Errorf("feline → %q, want %q", got, want)
+	}
+	if got, want := animal.DiscriminatorMapping["canine"], "Dog"; got != want {
+		t.Errorf("canine → %q, want %q", got, want)
+	}
 }
 
 // TestOpenAPIRoundtripSynthesis_OneOf exercises the cross-kind
@@ -315,5 +368,12 @@ func TestOpenAPIRoundtripSynthesis_OneOf(t *testing.T) {
 		if got := animalRef.Value.OneOf[i].Ref; got != want {
 			t.Errorf("OneOf[%d].Ref = %q, want %q", i, got, want)
 		}
+	}
+	// Discriminator survives via the canonical fields, not Origin.
+	if animalRef.Value.Discriminator == nil {
+		t.Fatal("synthesized Animal missing discriminator")
+	}
+	if got := animalRef.Value.Discriminator.PropertyName; got != "kind" {
+		t.Errorf("discriminator.propertyName = %q, want %q", got, "kind")
 	}
 }

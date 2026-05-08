@@ -392,9 +392,12 @@ func (b *IRTypeBuilder) enumFor(t *ir.Type) *graphql.Enum {
 // dropped; an empty result falls back to a JSON scalar so the field
 // still surfaces.
 //
-// ResolveType reads `__typename` off the value (clients are expected
-// to select it under any abstract type — same convention as the
-// existing graphQLMirror code).
+// ResolveType prefers the IR Type's DiscriminatorProperty (OpenAPI's
+// schema.discriminator.propertyName) when set: read the property off
+// the runtime value, then look the value up in
+// DiscriminatorMapping (falling through to a variant-name identity
+// match if no mapping entry exists). Falls back to the GraphQL
+// `__typename` convention when no discriminator is declared.
 func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 	if u, ok := b.unions[t.Name]; ok {
 		return u, nil
@@ -416,6 +419,8 @@ func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 	if len(types) == 0 {
 		return b.jsonScalar(), nil
 	}
+	discProp := t.DiscriminatorProperty
+	discMap := t.DiscriminatorMapping
 	u := graphql.NewUnion(graphql.UnionConfig{
 		Name:        b.naming.UnionName(t.Name),
 		Description: t.Description,
@@ -424,6 +429,18 @@ func (b *IRTypeBuilder) unionFor(t *ir.Type) (graphql.Output, error) {
 			m, ok := p.Value.(map[string]any)
 			if !ok {
 				return nil
+			}
+			if discProp != "" {
+				if d, ok := m[discProp].(string); ok {
+					if mapped, ok := discMap[d]; ok {
+						if obj, ok := byName[mapped]; ok {
+							return obj
+						}
+					}
+					if obj, ok := byName[d]; ok {
+						return obj
+					}
+				}
 			}
 			if name, ok := m["__typename"].(string); ok {
 				if obj, ok := byName[name]; ok {
