@@ -313,6 +313,152 @@ func TestInjectPath_NonMatchingOpSkipped(t *testing.T) {
 	}
 }
 
+// TestNullable_TypeRewriteFlipsRequired confirms NullableTypeRewrite
+// walks ir.Services and clears Required on every arg/field whose
+// named type matches.
+func TestNullable_TypeRewriteFlipsRequired(t *testing.T) {
+	svcs := []*ir.Service{
+		{
+			Namespace: "user",
+			Version:   "v1",
+			Types: map[string]*ir.Type{
+				"user.v1.GetMeRequest": {
+					Name:     "user.v1.GetMeRequest",
+					TypeKind: ir.TypeInput,
+					Fields: []*ir.Field{
+						{Name: "auth", Type: ir.TypeRef{Named: "auth.v1.Context"}, Required: true},
+						{Name: "trace_id", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
+					},
+				},
+			},
+			Operations: []*ir.Operation{
+				{
+					Name: "GetMe",
+					Args: []*ir.Arg{
+						{Name: "auth", Type: ir.TypeRef{Named: "auth.v1.Context"}, Required: true},
+						{Name: "name", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
+					},
+				},
+			},
+		},
+	}
+	NullableTypeRewrite{Name: "auth.v1.Context"}.apply(svcs)
+
+	t0 := svcs[0].Types["user.v1.GetMeRequest"]
+	if t0.Fields[0].Required {
+		t.Fatal("expected auth field Required=false after Nullable rewrite")
+	}
+	if !t0.Fields[1].Required {
+		t.Fatal("trace_id (non-matching type) should remain Required")
+	}
+	op0 := svcs[0].Operations[0]
+	if op0.Args[0].Required {
+		t.Fatal("expected auth arg Required=false after Nullable rewrite")
+	}
+	if !op0.Args[1].Required {
+		t.Fatal("name (non-matching type) should remain Required")
+	}
+}
+
+// TestNullable_PathRewriteFlipsRequired confirms NullablePathRewrite
+// targets just one (ns, op, arg) tuple.
+func TestNullable_PathRewriteFlipsRequired(t *testing.T) {
+	svcs := []*ir.Service{
+		{
+			Namespace: "user",
+			Version:   "v1",
+			Operations: []*ir.Operation{
+				{
+					Name: "GetMe",
+					Args: []*ir.Arg{
+						{Name: "auth", Required: true},
+						{Name: "name", Required: true},
+					},
+				},
+				{
+					Name: "GetOther",
+					Args: []*ir.Arg{
+						{Name: "auth", Required: true},
+					},
+				},
+			},
+		},
+	}
+	NullablePathRewrite{Path: "user.GetMe.auth"}.apply(svcs)
+
+	if svcs[0].Operations[0].Args[0].Required {
+		t.Fatal("user.GetMe.auth should be Required=false")
+	}
+	if !svcs[0].Operations[0].Args[1].Required {
+		t.Fatal("user.GetMe.name should remain Required")
+	}
+	if !svcs[0].Operations[1].Args[0].Required {
+		t.Fatal("user.GetOther.auth should remain Required (different op)")
+	}
+}
+
+// TestInjectType_NullableHideFalseEmitsBothRewrites confirms the
+// composition: Hide(false) skips HideTypeRewrite, Nullable(true)
+// adds NullableTypeRewrite. Schema half is exactly the Nullable.
+func TestInjectType_NullableHideFalseEmitsBothRewrites(t *testing.T) {
+	tx := InjectType[*authv1.Context](func(_ context.Context, _ **authv1.Context) (*authv1.Context, error) {
+		return &authv1.Context{}, nil
+	}, Hide(false), Nullable(true))
+	if got := len(tx.Schema); got != 1 {
+		t.Fatalf("len(Schema)=%d, want 1 (just the Nullable)", got)
+	}
+	n, ok := tx.Schema[0].(NullableTypeRewrite)
+	if !ok {
+		t.Fatalf("Schema[0] is %T, want NullableTypeRewrite", tx.Schema[0])
+	}
+	if n.Name != "auth.v1.Context" {
+		t.Fatalf("NullableTypeRewrite.Name=%q", n.Name)
+	}
+}
+
+// TestInjectType_NullableHideTruePanic asserts the registration
+// rejects the bad combo at the user's call site.
+func TestInjectType_NullableHideTruePanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for Hide(true) + Nullable(true)")
+		}
+	}()
+	_ = InjectType[*authv1.Context](func(_ context.Context, _ **authv1.Context) (*authv1.Context, error) {
+		return nil, nil
+	}, Nullable(true))
+}
+
+// TestInjectPath_NullableHideTruePanic mirrors the InjectType case.
+func TestInjectPath_NullableHideTruePanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for Hide(true) + Nullable(true)")
+		}
+	}()
+	_ = InjectPath("user.GetMe.auth", func(_ context.Context, _ any) (any, error) {
+		return nil, nil
+	}, Nullable(true))
+}
+
+// TestInjectPath_NullableHideFalseEmitsBothRewrites — composition
+// surface mirroring the type case.
+func TestInjectPath_NullableHideFalseEmitsBothRewrites(t *testing.T) {
+	tx := InjectPath("user.GetMe.auth", func(_ context.Context, _ any) (any, error) {
+		return nil, nil
+	}, Hide(false), Nullable(true))
+	if got := len(tx.Schema); got != 1 {
+		t.Fatalf("len(Schema)=%d, want 1", got)
+	}
+	n, ok := tx.Schema[0].(NullablePathRewrite)
+	if !ok {
+		t.Fatalf("Schema[0] is %T, want NullablePathRewrite", tx.Schema[0])
+	}
+	if n.Path != "user.GetMe.auth" {
+		t.Fatalf("NullablePathRewrite.Path=%q", n.Path)
+	}
+}
+
 // TestInjectType_RuntimeFillsHiddenField runs the InjectType runtime
 // middleware against a synthesized GetMeRequest dynamic message and
 // confirms the auth field gets populated by the resolver.

@@ -40,9 +40,16 @@ func InjectType[T any](resolve func(ctx context.Context, current *T) (T, error),
 
 	irName := irNameForGoType[T]()
 
+	if cfg.hide && cfg.nullable {
+		panic(fmt.Sprintf("gateway: InjectType[%s]: Hide(true) + Nullable(true) is rejected — arg is gone from the schema, nullability is moot", irName))
+	}
+
 	var schema []SchemaRewrite
 	if cfg.hide {
 		schema = append(schema, HideTypeRewrite{Name: irName})
+	}
+	if cfg.nullable {
+		schema = append(schema, NullableTypeRewrite{Name: irName})
 	}
 
 	runtime := protoInjectMiddlewareFor[T](cfg.hide, resolve)
@@ -233,7 +240,8 @@ type InjectOption interface {
 }
 
 type injectConfig struct {
-	hide bool
+	hide     bool
+	nullable bool
 }
 
 type hideOption bool
@@ -245,6 +253,19 @@ func (h hideOption) applyInject(c *injectConfig) { c.hide = bool(h) }
 // Pass Hide(false) to keep the arg on the wire and have the resolver
 // inspect-and-decide.
 func Hide(hide bool) InjectOption { return hideOption(hide) }
+
+type nullableOption bool
+
+func (n nullableOption) applyInject(c *injectConfig) { c.nullable = bool(n) }
+
+// Nullable flips the targeted args' nullability in the external
+// schema. Pairs naturally with Hide(false): the caller can omit the
+// arg entirely, the resolver decides what to fill in.
+//
+// Hide(true) + Nullable(true) is rejected at registration (the arg is
+// gone from the schema; nullability is moot) — the panic surfaces at
+// the user's call site, not at schema rebuild.
+func Nullable(nullable bool) InjectOption { return nullableOption(nullable) }
 
 // InjectPath returns a Transform targeting one specific schema
 // location. `path` is "namespace.op.arg" (op + arg names match
@@ -275,9 +296,16 @@ func InjectPath(path string, resolve func(ctx context.Context, current any) (any
 		o.applyInject(&cfg)
 	}
 
+	if cfg.hide && cfg.nullable {
+		panic(fmt.Sprintf("gateway: InjectPath(%q): Hide(true) + Nullable(true) is rejected — arg is gone from the schema, nullability is moot", path))
+	}
+
 	var schema []SchemaRewrite
 	if cfg.hide {
 		schema = append(schema, HidePathRewrite{Path: path})
+	}
+	if cfg.nullable {
+		schema = append(schema, NullablePathRewrite{Path: path})
 	}
 	runtime := injectPathMiddleware(path, cfg.hide, resolve)
 	return Transform{Schema: schema, Runtime: runtime}

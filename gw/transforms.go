@@ -147,3 +147,94 @@ func splitInjectPath(path string) (ns, op, arg string, ok bool) {
 	}
 	return parts[0], parts[1], parts[2], true
 }
+
+// NullableTypeRewrite is the concrete SchemaRewrite emitted by
+// InjectType[T] under Nullable(true). It flips the Required flag on
+// every arg/field whose IR-named type matches Name, leaving the type
+// otherwise intact.
+type NullableTypeRewrite struct {
+	Name string
+}
+
+func (n NullableTypeRewrite) apply(svcs []*ir.Service) {
+	if n.Name == "" {
+		return
+	}
+	for _, svc := range svcs {
+		for _, t := range svc.Types {
+			if t.TypeKind != ir.TypeObject && t.TypeKind != ir.TypeInput {
+				continue
+			}
+			for _, f := range t.Fields {
+				if f.Type.IsNamed() && f.Type.Named == n.Name {
+					f.Required = false
+				}
+			}
+		}
+		nullableArgsOfType(svc.Operations, n.Name)
+		for _, grp := range svc.Groups {
+			nullableArgsOfTypeInGroup(grp, n.Name)
+		}
+	}
+}
+
+func nullableArgsOfType(ops []*ir.Operation, name string) {
+	for _, op := range ops {
+		for _, a := range op.Args {
+			if a.Type.IsNamed() && a.Type.Named == name {
+				a.Required = false
+			}
+		}
+	}
+}
+
+func nullableArgsOfTypeInGroup(grp *ir.OperationGroup, name string) {
+	nullableArgsOfType(grp.Operations, name)
+	for _, sub := range grp.Groups {
+		nullableArgsOfTypeInGroup(sub, name)
+	}
+}
+
+// NullablePathRewrite is the concrete SchemaRewrite emitted by
+// InjectPath under Nullable(true). It flips the Required flag on the
+// one named arg in the matching op across every version of the
+// namespace.
+type NullablePathRewrite struct {
+	Path string
+}
+
+func (n NullablePathRewrite) apply(svcs []*ir.Service) {
+	ns, opName, arg, ok := splitInjectPath(n.Path)
+	if !ok {
+		return
+	}
+	for _, svc := range svcs {
+		if svc.Namespace != ns {
+			continue
+		}
+		nullableArgInOps(svc.Operations, opName, arg)
+		for _, grp := range svc.Groups {
+			nullableArgInGroup(grp, opName, arg)
+		}
+	}
+}
+
+func nullableArgInOps(ops []*ir.Operation, opName, arg string) {
+	for _, op := range ops {
+		if op.Name != opName {
+			continue
+		}
+		for _, a := range op.Args {
+			if a.Name == arg {
+				a.Required = false
+			}
+		}
+	}
+}
+
+func nullableArgInGroup(grp *ir.OperationGroup, opName, arg string) {
+	nullableArgInOps(grp.Operations, opName, arg)
+	for _, sub := range grp.Groups {
+		nullableArgInGroup(sub, opName, arg)
+	}
+}
