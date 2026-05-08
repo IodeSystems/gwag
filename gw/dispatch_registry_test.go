@@ -8,10 +8,16 @@ import (
 )
 
 // After a schema rebuild, every dispatchable operation must be
-// addressable by its IR SchemaID. That's the contract step 5 relies
-// on: the runtime renderer (when it lands) builds resolvers via
-// registry lookup, not by capturing dispatcher pointers — so a
-// missing entry is a silent dispatch failure post-cutover.
+// addressable by its IR SchemaID. That's the contract the runtime
+// renderer relies on: resolvers are built via registry lookup, not
+// by capturing dispatcher pointers — so a missing entry is a silent
+// dispatch failure.
+//
+// SchemaIDs use the wire-native op name (proto rpc names stay
+// PascalCase). The GraphQL surface lower-camels at field-key
+// emission, so `greeter.hello` and `greeter.v1.hello` are both
+// looked up under the same id `greeter/v1/Hello` — one dispatcher
+// serves both surfaces.
 func TestDispatchRegistry_PopulatedAfterSchemaBuild(t *testing.T) {
 	f := newGRPCE2EFixture(t)
 
@@ -19,20 +25,17 @@ func TestDispatchRegistry_PopulatedAfterSchemaBuild(t *testing.T) {
 		t.Fatal("registry empty after schema build")
 	}
 
-	// Greeter v1 has Hello unary RPC. Both the namespace-flat alias
-	// (greeter.hello) and the versioned sub-object alias
-	// (greeter.v1.hello) point at the same dispatcher; the registry
-	// holds one entry per alias.
-	flat := ir.MakeSchemaID("greeter", "v1", "hello")
-	versioned := ir.MakeSchemaID("greeter", "v1", "v1_hello")
-	for _, sid := range []ir.SchemaID{flat, versioned} {
-		if d := f.gw.dispatchers.Get(sid); d == nil {
-			t.Fatalf("dispatcher missing for %s", sid)
-		}
+	// One entry per (pool, RPC) keyed by IR's op.SchemaID. The flat
+	// and versioned graphql surfaces resolve through the same id
+	// because RenderGraphQLRuntime walks IR Operations once and
+	// emits the same SchemaID under both aliases.
+	sid := ir.MakeSchemaID("greeter", "v1", "Hello")
+	if d := f.gw.dispatchers.Get(sid); d == nil {
+		t.Fatalf("dispatcher missing for %s", sid)
 	}
 
 	// The dispatcher fetched from the registry must actually run.
-	d := f.gw.dispatchers.Get(flat)
+	d := f.gw.dispatchers.Get(sid)
 	out, err := d.Dispatch(context.Background(), map[string]any{"name": "registry"})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -74,7 +77,7 @@ func TestDispatchRegistry_RebuildClearsStaleEntries(t *testing.T) {
 		t.Fatal("stale registry entry survived rebuild")
 	}
 	// Real dispatcher must still be there post-rebuild.
-	if d := f.gw.dispatchers.Get(ir.MakeSchemaID("greeter", "v1", "hello")); d == nil {
+	if d := f.gw.dispatchers.Get(ir.MakeSchemaID("greeter", "v1", "Hello")); d == nil {
 		t.Fatal("greeter dispatcher missing after rebuild")
 	}
 }
