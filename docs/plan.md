@@ -66,29 +66,14 @@ struct-of-handlers, or whether per-schema codegen is worth it).
 - [x] Inline (anonymous) `oneOf` / `anyOf` at OpenAPI field positions: `synthesizeInlineUnion` registers a deterministic `<A>Or<B>`-named `TypeUnion` in `svc.Types` and the field's `TypeRef` points at it. Anonymous variants (no `$ref`) still fall through to the scalar fallback — IR has no name-synthesis story for those yet.
 - [x] `IngestProto` walks `fd.Imports()` transitively so cross-file message refs (e.g. `user.proto` returning `auth.v1.Context`) land in the IR Types map. Necessary for the IR-driven type-builder wiring to resolve cross-file refs without falling through to the descriptor graph.
 - [x] **Proto path wired through `IRTypeBuilder`.** `gw/proto_typebuilder.go` builds one shared `*IRTypeBuilder` over the merged proto Types from every pool (proto FullNames are globally unique, so a single Types map is collision-free); `buildPoolMethodField` and `buildSubscriptionField` resolve outputs via `protoTB.Output(ir.TypeRef{Named: ...})`. Args still walk `md.Fields()` (the flatten-input-message path) but route type lookup through `protoTB.Input(ir.TypeRef{Named: fd.Message().FullName()}, ...)` so cyclic message refs share a single `*graphql.Object` across Query/Subscription roots. The `tb.hidden(fd)` skip migrated to `protoMessageHidden` in the args walk because `ir.Hides` only filters `Type.Fields` — args bypass that path. Old `typeBuilder` / `policy` deleted from `gw/types.go` (kept `exportedName` / `lowerCamel` helpers).
+- [x] **OpenAPI path wired through `IRTypeBuilder`.** `gw/openapi.go` constructs one `*IRTypeBuilder` per source (`newOpenAPISourceTypeBuilder`) with prefix-aware naming closures (`ObjectName`/`InputName`/etc. project `Pet` → `<ns>_Pet` or `<ns>_<vN>_Pet`). Long + JSON scalars are built once per schema build and shared across per-source builders via `IRTypeBuilderOptions{Int64Type, UInt64Type, MapType, JSONType}` because graphql-go forbids two scalars sharing a Name. `buildOpenAPIFields` walks IR Operations from `ir.IngestOpenAPI(src.doc)` instead of the kin-openapi path tree — IR is the type contract, the openapi3.Operation captured on `irOp.Origin` stays the wire contract for `dispatchOpenAPI`. Inline anonymous schemas (body / response / nested fields) are synthesized in IR ingest with deterministic names (`<OperationId>Body`, `<OperationId>Response`, `<ParentName><FieldName>`) so IRTypeBuilder lookups via `TypeRef.Named` resolve. `IRTypeBuilder.unionFor` extended with the legacy "first variant whose required fields are all present" heuristic; `ScalarUnknown` falls back to `Options.JSONType` when set so unmappable schemas (mixed-kind oneOf) still surface as the JSON scalar. Old `openAPITypeBuilder` + helpers (`schemaName`, `validGraphQLName`, `isRequired`, `primaryType`, `integerType`, `unionFromVariants`, etc.) deleted — ~440 lines of duplicated type-construction collapsed into the IR builder.
 
 **Todo.**
 
-The three bullets below sequence the remaining runtime cutover.
-OpenAPI first (Long scalar + per-source prefix); GraphQL ingest
-second (per-source prefix + remote-side ResolveType); render-side
-fold last (multi-version composition + nested groups) so each prior
-step lands behind a green test suite.
-
-- [ ] **Wire OpenAPI path through `IRTypeBuilder`.** Replace `openAPITypeBuilder` in `gw/openapi.go`. One `*IRTypeBuilder` per source (so `withPrefix("<ns>_")` / `withPrefix("<ns>_<vN>_")` translate cleanly to per-builder `IRTypeNaming.ObjectName` closures). Wire the existing Long scalar via `IRTypeBuilderOptions.Int64Type/UInt64Type` (`b.LongScalar()`); JSON scalar handles maps + the unmappable fallback. Builder sketch:
-  ```go
-  prefix := ns + "_" // or ns + "_" + version + "_" for older
-  tb := NewIRTypeBuilder(svc, IRTypeNaming{
-      ObjectName: func(s string) string { return prefix + s },
-      EnumName:   func(s string) string { return prefix + s },
-      UnionName:  func(s string) string { return prefix + s },
-      InputName:  func(s string) string { return prefix + s + "Input" },
-      FieldName:  lowerCamel,
-  }, IRTypeBuilderOptions{})
-  long := tb.LongScalar()
-  tb = NewIRTypeBuilder(svc, /* same naming */, IRTypeBuilderOptions{Int64Type: long, UInt64Type: long})
-  ```
-  Per-source builder is needed because the prefix changes between latest and older versions even for the same `svc.Types["Pet"]` — the IR Type entry is shared but the rendered graphql identifier must differ. Discriminator-driven union resolution comes "for free" from `IRTypeBuilder.unionFor`; inline-oneOf field types resolve through the synthesised `<A>Or<B>` named entry. Tests like `openapi_test.go:671` assert `SVC_v1_Object` exactly — names must round-trip identically. ~0.5-1 day.
+The two bullets below sequence the remaining runtime cutover.
+GraphQL ingest first (per-source prefix + remote-side ResolveType);
+render-side fold last (multi-version composition + nested groups) so
+each prior step lands behind a green test suite.
 
 - [ ] **Wire GraphQL-ingest path through `IRTypeBuilder`.** Replace the type code in `gw/graphql_mirror.go` (objects/inputs/enums/scalars/unions). The forwarding-resolver code stays — only type construction moves. Naming is `<ns>_<type>` / `<ns>_<vN>_<type>`, same shape as the OpenAPI builder. Custom scalars: `IRTypeNaming.ScalarName` projects through the prefix. The `unionFor` ResolveType picks via `__typename`, which `IRTypeBuilder.unionFor` already does (no discriminator on graphql ingest). Watch for: scalar/Object identity — `m.scalars` cache currently keys by `t.Name`, the IR builder caches by `t.Name` too, so same dedup. Watch for: inline-fragment AST rewriting (`unprefixTypeName`) is independent of type construction and stays. ~0.5 day.
 

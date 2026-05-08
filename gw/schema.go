@@ -137,8 +137,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	}
 
 	// Merge OpenAPI fields into the Query and Mutation roots.
-	openTB := newOpenAPITypeBuilder()
-	openQueries, openMutations, err := g.buildOpenAPIFields(openTB, filter)
+	openQueries, openMutations, err := g.buildOpenAPIFields(filter)
 	if err != nil {
 		return nil, err
 	}
