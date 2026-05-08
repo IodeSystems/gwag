@@ -71,16 +71,83 @@ struct-of-handlers, or whether per-schema codegen is worth it).
 
 **Todo.**
 
-The remaining tier-2 runtime work is the multi-version
-render-side fold; once that lands, the cross-format converters
-in `gw/{convert,openapi,graphql_mirror,schema}.go` collapse into
-one IR-driven `RenderGraphQLRuntime(svcs, registry)` and the IR
-becomes canonical for every code path.
+The remaining tier-2 runtime work is decomposed below. Each step
+is committable on its own; steps 1-2 are pure additions (no
+existing code path changes); cuts begin at step 3. Once step 7
+lands, the cross-format converters in
+`gw/{convert,openapi,graphql_mirror,schema}.go` are gone and IR
+is canonical for every code path.
 
-- [ ] **Multi-version render-side fold + `RenderGraphQLRuntime(svcs, registry)`.** Walks IR + registry, composes same-namespace services into a single synthesized Group tree (latest at top, older as `vN` sub-groups), builds `*graphql.Schema` with resolvers that look up Dispatchers via SchemaID. Cuts over `buildSchemaLocked`; deletes the old converters. ~1-2 days. **Highest risk** — parity for hide-and-inject middleware and subscription field collisions.
-- [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` → `admin.listPeers`, `admin_forgetPeer` (Mutation) → `admin.forgetPeer`. Multi-version OpenAPI sources change too: `pets_v1_getPet` → `pets.v1.getPet`. UI admin pages + any typed query consumer need migration (graphql-codegen regenerates from the new SDL). ~0.5-1 day.
-- [ ] **Test churn.** ~70 tests assert flat field names (`admin_listPeers` etc.); most need rewriting. ~1-2 days.
-- [ ] **Allocation + cache-friendliness pass on dispatchers.** Baselines captured (see done list); per-call hot path is small enough to profile. Look for: arg unmarshal allocations (178 allocs/proto is heavy), response-shape map building, dynamicpb churn, `graphql.ResolveParams` field walks. Goal is to close the gap to hand-written handlers; spike a per-schema codegen path (`go:generate` from IR) only if reflection-based is leaving meaningful headroom. ~2-3 days, scope-dependent.
+- [ ] **Step 1: `RenderGraphQLRuntime` — single-version skeleton.**
+  New `gw/render_graphql_runtime.go` (lives in `gw` because
+  `IRTypeBuilder` already does — moving the typebuilder into
+  `gw/ir` would force `gw/ir` to depend on `graphql-go` and is a
+  bigger refactor). Function
+  `RenderGraphQLRuntime(svcs []*ir.Service, registry *ir.DispatchRegistry, opts RuntimeOptions) (*graphql.Schema, error)`
+  walks top-level Operations + Groups (recursive), builds resolvers
+  that look up Dispatchers via SchemaID. One IRTypeBuilder per
+  Service; naming policy picked from `Service.OriginKind` so
+  proto/OpenAPI/GraphQL type-name conventions match the existing
+  per-format builders. Subscription fields flatten (graphql-go
+  limitation). Tests against IR fixtures (no Gateway): feed
+  service + fake dispatcher, build schema, execute query, verify
+  canonical args reach `Dispatch()`. Doesn't replace anything —
+  runs side-by-side with `buildSchemaLocked`. ~1 day.
+- [ ] **Step 2: Multi-version fold inside RenderGraphQLRuntime.**
+  Group services by namespace, sort by versionN, latest's
+  Operations/Groups at top, older wrapped in `vN` sub-Groups.
+  Per-service IRTypeBuilders mean version-prefixed type names
+  (`<ns>_v1_Pet`) emerge naturally for OpenAPI/GraphQL while
+  proto's package-qualified FullNames stay collision-free without
+  extra prefixing. Tests against multi-version IR fixtures.
+  ~0.5 day.
+- [ ] **Step 3: Cut over proto path.** Replace the proto half of
+  `buildSchemaLocked` with a call to `RenderGraphQLRuntime`,
+  filtered to proto-origin services. OpenAPI + GraphQL paths stay
+  intact (they merge their own fields into rootFields as today).
+  Should be near-zero behavior change for proto callers — the path
+  was already nested + multi-version. Test impact: proto-origin
+  tests (greeter, schema_rebuild, grpc_dispatch) only.
+  ~0.5-1 day.
+- [ ] **Step 4: Cut over OpenAPI path.** Pass OpenAPI services
+  through RenderGraphQLRuntime. **Behavior change:** field names
+  shift from `pets_v1_getPet` → `pets.v1.getPet`,
+  `admin_listPeers` → `admin.listPeers`. ~half the
+  openapi_test.go / admin_huma_test.go cases need rewriting; UI
+  admin pages break (UI rewrite is its own todo below).
+  ~0.5-1 day.
+- [ ] **Step 5: Cut over GraphQL ingest path.** Same deal for
+  graphql-mirror. Inline-fragment AST rewriting stays put
+  (orthogonal — internal to `forwardingResolver`). ~0.5-1 day.
+- [ ] **Step 6: Subscription unification.** Move
+  `buildSubscriptionFields` into RenderGraphQLRuntime. Subs still
+  flatten (graphql-go limitation) but the whole render path is
+  one walk. Closes the parity-for-subscription-field-collisions
+  risk called out as "highest risk" in the original push. ~0.5 day.
+- [ ] **Step 7: Delete dead converters.** Remove `gw/convert.go`,
+  `buildPoolRPCs`, `buildOpenAPIFields`, `buildGraphQLFields`,
+  `graphQLMirror.build`, `newOpenAPISourceTypeBuilder`,
+  `newGraphQLSourceTypeBuilder`. Dispatcher internals
+  (`dispatchOpenAPI`, `(m *graphQLMirror).forwardingResolver`,
+  `subscribeNATS`) stay — orthogonal to render-side. ~0.5 day.
+- [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` →
+  `admin.listPeers`, `admin_forgetPeer` (Mutation) →
+  `admin.forgetPeer`. Multi-version OpenAPI sources change too:
+  `pets_v1_getPet` → `pets.v1.getPet`. UI admin pages + any typed
+  query consumer need migration (graphql-codegen regenerates from
+  the new SDL). Triggered by step 4. ~0.5-1 day.
+- [ ] **Test churn.** ~70 tests assert flat field names; most need
+  rewriting. Trickles through steps 3-5; this is the final
+  cleanup pass after step 7. ~1-2 days.
+- [ ] **Allocation + cache-friendliness pass on dispatchers.**
+  Baselines captured (see done list); per-call hot path is small
+  enough to profile. Look for: arg unmarshal allocations
+  (178 allocs/proto is heavy), response-shape map building,
+  dynamicpb churn, `graphql.ResolveParams` field walks. Goal is
+  to close the gap to hand-written handlers; spike a per-schema
+  codegen path (`go:generate` from IR) only if reflection-based
+  is leaving meaningful headroom. Independent of steps 1-7;
+  pickable in parallel. ~2-3 days, scope-dependent.
 
 **Conventions** (settled, see `gw/ir/render_graphql.go`):
 - GraphQL renders nested everywhere; proto / OpenAPI flatten via `FlatOperations`. IR carries the structure; each format honors it as far as the format permits.
