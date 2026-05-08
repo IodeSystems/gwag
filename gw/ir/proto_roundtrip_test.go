@@ -3,6 +3,8 @@ package ir
 import (
 	"testing"
 
+	authv1 "github.com/iodesystems/go-api-gateway/examples/auth/gen/auth/v1"
+	userv1 "github.com/iodesystems/go-api-gateway/examples/auth/gen/user/v1"
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
 
@@ -127,5 +129,44 @@ func TestProtoIngestFieldDetails(t *testing.T) {
 		default:
 			t.Errorf("unexpected field %q", f.Name)
 		}
+	}
+}
+
+// TestProtoIngest_TransitiveImports covers the cross-file path:
+// user.proto imports auth.proto's Context message; ingesting only
+// user.proto should still register auth.v1.Context in the IR Types
+// map, so an IR-driven type-builder can resolve cross-file refs
+// without falling back to the descriptor graph.
+func TestProtoIngest_TransitiveImports(t *testing.T) {
+	svcs := IngestProto(userv1.File_user_proto)
+	if len(svcs) == 0 {
+		t.Fatal("IngestProto(user) returned no services")
+	}
+	svc := svcs[0]
+
+	// User's own message must still be there.
+	if _, ok := svc.Types["user.v1.GetMeRequest"]; !ok {
+		keys := []string{}
+		for k := range svc.Types {
+			keys = append(keys, k)
+		}
+		t.Errorf("user.v1.GetMeRequest missing from Types; have %v", keys)
+	}
+	// And the imported auth.v1.Context message lands too.
+	if _, ok := svc.Types["auth.v1.Context"]; !ok {
+		keys := []string{}
+		for k := range svc.Types {
+			keys = append(keys, k)
+		}
+		t.Errorf("imported auth.v1.Context missing from Types; have %v", keys)
+	}
+
+	// Sanity: the package-level auth-only ingest still works on its own.
+	authSvcs := IngestProto(authv1.File_auth_proto)
+	if len(authSvcs) == 0 {
+		t.Fatal("IngestProto(auth) returned no services")
+	}
+	if _, ok := authSvcs[0].Types["auth.v1.Context"]; !ok {
+		t.Errorf("auth.v1.Context missing from auth-only ingest")
 	}
 }
