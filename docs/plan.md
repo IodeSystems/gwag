@@ -67,7 +67,57 @@ struct-of-handlers, or whether per-schema codegen is worth it).
 - [x] `IngestProto` walks `fd.Imports()` transitively so cross-file message refs (e.g. `user.proto` returning `auth.v1.Context`) land in the IR Types map. Necessary for the IR-driven type-builder wiring to resolve cross-file refs without falling through to the descriptor graph.
 
 **Todo.**
-- [ ] **Wire IR type-builder into `buildSchemaLocked`.** Replace the three per-format type-build paths (`typeBuilder` in `gw/types.go`, `openAPITypeBuilder` in `gw/openapi.go`, `graphQLMirror` type code in `gw/graphql_mirror.go`) with calls into the new `IRTypeBuilder`, driven by `gatewayServicesAsIR()`. Per-format naming flows through `IRTypeNaming` callbacks (proto: `exportedName(fullName)`; OpenAPI: `<ns>_<schema>` / `<ns>_<vN>_<schema>`; graphql-ingest: `<ns>_<type>` / `<ns>_<vN>_<type>`). IR ingest is now feature-complete enough to feed the wiring (unions + discriminator + inline oneOf + arg hides all canonical). ~1-2 days for the wiring; +1-2 days for test churn.
+
+The four bullets below sequence the runtime cutover. IR ingest is
+feature-complete (unions + discriminator + inline oneOf + arg hides
++ transitive proto imports all canonical), so each step below pulls
+from `gatewayServicesAsIR()` rather than walking format-specific
+descriptors directly. Proto first (simplest — no unions, no custom
+scalars, no version prefix on type names); OpenAPI second (Long
+scalar + per-source prefix); GraphQL ingest third (per-source
+prefix + remote-side ResolveType); render-side fold last (multi-
+version composition + nested groups) so each prior step lands
+behind a green test suite.
+
+- [ ] **Wire proto path through `IRTypeBuilder`.** Replace `typeBuilder.{objectFromMessage,inputFromMessage,argsFromMessage,enumFromDescriptor}` in `gw/types.go` with calls into a shared `*IRTypeBuilder`. Construction sketch:
+  ```go
+  // In buildSchemaLocked, build one shared *IRTypeBuilder over the
+  // merged proto Types from every pool — proto FullNames are globally
+  // unique, so a single Types map is collision-free.
+  merged := &ir.Service{Types: map[string]*ir.Type{}}
+  for _, p := range g.pools {
+      for _, s := range ir.IngestProto(p.file) {
+          for k, v := range s.Types {
+              if _, ok := merged.Types[k]; !ok { merged.Types[k] = v }
+          }
+      }
+  }
+  if hide := g.hidesSet(); len(hide) > 0 { ir.Hides([]*ir.Service{merged}, hide) }
+  protoTB := NewIRTypeBuilder(merged, IRTypeNaming{
+      ObjectName: exportedName, EnumName: exportedName,
+      InputName:  func(s string) string { return exportedName(s) + "_Input" },
+      FieldName:  lowerCamel,
+  }, IRTypeBuilderOptions{}) // defaults: int64→String, JSON map scalar
+  ```
+  Args from the input message keep walking `md.Fields()` (existing flatten path) but call `protoTB.Input(ir.TypeRef{Named: string(fd.Message().FullName())}, ...)` for type lookup; the `tb.hidden(fd)` skip stays on the args walk because `ir.Hides` filters `Type.Fields` but the args path doesn't go through Type.Fields. Output objects: `protoTB.Output(ir.TypeRef{Named: string(md.Output().FullName())}, false, false, false)`. Subscription field uses the same builder. Delete the old `typeBuilder` once all proto callers migrated. ~0.5-1 day.
+
+- [ ] **Wire OpenAPI path through `IRTypeBuilder`.** Replace `openAPITypeBuilder` in `gw/openapi.go`. One `*IRTypeBuilder` per source (so `withPrefix("<ns>_")` / `withPrefix("<ns>_<vN>_")` translate cleanly to per-builder `IRTypeNaming.ObjectName` closures). Wire the existing Long scalar via `IRTypeBuilderOptions.Int64Type/UInt64Type` (`b.LongScalar()`); JSON scalar handles maps + the unmappable fallback. Builder sketch:
+  ```go
+  prefix := ns + "_" // or ns + "_" + version + "_" for older
+  tb := NewIRTypeBuilder(svc, IRTypeNaming{
+      ObjectName: func(s string) string { return prefix + s },
+      EnumName:   func(s string) string { return prefix + s },
+      UnionName:  func(s string) string { return prefix + s },
+      InputName:  func(s string) string { return prefix + s + "Input" },
+      FieldName:  lowerCamel,
+  }, IRTypeBuilderOptions{})
+  long := tb.LongScalar()
+  tb = NewIRTypeBuilder(svc, /* same naming */, IRTypeBuilderOptions{Int64Type: long, UInt64Type: long})
+  ```
+  Per-source builder is needed because the prefix changes between latest and older versions even for the same `svc.Types["Pet"]` — the IR Type entry is shared but the rendered graphql identifier must differ. Discriminator-driven union resolution comes "for free" from `IRTypeBuilder.unionFor`; inline-oneOf field types resolve through the synthesised `<A>Or<B>` named entry. Tests like `openapi_test.go:671` assert `SVC_v1_Object` exactly — names must round-trip identically. ~0.5-1 day.
+
+- [ ] **Wire GraphQL-ingest path through `IRTypeBuilder`.** Replace the type code in `gw/graphql_mirror.go` (objects/inputs/enums/scalars/unions). The forwarding-resolver code stays — only type construction moves. Naming is `<ns>_<type>` / `<ns>_<vN>_<type>`, same shape as the OpenAPI builder. Custom scalars: `IRTypeNaming.ScalarName` projects through the prefix. The `unionFor` ResolveType picks via `__typename`, which `IRTypeBuilder.unionFor` already does (no discriminator on graphql ingest). Watch for: scalar/Object identity — `m.scalars` cache currently keys by `t.Name`, the IR builder caches by `t.Name` too, so same dedup. Watch for: inline-fragment AST rewriting (`unprefixTypeName`) is independent of type construction and stays. ~0.5 day.
+
 - [ ] **Multi-version render-side fold + `RenderGraphQLRuntime(svcs, registry)`.** Walks IR + registry, composes same-namespace services into a single synthesized Group tree (latest at top, older as `vN` sub-groups), builds `*graphql.Schema` with resolvers that look up Dispatchers via SchemaID. Cuts over `buildSchemaLocked`; deletes the old converters. ~1-2 days. **Highest risk** — parity for hide-and-inject middleware and subscription field collisions.
 - [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` → `admin.listPeers`, `admin_forgetPeer` (Mutation) → `admin.forgetPeer`. Multi-version OpenAPI sources change too: `pets_v1_getPet` → `pets.v1.getPet`. UI admin pages + any typed query consumer need migration (graphql-codegen regenerates from the new SDL). ~0.5-1 day.
 - [ ] **Test churn.** ~70 tests assert flat field names (`admin_listPeers` etc.); most need rewriting. ~1-2 days.
