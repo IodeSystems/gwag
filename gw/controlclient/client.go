@@ -73,6 +73,19 @@ type Service struct {
 	// for GraphQL bindings — the endpoint URL carries both the
 	// schema source and the dispatch destination.
 	GraphQLEndpoint string
+
+	// MaxConcurrency caps simultaneous unary dispatches against this
+	// (namespace, version) on the receiving gateway. Overrides the
+	// gateway-wide BackpressureOptions.MaxInflight default for this
+	// one binding. 0 → fall back to the gateway default.
+	MaxConcurrency uint32
+
+	// MaxConcurrencyPerInstance caps simultaneous unary dispatches
+	// against any single replica behind this binding. New axis: the
+	// service-level cap above bounds the pool, this bounds each
+	// replica individually. 0 → unbounded per replica (only the
+	// service-level cap applies).
+	MaxConcurrencyPerInstance uint32
 }
 
 type Options struct {
@@ -200,15 +213,19 @@ func (r *Registration) register(ctx context.Context) error {
 		}
 		if hasGraphQL {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
-				Namespace:       s.Namespace,
-				GraphqlEndpoint: s.GraphQLEndpoint,
+				Namespace:                 s.Namespace,
+				GraphqlEndpoint:           s.GraphQLEndpoint,
+				MaxConcurrency:            s.MaxConcurrency,
+				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 			})
 			continue
 		}
 		if hasOpenAPI {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
-				Namespace:   s.Namespace,
-				OpenapiSpec: s.OpenAPISpec,
+				Namespace:                 s.Namespace,
+				OpenapiSpec:               s.OpenAPISpec,
+				MaxConcurrency:            s.MaxConcurrency,
+				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 			})
 			continue
 		}
@@ -217,10 +234,12 @@ func (r *Registration) register(ctx context.Context) error {
 			return fmt.Errorf("descriptor for %s: %w", s.FileDescriptor.Path(), err)
 		}
 		req.Services = append(req.Services, &cpv1.ServiceBinding{
-			Namespace:         s.Namespace,
-			Version:           s.Version,
-			FileDescriptorSet: fdsBytes,
-			FileName:          fileName,
+			Namespace:                 s.Namespace,
+			Version:                   s.Version,
+			FileDescriptorSet:         fdsBytes,
+			FileName:                  fileName,
+			MaxConcurrency:            s.MaxConcurrency,
+			MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 		})
 	}
 

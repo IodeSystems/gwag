@@ -108,6 +108,20 @@ message ServiceBinding {
   // ignored for GraphQL bindings — the endpoint URL carries the
   // dispatch destination too.
   string graphql_endpoint = 6;
+
+  // Caps simultaneous unary dispatches against this (namespace,
+  // version) on the receiving gateway. Overrides the gateway-wide
+  // BackpressureOptions.MaxInflight default for this one binding.
+  // 0 → fall back to the gateway default. Frozen at first
+  // registration: later joins must agree (mismatched values reject).
+  uint32 max_concurrency = 7;
+  // Caps simultaneous unary dispatches against any single replica
+  // behind this binding. Independent of max_concurrency — a 3-replica
+  // service with max_concurrency_per_instance=50 holds at most 150
+  // in-flight even if max_concurrency is higher. 0 → unbounded per
+  // replica (only the service-level cap applies). Frozen at first
+  // registration.
+  uint32 max_concurrency_per_instance = 8;
 }
 
 message RegisterResponse {

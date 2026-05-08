@@ -354,15 +354,26 @@ func (s *openAPISource) replicaCount() int {
 // addOpenAPISourceLocked is the internal hook the control-plane and
 // reconciler share. Idempotent under hash equality: a duplicate
 // register with matching bytes appends a new replica to the existing
-// source (HTTP analogue of joinPoolLocked). Rejects mismatched hash.
-// Caller holds g.mu.
+// source (HTTP analogue of joinPoolLocked). Rejects mismatched hash
+// or mismatched concurrency caps. Caller holds g.mu.
 //
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
 // reconciler.handleDelete can later remove the matching replica.
-func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string) error {
+//
+// maxConcurrency / maxConcurrencyPerInstance carry the
+// ServiceBinding's per-binding caps (0 → gateway default for
+// service-level, unbounded per-instance). Frozen at first
+// registration.
+func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string, maxConcurrency, maxConcurrencyPerInstance int) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
+	}
+	if maxConcurrency < 0 {
+		return fmt.Errorf("openapi: %s/%s: max_concurrency must be ≥ 0", ns, ver)
+	}
+	if maxConcurrencyPerInstance < 0 {
+		return fmt.Errorf("openapi: %s/%s: max_concurrency_per_instance must be ≥ 0", ns, ver)
 	}
 	canonicalVer, verN, err := parseVersion(ver)
 	if err != nil {
@@ -380,6 +391,10 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if existing, ok := g.openAPISources[key]; ok {
 		if existing.hash != hash {
 			return fmt.Errorf("openapi: %s/%s already registered with different spec hash", ns, ver)
+		}
+		if maxConcurrency != existing.maxConcurrency || maxConcurrencyPerInstance != existing.maxConcurrencyPerInstance {
+			return fmt.Errorf("openapi: %s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
+				ns, ver, existing.maxConcurrency, existing.maxConcurrencyPerInstance, maxConcurrency, maxConcurrencyPerInstance)
 		}
 		// Idempotent: if a replica with the same id already lives
 		// here, treat as no-op (reconciler replays).
@@ -403,20 +418,22 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if err := doc.Validate(loader.Context); err != nil {
 		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
-	// Control-plane registrations don't carry concurrency caps yet
-	// (cpv1.ServiceBinding fields land in a follow-up commit);
-	// sources created here use the gateway default. Boot-time
-	// AddOpenAPI carries explicit caps via serviceConfig.
 	src := &openAPISource{
-		namespace: ns,
-		version:   ver,
-		versionN:  verN,
-		doc:       doc,
-		hash:      hash,
-		rawSpec:   append([]byte(nil), specBytes...),
+		namespace:                 ns,
+		version:                   ver,
+		versionN:                  verN,
+		doc:                       doc,
+		hash:                      hash,
+		rawSpec:                   append([]byte(nil), specBytes...),
+		maxConcurrency:            maxConcurrency,
+		maxConcurrencyPerInstance: maxConcurrencyPerInstance,
 	}
-	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
-		src.sem = make(chan struct{}, mi)
+	semSize := maxConcurrency
+	if semSize == 0 {
+		semSize = g.cfg.backpressure.MaxInflight
+	}
+	if semSize > 0 {
+		src.sem = make(chan struct{}, semSize)
 	}
 	src.addReplica(newOpenAPIReplica(src, openAPIReplicaInit{
 		id:         replicaID,

@@ -41,6 +41,13 @@ type registryValue struct {
 	// other peers' reconcilers don't have to re-fetch.
 	GraphQLEndpoint      string `json:"graphql_endpoint,omitempty"`
 	GraphQLIntrospection []byte `json:"graphql_introspection,omitempty"`
+
+	// Per-binding concurrency caps from the ServiceBinding. Frozen at
+	// first registration so the reconciler can size pool / source
+	// sems consistently across the cluster. 0 → gateway default
+	// (service-level) or unbounded (per-instance).
+	MaxConcurrency            uint32 `json:"max_concurrency,omitempty"`
+	MaxConcurrencyPerInstance uint32 `json:"max_concurrency_per_instance,omitempty"`
 }
 
 // IsOpenAPI reports whether this entry represents an OpenAPI source.

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 )
 
 // TestMaxConcurrency_PerService_RejectsOnOverflow verifies that the
@@ -177,6 +178,72 @@ func TestMaxConcurrencyPerInstance_GatesSingleReplica(t *testing.T) {
 	}
 	if took := time.Since(start); took > 500*time.Millisecond {
 		t.Fatalf("second dispatch took %v — per-instance backpressure didn't fast-reject", took)
+	}
+}
+
+// TestMaxConcurrency_ControlPlaneRoundTrip verifies the
+// cpv1.ServiceBinding.MaxConcurrency field reaches the live pool
+// when a service registers via the control plane (standalone mode,
+// in-process Register call) — the wire-up that lets external
+// services declare their own caps.
+func TestMaxConcurrency_ControlPlaneRoundTrip(t *testing.T) {
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, &fakeGreeterServer{})
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
+	gw := New(
+		WithoutMetrics(),
+		WithBackpressure(BackpressureOptions{MaxInflight: 64, MaxWaitTime: 50 * time.Millisecond}),
+		WithAdminToken([]byte("ignored")),
+	)
+	t.Cleanup(gw.Close)
+
+	fdsBytes, err := marshalFileDescriptorSet(greeterv1.File_greeter_proto)
+	if err != nil {
+		t.Fatalf("fds: %v", err)
+	}
+	cp := gw.ControlPlane()
+	if _, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
+		Addr:       beLis.Addr().String(),
+		InstanceId: "greeter@1",
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:                 "greeter",
+			Version:                   "v1",
+			FileDescriptorSet:         fdsBytes,
+			FileName:                  string(greeterv1.File_greeter_proto.Path()),
+			MaxConcurrency:            7,
+			MaxConcurrencyPerInstance: 3,
+		}},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	gw.mu.Lock()
+	p := gw.pools[poolKey{namespace: "greeter", version: "v1"}]
+	gw.mu.Unlock()
+	if p == nil {
+		t.Fatal("pool not created")
+	}
+	if got := p.maxConcurrency; got != 7 {
+		t.Fatalf("pool.maxConcurrency=%d want 7", got)
+	}
+	if got := p.maxConcurrencyPerInstance; got != 3 {
+		t.Fatalf("pool.maxConcurrencyPerInstance=%d want 3", got)
+	}
+	if cap(p.sem) != 7 {
+		t.Fatalf("pool sem cap=%d want 7", cap(p.sem))
+	}
+	rs := p.replicas.Load()
+	if rs == nil || len(*rs) != 1 {
+		t.Fatalf("expected 1 replica, got %v", rs)
+	}
+	if cap((*rs)[0].sem) != 3 {
+		t.Fatalf("replica sem cap=%d want 3", cap((*rs)[0].sem))
 	}
 }
 

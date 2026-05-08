@@ -166,6 +166,13 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		graphqlEndpoint      string
 		graphqlIntrospection []byte
 
+		// Per-binding concurrency caps captured from the ServiceBinding.
+		// 0 → gateway default (service-level) or unbounded (per-
+		// instance). Frozen at first registration; later joins must
+		// agree.
+		maxConcurrency            uint32
+		maxConcurrencyPerInstance uint32
+
 		isOpenAPI bool
 		isGraphQL bool
 	}
@@ -220,12 +227,14 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				return nil, fmt.Errorf("controlplane: introspect %s: %w", endpoint, err)
 			}
 			prep = append(prep, prepared{
-				namespace:            ns,
-				version:              ver,
-				hash:                 hashIntrospection(rawIntro),
-				graphqlEndpoint:      endpoint,
-				graphqlIntrospection: rawIntro,
-				isGraphQL:            true,
+				namespace:                 ns,
+				version:                   ver,
+				hash:                      hashIntrospection(rawIntro),
+				graphqlEndpoint:           endpoint,
+				graphqlIntrospection:      rawIntro,
+				maxConcurrency:            b.GetMaxConcurrency(),
+				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
+				isGraphQL:                 true,
 			})
 			continue
 		}
@@ -245,11 +254,13 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			}
 			used[k] = true
 			prep = append(prep, prepared{
-				namespace:   ns,
-				version:     ver,
-				hash:        hash,
-				openAPISpec: b.GetOpenapiSpec(),
-				isOpenAPI:   true,
+				namespace:                 ns,
+				version:                   ver,
+				hash:                      hash,
+				openAPISpec:               b.GetOpenapiSpec(),
+				maxConcurrency:            b.GetMaxConcurrency(),
+				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
+				isOpenAPI:                 true,
 			})
 			continue
 		}
@@ -284,12 +295,14 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		}
 		warnUnsupportedStreaming(cp.gw, ns, ver, fd)
 		prep = append(prep, prepared{
-			namespace: ns,
-			version:   ver,
-			hash:      hash,
-			fileDesc:  fd,
-			fdBytes:   b.GetFileDescriptorSet(),
-			fileName:  b.GetFileName(),
+			namespace:                 ns,
+			version:                   ver,
+			hash:                      hash,
+			fileDesc:                  fd,
+			fdBytes:                   b.GetFileDescriptorSet(),
+			fileName:                  b.GetFileName(),
+			maxConcurrency:            b.GetMaxConcurrency(),
+			maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
 		})
 	}
 
@@ -311,14 +324,16 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		for _, p := range prep {
 			replicaID := newReplicaID()
 			val := registryValue{
-				RegID:       id,
-				Namespace:   p.namespace,
-				Version:     p.version,
-				ReplicaID:   replicaID,
-				Addr:        req.GetAddr(),
-				InstanceID:  req.GetInstanceId(),
-				Hash:        p.hash[:],
-				OwnerNodeID: ownerNode,
+				RegID:                     id,
+				Namespace:                 p.namespace,
+				Version:                   p.version,
+				ReplicaID:                 replicaID,
+				Addr:                      req.GetAddr(),
+				InstanceID:                req.GetInstanceId(),
+				Hash:                      p.hash[:],
+				OwnerNodeID:               ownerNode,
+				MaxConcurrency:            p.maxConcurrency,
+				MaxConcurrencyPerInstance: p.maxConcurrencyPerInstance,
 			}
 			switch {
 			case p.isGraphQL:
@@ -412,20 +427,22 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			// Standalone path: replicaID is unused (no KV-driven
 			// removal). Pass "" so addOpenAPISourceLocked treats this
 			// as a boot-time-style replica owned by the registration.
-			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, ""); err != nil {
+			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, "", int(p.maxConcurrency), int(p.maxConcurrencyPerInstance)); err != nil {
 				rollback()
 				return nil, err
 			}
 			continue
 		}
 		err := cp.gw.joinPoolLocked(poolEntry{
-			namespace: p.namespace,
-			version:   p.version,
-			hash:      p.hash,
-			file:      p.fileDesc,
-			addr:      req.GetAddr(),
-			conn:      sc.conn,
-			owner:     id,
+			namespace:                 p.namespace,
+			version:                   p.version,
+			hash:                      p.hash,
+			file:                      p.fileDesc,
+			addr:                      req.GetAddr(),
+			conn:                      sc.conn,
+			owner:                     id,
+			maxConcurrency:            int(p.maxConcurrency),
+			maxConcurrencyPerInstance: int(p.maxConcurrencyPerInstance),
 		})
 		if err != nil {
 			rollback()
