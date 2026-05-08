@@ -65,41 +65,15 @@ struct-of-handlers, or whether per-schema codegen is worth it).
 - [x] Canonical `DiscriminatorProperty` + `DiscriminatorMapping` on `ir.Type` (Union kind only). `IngestOpenAPI` populates from `schema.discriminator`; `RenderOpenAPI` round-trips on the synthesis path; `IRTypeBuilder.unionFor` consults the mapping (then identity fallback, then `__typename`) before giving up. Removes the previous "discriminator survives only via Origin" caveat.
 - [x] Inline (anonymous) `oneOf` / `anyOf` at OpenAPI field positions: `synthesizeInlineUnion` registers a deterministic `<A>Or<B>`-named `TypeUnion` in `svc.Types` and the field's `TypeRef` points at it. Anonymous variants (no `$ref`) still fall through to the scalar fallback — IR has no name-synthesis story for those yet.
 - [x] `IngestProto` walks `fd.Imports()` transitively so cross-file message refs (e.g. `user.proto` returning `auth.v1.Context`) land in the IR Types map. Necessary for the IR-driven type-builder wiring to resolve cross-file refs without falling through to the descriptor graph.
+- [x] **Proto path wired through `IRTypeBuilder`.** `gw/proto_typebuilder.go` builds one shared `*IRTypeBuilder` over the merged proto Types from every pool (proto FullNames are globally unique, so a single Types map is collision-free); `buildPoolMethodField` and `buildSubscriptionField` resolve outputs via `protoTB.Output(ir.TypeRef{Named: ...})`. Args still walk `md.Fields()` (the flatten-input-message path) but route type lookup through `protoTB.Input(ir.TypeRef{Named: fd.Message().FullName()}, ...)` so cyclic message refs share a single `*graphql.Object` across Query/Subscription roots. The `tb.hidden(fd)` skip migrated to `protoMessageHidden` in the args walk because `ir.Hides` only filters `Type.Fields` — args bypass that path. Old `typeBuilder` / `policy` deleted from `gw/types.go` (kept `exportedName` / `lowerCamel` helpers).
 
 **Todo.**
 
-The four bullets below sequence the runtime cutover. IR ingest is
-feature-complete (unions + discriminator + inline oneOf + arg hides
-+ transitive proto imports all canonical), so each step below pulls
-from `gatewayServicesAsIR()` rather than walking format-specific
-descriptors directly. Proto first (simplest — no unions, no custom
-scalars, no version prefix on type names); OpenAPI second (Long
-scalar + per-source prefix); GraphQL ingest third (per-source
-prefix + remote-side ResolveType); render-side fold last (multi-
-version composition + nested groups) so each prior step lands
-behind a green test suite.
-
-- [ ] **Wire proto path through `IRTypeBuilder`.** Replace `typeBuilder.{objectFromMessage,inputFromMessage,argsFromMessage,enumFromDescriptor}` in `gw/types.go` with calls into a shared `*IRTypeBuilder`. Construction sketch:
-  ```go
-  // In buildSchemaLocked, build one shared *IRTypeBuilder over the
-  // merged proto Types from every pool — proto FullNames are globally
-  // unique, so a single Types map is collision-free.
-  merged := &ir.Service{Types: map[string]*ir.Type{}}
-  for _, p := range g.pools {
-      for _, s := range ir.IngestProto(p.file) {
-          for k, v := range s.Types {
-              if _, ok := merged.Types[k]; !ok { merged.Types[k] = v }
-          }
-      }
-  }
-  if hide := g.hidesSet(); len(hide) > 0 { ir.Hides([]*ir.Service{merged}, hide) }
-  protoTB := NewIRTypeBuilder(merged, IRTypeNaming{
-      ObjectName: exportedName, EnumName: exportedName,
-      InputName:  func(s string) string { return exportedName(s) + "_Input" },
-      FieldName:  lowerCamel,
-  }, IRTypeBuilderOptions{}) // defaults: int64→String, JSON map scalar
-  ```
-  Args from the input message keep walking `md.Fields()` (existing flatten path) but call `protoTB.Input(ir.TypeRef{Named: string(fd.Message().FullName())}, ...)` for type lookup; the `tb.hidden(fd)` skip stays on the args walk because `ir.Hides` filters `Type.Fields` but the args path doesn't go through Type.Fields. Output objects: `protoTB.Output(ir.TypeRef{Named: string(md.Output().FullName())}, false, false, false)`. Subscription field uses the same builder. Delete the old `typeBuilder` once all proto callers migrated. ~0.5-1 day.
+The three bullets below sequence the remaining runtime cutover.
+OpenAPI first (Long scalar + per-source prefix); GraphQL ingest
+second (per-source prefix + remote-side ResolveType); render-side
+fold last (multi-version composition + nested groups) so each prior
+step lands behind a green test suite.
 
 - [ ] **Wire OpenAPI path through `IRTypeBuilder`.** Replace `openAPITypeBuilder` in `gw/openapi.go`. One `*IRTypeBuilder` per source (so `withPrefix("<ns>_")` / `withPrefix("<ns>_<vN>_")` translate cleanly to per-builder `IRTypeNaming.ObjectName` closures). Wire the existing Long scalar via `IRTypeBuilderOptions.Int64Type/UInt64Type` (`b.LongScalar()`); JSON scalar handles maps + the unmappable fallback. Builder sketch:
   ```go
@@ -153,6 +127,69 @@ parity-tested.
 - [ ] **HTTP/JSON ingress.** Gateway exposes `/<package>.<Service>/<method>` (or REST paths from OpenAPI's HTTPMethod/HTTPPath) accepting JSON bodies, dispatching via canonical args. ~3-4 days.
 - [ ] **gRPC ingress for arbitrary services.** Dynamic `grpc.UnknownServiceHandler`-based proxy that catches every `/<svc>/<method>` invocation and routes through canonical args. Unary only — server-streaming RPCs at this ingress would still need to publish to NATS, same contract as today. ~4-5 days.
 - [ ] **Subscription transport-agnosticism.** NATS broker / HMAC / channel naming live next to the GraphQL transport today; the ingress work above needs the same subscribe story available over HTTP/SSE or gRPC server-streaming so a non-GraphQL client can subscribe. Symmetric refactor to make subs transport-agnostic. ~3 days.
+
+---
+
+### Generalized parameter injection
+
+**The push.** `HideAndInject[T proto.Message]` is the only first-class
+injector today and it's narrow: proto-message-typed fields only
+(`gw/hide_inject.go:50` early-returns on anything that isn't
+`*dynamicpb.Message`), keyed by message FullName so you can't replace
+a scalar (`string token`) with a context-resolved value, and there's
+no equivalent for outbound HTTP headers (`ForwardHeaders` is
+allowlist pass-through, not context-resolved injection). The
+mechanism should generalize across formats and target shapes:
+
+- *Field-level* (in input position) — replace any arg by name with
+  a context-resolved value, regardless of whether the underlying
+  type is a message, scalar, or enum. Applies symmetrically to
+  proto, OpenAPI, and downstream-GraphQL dispatch.
+- *Header-level* (outbound) — context-resolve a value and stamp it
+  into the outgoing HTTP header (or gRPC metadata) on dispatch.
+  Per-source allowlist still gates which headers a particular
+  upstream sees.
+- *Conditional* — "inject if the client didn't provide a value" vs
+  "always override". The greeter example below needs the
+  conditional flavour; auth-context overlays today are the
+  always-override flavour.
+
+Motivating example: in `examples/multi`, the `greeter.hello(name)`
+RPC takes a `name` string. We want the gateway to inject the source
+IP (e.g. extracted from `X-Forwarded-For` or the request remote
+addr) as the `name` arg when the caller doesn't pass one — a
+single declarative `Inject("name", resolveSourceIP, IfMissing)`
+on the registered Pair, no greeter-side change. Today this is
+expressible only by writing a custom Middleware that knows the
+proto-arg shape inside-out, and the schema half (the field would
+ideally be marked optional in SDL even if the proto says required)
+isn't tied to the runtime half.
+
+**Todo.**
+- [ ] **Field-level injection by arg name.** New Pair shape:
+  `InjectArg("name", resolve, Mode)` where Mode ∈ {Always, IfMissing}.
+  Schema half marks the arg optional in SDL when Mode=IfMissing
+  (so codegen consumers don't have to lie). Runtime half resolves
+  via context (caches per-request like `HideAndInject` already
+  does) and stamps onto the dispatcher's canonical args before
+  the dispatcher's own marshal step. Cross-format: applies on
+  proto / OpenAPI / GraphQL dispatch paths because the injection
+  point is the dispatcher's `args map[string]any`, which is
+  format-neutral. Greeter example becomes a one-liner. ~1-2 days.
+- [ ] **Header-level injection (outbound).** New Pair shape:
+  `InjectHeader("X-Source-IP", resolve, Mode)`. Stamps onto the
+  outgoing HTTP request (OpenAPI dispatch) or gRPC metadata
+  (proto dispatch). Header allowlist (`ForwardHeaders`) still
+  applies — injection populates a header, the allowlist gates
+  whether the upstream sees it. ~1 day.
+- [ ] **Re-base `HideAndInject` on the new primitive.** Express
+  `HideAndInject[T]` as `InjectArg(<every-arg-of-type-T>, resolve,
+  Always)` with the schema half hiding those args. Backwards-
+  compatible facade so existing callers don't break. ~0.5 day.
+- [ ] **Worked example in `examples/multi`.** Greeter resolver
+  documents both flavours (always-override for an audit
+  identifier; if-missing source-IP-as-name) so operators have a
+  copyable template. ~0.5 day.
 
 ---
 
