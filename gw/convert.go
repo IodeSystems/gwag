@@ -3,25 +3,59 @@ package gateway
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
+// protoFieldInfo caches a field's descriptor + its graphql arg key
+// (lowerCamel of the proto name). lowerCamel runs once per descriptor
+// instead of once per dispatch — saved alloc per field per call.
+type protoFieldInfo struct {
+	fd      protoreflect.FieldDescriptor
+	jsonKey string
+}
+
+// fieldInfoCache memoises per-MessageDescriptor field metadata. Keyed
+// by descriptor identity (the interface value), not FullName: two
+// gateways in the same process can register the same .proto and hold
+// distinct MessageDescriptor instances with identical FullNames —
+// dynamicpb.Set rejects a FieldDescriptor whose parent descriptor
+// doesn't match the receiver, so cross-gateway sharing breaks
+// dispatch on the second gateway.
+var fieldInfoCache sync.Map // map[protoreflect.MessageDescriptor][]protoFieldInfo
+
+func fieldInfosFor(md protoreflect.MessageDescriptor) []protoFieldInfo {
+	if v, ok := fieldInfoCache.Load(md); ok {
+		return v.([]protoFieldInfo)
+	}
+	fields := md.Fields()
+	out := make([]protoFieldInfo, fields.Len())
+	for i := 0; i < fields.Len(); i++ {
+		fd := fields.Get(i)
+		out[i] = protoFieldInfo{
+			fd:      fd,
+			jsonKey: lowerCamel(string(fd.Name())),
+		}
+	}
+	if v, loaded := fieldInfoCache.LoadOrStore(md, out); loaded {
+		return v.([]protoFieldInfo)
+	}
+	return out
+}
+
 // argsToMessage walks `args` (graphql-decoded JSON-ish: map[string]any,
 // []any, primitives) and writes them into `msg` according to its
 // descriptor. Unknown args are ignored; type mismatches return errors.
 func argsToMessage(args map[string]any, msg *dynamicpb.Message) error {
-	md := msg.Descriptor()
-	for i := 0; i < md.Fields().Len(); i++ {
-		fd := md.Fields().Get(i)
-		key := lowerCamel(string(fd.Name()))
-		v, ok := args[key]
+	for _, info := range fieldInfosFor(msg.Descriptor()) {
+		v, ok := args[info.jsonKey]
 		if !ok {
 			continue
 		}
-		if err := setField(msg, fd, v); err != nil {
-			return fmt.Errorf("field %s: %w", fd.Name(), err)
+		if err := setField(msg, info.fd, v); err != nil {
+			return fmt.Errorf("field %s: %w", info.fd.Name(), err)
 		}
 	}
 	return nil
@@ -178,19 +212,16 @@ func toFloat64(v any) (float64, error) {
 // graphql to serialise. Unset fields are omitted; lists become []any;
 // nested messages recurse.
 func messageToMap(msg *dynamicpb.Message) map[string]any {
-	out := map[string]any{}
 	if msg == nil {
-		return out
+		return map[string]any{}
 	}
-	md := msg.Descriptor()
-	for i := 0; i < md.Fields().Len(); i++ {
-		fd := md.Fields().Get(i)
-		if !msg.Has(fd) {
+	infos := fieldInfosFor(msg.Descriptor())
+	out := make(map[string]any, len(infos))
+	for _, info := range infos {
+		if !msg.Has(info.fd) {
 			continue
 		}
-		key := lowerCamel(string(fd.Name()))
-		v := msg.Get(fd)
-		out[key] = protoToAny(fd, v)
+		out[info.jsonKey] = protoToAny(info.fd, msg.Get(info.fd))
 	}
 	return out
 }
