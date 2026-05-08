@@ -52,36 +52,37 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 
 	rootFields := graphql.Fields{}
 
-	// Proto path goes through IR. Register the unary dispatchers
-	// keyed by IR-aligned SchemaID, distill pools into ir.Service via
-	// the same ingest path the export endpoints use, then let
-	// RenderGraphQLRuntimeFields walk the result. Subscriptions are
-	// dropped here (subFields below still emits them via the legacy
-	// pool walk) — step 6 retires that path.
+	// Proto + OpenAPI both go through RenderGraphQLRuntimeFields in a
+	// single call so the multi-version fold sees every service in a
+	// namespace together (avoiding two render calls that would each
+	// emit a `<ns>` Query/Mutation root field and collide on merge).
+	// Per-kind dispatcher registration runs first, then service
+	// distillation, then the render.
 	g.registerProtoDispatchersLocked(filter)
 	protoSvcs, err := g.protoServicesAsIRLocked(filter)
 	if err != nil {
 		return nil, err
 	}
-	protoQueries, protoMutations, _, err := RenderGraphQLRuntimeFields(protoSvcs, g.dispatchers, RuntimeOptions{
-		SharedProtoBuilder: protoTB,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("proto runtime render: %w", err)
-	}
-	for k, v := range protoQueries {
-		rootFields[k] = v
-	}
-
-	// Merge OpenAPI fields into the Query and Mutation roots.
-	openQueries, openMutations, err := g.buildOpenAPIFields(filter)
+	openSvcs, err := g.openAPIServicesAsIRLocked(filter)
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range openQueries {
-		if _, exists := rootFields[k]; exists {
-			return nil, fmt.Errorf("openapi/proto field collision in Query: %s", k)
-		}
+	if err := g.registerOpenAPIDispatchersLocked(openSvcs); err != nil {
+		return nil, err
+	}
+	long, jsonScalar := openAPISharedScalars()
+	allSvcs := make([]*ir.Service, 0, len(protoSvcs)+len(openSvcs))
+	allSvcs = append(allSvcs, protoSvcs...)
+	allSvcs = append(allSvcs, openSvcs...)
+	queries, mutations, _, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
+		SharedProtoBuilder: protoTB,
+		LongType:           long,
+		JSONType:           jsonScalar,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime render: %w", err)
+	}
+	for k, v := range queries {
 		rootFields[k] = v
 	}
 
@@ -113,16 +114,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 
 	cfg := graphql.SchemaConfig{Query: queryObj}
 
-	mutationFields := openMutations
-	for k, v := range protoMutations {
-		if mutationFields == nil {
-			mutationFields = graphql.Fields{}
-		}
-		if _, exists := mutationFields[k]; exists {
-			return nil, fmt.Errorf("proto/openapi field collision in Mutation: %s", k)
-		}
-		mutationFields[k] = v
-	}
+	mutationFields := mutations
 	for k, v := range gqlMutations {
 		if mutationFields == nil {
 			mutationFields = graphql.Fields{}
