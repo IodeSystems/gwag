@@ -51,6 +51,12 @@ type Gateway struct {
 	// Caller holds g.mu during rebuild.
 	dispatchers *ir.DispatchRegistry
 
+	// ingressRoutes is the (METHOD, path) → dispatcher table consumed
+	// by IngressHandler. Rebuilt on every assembleLocked from the
+	// freshly-populated dispatchers map. Atomic-swapped so the
+	// handler doesn't take g.mu on the hot path.
+	ingressRoutes atomic.Pointer[ingressTable]
+
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
 	// disabled (0).
