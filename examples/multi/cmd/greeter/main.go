@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/iodesystems/go-api-gateway/gw/controlclient"
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
@@ -24,9 +25,16 @@ type greeterImpl struct {
 	delay time.Duration
 }
 
-func (g *greeterImpl) Hello(_ context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+func (g *greeterImpl) Hello(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
 	if g.delay > 0 {
 		time.Sleep(g.delay)
+	}
+	// Surface the X-Source-IP metadata stamped by the gateway's
+	// InjectHeader demo (see examples/multi/cmd/gateway/main.go).
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get("x-source-ip"); len(v) > 0 {
+			log.Printf("greeter: hello name=%q x-source-ip=%s", req.GetName(), v[0])
+		}
 	}
 	name := req.GetName()
 	if name == "" {

@@ -166,6 +166,34 @@ func main() {
 	}
 	gw := gateway.New(gwOpts...)
 
+	// ----------------------------------------------------------------
+	// Worked-example injectors (plan §1, "InjectType / InjectPath /
+	// InjectHeader"). Two of three flavors land here; the third —
+	// hide-and-fill via InjectType[*authpb.Context] — lives in
+	// examples/auth so the gateway here stays generic (no
+	// service-specific proto imports).
+	//
+	// 1. Inspect-and-default for greeter.Hello.name. Hide(false) keeps
+	//    `name` on the external schema; Nullable(true) flips it to
+	//    optional. The resolver returns nil to pass through whatever
+	//    the caller sent, or the source IP when they omitted it.
+	//
+	// 2. Header inject for X-Source-IP. Hide(true) (default) ignores
+	//    any inbound value; the gateway stamps the header on every
+	//    outbound dispatch (HTTP via OpenAPI; gRPC metadata for
+	//    proto). The greeter logs incoming metadata so you can see it
+	//    land.
+	gw.Use(gateway.InjectPath("greeter.Hello.name", func(ctx context.Context, current any) (any, error) {
+		if current != nil {
+			return nil, nil // pass through caller's value
+		}
+		return clientIP(ctx), nil
+	}, gateway.Hide(false), gateway.Nullable(true)))
+
+	gw.Use(gateway.InjectHeader("X-Source-IP", func(ctx context.Context, _ *string) (string, error) {
+		return clientIP(ctx), nil
+	}))
+
 	cpLis, err := net.Listen("tcp", *cpAddr)
 	if err != nil {
 		log.Fatalf("listen control plane: %v", err)
@@ -257,6 +285,33 @@ func main() {
 
 	srv.GracefulStop()
 	cluster.Close()
+}
+
+// clientIP returns the caller's IP for the worked-example injectors.
+// Prefers the first hop in X-Forwarded-For (set by an upstream proxy
+// you trust), then Forwarded.for=, then the raw RemoteAddr. Returns
+// "" off the HTTP path. Trust the XFF chain only if your edge actually
+// strips it from untrusted callers — this example reads it
+// unconditionally because the demo runs locally.
+func clientIP(ctx context.Context) string {
+	r := gateway.HTTPRequestFromContext(ctx)
+	if r == nil {
+		return ""
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if v := r.Header.Get("X-Real-IP"); v != "" {
+		return v
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // emitSchemaSDL is the --gen entry point. Constructs a fresh gateway

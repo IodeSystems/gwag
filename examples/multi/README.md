@@ -57,6 +57,32 @@ them all with one Register call, sharing a single gRPC connection back
 from the gateway. See `controlplane.v1.RegisterRequest.services` (a
 repeated `ServiceBinding`).
 
+**Parameter / header injection.** `cmd/gateway/main.go` registers two
+`gw.Use(...)` injectors before services come in:
+
+- `InjectPath("greeter.Hello.name", …, Hide(false), Nullable(true))`
+  flips `name` to optional in the external schema and defaults it to
+  the caller's IP when omitted (`X-Forwarded-For` → `X-Real-IP` →
+  `RemoteAddr`). Send a value and it passes through.
+- `InjectHeader("X-Source-IP", …)` stamps the caller's IP on every
+  outbound dispatch — gRPC metadata for proto pools, HTTP header for
+  OpenAPI sources. The greeter logs `x-source-ip=…` whenever the
+  metadata lands.
+
+Try it:
+
+```
+$ curl -sS -d '{"query":"{ greeter { hello { greeting } } }"}' \
+       -H 'Content-Type: application/json' \
+       -H 'X-Forwarded-For: 192.0.2.42' \
+       http://localhost:8080/api/graphql
+{"data":{"greeter":{"hello":{"greeting":"Hello, 192.0.2.42!"}}}}
+```
+
+The third flavor — hide-and-fill via `InjectType[*authpb.Context]` —
+lives in [`examples/auth`](../auth) so the gateway here stays generic
+(no service-specific proto imports).
+
 ## Layout
 
 ```
