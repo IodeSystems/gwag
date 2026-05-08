@@ -127,9 +127,13 @@ func TestGraphQLIngest_SchemaPrefixesTypes(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	sdl := string(body)
+	// Field names are nested under a `pets: PetsQueryNamespace!`
+	// container in the runtime renderer; type names keep their `pets_`
+	// prefix.
 	for _, want := range []string{
-		"pets_users",
-		"pets_user",
+		"PetsQueryNamespace",
+		"users",
+		"user(",
 		"pets_User",
 		"pets_Role",
 	} {
@@ -163,7 +167,7 @@ func TestGraphQLIngest_ForwardingStripsPrefix(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{ pets_users { id name role } }"}`))
+		strings.NewReader(`{"query":"{ pets { users { id name role } } }"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -178,7 +182,7 @@ func TestGraphQLIngest_ForwardingStripsPrefix(t *testing.T) {
 	}
 
 	// Inspect what the remote actually received. Field name must be
-	// "users", not "pets_users".
+	// "users", with no namespace wrapping.
 	last := rf.lastQuery.Load()
 	if last == nil {
 		t.Fatal("remote never queried")
@@ -186,8 +190,8 @@ func TestGraphQLIngest_ForwardingStripsPrefix(t *testing.T) {
 	if !strings.Contains(*last, "users") {
 		t.Fatalf("forwarded query missing 'users': %s", *last)
 	}
-	if strings.Contains(*last, "pets_users") {
-		t.Fatalf("forwarded query still has 'pets_users' prefix: %s", *last)
+	if strings.Contains(*last, "pets {") || strings.Contains(*last, "pets_users") {
+		t.Fatalf("forwarded query leaked local namespace wrapper: %s", *last)
 	}
 }
 
@@ -205,7 +209,7 @@ func TestGraphQLIngest_ArgumentsPassThrough(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{ pets_user(id:\"42\") { id name } }"}`))
+		strings.NewReader(`{"query":"{ pets { user(id:\"42\") { id name } } }"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -260,7 +264,7 @@ func TestGraphQLIngest_RecordDispatchFires(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{ pets_users { id } }"}`))
+		strings.NewReader(`{"query":"{ pets { users { id } } }"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -355,7 +359,7 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 			t.Cleanup(srv.Close)
 
 			resp, err := http.Post(srv.URL+"/graphql", "application/json",
-				strings.NewReader(`{"query":"{ pets_users { id } }"}`))
+				strings.NewReader(`{"query":"{ pets { users { id } } }"}`))
 			if err != nil {
 				t.Fatalf("post: %v", err)
 			}
@@ -453,7 +457,7 @@ func TestGraphQLIngest_BackpressureTimesOutAndRejects(t *testing.T) {
 		return resp.StatusCode, string(body)
 	}
 
-	q := `{"query":"{ pets_users { id } }"}`
+	q := `{"query":"{ pets { users { id } } }"}`
 	holder := make(chan string, 1)
 	go func() {
 		_, body := postQuery(q)
@@ -511,9 +515,9 @@ func TestGraphQLIngest_DuplicateNamespaceIdempotent(t *testing.T) {
 }
 
 // TestGraphQLIngest_TwoVersions registers v1 and v2 of the same
-// namespace. Latest (v2) is exposed flat as "<ns>_users" with type
-// "pets_User"; older (v1) gets "<ns>_v1_users" with deprecation +
-// type "pets_v1_User" so the two versions don't collide on type
+// namespace. Latest (v2) is exposed nested as "<ns>.users" with type
+// "pets_User"; older (v1) sits under "<ns>.v1.users" with deprecation
+// + type "pets_v1_User" so the two versions don't collide on type
 // identity even when the introspection JSON is identical.
 func TestGraphQLIngest_TwoVersions(t *testing.T) {
 	v1 := newRemoteFixture(t)
@@ -548,7 +552,8 @@ func TestGraphQLIngest_TwoVersions(t *testing.T) {
 		out, _ := io.ReadAll(resp.Body)
 		return string(out)
 	}
-	pickFirstID := func(body string) string {
+	// pickIDAt walks data.<segments...>.users[0].id.
+	pickIDAt := func(body string, path ...string) string {
 		var out struct {
 			Data   map[string]any `json:"data"`
 			Errors []any          `json:"errors"`
@@ -559,27 +564,32 @@ func TestGraphQLIngest_TwoVersions(t *testing.T) {
 		if len(out.Errors) > 0 {
 			t.Fatalf("graphql errors: %v", out.Errors)
 		}
-		for _, v := range out.Data {
-			users, _ := v.([]any)
-			if len(users) == 0 {
-				continue
+		var cur any = out.Data
+		for _, seg := range path {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return ""
 			}
-			u, _ := users[0].(map[string]any)
-			if id, ok := u["id"].(string); ok {
-				return id
-			}
+			cur = m[seg]
 		}
-		return ""
+		users, _ := cur.([]any)
+		if len(users) == 0 {
+			return ""
+		}
+		u, _ := users[0].(map[string]any)
+		id, _ := u["id"].(string)
+		return id
 	}
 
-	if got := pickFirstID(post(`{ pets_users { id } }`)); got != "v2" {
-		t.Errorf("pets_users id=%q want v2 (latest)", got)
+	if got := pickIDAt(post(`{ pets { users { id } } }`), "pets", "users"); got != "v2" {
+		t.Errorf("pets.users id=%q want v2 (latest)", got)
 	}
-	if got := pickFirstID(post(`{ pets_v1_users { id } }`)); got != "v1" {
-		t.Errorf("pets_v1_users id=%q want v1", got)
+	if got := pickIDAt(post(`{ pets { v1 { users { id } } } }`), "pets", "v1", "users"); got != "v1" {
+		t.Errorf("pets.v1.users id=%q want v1", got)
 	}
 
-	// SDL: latest types stay "pets_TYPE", older types include version.
+	// SDL: nested namespace containers split latest vs older; type
+	// names follow the same `pets_` / `pets_v1_` split.
 	schemaSrv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(schemaSrv.Close)
 	resp, err := http.Get(schemaSrv.URL)
@@ -590,10 +600,10 @@ func TestGraphQLIngest_TwoVersions(t *testing.T) {
 	sdlBytes, _ := io.ReadAll(resp.Body)
 	sdl := string(sdlBytes)
 	for _, want := range []string{
-		"pets_users",    // latest field
-		"pets_v1_users", // older field
-		"pets_User",     // latest type
-		"pets_v1_User",  // older type — distinct from latest
+		"PetsQueryNamespace",
+		"PetsV1QueryNamespace",
+		"pets_User",    // latest type
+		"pets_v1_User", // older type — distinct from latest
 		`@deprecated(reason: "v2 is current")`,
 	} {
 		if !strings.Contains(sdl, want) {
@@ -713,10 +723,12 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 	t.Cleanup(srv.Close)
 	gqlBody, _ := json.Marshal(map[string]any{
 		"query": `{
-			pets_findAnimal(id: "1") {
-				__typename
-				... on pets_Cat { name claws }
-				... on pets_Dog { name barksPerMinute }
+			pets {
+				findAnimal(id: "1") {
+					__typename
+					... on pets_Cat { name claws }
+					... on pets_Dog { name barksPerMinute }
+				}
 			}
 		}`,
 	})
@@ -728,7 +740,9 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 	rawBody, _ := io.ReadAll(resp.Body)
 	var out struct {
 		Data struct {
-			FindAnimal map[string]any `json:"pets_findAnimal"`
+			Pets struct {
+				FindAnimal map[string]any `json:"findAnimal"`
+			} `json:"pets"`
 		} `json:"data"`
 		Errors []any `json:"errors"`
 	}
@@ -738,13 +752,13 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 	if len(out.Errors) > 0 {
 		t.Fatalf("graphql errors: %v\nbody=%s", out.Errors, rawBody)
 	}
-	if got := out.Data.FindAnimal["__typename"]; got != "pets_Cat" {
+	if got := out.Data.Pets.FindAnimal["__typename"]; got != "pets_Cat" {
 		t.Errorf("__typename=%v want pets_Cat", got)
 	}
-	if got := out.Data.FindAnimal["name"]; got != "whiskers" {
+	if got := out.Data.Pets.FindAnimal["name"]; got != "whiskers" {
 		t.Errorf("name=%v want whiskers", got)
 	}
-	if _, ok := out.Data.FindAnimal["claws"]; !ok {
+	if _, ok := out.Data.Pets.FindAnimal["claws"]; !ok {
 		t.Errorf("missing claws (Cat-specific) field; body=%s", rawBody)
 	}
 

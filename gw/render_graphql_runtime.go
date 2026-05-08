@@ -184,7 +184,15 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 
 		// Subscriptions flatten — graphql-go's executor doesn't
 		// support nested Object types under Subscription.
+		//
+		// Proto subscriptions stay on the legacy buildSubscriptionFields
+		// path until step 6 (so this renderer + that path don't both
+		// emit the same `<ns>_<method>` field and collide). OpenAPI has
+		// no subscription Operations to begin with.
 		for _, svc := range services {
+			if svc.OriginKind == ir.KindProto {
+				continue
+			}
 			isLatest := svc == latest
 			depReason := ""
 			if !isLatest {
@@ -384,7 +392,17 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *ir.Operation, registry *ir.Dis
 		if d == nil {
 			return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
 		}
-		return d.Dispatch(rp.Context, rp.Args)
+		// graphql-ingest dispatchers need rp.Info to forward the
+		// caller's selection-set verbatim (canonical args alone can't
+		// reconstruct an upstream query). proto/openapi dispatchers
+		// ignore the key, so setting it unconditionally is safe — but
+		// guard against nil Context (test fixtures call graphql.Do
+		// without one), since context.WithValue panics on nil parent.
+		ctx := rp.Context
+		if ctx != nil {
+			ctx = withGraphQLForwardInfo(ctx, &rp.Info)
+		}
+		return d.Dispatch(ctx, rp.Args)
 	}
 	if op.Kind == ir.OpSubscription {
 		return &graphql.Field{

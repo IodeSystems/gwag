@@ -79,7 +79,7 @@ func TestDynamicGraphQL_Standalone(t *testing.T) {
 	srv := httptest.NewServer(gw.Handler())
 	t.Cleanup(srv.Close)
 
-	got := postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id name role } }"}`)
+	got := postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets { users { id name role } } }"}`)
 	if strings.Contains(got, "errors") || !strings.Contains(got, "alice") {
 		t.Fatalf("unexpected response: %s", got)
 	}
@@ -87,15 +87,15 @@ func TestDynamicGraphQL_Standalone(t *testing.T) {
 		t.Errorf("backend never received the query (count=%d)", queries.Load())
 	}
 
-	// Deregister → source removed → schema loses pets_users.
+	// Deregister → source removed → schema loses the `pets` namespace.
 	if _, err := cp.Deregister(context.Background(), &cpv1.DeregisterRequest{
 		RegistrationId: resp.GetRegistrationId(),
 	}); err != nil {
 		t.Fatalf("Deregister: %v", err)
 	}
-	got = postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id } }"}`)
-	if !strings.Contains(got, "errors") || !strings.Contains(got, "pets_users") {
-		t.Fatalf("expected pets_users to disappear, got: %s", got)
+	got = postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets { users { id } } }"}`)
+	if !strings.Contains(got, "errors") || !strings.Contains(got, `Cannot query field \"pets\"`) {
+		t.Fatalf("expected pets namespace to disappear, got: %s", got)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestDynamicGraphQL_MultiReplica(t *testing.T) {
 	// Fire 10 queries serially. With pickReplica picking the lowest
 	// in-flight, sequential requests alternate between A and B.
 	for i := 0; i < 10; i++ {
-		got := postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id } }"}`)
+		got := postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets { users { id } } }"}`)
 		if strings.Contains(got, "errors") {
 			t.Fatalf("dispatch errored: %s", got)
 		}
@@ -284,7 +284,7 @@ func TestDynamicGraphQL_MultiReplica(t *testing.T) {
 
 	beforeB := countB()
 	for i := 0; i < 5; i++ {
-		_ = postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets_users { id } }"}`)
+		_ = postGraphQLForDynamic(t, srv.URL, `{"query":"{ pets { users { id } } }"}`)
 	}
 	afterA, afterB := countA(), countB()
 	if afterA != totalA {
@@ -349,7 +349,7 @@ func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
 
 	// Query through B forwards to backend.
 	got := postGraphQLForDynamic(t, b.httpSrv.URL,
-		`{"query":"{ pets_users { id name role } }"}`)
+		`{"query":"{ pets { users { id name role } } }"}`)
 	if strings.Contains(got, "errors") || !strings.Contains(got, "alice") {
 		t.Fatalf("response via B: %s", got)
 	}
