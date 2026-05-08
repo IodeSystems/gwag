@@ -1,13 +1,29 @@
 // Baseline (Ryzen 9 3900X, loopback backend, -benchtime=2s):
 //
-//   BenchmarkProtoDispatcher_Dispatch     ~186 µs/op   10.9 KB/op   178 allocs/op
-//   BenchmarkOpenAPIDispatcher_Dispatch   ~131 µs/op    7.8 KB/op    86 allocs/op
+//   BenchmarkProtoDispatcher_Dispatch     ~185 µs/op   10.9 KB/op   174 allocs/op
+//   BenchmarkOpenAPIDispatcher_Dispatch   ~128 µs/op    7.8 KB/op    86 allocs/op
+//   BenchmarkProtoSchemaExec              ~430 µs/op   67.8 KB/op   972 allocs/op
+//   BenchmarkOpenAPISchemaExec            ~391 µs/op   67.5 KB/op   982 allocs/op
 //
-// Captured before any optimisation pass. Drive these down with the
-// allocation work in plan.md (arg unmarshal, response-shape map
-// building, dynamicpb churn). A graphql-mirror benchmark is omitted
-// because the forwarder needs a full ResolveInfo (selection-set,
-// variables) — not stubbable without dragging in graphql-go's parser.
+// _Dispatch benches isolate the per-call work in front of grpc /
+// net/http (they call ir.Dispatcher directly); _SchemaExec benches
+// drive the same path through graphql.Do so the executor + resolver
+// closure overhead shows up.
+//
+// IR overhead vs pre-cutover (commit 8fd7de8, just before step 3):
+//   * Proto SchemaExec:   431 → 429 µs/op,  973 → 972 allocs/op  — flat
+//     (nested namespace shape was already the proto convention).
+//   * OpenAPI SchemaExec: 337 → 391 µs/op,  813 → 982 allocs/op  — +16%.
+//     Entirely from step 4's flat → nested namespace shape change
+//     (`pets_v1_getPet` → `pets.v1.getPet`); the IR machinery itself
+//     is invisible. ~50µs / ~170 allocs per request to make the
+//     namespace shape consistent across formats.
+//
+// Drive these down with the allocation work in plan.md (arg unmarshal,
+// response-shape map building, dynamicpb churn). A graphql-mirror
+// benchmark is omitted because the forwarder needs a full ResolveInfo
+// (selection-set, variables) — not stubbable without dragging in
+// graphql-go's parser.
 package gateway
 
 import (
@@ -16,6 +32,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/graphql-go/graphql"
 
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 	"github.com/iodesystems/go-api-gateway/gw/ir"
@@ -53,6 +71,37 @@ func BenchmarkProtoDispatcher_Dispatch(b *testing.B) {
 	}
 }
 
+// BenchmarkProtoSchemaExec drives the same proto dispatch through
+// graphql.Do — the resolver closures emitted by RenderGraphQLRuntime
+// run, args walk through ResolveParams, then the dispatcher path
+// from BenchmarkProtoDispatcher_Dispatch executes. The delta between
+// the two benches is the GraphQL executor + IR-emitted resolver
+// overhead per request.
+//
+// Use this number to compare against pre-cutover commits (where the
+// resolver was built by buildPoolMethodField instead of
+// RenderGraphQLRuntime). A near-zero delta means IR adds no
+// runtime overhead vs the legacy per-format builders.
+func BenchmarkProtoSchemaExec(b *testing.B) {
+	gw, _, cleanup := newProtoBenchGateway(b)
+	defer cleanup()
+
+	schema := gw.schema.Load()
+	if schema == nil {
+		b.Fatal("schema not built")
+	}
+	query := `{ greeter { hello(name:"x") { greeting } } }`
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: context.Background()})
+		if len(res.Errors) > 0 {
+			b.Fatalf("errors: %v", res.Errors)
+		}
+	}
+}
+
 // BenchmarkOpenAPIDispatcher_Dispatch covers the HTTP/JSON dispatch
 // hot path: canonical args → URL substitution → http.Do → JSON
 // decode → canonical map. The backend is httptest with a static
@@ -73,6 +122,31 @@ func BenchmarkOpenAPIDispatcher_Dispatch(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := disp.Dispatch(ctx, args); err != nil {
 			b.Fatalf("Dispatch: %v", err)
+		}
+	}
+}
+
+// BenchmarkOpenAPISchemaExec mirrors BenchmarkProtoSchemaExec for the
+// OpenAPI ingest path: graphql.Do drives a getThing query through
+// the IR-emitted resolver into the openAPIDispatcher. Compare with
+// BenchmarkOpenAPIDispatcher_Dispatch to see executor + resolver
+// overhead.
+func BenchmarkOpenAPISchemaExec(b *testing.B) {
+	gw, cleanup := newOpenAPIBenchGateway(b)
+	defer cleanup()
+
+	schema := gw.schema.Load()
+	if schema == nil {
+		b.Fatal("schema not built")
+	}
+	query := `{ test { getThing(id:"x") { id name } } }`
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: context.Background()})
+		if len(res.Errors) > 0 {
+			b.Fatalf("errors: %v", res.Errors)
 		}
 	}
 }
