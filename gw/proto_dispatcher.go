@@ -25,21 +25,20 @@ type protoDispatcher struct {
 	handler   Handler // chain(inner): user runtime middleware around pickReplica+Invoke+RecordDispatch
 }
 
-// newProtoDispatcher captures the pickReplica + Invoke loop as the
-// inner Handler, wraps it with the gateway's user-supplied runtime
-// middleware chain, and returns the canonical-args adapter.
+// newProtoInvocationHandler returns the proto-native inner Handler
+// for one (pool, RPC): pickReplica, increment inflight, gRPC Invoke,
+// RecordDispatch. Shared by the canonical-args protoDispatcher and
+// the proto-native gRPC ingress path — both want middleware wrapped
+// around the same inner.
 //
-// RecordDispatch fires from the inner Handler with the per-Invoke
-// duration. Pre-cutover the same metric covered queue+invoke wall
-// time; with BackpressureMiddleware now the outer layer the dwell
-// metric carries the queue portion separately. No test asserts on
-// the prior shape.
-func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, metrics Metrics) *protoDispatcher {
+// The returned Handler is uncomposed: callers wrap it with the
+// runtime middleware chain themselves. Backpressure is the outer
+// layer in both call sites.
+func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, metrics Metrics) Handler {
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 	outputDesc := md.Output()
 	ns, ver := p.key.namespace, p.key.version
-
-	inner := Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+	return Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 		start := time.Now()
 		r := p.pickReplica()
 		if r == nil {
@@ -57,7 +56,19 @@ func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protorefl
 		}
 		return resp, nil
 	})
+}
 
+// newProtoDispatcher wraps newProtoInvocationHandler with the user
+// runtime middleware chain and adapts to the canonical-args
+// ir.Dispatcher interface used by GraphQL / HTTP/JSON ingress.
+//
+// RecordDispatch fires from the inner Handler with the per-Invoke
+// duration. Pre-cutover the same metric covered queue+invoke wall
+// time; with BackpressureMiddleware now the outer layer the dwell
+// metric carries the queue portion separately. No test asserts on
+// the prior shape.
+func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, metrics Metrics) *protoDispatcher {
+	inner := newProtoInvocationHandler(p, sd, md, metrics)
 	return &protoDispatcher{
 		inputDesc: md.Input(),
 		handler:   chain(inner),

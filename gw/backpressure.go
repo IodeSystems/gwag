@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -47,24 +46,13 @@ func BackpressureMiddleware(cfg BackpressureConfig) ir.DispatcherMiddleware {
 			return next
 		}
 		return ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
-			waitStart := time.Now()
-			select {
-			case cfg.Sem <- struct{}{}:
-				cfg.Metrics.RecordDwell(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, time.Since(waitStart))
-			default:
-				depth := int(cfg.Queueing.Add(1))
-				cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, depth)
-				dwell, err := waitForSlot(ctx, cfg.Sem, cfg.MaxWaitTime)
-				now := int(cfg.Queueing.Add(-1))
-				cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, now)
-				cfg.Metrics.RecordDwell(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, dwell)
-				if err != nil {
-					cfg.Metrics.RecordBackoff(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, "wait_timeout")
-					return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", cfg.Namespace, cfg.Version, err.Error()))
-				}
+			release, err := acquireBackpressureSlot(ctx, cfg)
+			if err != nil {
+				return nil, err
 			}
-			defer func() { <-cfg.Sem }()
+			defer release()
 			return next.Dispatch(ctx, args)
 		})
 	}
 }
+

@@ -29,6 +29,7 @@ func (g *Gateway) assembleLocked() error {
 	}
 	g.schema.Store(schema)
 	g.rebuildIngressLocked()
+	g.rebuildGRPCIngressLocked()
 	return nil
 }
 

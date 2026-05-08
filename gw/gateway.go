@@ -57,6 +57,13 @@ type Gateway struct {
 	// handler doesn't take g.mu on the hot path.
 	ingressRoutes atomic.Pointer[ingressTable]
 
+	// grpcIngressRoutes is the gRPC analogue of ingressRoutes:
+	// "/<svcFullName>/<methodName>" → proto-native chained Handler
+	// (skipping canonical-args round trip). Consumed by
+	// GRPCUnknownHandler. Rebuilt + atomic-swapped on every
+	// assembleLocked.
+	grpcIngressRoutes atomic.Pointer[grpcIngressTable]
+
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
 	// disabled (0).
