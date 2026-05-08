@@ -294,6 +294,56 @@ func TestIRTypeBuilder_Union(t *testing.T) {
 	}
 }
 
+// TestIRTypeBuilder_UnionDiscriminator exercises the OpenAPI-style
+// resolver: discriminator property + mapping pick the variant
+// without `__typename` on the value.
+func TestIRTypeBuilder_UnionDiscriminator(t *testing.T) {
+	svc := &ir.Service{Types: map[string]*ir.Type{
+		"Cat": {
+			Name:     "Cat",
+			TypeKind: ir.TypeObject,
+			Fields:   []*ir.Field{{Name: "meow", Type: ir.TypeRef{Builtin: ir.ScalarBool}}},
+		},
+		"Dog": {
+			Name:     "Dog",
+			TypeKind: ir.TypeObject,
+			Fields:   []*ir.Field{{Name: "bark", Type: ir.TypeRef{Builtin: ir.ScalarBool}}},
+		},
+		"Animal": {
+			Name:                  "Animal",
+			TypeKind:              ir.TypeUnion,
+			Variants:              []string{"Cat", "Dog"},
+			DiscriminatorProperty: "kind",
+			DiscriminatorMapping:  map[string]string{"feline": "Cat", "canine": "Dog"},
+		},
+	}}
+	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	out, err := b.Output(ir.TypeRef{Named: "Animal"}, false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := out.(*graphql.Union)
+
+	// Mapping value → variant name lookup.
+	picked := u.ResolveType(graphql.ResolveTypeParams{Value: map[string]any{"kind": "feline"}})
+	if picked == nil || picked.Name() != "Cat" {
+		t.Errorf("mapping lookup picked %v, want Cat", picked)
+	}
+	// Identity fallback: "Dog" is not in mapping but matches a variant name directly.
+	picked = u.ResolveType(graphql.ResolveTypeParams{Value: map[string]any{"kind": "Dog"}})
+	if picked == nil || picked.Name() != "Dog" {
+		t.Errorf("identity fallback picked %v, want Dog", picked)
+	}
+	// __typename still works as a fallback when discriminator value is unknown.
+	picked = u.ResolveType(graphql.ResolveTypeParams{Value: map[string]any{
+		"kind":       "unknown",
+		"__typename": "Cat",
+	}})
+	if picked == nil || picked.Name() != "Cat" {
+		t.Errorf("__typename fallback picked %v, want Cat", picked)
+	}
+}
+
 // TestIRTypeBuilder_NamingPolicy verifies that an OpenAPI-style
 // per-source prefix policy produces distinct graphql type names for
 // two services sharing a schema-name like "Pet".

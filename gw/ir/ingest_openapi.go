@@ -101,6 +101,22 @@ func openapiSchemaToType(name string, ref *openapi3.SchemaRef) *Type {
 			parts := strings.Split(v.Ref, "/")
 			t.Variants = append(t.Variants, parts[len(parts)-1])
 		}
+		if s.Discriminator != nil {
+			t.DiscriminatorProperty = s.Discriminator.PropertyName
+			if len(s.Discriminator.Mapping) > 0 {
+				t.DiscriminatorMapping = map[string]string{}
+				for k, ref := range s.Discriminator.Mapping {
+					// Mapping values come in as "#/components/schemas/X"
+					// or bare schema names. Strip to the leaf so the
+					// canonical field stores variant-Name strings only.
+					// MappingRef wraps SchemaRef — the .Ref string is
+					// the JSON-serialised form ("foo" or
+					// "#/components/schemas/Foo").
+					parts := strings.Split(ref.Ref, "/")
+					t.DiscriminatorMapping[k] = parts[len(parts)-1]
+				}
+			}
+		}
 		return t
 	}
 	if pt := primaryOpenAPIType(s); pt == "string" && len(s.Enum) > 0 {
