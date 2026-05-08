@@ -515,6 +515,15 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 	}
 	sort.Strings(nsNames)
 
+	// Shared JSON scalar across every per-source IRTypeBuilder —
+	// graphql-go forbids two scalars sharing a Name in one schema, and
+	// each source can independently fall back to JSON for a degenerate
+	// abstract type or a map.
+	var jsonScalar *graphql.Scalar
+	if len(byNS) > 0 {
+		jsonScalar = newGraphQLIngestJSONScalar()
+	}
+
 	for _, ns := range nsNames {
 		sources := byNS[ns]
 		sort.Slice(sources, func(i, j int) bool { return sources[i].versionN < sources[j].versionN })
@@ -523,7 +532,7 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 
 		for _, src := range sources {
 			isLatest := src.versionN == latest.versionN
-			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure, g.dispatchers)
+			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure, g.dispatchers, jsonScalar)
 			mb.isLatest = isLatest
 			if !isLatest {
 				mb.deprecationReason = latestReason

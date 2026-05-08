@@ -15,13 +15,23 @@ import (
 // graphQLMirror walks the introspection model of one downstream
 // service and produces graphql-go types prefixed with the source's
 // namespace. The Object/Scalar/Enum/InputObject/List/NonNull subset is
-// covered; Interfaces, Unions, and Subscription roots are skipped
-// with a registration-time log line so operators see what's missing.
+// covered; Interfaces and Unions project to graphql.Union (the
+// gateway forwards the full subselection, so __typename suffices for
+// resolving the variant locally). Subscription roots are wired
+// separately via subscribingResolver.
+//
+// Type construction (Object/Input/Enum/Scalar/Union) goes through
+// IRTypeBuilder so the projection rules live in one place. Wrapper
+// chains (LIST / NON_NULL) and root-field iteration stay in the
+// mirror because they walk the introspection model directly. Inline-
+// fragment AST rewriting (unprefixTypeName) and the forwarding
+// resolver are independent of type construction and stay too.
 type graphQLMirror struct {
 	src         *graphQLSource
 	metrics     Metrics
 	bp          BackpressureOptions
 	dispatchers *ir.DispatchRegistry
+	tb          *IRTypeBuilder
 	// isLatest controls whether this mirror's fields and types use
 	// the bare "<ns>_" prefix (true, single-version or current) or
 	// the disambiguated "<ns>_<vN>_" prefix (false, older version).
@@ -29,29 +39,221 @@ type graphQLMirror struct {
 	// field so codegen consumers see "<latest> is current".
 	isLatest          bool
 	deprecationReason string
-	objects           map[string]*graphql.Object
-	inputs            map[string]*graphql.InputObject
-	enums             map[string]*graphql.Enum
-	scalars           map[string]*graphql.Scalar
-	unions            map[string]*graphql.Union
 }
 
-func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions, dispatchers *ir.DispatchRegistry) *graphQLMirror {
+func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions, dispatchers *ir.DispatchRegistry, jsonScalar *graphql.Scalar) *graphQLMirror {
 	if metrics == nil {
 		metrics = noopMetrics{}
 	}
-	return &graphQLMirror{
+	m := &graphQLMirror{
 		src:         src,
 		metrics:     metrics,
 		bp:          bp,
 		dispatchers: dispatchers,
 		isLatest:    true,
-		objects:     map[string]*graphql.Object{},
-		inputs:      map[string]*graphql.InputObject{},
-		enums:       map[string]*graphql.Enum{},
-		scalars:     map[string]*graphql.Scalar{},
-		unions:      map[string]*graphql.Union{},
 	}
+	m.tb = newGraphQLSourceTypeBuilder(introspectionToIRService(src.introspection), m.prefixCallback, jsonScalar)
+	return m
+}
+
+// prefixCallback returns the per-source naming projection. Closes
+// over the mirror so isLatest can flip after construction (the
+// versioned-vs-latest decision is made in buildGraphQLFields after
+// the mirror is built but before the first type is materialized).
+func (m *graphQLMirror) prefixCallback(name string) string {
+	return m.prefix(name)
+}
+
+// newGraphQLSourceTypeBuilder constructs an IRTypeBuilder configured
+// for graphql ingest:
+//   - All named types prefixed via the per-mirror prefix closure.
+//   - Field names pass through verbatim (introspection already gives
+//     graphql-conventional names).
+//   - Custom scalars use identity serialize/parse (the gateway
+//     forwards values verbatim; the upstream applies its own
+//     coercion).
+//   - JSON scalar shared across per-source builders — graphql-go
+//     forbids two scalars sharing a Name in one schema.
+func newGraphQLSourceTypeBuilder(svc *ir.Service, prefix func(string) string, jsonScalar *graphql.Scalar) *IRTypeBuilder {
+	naming := IRTypeNaming{
+		ObjectName:     prefix,
+		InputName:      prefix,
+		EnumName:       prefix,
+		UnionName:      prefix,
+		InterfaceName:  prefix,
+		ScalarName:     prefix,
+		FieldName:      identityName,
+		EnumValueName:  identityName,
+		EnumValueValue: func(v ir.EnumValue) any { return v.Name },
+	}
+	return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+		MapType:  jsonScalar,
+		JSONType: jsonScalar,
+	})
+}
+
+// introspectionToIRService converts the parsed introspection model
+// into an ir.Service whose Types map has every named type the
+// downstream schema declares — including namespace-shaped Objects.
+// Skips the Operation/Group classification IngestGraphQL does for
+// cross-kind rendering (which prunes namespace-container types);
+// the runtime mirror walks introspection root fields directly and
+// must be able to resolve every type those fields reach. Root types
+// (Query / Mutation / Subscription) are excluded since they're
+// schema scaffolding, not data shapes.
+func introspectionToIRService(intro *introspectionSchema) *ir.Service {
+	svc := &ir.Service{Types: map[string]*ir.Type{}}
+	rootNames := map[string]bool{}
+	if n := intro.QueryTypeName; n != "" {
+		rootNames[n] = true
+	}
+	if n := intro.MutationTypeName; n != "" {
+		rootNames[n] = true
+	}
+	if n := intro.SubscriptionTypeName; n != "" {
+		rootNames[n] = true
+	}
+	for name, t := range intro.Types {
+		if rootNames[name] {
+			continue
+		}
+		switch t.Kind {
+		case "OBJECT":
+			obj := &ir.Type{Name: name, TypeKind: ir.TypeObject, Description: t.Description, OriginKind: ir.KindGraphQL}
+			for _, f := range t.Fields {
+				obj.Fields = append(obj.Fields, introspectionFieldToIR(f))
+			}
+			svc.Types[name] = obj
+		case "INPUT_OBJECT":
+			obj := &ir.Type{Name: name, TypeKind: ir.TypeInput, Description: t.Description, OriginKind: ir.KindGraphQL}
+			for _, f := range t.InputFields {
+				obj.Fields = append(obj.Fields, introspectionInputToIR(f))
+			}
+			svc.Types[name] = obj
+		case "ENUM":
+			obj := &ir.Type{Name: name, TypeKind: ir.TypeEnum, Description: t.Description, OriginKind: ir.KindGraphQL}
+			for i, ev := range t.EnumValues {
+				obj.Enum = append(obj.Enum, ir.EnumValue{
+					Name:        ev.Name,
+					Number:      int32(i),
+					Description: ev.Description,
+				})
+			}
+			svc.Types[name] = obj
+		case "UNION", "INTERFACE":
+			kind := ir.TypeUnion
+			if t.Kind == "INTERFACE" {
+				kind = ir.TypeInterface
+			}
+			obj := &ir.Type{Name: name, TypeKind: kind, Description: t.Description, OriginKind: ir.KindGraphQL}
+			for _, p := range t.PossibleTypes {
+				if p == nil || p.Name == "" {
+					continue
+				}
+				obj.Variants = append(obj.Variants, p.Name)
+			}
+			if kind == ir.TypeInterface {
+				for _, f := range t.Fields {
+					obj.Fields = append(obj.Fields, introspectionFieldToIR(f))
+				}
+			}
+			svc.Types[name] = obj
+		case "SCALAR":
+			if isBuiltinScalar(name) {
+				continue
+			}
+			svc.Types[name] = &ir.Type{
+				Name:        name,
+				TypeKind:    ir.TypeScalar,
+				Description: t.Description,
+				OriginKind:  ir.KindGraphQL,
+			}
+		}
+	}
+	return svc
+}
+
+func introspectionFieldToIR(f *introspectionField) *ir.Field {
+	out := &ir.Field{
+		Name:        f.Name,
+		JSONName:    f.Name,
+		Description: f.Description,
+		OneofIndex:  -1,
+	}
+	if ref := introspectionTypeRefToIR(f.Type); ref != nil {
+		out.Type = *ref
+	}
+	out.Repeated, out.Required, out.ItemRequired = wrapperFlags(f.Type)
+	return out
+}
+
+func introspectionInputToIR(f *introspectionInputV) *ir.Field {
+	out := &ir.Field{
+		Name:       f.Name,
+		JSONName:   f.Name,
+		OneofIndex: -1,
+	}
+	if ref := introspectionTypeRefToIR(f.Type); ref != nil {
+		out.Type = *ref
+	}
+	out.Repeated, out.Required, out.ItemRequired = wrapperFlags(f.Type)
+	return out
+}
+
+// introspectionTypeRefToIR walks past wrapper kinds and returns the
+// leaf TypeRef. Wrapper flags are extracted separately via
+// wrapperFlags so the IR Field's Repeated/Required/ItemRequired align
+// with how IRTypeBuilder applies them.
+func introspectionTypeRefToIR(r *introspectionTypeRef) *ir.TypeRef {
+	if r == nil {
+		return nil
+	}
+	cur := r
+	for cur.Kind == "NON_NULL" || cur.Kind == "LIST" {
+		if cur.OfType == nil {
+			return nil
+		}
+		cur = cur.OfType
+	}
+	if cur.Name == "" {
+		return nil
+	}
+	switch cur.Name {
+	case "String":
+		return &ir.TypeRef{Builtin: ir.ScalarString}
+	case "Int":
+		return &ir.TypeRef{Builtin: ir.ScalarInt32}
+	case "Float":
+		return &ir.TypeRef{Builtin: ir.ScalarDouble}
+	case "Boolean":
+		return &ir.TypeRef{Builtin: ir.ScalarBool}
+	case "ID":
+		return &ir.TypeRef{Builtin: ir.ScalarID}
+	}
+	return &ir.TypeRef{Named: cur.Name}
+}
+
+// wrapperFlags inspects the wrapper chain. The introspection model
+// allows arbitrary nesting (e.g. [[T]]); IR's flag triple captures
+// only the common single-list shape. Nested lists collapse to
+// repeated=true with itemRequired derived from the outermost LIST's
+// inner NON_NULL — same as the existing mirror's coverage.
+func wrapperFlags(r *introspectionTypeRef) (repeated, required, itemRequired bool) {
+	if r == nil {
+		return
+	}
+	if r.Kind == "NON_NULL" {
+		required = true
+		r = r.OfType
+	}
+	if r != nil && r.Kind == "LIST" {
+		repeated = true
+		inner := r.OfType
+		if inner != nil && inner.Kind == "NON_NULL" {
+			itemRequired = true
+		}
+	}
+	return
 }
 
 // build emits (queries, mutations, subscriptions) keyed by
@@ -207,29 +409,10 @@ func (m *graphQLMirror) namedOutput(name string) (graphql.Output, error) {
 	if isBuiltinScalar(name) {
 		return graphqlBuiltinScalar(name), nil
 	}
-	t, ok := m.src.introspection.Types[name]
-	if !ok {
+	if _, ok := m.src.introspection.Types[name]; !ok {
 		return nil, fmt.Errorf("type %q missing from introspection", name)
 	}
-	switch t.Kind {
-	case "OBJECT":
-		return m.objectFor(t), nil
-	case "ENUM":
-		return m.enumFor(t), nil
-	case "SCALAR":
-		return m.scalarFor(t), nil
-	case "INTERFACE", "UNION":
-		// Both Interface and Union project to graphql.NewUnion in the
-		// local schema — the gateway forwards the whole subselection
-		// upstream, so the only thing the local schema needs to do at
-		// dispatch time is pick the right concrete Object via
-		// `__typename`. Carrying graphql.Interface (with shared fields)
-		// would force every Object to declare `Interfaces:` *during
-		// thunk-build*, which is a topological hassle without
-		// pulling its weight for a forwarding role.
-		return m.unionFor(t), nil
-	}
-	return nil, fmt.Errorf("unsupported type kind %q for %s", t.Kind, name)
+	return m.tb.Output(ir.TypeRef{Named: name}, false, false, false)
 }
 
 func (m *graphQLMirror) inputType(ref *introspectionTypeRef) (graphql.Input, error) {
@@ -253,177 +436,10 @@ func (m *graphQLMirror) inputType(ref *introspectionTypeRef) (graphql.Input, err
 	if isBuiltinScalar(ref.Name) {
 		return graphqlBuiltinScalar(ref.Name), nil
 	}
-	t, ok := m.src.introspection.Types[ref.Name]
-	if !ok {
+	if _, ok := m.src.introspection.Types[ref.Name]; !ok {
 		return nil, fmt.Errorf("input type %q missing", ref.Name)
 	}
-	switch t.Kind {
-	case "ENUM":
-		return m.enumFor(t), nil
-	case "INPUT_OBJECT":
-		return m.inputObjectFor(t), nil
-	case "SCALAR":
-		return m.scalarFor(t), nil
-	}
-	return nil, fmt.Errorf("unsupported input type kind %q for %s", t.Kind, ref.Name)
-}
-
-func (m *graphQLMirror) objectFor(t *introspectionType) *graphql.Object {
-	if obj, ok := m.objects[t.Name]; ok {
-		return obj
-	}
-	name := m.prefix(t.Name)
-	obj := graphql.NewObject(graphql.ObjectConfig{
-		Name:        name,
-		Description: t.Description,
-		Fields: graphql.FieldsThunk(func() graphql.Fields {
-			fields := graphql.Fields{}
-			for _, f := range t.Fields {
-				typ, err := m.outputType(f.Type)
-				if err != nil {
-					continue
-				}
-				args, _ := m.argsConfig(f.Args)
-				// Nested fields rely on the default resolver
-				// (rp.Source.(map[string]any)[fieldName]) since the
-				// top-level forwarder fetches the whole subtree in
-				// one POST.
-				fields[f.Name] = &graphql.Field{
-					Type:        typ,
-					Args:        args,
-					Description: f.Description,
-				}
-			}
-			if len(fields) == 0 {
-				fields["_void"] = &graphql.Field{Type: graphql.String}
-			}
-			return fields
-		}),
-	})
-	m.objects[t.Name] = obj
-	return obj
-}
-
-func (m *graphQLMirror) inputObjectFor(t *introspectionType) *graphql.InputObject {
-	if io, ok := m.inputs[t.Name]; ok {
-		return io
-	}
-	name := m.prefix(t.Name)
-	io := graphql.NewInputObject(graphql.InputObjectConfig{
-		Name:        name,
-		Description: t.Description,
-		Fields: graphql.InputObjectConfigFieldMapThunk(func() graphql.InputObjectConfigFieldMap {
-			fields := graphql.InputObjectConfigFieldMap{}
-			for _, f := range t.InputFields {
-				typ, err := m.inputType(f.Type)
-				if err != nil {
-					continue
-				}
-				fields[f.Name] = &graphql.InputObjectFieldConfig{
-					Type:        typ,
-					Description: f.Description,
-				}
-			}
-			if len(fields) == 0 {
-				fields["_void"] = &graphql.InputObjectFieldConfig{Type: graphql.String}
-			}
-			return fields
-		}),
-	})
-	m.inputs[t.Name] = io
-	return io
-}
-
-func (m *graphQLMirror) enumFor(t *introspectionType) *graphql.Enum {
-	if e, ok := m.enums[t.Name]; ok {
-		return e
-	}
-	values := graphql.EnumValueConfigMap{}
-	for _, v := range t.EnumValues {
-		values[v.Name] = &graphql.EnumValueConfig{
-			Value:       v.Name, // remote sees the name on the wire
-			Description: v.Description,
-		}
-	}
-	e := graphql.NewEnum(graphql.EnumConfig{
-		Name:        m.prefix(t.Name),
-		Description: t.Description,
-		Values:      values,
-	})
-	m.enums[t.Name] = e
-	return e
-}
-
-func (m *graphQLMirror) scalarFor(t *introspectionType) *graphql.Scalar {
-	if s, ok := m.scalars[t.Name]; ok {
-		return s
-	}
-	s := graphql.NewScalar(graphql.ScalarConfig{
-		Name:        m.prefix(t.Name),
-		Description: t.Description,
-		Serialize:   func(v any) any { return v },
-		ParseValue:  func(v any) any { return v },
-		ParseLiteral: func(v ast.Value) any {
-			if sv, ok := v.(*ast.StringValue); ok {
-				return sv.Value
-			}
-			return nil
-		},
-	})
-	m.scalars[t.Name] = s
-	return s
-}
-
-// unionFor projects an INTERFACE or UNION into a graphql.NewUnion over
-// the prefixed Object types from the introspected `possibleTypes`.
-// ResolveType reads `__typename` off the per-value map (clients are
-// expected to select it under any abstract type — the gateway does
-// not auto-inject it).
-//
-// If `possibleTypes` is empty (e.g. a poorly-introspected upstream)
-// or no variant resolves to an Object the mirror has built, fall
-// back to a JSON-scalar mirror so the field still surfaces — same
-// shape the v1 fallback used.
-func (m *graphQLMirror) unionFor(t *introspectionType) graphql.Output {
-	if u, ok := m.unions[t.Name]; ok {
-		return u
-	}
-	types := []*graphql.Object{}
-	byRemoteName := map[string]*graphql.Object{}
-	for _, p := range t.PossibleTypes {
-		if p == nil || p.Name == "" {
-			continue
-		}
-		concrete, ok := m.src.introspection.Types[p.Name]
-		if !ok || concrete.Kind != "OBJECT" {
-			continue
-		}
-		obj := m.objectFor(concrete)
-		types = append(types, obj)
-		byRemoteName[p.Name] = obj
-	}
-	if len(types) == 0 {
-		log.Printf("graphql ingest %s: %s %s has no resolvable possibleTypes — falling back to JSON scalar",
-			m.src.namespace, t.Kind, t.Name)
-		return m.scalarFor(t)
-	}
-	u := graphql.NewUnion(graphql.UnionConfig{
-		Name:        m.prefix(t.Name),
-		Description: t.Description,
-		Types:       types,
-		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
-			if v, ok := p.Value.(map[string]any); ok {
-				if name, ok := v["__typename"].(string); ok {
-					if obj, ok := byRemoteName[name]; ok {
-						return obj
-					}
-				}
-			}
-			return nil
-		},
-	})
-	m.unions[t.Name] = u
-	return u
+	return m.tb.Input(ir.TypeRef{Named: ref.Name}, false, false, false)
 }
 
 func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldConfigArgument, error) {
@@ -656,6 +672,20 @@ func (m *graphQLMirror) unprefixTypeName(name string) string {
 		return name[len(short):]
 	}
 	return name
+}
+
+// newGraphQLIngestJSONScalar constructs the shared JSON scalar used
+// as the IRTypeBuilder fallback for every per-source mirror in one
+// schema build. graphql-go rejects two scalars sharing a Name; the
+// scalar must therefore be built once and shared across builders.
+func newGraphQLIngestJSONScalar() *graphql.Scalar {
+	return graphql.NewScalar(graphql.ScalarConfig{
+		Name:         "JSON",
+		Description:  "Untyped JSON value (used as the graphql-ingest fallback for poorly-introspected abstract types).",
+		Serialize:    func(v any) any { return v },
+		ParseValue:   func(v any) any { return v },
+		ParseLiteral: func(v ast.Value) any { return v },
+	})
 }
 
 // graphqlBuiltinScalar maps the standard scalar names to graphql-go's
