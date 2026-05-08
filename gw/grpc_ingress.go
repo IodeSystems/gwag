@@ -176,7 +176,8 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return g.serveGRPCStreamingUnknown(stream, route)
 	}
 
-	req := dynamicpb.NewMessage(route.inputDesc)
+	req := acquireDynamicMessage(route.inputDesc)
+	defer releaseDynamicMessage(route.inputDesc, req)
 	if err := stream.RecvMsg(req); err != nil {
 		// EOF / cancellation propagate as-is so client sees the right
 		// status; everything else maps to InvalidArgument since the
@@ -199,7 +200,10 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 	if err != nil {
 		return ingressGRPCStatus(err)
 	}
-	return stream.SendMsg(resp)
+	respMsg := resp.(*dynamicpb.Message)
+	sendErr := stream.SendMsg(respMsg)
+	releaseDynamicMessage(route.outputDesc, respMsg)
+	return sendErr
 }
 
 // gRPC metadata keys the streaming ingress consults for subscription
@@ -212,7 +216,8 @@ const (
 )
 
 func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grpcIngressRoute) error {
-	req := dynamicpb.NewMessage(route.inputDesc)
+	req := acquireDynamicMessage(route.inputDesc)
+	defer releaseDynamicMessage(route.inputDesc, req)
 	if err := stream.RecvMsg(req); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
@@ -256,11 +261,14 @@ func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grp
 			if !ok {
 				continue
 			}
-			outMsg := dynamicpb.NewMessage(route.outputDesc)
+			outMsg := acquireDynamicMessage(route.outputDesc)
 			if err := argsToMessage(evMap, outMsg); err != nil {
+				releaseDynamicMessage(route.outputDesc, outMsg)
 				continue
 			}
-			if err := stream.SendMsg(outMsg); err != nil {
+			err := stream.SendMsg(outMsg)
+			releaseDynamicMessage(route.outputDesc, outMsg)
+			if err != nil {
 				return err
 			}
 		}

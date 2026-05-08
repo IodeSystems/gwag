@@ -34,6 +34,13 @@ type protoDispatcher struct {
 // The returned Handler is uncomposed: callers wrap it with the
 // runtime middleware chain themselves. Backpressure is the outer
 // layer in both call sites.
+//
+// Response message comes from the per-descriptor pool. The caller
+// is responsible for calling releaseDynamicMessage on it once
+// they've read out the contents (e.g. messageToMap) or written them
+// to the wire (stream.SendMsg). On Invoke error the handler returns
+// the message to the pool itself — `nil, err` doesn't dangle a
+// pooled allocation.
 func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, metrics Metrics) Handler {
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 	outputDesc := md.Output()
@@ -48,10 +55,11 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		}
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
-		resp := dynamicpb.NewMessage(outputDesc)
+		resp := acquireDynamicMessage(outputDesc)
 		err := r.conn.Invoke(ctx, method, req, resp)
 		metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
 		if err != nil {
+			releaseDynamicMessage(outputDesc, resp)
 			return nil, err
 		}
 		return resp, nil
@@ -78,8 +86,14 @@ func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protorefl
 // Dispatch satisfies ir.Dispatcher. Marshals canonical args into a
 // dynamicpb request, runs the captured Handler chain, unmarshals
 // the response back to a canonical map.
+//
+// Both request and response messages come from
+// acquireDynamicMessage; they're released after the response has
+// been turned into the canonical map (gRPC has already finished
+// marshaling by then, so the buffer is safe to reuse).
 func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
-	req := dynamicpb.NewMessage(d.inputDesc)
+	req := acquireDynamicMessage(d.inputDesc)
+	defer releaseDynamicMessage(d.inputDesc, req)
 	if err := argsToMessage(args, req); err != nil {
 		return nil, err
 	}
@@ -87,7 +101,10 @@ func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 	if err != nil {
 		return nil, err
 	}
-	return messageToMap(resp.(*dynamicpb.Message)), nil
+	respMsg := resp.(*dynamicpb.Message)
+	out := messageToMap(respMsg)
+	releaseDynamicMessage(respMsg.Descriptor(), respMsg)
+	return out, nil
 }
 
 // methodLabel returns the proto wire path for an RPC, used as the

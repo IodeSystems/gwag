@@ -10,7 +10,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // subBroker shares NATS subscriptions across WebSocket clients
@@ -106,8 +105,15 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 // drops events rather than gating the broker. Trade-off note: drop
 // policy keeps healthy consumers fast; consider switching to "kick
 // the slow one" if drops become operationally meaningful.
+//
+// The event message itself is pool-acquired so steady-state
+// subscriptions don't allocate a fresh dynamicpb per delivery; we
+// release it once messageToMap has built the canonical payload (the
+// payload is the only thing fanned out — no consumer holds the
+// underlying message).
 func (f *subFanout) deliver(msg *nats.Msg) {
-	event := dynamicpb.NewMessage(f.outputDesc)
+	event := acquireDynamicMessage(f.outputDesc)
+	defer releaseDynamicMessage(f.outputDesc, event)
 	if err := proto.Unmarshal(msg.Data, event); err != nil {
 		return
 	}
