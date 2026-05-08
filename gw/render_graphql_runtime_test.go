@@ -10,11 +10,13 @@ import (
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
-// TestRenderGraphQLRuntime_ProtoTopLevelQuery is the smallest happy
-// path: one proto-origin service with one Query op that flattens a
-// single arg, returns a typed Object via the IR Types registry, and
-// resolves through the dispatcher registry.
-func TestRenderGraphQLRuntime_ProtoTopLevelQuery(t *testing.T) {
+// TestRuntime_ProtoFlatAndVersioned exercises the smallest fold:
+// one proto-origin service `greeter/v1`. The renderer must surface
+// the op at both `Query.greeter.hello` (latest flat) AND
+// `Query.greeter.v1.hello` (version-addressable). Both paths
+// resolve through the same SchemaID — the renderer's lookup
+// indirection lets one dispatcher serve both surfaces.
+func TestRuntime_ProtoFlatAndVersioned(t *testing.T) {
 	svc := &ir.Service{
 		Namespace:  "greeter",
 		Version:    "v1",
@@ -37,10 +39,11 @@ func TestRenderGraphQLRuntime_ProtoTopLevelQuery(t *testing.T) {
 	}
 	ir.PopulateSchemaIDs(svc)
 
+	calls := 0
 	registry := ir.NewDispatchRegistry()
 	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
-		name, _ := args["name"].(string)
-		return map[string]any{"message": "hello, " + name}, nil
+		calls++
+		return map[string]any{"message": "hello, " + args["name"].(string)}, nil
 	}))
 
 	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
@@ -48,24 +51,40 @@ func TestRenderGraphQLRuntime_ProtoTopLevelQuery(t *testing.T) {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
 
-	res := graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `{ hello(name: "world") { message } }`,
-	})
-	if len(res.Errors) > 0 {
-		t.Fatalf("execute: %v", res.Errors)
+	// Container types follow the SDL naming convention.
+	for _, n := range []string{"GreeterQueryNamespace", "GreeterV1QueryNamespace"} {
+		if schema.Type(n) == nil {
+			t.Errorf("expected type %s; got %v", n, schemaTypeNames(schema))
+		}
 	}
-	data, _ := res.Data.(map[string]any)
-	hello, _ := data["hello"].(map[string]any)
-	if got, want := hello["message"], "hello, world"; got != want {
-		t.Errorf("hello.message = %v, want %v", got, want)
+
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ greeter { hello(name: "flat") { message } } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("flat: %v", res.Errors)
+	}
+	flat := res.Data.(map[string]any)["greeter"].(map[string]any)["hello"].(map[string]any)
+	if flat["message"] != "hello, flat" {
+		t.Errorf("flat.hello.message = %v", flat["message"])
+	}
+
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ greeter { v1 { hello(name: "ver") { message } } } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("ver: %v", res.Errors)
+	}
+	ver := res.Data.(map[string]any)["greeter"].(map[string]any)["v1"].(map[string]any)["hello"].(map[string]any)
+	if ver["message"] != "hello, ver" {
+		t.Errorf("ver.hello.message = %v", ver["message"])
+	}
+	if calls != 2 {
+		t.Errorf("dispatcher calls = %d, want 2 (one per query)", calls)
 	}
 }
 
-// TestRenderGraphQLRuntime_OpenAPIQueryAndMutation covers the
-// OpenAPI-origin naming policy (type names prefixed with `<ns>_`)
-// and the OpQuery / OpMutation split into separate roots.
-func TestRenderGraphQLRuntime_OpenAPIQueryAndMutation(t *testing.T) {
+// TestRuntime_OpenAPIQueryAndMutation covers the OpenAPI-origin
+// naming policy (latest → bare `<ns>_` prefix) and the OpQuery /
+// OpMutation split into separate roots, both wrapped under the
+// namespace container.
+func TestRuntime_OpenAPIQueryAndMutation(t *testing.T) {
 	svc := &ir.Service{
 		Namespace:  "pets",
 		Version:    "v1",
@@ -88,11 +107,9 @@ func TestRenderGraphQLRuntime_OpenAPIQueryAndMutation(t *testing.T) {
 				Output: &ir.TypeRef{Named: "Pet"},
 			},
 			{
-				Name: "createPet",
-				Kind: ir.OpMutation,
-				Args: []*ir.Arg{
-					{Name: "name", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
-				},
+				Name:   "createPet",
+				Kind:   ir.OpMutation,
+				Args:   []*ir.Arg{{Name: "name", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true}},
 				Output: &ir.TypeRef{Named: "Pet"},
 			},
 		},
@@ -112,235 +129,324 @@ func TestRenderGraphQLRuntime_OpenAPIQueryAndMutation(t *testing.T) {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
 
-	// Type name should be `pets_Pet` (OpenAPI naming policy).
-	if got := schema.Type("pets_Pet"); got == nil {
-		t.Errorf("expected type pets_Pet in schema; types: %v", schemaTypeNames(schema))
+	if schema.Type("pets_Pet") == nil {
+		t.Errorf("expected type pets_Pet; got %v", schemaTypeNames(schema))
 	}
 
-	res := graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `{ getPet(id: "abc") { id name } }`,
-	})
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ pets { getPet(id: "abc") { id name } } }`})
 	if len(res.Errors) > 0 {
-		t.Fatalf("query execute: %v", res.Errors)
+		t.Fatalf("query: %v", res.Errors)
 	}
-	data, _ := res.Data.(map[string]any)
-	pet, _ := data["getPet"].(map[string]any)
+	pet := res.Data.(map[string]any)["pets"].(map[string]any)["getPet"].(map[string]any)
 	if pet["id"] != "abc" || pet["name"] != "fido" {
-		t.Errorf("getPet = %v, want {id:abc, name:fido}", pet)
+		t.Errorf("getPet = %v", pet)
 	}
 
-	res = graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `mutation { createPet(name: "rex") { id name } }`,
-	})
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `mutation { pets { createPet(name: "rex") { id name } } }`})
 	if len(res.Errors) > 0 {
-		t.Fatalf("mutation execute: %v", res.Errors)
+		t.Fatalf("mutation: %v", res.Errors)
 	}
-	data, _ = res.Data.(map[string]any)
-	pet, _ = data["createPet"].(map[string]any)
+	pet = res.Data.(map[string]any)["pets"].(map[string]any)["createPet"].(map[string]any)
 	if pet["id"] != "new" || pet["name"] != "rex" {
-		t.Errorf("createPet = %v, want {id:new, name:rex}", pet)
+		t.Errorf("createPet = %v", pet)
 	}
 }
 
-// TestRenderGraphQLRuntime_GraphQLNestedGroups covers the
-// graphql-origin nested-namespace pattern: an "admin" namespace
-// hosting Query ops in one Group and Mutation ops in another. Each
-// Group becomes a sibling field under its respective root with a
-// synthesized container Object.
-func TestRenderGraphQLRuntime_GraphQLNestedGroups(t *testing.T) {
+// TestRuntime_MultiVersionFold drives the headline behavior of
+// step 2: two versions of the same OpenAPI namespace produce
+// version-prefixed type names for the older one, latest's content
+// flat at top, and per-version sub-groups carrying @deprecated.
+func TestRuntime_MultiVersionFold(t *testing.T) {
+	mkSvc := func(ver string, petFields []*ir.Field) *ir.Service {
+		s := &ir.Service{
+			Namespace:  "pets",
+			Version:    ver,
+			OriginKind: ir.KindOpenAPI,
+			Types: map[string]*ir.Type{
+				"Pet": {Name: "Pet", TypeKind: ir.TypeObject, Fields: petFields},
+			},
+			Operations: []*ir.Operation{{
+				Name:   "getPet",
+				Kind:   ir.OpQuery,
+				Args:   []*ir.Arg{{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true}},
+				Output: &ir.TypeRef{Named: "Pet"},
+			}},
+		}
+		ir.PopulateSchemaIDs(s)
+		return s
+	}
+	v1 := mkSvc("v1", []*ir.Field{{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}}})
+	v2 := mkSvc("v2", []*ir.Field{
+		{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}},
+		{Name: "tag", Type: ir.TypeRef{Builtin: ir.ScalarString}}, // new field in v2
+	})
+
+	registry := ir.NewDispatchRegistry()
+	registry.Set(v1.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return map[string]any{"id": "old-" + args["id"].(string)}, nil
+	}))
+	registry.Set(v2.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return map[string]any{"id": "new-" + args["id"].(string), "tag": "current"}, nil
+	}))
+
+	// Order intentionally reversed to confirm version sort, not
+	// input order, picks latest.
+	schema, err := RenderGraphQLRuntime([]*ir.Service{v2, v1}, registry, RuntimeOptions{
+		LongType: nil,
+		JSONType: nil,
+	})
+	if err != nil {
+		t.Fatalf("RenderGraphQLRuntime: %v", err)
+	}
+
+	// Latest's type uses bare prefix; older version uses
+	// version-qualified prefix (graphql-go would error on duplicate
+	// type names if both were `pets_Pet`).
+	for _, n := range []string{"pets_Pet", "pets_v1_Pet"} {
+		if schema.Type(n) == nil {
+			t.Errorf("expected type %s; got %v", n, schemaTypeNames(schema))
+		}
+	}
+
+	// Latest flat: v2's getPet.
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ pets { getPet(id: "x") { id tag } } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("flat: %v", res.Errors)
+	}
+	flat := res.Data.(map[string]any)["pets"].(map[string]any)["getPet"].(map[string]any)
+	if flat["id"] != "new-x" {
+		t.Errorf("flat.id = %v, want new-x", flat["id"])
+	}
+	if flat["tag"] != "current" {
+		t.Errorf("flat.tag = %v, want current", flat["tag"])
+	}
+
+	// v2 sub-group: also v2's getPet (latest is addressable both ways).
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ pets { v2 { getPet(id: "x") { id } } } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("v2: %v", res.Errors)
+	}
+	got := res.Data.(map[string]any)["pets"].(map[string]any)["v2"].(map[string]any)["getPet"].(map[string]any)
+	if got["id"] != "new-x" {
+		t.Errorf("v2.id = %v, want new-x", got["id"])
+	}
+
+	// v1 sub-group: returns v1's Pet (no `tag` field — would error
+	// if the v1 sub-group surface used the v2-shaped type).
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ pets { v1 { getPet(id: "x") { id } } } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("v1: %v", res.Errors)
+	}
+	got = res.Data.(map[string]any)["pets"].(map[string]any)["v1"].(map[string]any)["getPet"].(map[string]any)
+	if got["id"] != "old-x" {
+		t.Errorf("v1.id = %v, want old-x", got["id"])
+	}
+
+	// Selecting `tag` on the v1 surface must fail — v1 doesn't
+	// expose that field.
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ pets { v1 { getPet(id: "x") { tag } } } }`})
+	if len(res.Errors) == 0 {
+		t.Errorf("expected v1 surface to reject `tag` selection (v1's Pet has no tag)")
+	}
+
+	// v1 sub-group field carries deprecation reason; v2 does not.
+	pets := schema.Type("petsQueryNamespace")
+	if pets == nil {
+		// graphql-go preserves the case from ObjectConfig.Name.
+		// Our convention upper-cases the leading rune of namespace,
+		// so the type is "PetsQueryNamespace".
+		pets = schema.Type("PetsQueryNamespace")
+	}
+	if pets == nil {
+		t.Fatalf("PetsQueryNamespace missing; types: %v", schemaTypeNames(schema))
+	}
+	obj, ok := pets.(*graphql.Object)
+	if !ok {
+		t.Fatalf("PetsQueryNamespace is %T, want *graphql.Object", pets)
+	}
+	v1Field := obj.Fields()["v1"]
+	if v1Field == nil {
+		t.Fatalf("v1 sub-field missing on PetsQueryNamespace; fields: %v", fieldNames(obj.Fields()))
+	}
+	if v1Field.DeprecationReason == "" {
+		t.Errorf("v1 sub-field DeprecationReason empty; want non-empty (latest is current)")
+	}
+	if obj.Fields()["v2"].DeprecationReason != "" {
+		t.Errorf("v2 sub-field DeprecationReason = %q; want empty (v2 is latest)", obj.Fields()["v2"].DeprecationReason)
+	}
+}
+
+// TestRuntime_GraphQLNestedGroup exercises the graphql-origin path
+// where the upstream Service has a Group inside latest. The fold
+// preserves the group structure under the synthesized namespace
+// container — `Query.<ns>.<group>.<op>` — and the recursive
+// container naming follows the SDL convention.
+func TestRuntime_GraphQLNestedGroup(t *testing.T) {
 	svc := &ir.Service{
-		Namespace:  "admin",
+		Namespace:  "core",
 		Version:    "v1",
 		OriginKind: ir.KindGraphQL,
 		Types: map[string]*ir.Type{
 			"Peer": {
 				Name:     "Peer",
 				TypeKind: ir.TypeObject,
-				Fields: []*ir.Field{
-					{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
-				},
+				Fields:   []*ir.Field{{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true}},
 			},
 		},
-		Groups: []*ir.OperationGroup{
-			{
-				Name: "admin",
-				Kind: ir.OpQuery,
-				Operations: []*ir.Operation{{
-					Name:   "listPeers",
-					Kind:   ir.OpQuery,
-					Output: &ir.TypeRef{Named: "Peer"}, OutputRepeated: true,
-				}},
-			},
-			{
-				Name: "admin",
-				Kind: ir.OpMutation,
-				Operations: []*ir.Operation{{
-					Name:   "forgetPeer",
-					Kind:   ir.OpMutation,
-					Args:   []*ir.Arg{{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true}},
-					Output: &ir.TypeRef{Named: "Peer"},
-				}},
-			},
-		},
+		Operations: []*ir.Operation{{
+			Name:   "ping",
+			Kind:   ir.OpQuery,
+			Output: &ir.TypeRef{Builtin: ir.ScalarString},
+		}},
+		Groups: []*ir.OperationGroup{{
+			Name: "admin",
+			Kind: ir.OpQuery,
+			Operations: []*ir.Operation{{
+				Name:   "listPeers",
+				Kind:   ir.OpQuery,
+				Output: &ir.TypeRef{Named: "Peer"}, OutputRepeated: true,
+			}},
+		}},
 	}
 	ir.PopulateSchemaIDs(svc)
 
 	registry := ir.NewDispatchRegistry()
+	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return "pong", nil
+	}))
 	registry.Set(svc.Groups[0].Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 		return []any{map[string]any{"id": "p1"}}, nil
 	}))
-	registry.Set(svc.Groups[1].Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
-		return map[string]any{"id": args["id"]}, nil
-	}))
 
 	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
 
-	// Nested-namespace container types should exist.
-	for _, n := range []string{"AdminQueryNamespace", "AdminMutationNamespace"} {
+	for _, n := range []string{"CoreQueryNamespace", "CoreAdminQueryNamespace", "CoreV1QueryNamespace", "CoreV1AdminQueryNamespace"} {
 		if schema.Type(n) == nil {
-			t.Errorf("expected synthesized container type %s", n)
+			t.Errorf("expected synthesized container %s; got %v", n, schemaTypeNames(schema))
 		}
 	}
 
-	res := graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `{ admin { listPeers { id } } }`,
-	})
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ core { ping admin { listPeers { id } } } }`})
 	if len(res.Errors) > 0 {
-		t.Fatalf("query execute: %v", res.Errors)
+		t.Fatalf("execute: %v", res.Errors)
 	}
-	data, _ := res.Data.(map[string]any)
-	adminQ, _ := data["admin"].(map[string]any)
-	peers, _ := adminQ["listPeers"].([]any)
-	if len(peers) != 1 {
-		t.Fatalf("listPeers = %v, want 1 entry", peers)
+	core := res.Data.(map[string]any)["core"].(map[string]any)
+	if core["ping"] != "pong" {
+		t.Errorf("ping = %v", core["ping"])
 	}
-	if got := peers[0].(map[string]any)["id"]; got != "p1" {
-		t.Errorf("listPeers[0].id = %v, want p1", got)
-	}
-
-	res = graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `mutation { admin { forgetPeer(id: "p9") { id } } }`,
-	})
-	if len(res.Errors) > 0 {
-		t.Fatalf("mutation execute: %v", res.Errors)
-	}
-	data, _ = res.Data.(map[string]any)
-	adminM, _ := data["admin"].(map[string]any)
-	forgot, _ := adminM["forgetPeer"].(map[string]any)
-	if forgot["id"] != "p9" {
-		t.Errorf("forgetPeer.id = %v, want p9", forgot["id"])
+	peers := core["admin"].(map[string]any)["listPeers"].([]any)
+	if len(peers) != 1 || peers[0].(map[string]any)["id"] != "p1" {
+		t.Errorf("listPeers = %v", peers)
 	}
 }
 
-// TestRenderGraphQLRuntime_NestedSubgroup verifies recursive Group
-// descent: a Query group contains a sub-Group whose container type
-// is named with the parent path joined.
-func TestRenderGraphQLRuntime_NestedSubgroup(t *testing.T) {
+// TestRuntime_QueryAndMutationSiblingGroups covers the admin
+// dogfood pattern: same namespace hosts both Query and Mutation
+// Groups under sibling root fields. Container types disambiguate
+// via the kind suffix.
+func TestRuntime_QueryAndMutationSiblingGroups(t *testing.T) {
 	svc := &ir.Service{
-		Namespace:  "greeter",
+		Namespace:  "admin",
 		Version:    "v1",
-		OriginKind: ir.KindGraphQL,
+		OriginKind: ir.KindOpenAPI,
 		Types:      map[string]*ir.Type{},
-		Groups: []*ir.OperationGroup{{
-			Name: "greeter",
-			Kind: ir.OpQuery,
-			Groups: []*ir.OperationGroup{{
-				Name: "v1",
-				Kind: ir.OpQuery,
-				Operations: []*ir.Operation{{
-					Name:   "ping",
-					Kind:   ir.OpQuery,
-					Output: &ir.TypeRef{Builtin: ir.ScalarString},
-				}},
-			}},
-		}},
+		Operations: []*ir.Operation{
+			{Name: "listPeers", Kind: ir.OpQuery, Output: &ir.TypeRef{Builtin: ir.ScalarString}},
+			{Name: "forgetPeer", Kind: ir.OpMutation, Args: []*ir.Arg{{Name: "id", Type: ir.TypeRef{Builtin: ir.ScalarString}}}, Output: &ir.TypeRef{Builtin: ir.ScalarString}},
+		},
 	}
 	ir.PopulateSchemaIDs(svc)
 
 	registry := ir.NewDispatchRegistry()
-	registry.Set(svc.Groups[0].Groups[0].Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
-		return "pong", nil
+	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return "peers", nil
+	}))
+	registry.Set(svc.Operations[1].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return "forgot-" + args["id"].(string), nil
 	}))
 
 	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
-	if schema.Type("GreeterV1QueryNamespace") == nil {
-		t.Errorf("expected GreeterV1QueryNamespace in schema; types: %v", schemaTypeNames(schema))
+
+	for _, n := range []string{"AdminQueryNamespace", "AdminMutationNamespace"} {
+		if schema.Type(n) == nil {
+			t.Errorf("expected %s; got %v", n, schemaTypeNames(schema))
+		}
 	}
 
-	res := graphql.Do(graphql.Params{
-		Schema:        *schema,
-		RequestString: `{ greeter { v1 { ping } } }`,
-	})
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ admin { listPeers } }`})
 	if len(res.Errors) > 0 {
-		t.Fatalf("execute: %v", res.Errors)
+		t.Fatalf("query: %v", res.Errors)
 	}
-	data, _ := res.Data.(map[string]any)
-	g, _ := data["greeter"].(map[string]any)
-	v, _ := g["v1"].(map[string]any)
-	if v["ping"] != "pong" {
-		t.Errorf("ping = %v, want pong", v["ping"])
+	if got := res.Data.(map[string]any)["admin"].(map[string]any)["listPeers"]; got != "peers" {
+		t.Errorf("listPeers = %v", got)
+	}
+
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `mutation { admin { forgetPeer(id: "p9") } }`})
+	if len(res.Errors) > 0 {
+		t.Fatalf("mutation: %v", res.Errors)
+	}
+	if got := res.Data.(map[string]any)["admin"].(map[string]any)["forgetPeer"]; got != "forgot-p9" {
+		t.Errorf("forgetPeer = %v", got)
 	}
 }
 
-// TestRenderGraphQLRuntime_SubscriptionGroupFlattens verifies
-// graphql-go's "no nested objects under Subscription" limitation:
-// a subscription-rooted Group's operations land at the root with
-// `<group>_<op>` names.
-func TestRenderGraphQLRuntime_SubscriptionGroupFlattens(t *testing.T) {
-	svc := &ir.Service{
-		Namespace:  "events",
-		Version:    "v1",
-		OriginKind: ir.KindGraphQL,
-		Types:      map[string]*ir.Type{},
-		Groups: []*ir.OperationGroup{{
-			Name: "events",
-			Kind: ir.OpSubscription,
+// TestRuntime_SubscriptionFlattenAcrossVersions exercises the
+// graphql-go "no nested objects under Subscription" workaround
+// across multi-version: latest emits `<ns>_<op>`, older emits
+// `<ns>_<vN>_<op>`. Subscription Groups recursively flatten with
+// `_`-joined names.
+func TestRuntime_SubscriptionFlattenAcrossVersions(t *testing.T) {
+	mk := func(ver string) *ir.Service {
+		s := &ir.Service{
+			Namespace:  "events",
+			Version:    ver,
+			OriginKind: ir.KindProto,
+			Types:      map[string]*ir.Type{},
 			Operations: []*ir.Operation{{
-				Name:   "tick",
-				Kind:   ir.OpSubscription,
+				Name: "tick", Kind: ir.OpSubscription,
 				Output: &ir.TypeRef{Builtin: ir.ScalarString},
 			}},
-		}},
+		}
+		ir.PopulateSchemaIDs(s)
+		return s
 	}
-	ir.PopulateSchemaIDs(svc)
-
+	v1 := mk("v1")
+	v2 := mk("v2")
 	registry := ir.NewDispatchRegistry()
-	registry.Set(svc.Groups[0].Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
-		return "tick", nil
-	}))
+	registry.Set(v1.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v1tick", nil }))
+	registry.Set(v2.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v2tick", nil }))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
 	subRoot := schema.SubscriptionType()
 	if subRoot == nil {
-		t.Fatal("expected Subscription root type")
+		t.Fatal("Subscription root missing")
 	}
-	if _, ok := subRoot.Fields()["events_tick"]; !ok {
-		var names []string
-		for k := range subRoot.Fields() {
-			names = append(names, k)
+	for _, want := range []string{"events_tick", "events_v1_tick"} {
+		if _, ok := subRoot.Fields()[want]; !ok {
+			t.Errorf("Subscription missing %s; have %v", want, fieldNames(subRoot.Fields()))
 		}
-		t.Errorf("expected events_tick on Subscription, got %v", names)
+	}
+	if dep := subRoot.Fields()["events_v1_tick"].DeprecationReason; dep == "" {
+		t.Errorf("events_v1_tick missing @deprecated reason")
+	}
+	if dep := subRoot.Fields()["events_tick"].DeprecationReason; dep != "" {
+		t.Errorf("events_tick has @deprecated %q; want none (latest)", dep)
 	}
 }
 
-// TestRenderGraphQLRuntime_DispatchAtCallTime verifies the
-// resolver looks up Dispatchers by SchemaID *at call time*, not at
-// schema-build time. Replacing a dispatcher between build and
-// execute should be observable.
-func TestRenderGraphQLRuntime_DispatchAtCallTime(t *testing.T) {
+// TestRuntime_DispatchAtCallTime verifies the resolver looks up
+// Dispatchers by SchemaID at call time, not at schema-build time —
+// swapping or deleting between build and execute is observable.
+func TestRuntime_DispatchAtCallTime(t *testing.T) {
 	svc := &ir.Service{
 		Namespace:  "x",
 		Version:    "v1",
@@ -363,64 +469,61 @@ func TestRenderGraphQLRuntime_DispatchAtCallTime(t *testing.T) {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
 
-	// Swap the dispatcher post-build.
 	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 		return "v2", nil
 	}))
 
-	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ ping }`})
+	res := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ x { ping } }`})
 	if len(res.Errors) > 0 {
 		t.Fatalf("execute: %v", res.Errors)
 	}
-	if v := res.Data.(map[string]any)["ping"]; v != "v2" {
+	if v := res.Data.(map[string]any)["x"].(map[string]any)["ping"]; v != "v2" {
 		t.Errorf("ping = %v, want v2 (post-swap)", v)
 	}
 
-	// Deleting the dispatcher must surface a CodeInternal error
-	// rather than a panic.
 	registry.Delete(svc.Operations[0].SchemaID)
-	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ ping }`})
+	res = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ x { ping } }`})
 	if len(res.Errors) == 0 {
-		t.Fatalf("expected error after dispatcher delete; got data %v", res.Data)
+		t.Fatalf("expected error after dispatcher delete; got %v", res.Data)
 	}
 	if !strings.Contains(res.Errors[0].Error(), "no dispatcher") {
-		t.Errorf("error message = %q, want to contain 'no dispatcher'", res.Errors[0].Error())
+		t.Errorf("error %q lacks 'no dispatcher'", res.Errors[0].Error())
 	}
 }
 
-// TestRenderGraphQLRuntime_FieldCollision verifies field-name
-// collisions across services share the root namespace and fail the
-// build — matches the existing buildSchemaLocked posture.
-func TestRenderGraphQLRuntime_FieldCollision(t *testing.T) {
-	mk := func(ns string) *ir.Service {
-		svc := &ir.Service{
-			Namespace:  ns,
-			Version:    "v1",
-			OriginKind: ir.KindProto,
-			Types:      map[string]*ir.Type{},
-			Operations: []*ir.Operation{{
-				Name:   "ping",
-				Kind:   ir.OpQuery,
-				Output: &ir.TypeRef{Builtin: ir.ScalarString},
-			}},
-		}
-		ir.PopulateSchemaIDs(svc)
-		return svc
+// TestRuntime_OpVersionCollision: an op named the same as a
+// version label collides with the synthesized version sub-group
+// field. The renderer surfaces this as a build error — better
+// loud than silent, and the operator can rename the op.
+func TestRuntime_OpVersionCollision(t *testing.T) {
+	svc := &ir.Service{
+		Namespace:  "weird",
+		Version:    "v1",
+		OriginKind: ir.KindProto,
+		Types:      map[string]*ir.Type{},
+		Operations: []*ir.Operation{{
+			Name:   "v1", // collides with the v1 sub-group field
+			Kind:   ir.OpQuery,
+			Output: &ir.TypeRef{Builtin: ir.ScalarString},
+		}},
 	}
+	ir.PopulateSchemaIDs(svc)
 	registry := ir.NewDispatchRegistry()
-	_, err := RenderGraphQLRuntime([]*ir.Service{mk("a"), mk("b")}, registry, RuntimeOptions{})
+	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+		return "ok", nil
+	}))
+	_, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
 	if err == nil {
 		t.Fatal("expected collision error, got nil")
 	}
-	if !strings.Contains(err.Error(), "collision") {
+	if !strings.Contains(err.Error(), "collide") && !strings.Contains(err.Error(), "collision") {
 		t.Errorf("error %q does not mention collision", err.Error())
 	}
 }
 
-// TestRenderGraphQLRuntime_EmptyServices yields a stub schema with
-// a `_status` field — same posture as buildSchemaLocked when no
-// services are registered.
-func TestRenderGraphQLRuntime_EmptyServices(t *testing.T) {
+// TestRuntime_EmptyServices yields a stub schema with `_status` —
+// matches the buildSchemaLocked posture when no services register.
+func TestRuntime_EmptyServices(t *testing.T) {
 	registry := ir.NewDispatchRegistry()
 	schema, err := RenderGraphQLRuntime(nil, registry, RuntimeOptions{})
 	if err != nil {
@@ -431,14 +534,22 @@ func TestRenderGraphQLRuntime_EmptyServices(t *testing.T) {
 		t.Fatalf("execute: %v", res.Errors)
 	}
 	if v := res.Data.(map[string]any)["_status"]; v != "no services registered" {
-		t.Errorf("_status = %v, want 'no services registered'", v)
+		t.Errorf("_status = %v", v)
 	}
 }
 
 func schemaTypeNames(s *graphql.Schema) []string {
-	names := []string{}
+	out := []string{}
 	for n := range s.TypeMap() {
-		names = append(names, n)
+		out = append(out, n)
 	}
-	return names
+	return out
+}
+
+func fieldNames(fields graphql.FieldDefinitionMap) []string {
+	out := []string{}
+	for n := range fields {
+		out = append(out, n)
+	}
+	return out
 }
