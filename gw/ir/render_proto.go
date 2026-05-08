@@ -76,7 +76,7 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 	for _, t := range stableTypeOrder(svc) {
 		switch t.TypeKind {
 		case TypeObject, TypeInput:
-			fp.MessageType = append(fp.MessageType, renderProtoMessage(t))
+			fp.MessageType = append(fp.MessageType, renderProtoMessage(t, pkg))
 		case TypeEnum:
 			fp.EnumType = append(fp.EnumType, renderProtoEnum(t))
 		}
@@ -85,7 +85,12 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 		// top-level type.)
 	}
 
-	// Build one ServiceDescriptorProto with all operations.
+	// Build one ServiceDescriptorProto with all operations. For
+	// non-proto-origin operations (no Origin MethodDescriptor) we
+	// synthesize <Op>Request / <Op>Response messages from Args /
+	// Output and add them to the file's MessageType. proto3 needs
+	// concrete input/output types — we don't import
+	// google.protobuf.Empty just to point at it.
 	if len(svc.Operations) > 0 {
 		serviceName := svc.ServiceName
 		if serviceName == "" {
@@ -95,26 +100,153 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 			Name: &serviceName,
 		}
 		for _, op := range svc.Operations {
-			mp := renderProtoMethod(op, pkg)
-			sp.Method = append(sp.Method, mp)
+			if op.OriginKind == KindProto {
+				if mp, ok := op.Origin.(*descriptorpb.MethodDescriptorProto); ok && mp != nil {
+					sp.Method = append(sp.Method, mp)
+					continue
+				}
+			}
+			reqName := sanitizeProtoIdentifier(op.Name) + "Request"
+			respName := sanitizeProtoIdentifier(op.Name) + "Response"
+			fp.MessageType = append(fp.MessageType, synthRequestMessage(reqName, op.Args, pkg))
+			fp.MessageType = append(fp.MessageType, synthResponseMessage(respName, op.Output, op.OutputRepeated, pkg))
+			fp.Service = append(fp.Service, &descriptorpb.ServiceDescriptorProto{Name: &serviceName, Method: []*descriptorpb.MethodDescriptorProto{}})
+			lastSP := fp.Service[len(fp.Service)-1]
+			fullReq := pkg + "." + reqName
+			fullResp := pkg + "." + respName
+			streamServer := op.Kind == OpSubscription
+			streamClient := op.StreamingClient
+			lastSP.Method = append(lastSP.Method, &descriptorpb.MethodDescriptorProto{
+				Name:            stringPtr(op.Name),
+				InputType:       stringPtr("." + fullReq),
+				OutputType:      stringPtr("." + fullResp),
+				ClientStreaming: &streamClient,
+				ServerStreaming: &streamServer,
+			})
 		}
-		fp.Service = append(fp.Service, sp)
+		// Collapse the per-op service-list entries into the canonical
+		// single-Service shape: stash methods on sp[0] and drop the
+		// rest. (We added one sp per op above so the above
+		// append+lastSP shorthand worked without coordinating index;
+		// merge here.)
+		merged := sp
+		for _, extra := range fp.Service {
+			merged.Method = append(merged.Method, extra.Method...)
+		}
+		fp.Service = []*descriptorpb.ServiceDescriptorProto{merged}
 	}
 	return fp, nil
 }
 
-func renderProtoMessage(t *Type) *descriptorpb.DescriptorProto {
+// synthRequestMessage builds a DescriptorProto whose fields mirror
+// the operation's Args. Used when an Operation has no proto Origin
+// (OpenAPI / GraphQL ingest); proto3 needs a concrete input message.
+func synthRequestMessage(name string, args []*Arg, pkg string) *descriptorpb.DescriptorProto {
+	mp := &descriptorpb.DescriptorProto{Name: &name}
+	num := int32(0)
+	for _, a := range args {
+		if !isValidProtoIdentifier(a.Name) {
+			continue
+		}
+		num++
+		f := &Field{
+			Name:     a.Name,
+			Type:     a.Type,
+			Repeated: a.Repeated,
+			Required: a.Required,
+		}
+		mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
+	}
+	return mp
+}
+
+// synthResponseMessage wraps a single Output TypeRef in a
+// `<Op>Response` message with one field "value" — an artifact of
+// the lossy cross-kind translation since proto methods always
+// return a message, never a primitive.
+func synthResponseMessage(name string, output *TypeRef, repeated bool, pkg string) *descriptorpb.DescriptorProto {
+	mp := &descriptorpb.DescriptorProto{Name: &name}
+	if output == nil {
+		return mp
+	}
+	num := int32(1)
+	f := &Field{
+		Name:     "value",
+		Type:     *output,
+		Repeated: repeated,
+	}
+	mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
+	return mp
+}
+
+func renderProtoMessage(t *Type, pkg string) *descriptorpb.DescriptorProto {
 	if t.OriginKind == KindProto {
 		if mp, ok := t.Origin.(*descriptorpb.DescriptorProto); ok && mp != nil {
 			return mp
 		}
 	}
-	name := localName(t.Name)
+	name := sanitizeProtoIdentifier(localName(t.Name))
 	mp := &descriptorpb.DescriptorProto{Name: &name}
-	for i, f := range t.Fields {
-		mp.Field = append(mp.Field, renderProtoField(f, int32(i+1)))
+	num := int32(0)
+	for _, f := range t.Fields {
+		// Cross-kind sources can carry field names proto can't
+		// express — JSON Schema's `$schema` meta-property, OpenAPI
+		// extension keys with `x-`, etc. Skip them here rather
+		// than fabricating a sanitized name; the lossy translation
+		// is a stripped field, not a renamed one.
+		if !isValidProtoIdentifier(f.Name) {
+			continue
+		}
+		num++
+		mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
 	}
 	return mp
+}
+
+// isValidProtoIdentifier matches proto3's identifier rules:
+// [a-zA-Z_][a-zA-Z0-9_]*. Used to skip JSON-Schema-flavored field
+// names like `$schema` that came in via OpenAPI ingest.
+func isValidProtoIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+				return false
+			}
+			continue
+		}
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeProtoIdentifier replaces non-identifier characters in s
+// with underscores. Used for type names (which can't be skipped —
+// dropping the type would orphan refs).
+func sanitizeProtoIdentifier(s string) string {
+	if isValidProtoIdentifier(s) {
+		return s
+	}
+	out := make([]rune, 0, len(s))
+	for i, r := range s {
+		ok := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if i > 0 {
+			ok = ok || (r >= '0' && r <= '9')
+		}
+		if ok {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	if len(out) == 0 || (out[0] >= '0' && out[0] <= '9') {
+		out = append([]rune{'_'}, out...)
+	}
+	return string(out)
 }
 
 func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
@@ -136,7 +268,7 @@ func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
 	return ep
 }
 
-func renderProtoField(f *Field, defaultNumber int32) *descriptorpb.FieldDescriptorProto {
+func renderProtoField(f *Field, defaultNumber int32, pkg string) *descriptorpb.FieldDescriptorProto {
 	num := f.ProtoNumber
 	if num == 0 {
 		num = defaultNumber
@@ -157,20 +289,49 @@ func renderProtoField(f *Field, defaultNumber int32) *descriptorpb.FieldDescript
 	case f.Type.IsBuiltin():
 		out.Type = scalarToProtoKind(f.Type.Builtin).Enum()
 	case f.Type.IsNamed():
-		// We don't track here whether Named refers to a message or
-		// enum — the renderer must consult Service.Types. The
-		// caller is expected to set TypeName so protoc resolves
-		// downstream.
-		out.TypeName = stringPtr("." + f.Type.Named)
-		// Default to MESSAGE; fix below if it's actually an enum.
+		// Synthesize a fully-qualified TypeName. For proto-origin
+		// IR the Named field carries the FullName already
+		// ("greeter.v1.HelloRequest" — no leading dot). For non-
+		// proto origins (OpenAPI components key like "ChannelInfo")
+		// we prepend the rendered package so the in-file lookup
+		// resolves. We don't know whether Named refers to a
+		// message or enum here; default to MESSAGE — protoc
+		// resolves both via TypeName, and the IR's Type registry
+		// already pre-renders enums under their qualified names so
+		// cross-references stay consistent.
+		qualified := f.Type.Named
+		if pkg != "" && !looksFullyQualified(qualified, pkg) {
+			qualified = pkg + "." + qualified
+		}
+		out.TypeName = stringPtr("." + qualified)
 		out.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
 	case f.Type.IsMap():
 		// Maps render as a synthesised entry message — not yet
 		// implemented in the canonical render path. Same-kind
 		// shortcut handles maps via Origin; cross-kind drops them
 		// for v1.
+	default:
+		// Cross-kind shapes the proto can't represent (unconstrained
+		// JSON, oneOf-without-discriminator, etc.) land here.
+		// Default to string so the synthesized descriptor at least
+		// resolves. Lossy by design — proto3 has no JSON type.
+		out.Type = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()
 	}
 	return out
+}
+
+// looksFullyQualified reports whether `name` already starts with a
+// dot-component matching `pkg` (the destination file's package).
+// Avoids double-prefixing when the IR's Named was set to
+// "<pkg>.<Local>" already (proto-origin paths).
+func looksFullyQualified(name, pkg string) bool {
+	if pkg == "" {
+		return false
+	}
+	if len(name) < len(pkg)+1 {
+		return false
+	}
+	return name[:len(pkg)] == pkg && name[len(pkg)] == '.'
 }
 
 func renderProtoMethod(op *Operation, pkg string) *descriptorpb.MethodDescriptorProto {
