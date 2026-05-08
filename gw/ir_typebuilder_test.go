@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
@@ -198,6 +199,59 @@ func TestIRTypeBuilder_Input(t *testing.T) {
 	fields := io.Fields()
 	if fields["email"].Type.String() != "String!" {
 		t.Errorf("email: got %s, want String!", fields["email"].Type.String())
+	}
+}
+
+// TestIRTypeBuilder_OpenAPIOneOf exercises the cross-format chain:
+// OpenAPI oneOf → IR TypeUnion → graphql.Union via IRTypeBuilder.
+// Pins the contract that a real OpenAPI service's oneOf variants
+// surface as a usable GraphQL schema (no JSON-scalar fallback).
+func TestIRTypeBuilder_OpenAPIOneOf(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Dog": {"type": "object", "properties": {"bark": {"type": "boolean"}}},
+      "Animal": {
+        "oneOf": [
+          {"$ref": "#/components/schemas/Cat"},
+          {"$ref": "#/components/schemas/Dog"}
+        ]
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := ir.IngestOpenAPI(doc)
+
+	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	out, err := b.Output(ir.TypeRef{Named: "Animal"}, false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, ok := out.(*graphql.Union)
+	if !ok {
+		t.Fatalf("expected *graphql.Union, got %T", out)
+	}
+	if len(u.Types()) != 2 {
+		t.Errorf("union has %d types, want 2", len(u.Types()))
+	}
+	gotNames := map[string]bool{}
+	for _, ot := range u.Types() {
+		gotNames[ot.Name()] = true
+	}
+	if !gotNames["Cat"] || !gotNames["Dog"] {
+		t.Errorf("missing variant: got %v", gotNames)
 	}
 }
 
