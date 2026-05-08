@@ -523,7 +523,7 @@ func (g *Gateway) buildGraphQLFields(filter schemaFilter) (graphql.Fields, graph
 
 		for _, src := range sources {
 			isLatest := src.versionN == latest.versionN
-			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure)
+			mb := newGraphQLMirror(src, g.cfg.metrics, g.cfg.backpressure, g.dispatchers)
 			mb.isLatest = isLatest
 			if !isLatest {
 				mb.deprecationReason = latestReason

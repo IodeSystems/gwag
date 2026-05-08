@@ -8,11 +8,23 @@ import (
 
 	"github.com/graphql-go/graphql"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 // assembleLocked builds the gateway's canonical (unfiltered) GraphQL
 // schema and atomically swaps it into g.schema. Caller holds g.mu.
+//
+// The DispatchRegistry is rebuilt fresh: every schema rebuild
+// re-creates dispatchers (because the user runtime middleware chain
+// can change between rebuilds), so any stale entries from a prior
+// rebuild must go. Filtered schema builds (via /api/schema/graphql
+// `?service=`) reuse this same registry — the per-call schemas
+// produced by buildSchemaLocked share dispatcher state across all
+// callers since the dispatcher's runtime behavior is independent of
+// which subset is rendered.
 func (g *Gateway) assembleLocked() error {
+	g.dispatchers = ir.NewDispatchRegistry()
 	schema, err := g.buildSchemaLocked(schemaFilter{})
 	if err != nil {
 		return err
@@ -68,8 +80,12 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		nsFields := graphql.Fields{}
 
 		// Latest version's RPCs flat under the namespace — what
-		// version-agnostic clients see.
-		latestRPCs, err := buildPoolRPCs(tb, latest, chain, g.cfg.metrics, g.cfg.backpressure)
+		// version-agnostic clients see. SchemaIDs for the flat-at-top
+		// names use the bare RPC name (no version prefix); the
+		// versioned sub-objects below register additional aliases
+		// (`<vN>_<rpc>`) so both surfaces resolve through the same
+		// dispatcher.
+		latestRPCs, err := buildPoolRPCs(g.dispatchers, tb, latest, chain, g.cfg.metrics, g.cfg.backpressure, "")
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +99,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		// (Subscription-only namespaces hit this; their fields land on
 		// the Subscription root instead.)
 		for _, p := range pools {
-			versionedRPCs, err := buildPoolRPCs(tb, p, chain, g.cfg.metrics, g.cfg.backpressure)
+			versionedRPCs, err := buildPoolRPCs(g.dispatchers, tb, p, chain, g.cfg.metrics, g.cfg.backpressure, p.key.version+"_")
 			if err != nil {
 				return nil, err
 			}
@@ -332,9 +348,16 @@ func (g *Gateway) buildSubscriptionField(
 }
 
 // buildPoolRPCs returns one graphql.Field per RPC method declared in
-// the pool's proto. The dispatch closure picks a replica via
-// pool.pickReplica at invocation time.
-func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions) (graphql.Fields, error) {
+// the pool's proto. Each field's Resolve closure looks up its
+// dispatcher by SchemaID at call time — the dispatcher itself is
+// registered in `registry` here, keyed by
+// `<namespace>/<version>/<flatPrefix><lowerCamelMethodName>`.
+//
+// flatPrefix is empty for the namespace-flat alias and `<version>_`
+// for the versioned sub-object alias. Both aliases register the
+// same dispatcher under different keys so a query selecting
+// `greeter.hello` and `greeter.v1.hello` both resolve.
+func buildPoolRPCs(registry *ir.DispatchRegistry, tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions, flatPrefix string) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	services := p.file.Services()
 	for i := 0; i < services.Len(); i++ {
@@ -345,7 +368,7 @@ func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, 
 			if md.IsStreamingClient() || md.IsStreamingServer() {
 				continue
 			}
-			field, err := buildPoolMethodField(tb, p, sd, md, chain, metrics, bp)
+			field, err := buildPoolMethodField(registry, tb, p, sd, md, chain, metrics, bp, flatPrefix)
 			if err != nil {
 				return nil, err
 			}
@@ -356,6 +379,7 @@ func buildPoolRPCs(tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, 
 }
 
 func buildPoolMethodField(
+	registry *ir.DispatchRegistry,
 	tb *typeBuilder,
 	p *pool,
 	sd protoreflect.ServiceDescriptor,
@@ -363,6 +387,7 @@ func buildPoolMethodField(
 	chain Middleware,
 	metrics Metrics,
 	bp BackpressureOptions,
+	flatPrefix string,
 ) (*graphql.Field, error) {
 	args, err := tb.argsFromMessage(md.Input())
 	if err != nil {
@@ -376,12 +401,18 @@ func buildPoolMethodField(
 	label := methodLabel(sd, md)
 	core := newProtoDispatcher(p, sd, md, chain, metrics)
 	dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
+	sid := ir.MakeSchemaID(p.key.namespace, p.key.version, flatPrefix+lowerCamel(string(md.Name())))
+	registry.Set(sid, dispatcher)
 
 	return &graphql.Field{
 		Type: outputType,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return dispatcher.Dispatch(rp.Context, rp.Args)
+			d := registry.Get(sid)
+			if d == nil {
+				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
+			}
+			return d.Dispatch(rp.Context, rp.Args)
 		},
 	}, nil
 }

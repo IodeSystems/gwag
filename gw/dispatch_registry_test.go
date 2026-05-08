@@ -1,0 +1,80 @@
+package gateway
+
+import (
+	"context"
+	"testing"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
+)
+
+// After a schema rebuild, every dispatchable operation must be
+// addressable by its IR SchemaID. That's the contract step 5 relies
+// on: the runtime renderer (when it lands) builds resolvers via
+// registry lookup, not by capturing dispatcher pointers — so a
+// missing entry is a silent dispatch failure post-cutover.
+func TestDispatchRegistry_PopulatedAfterSchemaBuild(t *testing.T) {
+	f := newGRPCE2EFixture(t)
+
+	if got := f.gw.dispatchers.Len(); got == 0 {
+		t.Fatal("registry empty after schema build")
+	}
+
+	// Greeter v1 has Hello unary RPC. Both the namespace-flat alias
+	// (greeter.hello) and the versioned sub-object alias
+	// (greeter.v1.hello) point at the same dispatcher; the registry
+	// holds one entry per alias.
+	flat := ir.MakeSchemaID("greeter", "v1", "hello")
+	versioned := ir.MakeSchemaID("greeter", "v1", "v1_hello")
+	for _, sid := range []ir.SchemaID{flat, versioned} {
+		if d := f.gw.dispatchers.Get(sid); d == nil {
+			t.Fatalf("dispatcher missing for %s", sid)
+		}
+	}
+
+	// The dispatcher fetched from the registry must actually run.
+	d := f.gw.dispatchers.Get(flat)
+	out, err := d.Dispatch(context.Background(), map[string]any{"name": "registry"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("Dispatch result type: %T", out)
+	}
+	if got := m["greeting"]; got != "hello registry" {
+		t.Fatalf("greeting=%v want %q", got, "hello registry")
+	}
+	if got := f.greeter.helloCalls.Load(); got != 1 {
+		t.Fatalf("backend Hello called %d times, want 1", got)
+	}
+}
+
+// Schema rebuild must replace the registry — stale entries from a
+// prior pool / source layout cannot leak into the new schema, or
+// dispatch will route to dead state.
+func TestDispatchRegistry_RebuildClearsStaleEntries(t *testing.T) {
+	f := newGRPCE2EFixture(t)
+
+	// Stuff a phantom entry under a SchemaID the gateway will never
+	// produce. Schema rebuild should drop it.
+	stale := ir.SchemaID("phantom/v1/op")
+	f.gw.dispatchers.Set(stale, ir.DispatcherFunc(func(_ context.Context, _ map[string]any) (any, error) {
+		t.Fatal("stale dispatcher must not be invoked")
+		return nil, nil
+	}))
+
+	f.gw.mu.Lock()
+	if err := f.gw.assembleLocked(); err != nil {
+		f.gw.mu.Unlock()
+		t.Fatalf("rebuild: %v", err)
+	}
+	f.gw.mu.Unlock()
+
+	if d := f.gw.dispatchers.Get(stale); d != nil {
+		t.Fatal("stale registry entry survived rebuild")
+	}
+	// Real dispatcher must still be there post-rebuild.
+	if d := f.gw.dispatchers.Get(ir.MakeSchemaID("greeter", "v1", "hello")); d == nil {
+		t.Fatal("greeter dispatcher missing after rebuild")
+	}
+}

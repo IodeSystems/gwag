@@ -21,6 +21,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 type Gateway struct {
@@ -35,6 +37,19 @@ type Gateway struct {
 	broker         *subBroker
 	openAPISources map[poolKey]*openAPISource
 	graphQLSources map[poolKey]*graphQLSource
+
+	// dispatchers holds one ir.Dispatcher per (namespace, version,
+	// flat-op-name) populated by the per-format field builders during
+	// schema rebuild. Resolver closures fetch by SchemaID instead of
+	// capturing the dispatcher pointer, which keeps the closure
+	// independent of dispatcher identity — non-GraphQL ingress paths
+	// (planned: HTTP/JSON, gRPC) can find the same dispatcher by
+	// SchemaID without re-walking pools/sources.
+	//
+	// Dispatchers are registered fresh on each schema rebuild
+	// (assembleLocked → buildSchemaLocked clears + repopulates).
+	// Caller holds g.mu during rebuild.
+	dispatchers *ir.DispatchRegistry
 
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
@@ -259,12 +274,13 @@ func New(opts ...Option) *Gateway {
 	}
 	life, cancel := context.WithCancel(context.Background())
 	g := &Gateway{
-		cfg:        cfg,
-		pools:      map[poolKey]*pool{},
-		internal:   map[string]bool{},
-		wsConns:    map[uintptr]context.CancelFunc{},
-		life:       life,
-		lifeCancel: cancel,
+		cfg:         cfg,
+		pools:       map[poolKey]*pool{},
+		internal:    map[string]bool{},
+		wsConns:     map[uintptr]context.CancelFunc{},
+		life:        life,
+		lifeCancel:  cancel,
+		dispatchers: ir.NewDispatchRegistry(),
 	}
 	if cfg.backpressure.MaxStreamsTotal > 0 {
 		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)

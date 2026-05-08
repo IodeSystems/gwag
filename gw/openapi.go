@@ -19,6 +19,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 // AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape
@@ -568,14 +570,15 @@ func (g *Gateway) buildOpenAPIFields(tb *openAPITypeBuilder, filter schemaFilter
 			for _, p := range pathKeys {
 				pathItem := paths.Map()[p]
 				for _, op := range listOperations(p, pathItem) {
-					field, err := g.buildOpenAPIField(tb, src, op)
+					opKey := openAPIFieldName("", op)
+					field, err := g.buildOpenAPIField(tb, src, op, opKey)
 					if err != nil {
 						return nil, nil, err
 					}
 					if !isLatest {
 						field.DeprecationReason = latestReason
 					}
-					name := openAPIFieldName(fieldPrefix, op)
+					name := fieldPrefix + opKey
 					switch strings.ToUpper(op.Method) {
 					case "GET":
 						if _, exists := queries[name]; exists {
@@ -649,7 +652,7 @@ func pathToSlug(p string) string {
 	return strings.Trim(b.String(), "_")
 }
 
-func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, op openAPIOperation) (*graphql.Field, error) {
+func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, op openAPIOperation, opKey string) (*graphql.Field, error) {
 	args := graphql.FieldConfigArgument{}
 
 	// Path + query parameters → args.
@@ -694,12 +697,18 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 
 	core := newOpenAPIDispatcher(src, op.Op, op.Method, op.Path, g.cfg.metrics)
 	dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, g.cfg.metrics, g.cfg.backpressure))(core)
+	sid := ir.MakeSchemaID(src.namespace, src.version, opKey)
+	g.dispatchers.Set(sid, dispatcher)
 
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			return dispatcher.Dispatch(rp.Context, rp.Args)
+			d := g.dispatchers.Get(sid)
+			if d == nil {
+				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
+			}
+			return d.Dispatch(rp.Context, rp.Args)
 		},
 	}, nil
 }
