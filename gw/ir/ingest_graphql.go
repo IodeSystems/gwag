@@ -36,6 +36,20 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 		Origin:     wire,
 	}
 
+	// Root type names are special — they're walked below to extract
+	// Operations, but never land in svc.Types since they don't
+	// represent reusable data shapes.
+	rootTypeNames := map[string]bool{}
+	if n := wire.Schema.QueryType; n != nil {
+		rootTypeNames[n.Name] = true
+	}
+	if n := wire.Schema.MutationType; n != nil {
+		rootTypeNames[n.Name] = true
+	}
+	if n := wire.Schema.SubscriptionType; n != nil {
+		rootTypeNames[n.Name] = true
+	}
+
 	// First pass: register every named non-introspection type.
 	for i := range wire.Schema.Types {
 		t := &wire.Schema.Types[i]
@@ -44,6 +58,9 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 		}
 		if t.Name == "" {
 			continue // wrapper types (LIST, NON_NULL) carry no name
+		}
+		if rootTypeNames[t.Name] {
+			continue
 		}
 		switch t.Kind {
 		case "OBJECT":
@@ -103,7 +120,11 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 		}
 	}
 
-	// Operations come from the three root types.
+	// Operations come from the three root types. Each root field is
+	// classified as either a flat Operation or a nested
+	// OperationGroup; namespace-container types found during the
+	// classification walk are stripped from svc.Types since they're
+	// IR-synthesized rather than real data types.
 	rootName := func(p *struct{ Name string }) string {
 		if p == nil {
 			return ""
@@ -118,6 +139,7 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 		{rootName(wire.Schema.MutationType), OpMutation},
 		{rootName(wire.Schema.SubscriptionType), OpSubscription},
 	}
+	namespaceTypes := map[string]bool{}
 	for _, r := range roots {
 		if r.name == "" {
 			continue
@@ -131,37 +153,161 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 		sort.Slice(fields, func(i, j int) bool { return fields[i].Name < fields[j].Name })
 		for i := range fields {
 			f := &fields[i]
-			op := &Operation{
-				Name:        f.Name,
-				Kind:        r.kind,
-				Description: f.Description,
-				Deprecated:  f.DeprecationReason,
-				OriginKind:  KindGraphQL,
-				Origin:      f,
+			op, grp := classifyGraphQLRootField(wire.Schema.Types, f, r.kind, namespaceTypes)
+			if op != nil {
+				svc.Operations = append(svc.Operations, op)
 			}
-			if ref := graphqlTypeRef(f.Type); ref != nil {
-				op.Output = ref
-				op.OutputRepeated = isListRef(f.Type)
-				op.OutputRequired = isNonNullRef(f.Type)
-				op.OutputItemRequired = isItemRequiredRef(f.Type)
+			if grp != nil {
+				svc.Groups = append(svc.Groups, grp)
 			}
-			for _, a := range f.Args {
-				arg := &Arg{
-					Name:        a.Name,
-					Description: a.Description,
-				}
-				if ref := graphqlTypeRef(a.Type); ref != nil {
-					arg.Type = *ref
-				}
-				arg.Repeated = isListRef(a.Type)
-				arg.Required = isNonNullRef(a.Type)
-				arg.ItemRequired = isItemRequiredRef(a.Type)
-				op.Args = append(op.Args, arg)
-			}
-			svc.Operations = append(svc.Operations, op)
 		}
 	}
+	// Prune namespace-container types — they're not data, just
+	// IR-synthesized parents for the Groups tree. Round-trip via
+	// re-render synthesizes them back from the Groups.
+	for n := range namespaceTypes {
+		delete(svc.Types, n)
+	}
 	return svc, nil
+}
+
+// classifyGraphQLRootField decides whether one field on a root (or
+// nested-namespace) type is a flat Operation or an OperationGroup.
+// The heuristic: a field with zero args whose return type unwraps
+// to a single OBJECT (no LIST) and whose return type transitively
+// contains at least one field-with-args is a Group; otherwise it
+// is an Operation. namespaceTypes accumulates the names of
+// namespace-container types so the caller can prune them from
+// svc.Types after the walk.
+func classifyGraphQLRootField(types []wireGraphQLType, f *wireGraphQLField, kind OpKind, namespaceTypes map[string]bool) (*Operation, *OperationGroup) {
+	if grp := tryGraphQLGroup(types, f, kind, namespaceTypes, map[string]bool{}); grp != nil {
+		return nil, grp
+	}
+	return graphqlFieldToOperation(f, kind), nil
+}
+
+// tryGraphQLGroup attempts to classify f as an OperationGroup. Returns
+// nil if f is a flat Operation. seen tracks types under recursive
+// inspection to break cycles in pathological schemas.
+func tryGraphQLGroup(types []wireGraphQLType, f *wireGraphQLField, kind OpKind, namespaceTypes, seen map[string]bool) *OperationGroup {
+	if len(f.Args) > 0 {
+		return nil
+	}
+	objName := unwrapToObjectName(f.Type)
+	if objName == "" {
+		return nil
+	}
+	target := findGraphQLType(types, objName)
+	if target == nil || target.Kind != "OBJECT" {
+		return nil
+	}
+	if !typeHasOperations(types, target, map[string]bool{}) {
+		return nil
+	}
+	// Cycle detection on the recursive build path. A namespace that
+	// references itself (directly or via sub-groups) gets cut at the
+	// first re-entry.
+	if seen[objName] {
+		return nil
+	}
+	seen[objName] = true
+	defer delete(seen, objName)
+
+	grp := &OperationGroup{Name: f.Name, Description: f.Description, Kind: kind}
+	subFields := append([]wireGraphQLField(nil), target.Fields...)
+	sort.Slice(subFields, func(i, j int) bool { return subFields[i].Name < subFields[j].Name })
+	for i := range subFields {
+		sf := &subFields[i]
+		if sub := tryGraphQLGroup(types, sf, kind, namespaceTypes, seen); sub != nil {
+			grp.Groups = append(grp.Groups, sub)
+			continue
+		}
+		grp.Operations = append(grp.Operations, graphqlFieldToOperation(sf, kind))
+	}
+	namespaceTypes[objName] = true
+	return grp
+}
+
+// graphqlFieldToOperation projects one GraphQL field onto an IR
+// Operation. Used both for root-level fields that classified as
+// Operations and for fields on namespace-container types that
+// classified as Operations under a parent Group.
+func graphqlFieldToOperation(f *wireGraphQLField, kind OpKind) *Operation {
+	op := &Operation{
+		Name:        f.Name,
+		Kind:        kind,
+		Description: f.Description,
+		Deprecated:  f.DeprecationReason,
+		OriginKind:  KindGraphQL,
+		Origin:      f,
+	}
+	if ref := graphqlTypeRef(f.Type); ref != nil {
+		op.Output = ref
+		op.OutputRepeated = isListRef(f.Type)
+		op.OutputRequired = isNonNullRef(f.Type)
+		op.OutputItemRequired = isItemRequiredRef(f.Type)
+	}
+	for _, a := range f.Args {
+		arg := &Arg{
+			Name:        a.Name,
+			Description: a.Description,
+		}
+		if ref := graphqlTypeRef(a.Type); ref != nil {
+			arg.Type = *ref
+		}
+		arg.Repeated = isListRef(a.Type)
+		arg.Required = isNonNullRef(a.Type)
+		arg.ItemRequired = isItemRequiredRef(a.Type)
+		op.Args = append(op.Args, arg)
+	}
+	return op
+}
+
+// typeHasOperations returns true if t (an OBJECT type) contains at
+// least one field-with-args directly or transitively through a
+// sub-object reference. Mirror of the namespace-classification
+// heuristic; used to decide whether to descend into a candidate
+// namespace.
+func typeHasOperations(types []wireGraphQLType, t *wireGraphQLType, visited map[string]bool) bool {
+	if t == nil || visited[t.Name] {
+		return false
+	}
+	visited[t.Name] = true
+	for _, f := range t.Fields {
+		if len(f.Args) > 0 {
+			return true
+		}
+		innerName := unwrapToObjectName(f.Type)
+		if innerName == "" {
+			continue
+		}
+		inner := findGraphQLType(types, innerName)
+		if inner != nil && inner.Kind == "OBJECT" && typeHasOperations(types, inner, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+// unwrapToObjectName returns the OBJECT type's name if r is OBJECT
+// or NON_NULL→OBJECT. Returns "" if the wrapper chain crosses a
+// LIST or terminates at anything other than an OBJECT — namespace
+// containers must be a single object, not a list.
+func unwrapToObjectName(r *wireGraphQLTypeRef) string {
+	cur := r
+	for cur != nil {
+		switch cur.Kind {
+		case "NON_NULL":
+			cur = cur.OfType
+		case "LIST":
+			return ""
+		case "OBJECT":
+			return cur.Name
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 // graphqlFieldToIRField converts a wireGraphQLField to an IR Field.
