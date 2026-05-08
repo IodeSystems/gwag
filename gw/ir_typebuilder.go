@@ -29,6 +29,14 @@ type IRTypeNaming struct {
 	ScalarName    func(irName string) string
 	FieldName     func(irName string) string
 	EnumValueName func(irName string) string
+
+	// EnumValueValue returns the Go-side runtime Value graphql-go
+	// will compare against when coercing inbound enum literals and
+	// outbound payloads. Default returns the IR EnumValue.Number
+	// (proto's wire shape). graphql ingest overrides to return
+	// EnumValue.Name (string) so the upstream's "ADMIN" string
+	// coerces correctly through graphql-go's Enum coercion.
+	EnumValueValue func(ir.EnumValue) any
 }
 
 // IRTypeBuilderOptions tweaks scalar projection. The defaults match
@@ -121,6 +129,9 @@ func NewIRTypeBuilder(svc *ir.Service, naming IRTypeNaming, opts IRTypeBuilderOp
 	}
 	if b.naming.EnumValueName == nil {
 		b.naming.EnumValueName = identityName
+	}
+	if b.naming.EnumValueValue == nil {
+		b.naming.EnumValueValue = func(v ir.EnumValue) any { return v.Number }
 	}
 	if b.options.Int64Type == nil {
 		b.options.Int64Type = graphql.String
@@ -378,7 +389,7 @@ func (b *IRTypeBuilder) enumFor(t *ir.Type) *graphql.Enum {
 	for _, v := range t.Enum {
 		name := b.naming.EnumValueName(v.Name)
 		values[name] = &graphql.EnumValueConfig{
-			Value:             v.Number,
+			Value:             b.naming.EnumValueValue(v),
 			Description:       v.Description,
 			DeprecationReason: v.Deprecated,
 		}
