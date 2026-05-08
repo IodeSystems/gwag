@@ -153,14 +153,16 @@ func (f *openAPIE2EFixture) postGraphQL(t *testing.T, query string, headers map[
 
 func TestOpenAPIE2E_Get(t *testing.T) {
 	f := newOpenAPIE2EFixture(t)
-	status, body := f.postGraphQL(t, `{"query":"{ test_getThing(id:\"42\") { id name } }"}`, nil)
+	status, body := f.postGraphQL(t, `{"query":"{ test { getThing(id:\"42\") { id name } } }"}`, nil)
 	if status != http.StatusOK {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
 
 	var out struct {
 		Data struct {
-			TestGetThing map[string]any `json:"test_getThing"`
+			Test struct {
+				GetThing map[string]any `json:"getThing"`
+			} `json:"test"`
 		} `json:"data"`
 		Errors []any `json:"errors"`
 	}
@@ -170,7 +172,7 @@ func TestOpenAPIE2E_Get(t *testing.T) {
 	if len(out.Errors) > 0 {
 		t.Fatalf("graphql errors: %v", out.Errors)
 	}
-	if got := out.Data.TestGetThing["id"]; got != "abc" {
+	if got := out.Data.Test.GetThing["id"]; got != "abc" {
 		t.Fatalf("id=%v want abc", got)
 	}
 
@@ -185,7 +187,7 @@ func TestOpenAPIE2E_Get(t *testing.T) {
 
 func TestOpenAPIE2E_PostBody(t *testing.T) {
 	f := newOpenAPIE2EFixture(t)
-	q := `{"query":"mutation { test_createThing(body:{name:\"widget\"}) { id name } }"}`
+	q := `{"query":"mutation { test { createThing(body:{name:\"widget\"}) { id name } } }"}`
 	status, body := f.postGraphQL(t, q, nil)
 	if status != http.StatusOK {
 		t.Fatalf("status=%d body=%s", status, body)
@@ -208,7 +210,7 @@ func TestOpenAPIE2E_PostBody(t *testing.T) {
 
 func TestOpenAPIE2E_AuthorizationForwarded(t *testing.T) {
 	f := newOpenAPIE2EFixture(t)
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, _ = f.postGraphQL(t, q, map[string]string{
 		"Authorization": "Bearer hunter2",
 		"X-Other":       "leaked?",
@@ -227,7 +229,7 @@ func TestOpenAPIE2E_AuthorizationForwarded(t *testing.T) {
 
 func TestOpenAPIE2E_ForwardHeadersAllowlist(t *testing.T) {
 	f := newOpenAPIE2EFixture(t, ForwardHeaders("X-Api-Key"))
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, _ = f.postGraphQL(t, q, map[string]string{
 		"Authorization": "Bearer hunter2",
 		"X-Api-Key":     "k1",
@@ -278,7 +280,7 @@ func TestOpenAPIE2E_HTTPClient_GatewayWideDefault(t *testing.T) {
 		Transport: &markingTransport{markHeader: "X-Via", markValue: "gw-default"},
 	})
 
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, _ = f.postGraphQL(t, q, nil)
 	rec := f.lastReq.Load()
 	if rec == nil {
@@ -297,7 +299,7 @@ func TestOpenAPIE2E_HTTPClient_PerSourceBeatsGatewayWide(t *testing.T) {
 		OpenAPIClient(&http.Client{Transport: &markingTransport{markHeader: "X-Via", markValue: "per-source"}}),
 	)
 
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, _ = f.postGraphQL(t, q, nil)
 	rec := f.lastReq.Load()
 	if rec == nil {
@@ -313,7 +315,7 @@ func TestOpenAPIE2E_HTTPClient_NilFallsBackToDefault(t *testing.T) {
 	// We can't easily probe the default client, but we can confirm
 	// the request reached the backend (no transport rewriting / drops).
 	f := newOpenAPIE2EFixture(t)
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	status, body := f.postGraphQL(t, q, nil)
 	if status != http.StatusOK || strings.Contains(body, "errors") {
 		t.Fatalf("default client path failed: status=%d body=%s", status, body)
@@ -404,7 +406,7 @@ func TestOpenAPIE2E_BackpressureTimesOutAndRejects(t *testing.T) {
 		return rr.Code, rr.Body.String()
 	}
 
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	holder := make(chan string, 1)
 	go func() {
 		_, body := postQuery(q)
@@ -499,9 +501,9 @@ func TestOpenAPIE2E_RecordDispatchFires(t *testing.T) {
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}
 
-	post(`{"query":"{ test_getThing(id:\"1\") { id } }"}`)
+	post(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`)
 	fail.Store(true)
-	post(`{"query":"{ test_getThing(id:\"2\") { id } }"}`)
+	post(`{"query":"{ test { getThing(id:\"2\") { id } } }"}`)
 
 	cm.mu.Lock()
 	calls := append([]openAPIDispatchCall(nil), cm.calls...)
@@ -550,7 +552,7 @@ func TestOpenAPIE2E_ErrorClassification(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte("err"))
 			}
-			q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+			q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 			_, body := f.postGraphQL(t, q, nil)
 			if !strings.Contains(body, tc.wantCode) {
 				t.Errorf("expected %s in graphql error body, got %s", tc.wantCode, body)
@@ -564,7 +566,7 @@ func TestOpenAPIE2E_TransportErrorClassifiesAsInternal(t *testing.T) {
 	// error in client.Do — must classify as INTERNAL.
 	f := newOpenAPIE2EFixture(t)
 	f.backend.Close() // backend gone before dispatch
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, body := f.postGraphQL(t, q, nil)
 	if !strings.Contains(body, "INTERNAL") {
 		t.Errorf("expected INTERNAL code, got %s", body)
@@ -577,7 +579,7 @@ func TestOpenAPIE2E_BackendErrorSurfaces(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("boom"))
 	}
-	q := `{"query":"{ test_getThing(id:\"1\") { id } }"}`
+	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	status, body := f.postGraphQL(t, q, nil)
 	if status != http.StatusOK {
 		t.Fatalf("graphql transport status = %d, want 200", status)
@@ -625,10 +627,11 @@ func TestOpenAPIE2E_TwoVersions(t *testing.T) {
 		return rr.Body.String()
 	}
 
-	pickID := func(body string) string {
+	// pickIDAt extracts the id at the nested path data.<segments...>.id.
+	pickIDAt := func(body string, path ...string) string {
 		var out struct {
-			Data   map[string]map[string]any `json:"data"`
-			Errors []any                     `json:"errors"`
+			Data   map[string]any `json:"data"`
+			Errors []any          `json:"errors"`
 		}
 		if err := json.Unmarshal([]byte(body), &out); err != nil {
 			t.Fatalf("decode: %v: %s", err, body)
@@ -636,41 +639,50 @@ func TestOpenAPIE2E_TwoVersions(t *testing.T) {
 		if len(out.Errors) > 0 {
 			t.Fatalf("graphql errors: %v", out.Errors)
 		}
-		for _, m := range out.Data {
-			if id, ok := m["id"].(string); ok {
-				return id
+		var cur any = out.Data
+		for _, seg := range path {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return ""
 			}
+			cur = m[seg]
 		}
-		return ""
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return ""
+		}
+		id, _ := m["id"].(string)
+		return id
 	}
 
-	// Latest field — flat naming, hits v2.
-	if got := pickID(post(`{ svc_getThing(id:"x") { id } }`)); got != "v2" {
-		t.Errorf("svc_getThing id=%q want v2", got)
+	// Latest field — top-level addressable as svc.getThing, hits v2.
+	if got := pickIDAt(post(`{ svc { getThing(id:"x") { id } } }`), "svc", "getThing"); got != "v2" {
+		t.Errorf("svc.getThing id=%q want v2", got)
 	}
 	if v2Hits.Load() != 1 || v1Hits.Load() != 0 {
 		t.Errorf("after latest call: v1Hits=%d v2Hits=%d, want 0/1", v1Hits.Load(), v2Hits.Load())
 	}
 
-	// v1 field — versioned naming, hits v1.
-	if got := pickID(post(`{ svc_v1_getThing(id:"x") { id } }`)); got != "v1" {
-		t.Errorf("svc_v1_getThing id=%q want v1", got)
+	// v1 field — addressable as svc.v1.getThing, hits v1.
+	if got := pickIDAt(post(`{ svc { v1 { getThing(id:"x") { id } } } }`), "svc", "v1", "getThing"); got != "v1" {
+		t.Errorf("svc.v1.getThing id=%q want v1", got)
 	}
 	if v1Hits.Load() != 1 {
 		t.Errorf("after v1 call: v1Hits=%d, want 1", v1Hits.Load())
 	}
 
-	// SDL contains both, with v1 carrying @deprecated.
+	// SDL surfaces nested namespace containers + the v1 sub-field
+	// carries @deprecated. Field names inside containers are
+	// lower-camel; the deprecation reason includes the latest version.
 	sdl := getSDL(t, gw)
-	if !strings.Contains(sdl, "svc_getThing(") {
-		t.Errorf("SDL missing svc_getThing: %s", sdl)
+	if !strings.Contains(sdl, "SvcQueryNamespace") {
+		t.Errorf("SDL missing SvcQueryNamespace: %s", sdl)
 	}
-	if !strings.Contains(sdl, "svc_v1_getThing(") {
-		t.Errorf("SDL missing svc_v1_getThing: %s", sdl)
+	if !strings.Contains(sdl, "SvcV1QueryNamespace") {
+		t.Errorf("SDL missing SvcV1QueryNamespace: %s", sdl)
 	}
-	if !strings.Contains(sdl, `svc_v1_getThing(id: String!): SVC_v1_Object @deprecated(reason: "v2 is current")`) &&
-		!strings.Contains(sdl, `@deprecated(reason: "v2 is current")`) {
-		t.Errorf("SDL must mark v1 fields @deprecated with v2 reason: %s", sdl)
+	if !strings.Contains(sdl, `@deprecated(reason: "v2 is current")`) {
+		t.Errorf("SDL must mark v1 sub-group @deprecated with v2 reason: %s", sdl)
 	}
 }
 
@@ -779,14 +791,16 @@ func TestOpenAPIE2E_OneOfDiscriminatedUnion(t *testing.T) {
 	}
 
 	h := gw.Handler()
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ test_getPet(id:\"x\") { __typename ... on test_Cat { name claws } ... on test_Dog { name barksPerMinute } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ test { getPet(id:\"x\") { __typename ... on test_Cat { name claws } ... on test_Dog { name barksPerMinute } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
 	var out struct {
 		Data struct {
-			GetPet map[string]any `json:"test_getPet"`
+			Test struct {
+				GetPet map[string]any `json:"getPet"`
+			} `json:"test"`
 		} `json:"data"`
 		Errors []any `json:"errors"`
 	}
@@ -796,10 +810,10 @@ func TestOpenAPIE2E_OneOfDiscriminatedUnion(t *testing.T) {
 	if len(out.Errors) > 0 {
 		t.Fatalf("graphql errors: %v\nbody=%s", out.Errors, rr.Body.String())
 	}
-	if got := out.Data.GetPet["__typename"]; got != "test_Cat" {
+	if got := out.Data.Test.GetPet["__typename"]; got != "test_Cat" {
 		t.Errorf("__typename=%v want test_Cat", got)
 	}
-	if got := out.Data.GetPet["claws"]; got == nil {
+	if got := out.Data.Test.GetPet["claws"]; got == nil {
 		t.Errorf("Cat-specific claws missing; body=%s", rr.Body.String())
 	}
 }
@@ -849,19 +863,21 @@ func TestOpenAPIE2E_OneOfNoDiscriminatorHeuristic(t *testing.T) {
 
 	h := gw.Handler()
 	req := httptest.NewRequest(http.MethodPost, "/graphql",
-		strings.NewReader(`{"query":"{ h_getPet(id:\"x\") { __typename ... on h_Cat { claws } ... on h_Dog { barksPerMinute } } }"}`))
+		strings.NewReader(`{"query":"{ h { getPet(id:\"x\") { __typename ... on h_Cat { claws } ... on h_Dog { barksPerMinute } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	var hOut struct {
 		Data struct {
-			GetPet map[string]any `json:"h_getPet"`
+			H struct {
+				GetPet map[string]any `json:"getPet"`
+			} `json:"h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &hOut); err != nil {
 		t.Fatalf("decode: %v: %s", err, rr.Body.String())
 	}
-	if got := hOut.Data.GetPet["__typename"]; got != "h_Cat" {
+	if got := hOut.Data.H.GetPet["__typename"]; got != "h_Cat" {
 		t.Errorf("expected heuristic to pick h_Cat; got=%v body=%s", got, rr.Body.String())
 	}
 }

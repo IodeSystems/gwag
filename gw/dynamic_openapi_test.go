@@ -85,7 +85,7 @@ func TestDynamicOpenAPI_Standalone(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	got := postGraphQLForDynamic(t, srv.URL,
-		`{"query":"{ billing_getInvoice(id:\"INV-1\") { id amount } }"}`)
+		`{"query":"{ billing { getInvoice(id:\"INV-1\") { id amount } } }"}`)
 	if !strings.Contains(got, `INV-1`) || !strings.Contains(got, `42.5`) || strings.Contains(got, `errors`) {
 		t.Fatalf("unexpected response: %s", got)
 	}
@@ -97,9 +97,11 @@ func TestDynamicOpenAPI_Standalone(t *testing.T) {
 		t.Fatalf("Deregister: %v", err)
 	}
 	got = postGraphQLForDynamic(t, srv.URL,
-		`{"query":"{ billing_getInvoice(id:\"INV-1\") { id } }"}`)
-	if !strings.Contains(got, "errors") || !strings.Contains(got, "billing_getInvoice") {
-		t.Fatalf("expected schema to lose billing_getInvoice after deregister, got: %s", got)
+		`{"query":"{ billing { getInvoice(id:\"INV-1\") { id } } }"}`)
+	// After deregister the `billing` namespace container disappears
+	// from Query, so the parent field can no longer be selected.
+	if !strings.Contains(got, "errors") || !strings.Contains(got, `Cannot query field \"billing\"`) {
+		t.Fatalf("expected schema to lose billing namespace after deregister, got: %s", got)
 	}
 }
 
@@ -230,7 +232,7 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 
 	// Query through B → dispatches HTTP to backend.
 	got := postGraphQLForDynamic(t, b.httpSrv.URL,
-		`{"query":"{ billing_getInvoice(id:\"INV-1\") { id amount } }"}`)
+		`{"query":"{ billing { getInvoice(id:\"INV-1\") { id amount } } }"}`)
 	if strings.Contains(got, "errors") || !strings.Contains(got, "INV-1") {
 		t.Fatalf("response via B: %s", got)
 	}
@@ -300,7 +302,7 @@ func TestDynamicOpenAPI_MultiReplica(t *testing.T) {
 	// (each finishes before the next starts).
 	for i := 0; i < 10; i++ {
 		got := postGraphQLForDynamic(t, srv.URL,
-			`{"query":"{ billing_getInvoice(id:\"INV\") { id } }"}`)
+			`{"query":"{ billing { getInvoice(id:\"INV\") { id } } }"}`)
 		if strings.Contains(got, "errors") {
 			t.Fatalf("dispatch errored: %s", got)
 		}
@@ -329,7 +331,7 @@ func TestDynamicOpenAPI_MultiReplica(t *testing.T) {
 	beforeB := countB()
 	for i := 0; i < 5; i++ {
 		_ = postGraphQLForDynamic(t, srv.URL,
-			`{"query":"{ billing_getInvoice(id:\"INV\") { id } }"}`)
+			`{"query":"{ billing { getInvoice(id:\"INV\") { id } } }"}`)
 	}
 	afterA, afterB := countA(), countB()
 	if afterA != totalA {
