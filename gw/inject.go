@@ -207,7 +207,13 @@ func resolveCachedProto(
 	return cr.val, cr.err
 }
 
-type cacheKey struct{ name protoreflect.FullName }
+// cacheKey identifies one inject-resolver entry on the per-request
+// cache. Exactly one of `name` (InjectType) and `path` (InjectPath)
+// is populated; the other stays zero.
+type cacheKey struct {
+	name protoreflect.FullName
+	path string
+}
 
 type cachedResult struct {
 	once sync.Once
@@ -239,3 +245,111 @@ func (h hideOption) applyInject(c *injectConfig) { c.hide = bool(h) }
 // Pass Hide(false) to keep the arg on the wire and have the resolver
 // inspect-and-decide.
 func Hide(hide bool) InjectOption { return hideOption(hide) }
+
+// InjectPath returns a Transform targeting one specific schema
+// location. `path` is "namespace.op.arg" (op + arg names match
+// IR.Operation.Name and IR.Arg.Name verbatim — proto-pascal,
+// OpenAPI-camel, etc.). The match applies to every version of the
+// namespace.
+//
+// Resolver:
+//
+//	func(ctx context.Context, current any) (any, error)
+//
+// `current` is nil when the caller didn't send the arg (always nil
+// under Hide(true)). Otherwise it's the canonical IR-typed value
+// (string, float64, bool, map[string]any, …). The resolver returns
+// the value to write; nil leaves the arg untouched.
+//
+// Coverage today matches InjectType: schema rewrite (HidePathRewrite)
+// applies to every format; runtime injection runs for proto
+// dispatchers only.
+//
+// Path miss is silent today — at every schema rebuild, paths that
+// resolve fire; paths that don't are dormant. The dormant warn-log +
+// resolver-return-type validation are deferred to the injector
+// inventory work.
+func InjectPath(path string, resolve func(ctx context.Context, current any) (any, error), opts ...InjectOption) Transform {
+	cfg := injectConfig{hide: true}
+	for _, o := range opts {
+		o.applyInject(&cfg)
+	}
+
+	var schema []SchemaRewrite
+	if cfg.hide {
+		schema = append(schema, HidePathRewrite{Path: path})
+	}
+	runtime := injectPathMiddleware(path, cfg.hide, resolve)
+	return Transform{Schema: schema, Runtime: runtime}
+}
+
+// injectPathMiddleware wires the runtime half of InjectPath. Returns
+// nil if `path` is malformed — schema half still applies, runtime is
+// a no-op.
+func injectPathMiddleware(path string, hide bool, resolve func(ctx context.Context, current any) (any, error)) Middleware {
+	targetNS, targetOp, targetArg, ok := splitInjectPath(path)
+	if !ok {
+		return nil
+	}
+	return func(next Handler) Handler {
+		return func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+			info, ok := dispatchOpInfoFromContext(ctx)
+			if !ok || info.namespace != targetNS || info.op != targetOp {
+				return next(ctx, req)
+			}
+			dyn, ok := req.(*dynamicpb.Message)
+			if !ok {
+				return next(ctx, req)
+			}
+			fd := dyn.Descriptor().Fields().ByName(protoreflect.Name(targetArg))
+			if fd == nil {
+				return next(ctx, req)
+			}
+			var current any
+			if !hide && dyn.Has(fd) {
+				current = protoToAny(fd, dyn.Get(fd))
+			}
+			val, err := resolveCachedPath(ctx, path, current, resolve)
+			if err != nil {
+				return nil, err
+			}
+			if val == nil {
+				return next(ctx, req)
+			}
+			if err := setField(dyn, fd, val); err != nil {
+				return nil, err
+			}
+			return next(ctx, req)
+		}
+	}
+}
+
+// resolveCachedPath memoises path-resolver output per request, keyed
+// on the path string. The cache only kicks in when current is nil —
+// per-call-site current makes by-path caching wrong.
+func resolveCachedPath(
+	ctx context.Context,
+	path string,
+	current any,
+	resolve func(ctx context.Context, current any) (any, error),
+) (any, error) {
+	if current != nil {
+		return resolve(ctx, current)
+	}
+	cache, ok := ctx.Value(injectCacheCtxKey{}).(*sync.Map)
+	if !ok {
+		return resolve(ctx, nil)
+	}
+	entry, _ := cache.LoadOrStore(cacheKey{path: path}, &cachedPathResult{})
+	cr := entry.(*cachedPathResult)
+	cr.once.Do(func() {
+		cr.val, cr.err = resolve(ctx, nil)
+	})
+	return cr.val, cr.err
+}
+
+type cachedPathResult struct {
+	once sync.Once
+	val  any
+	err  error
+}

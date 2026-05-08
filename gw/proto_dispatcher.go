@@ -23,6 +23,9 @@ import (
 type protoDispatcher struct {
 	inputDesc protoreflect.MessageDescriptor
 	handler   Handler // chain(inner): user runtime middleware around pickReplica+Invoke+RecordDispatch
+	namespace string
+	version   string
+	op        string
 }
 
 // newProtoInvocationHandler returns the proto-native inner Handler
@@ -92,6 +95,9 @@ func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protorefl
 	return &protoDispatcher{
 		inputDesc: md.Input(),
 		handler:   chain(inner),
+		namespace: p.key.namespace,
+		version:   p.key.version,
+		op:        string(md.Name()),
 	}
 }
 
@@ -104,6 +110,7 @@ func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protorefl
 // been turned into the canonical map (gRPC has already finished
 // marshaling by then, so the buffer is safe to reuse).
 func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
 	req := acquireDynamicMessage(d.inputDesc)
 	defer releaseDynamicMessage(d.inputDesc, req)
 	if err := argsToMessage(args, req); err != nil {

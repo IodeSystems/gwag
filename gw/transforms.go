@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"reflect"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -84,4 +85,65 @@ func (g *Gateway) hiddenTypeNames() []string {
 		}
 	}
 	return out
+}
+
+// HidePathRewrite is the concrete SchemaRewrite returned by InjectPath
+// under Hide(true). It strips a single named arg from one specific
+// operation, identified by the namespace.op.arg path. The match
+// applies to every version of the namespace.
+type HidePathRewrite struct {
+	Path string // "namespace.op.arg"
+}
+
+func (h HidePathRewrite) apply(svcs []*ir.Service) {
+	ns, op, arg, ok := splitInjectPath(h.Path)
+	if !ok {
+		return
+	}
+	for _, svc := range svcs {
+		if svc.Namespace != ns {
+			continue
+		}
+		stripPathArgFromOps(svc.Operations, op, arg)
+		for _, grp := range svc.Groups {
+			stripPathArgFromGroup(grp, op, arg)
+		}
+	}
+}
+
+func stripPathArgFromOps(ops []*ir.Operation, opName, arg string) {
+	for _, op := range ops {
+		if op.Name != opName {
+			continue
+		}
+		n := 0
+		for _, a := range op.Args {
+			if a.Name == arg {
+				continue
+			}
+			op.Args[n] = a
+			n++
+		}
+		op.Args = op.Args[:n]
+	}
+}
+
+func stripPathArgFromGroup(grp *ir.OperationGroup, op, arg string) {
+	stripPathArgFromOps(grp.Operations, op, arg)
+	for _, sub := range grp.Groups {
+		stripPathArgFromGroup(sub, op, arg)
+	}
+}
+
+// splitInjectPath parses "namespace.op.arg" into its three segments.
+// Returns ok=false on malformed input.
+func splitInjectPath(path string) (ns, op, arg string, ok bool) {
+	parts := strings.Split(path, ".")
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
 }
