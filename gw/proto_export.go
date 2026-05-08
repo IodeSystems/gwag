@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoprint"
 	"google.golang.org/protobuf/proto"
@@ -52,6 +53,29 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 			return
 		}
 
+		// Pull every source through IR — proto, OpenAPI, GraphQL —
+		// then render each to a FileDescriptorProto. Same-kind
+		// (proto-origin) services emit verbatim via the Origin
+		// shortcut; cross-kind services (OpenAPI/GraphQL) emit
+		// synthesized FileDescriptorProtos so /schema/proto's
+		// filter-by-namespace still has content even when the
+		// matching service was never registered as proto.
+		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fds, err := ir.RenderProtoFiles(svcs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Same-kind shortcut returns the registered descriptor —
+		// fold in transitive imports + apply Hides via the existing
+		// helpers so wire compatibility tracks the gateway's old
+		// path. (For cross-kind synthesized files there are no
+		// imports yet; v1 doesn't synthesize external well-known-
+		// type imports.)
 		g.mu.Lock()
 		hides := map[protoreflect.FullName]bool{}
 		for _, p := range g.pairs {
@@ -59,24 +83,13 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 				hides[t] = true
 			}
 		}
-		// Collect matching pools' file descriptors.
-		matched := []*pool{}
-		for _, p := range g.pools {
-			if g.isInternal(p.key.namespace) {
-				continue
-			}
-			if !matchSelectors(p.key, selectors) {
-				continue
-			}
-			matched = append(matched, p)
-		}
 		g.mu.Unlock()
-
-		// Walk + transform + dedupe by file path.
-		fds := &descriptorpb.FileDescriptorSet{}
-		seen := map[string]bool{}
-		for _, p := range matched {
-			collectTransformedFiles(p.file, hides, fds, seen)
+		if len(hides) > 0 {
+			for _, fp := range fds.File {
+				for _, m := range fp.MessageType {
+					stripHiddenFields(m, hides)
+				}
+			}
 		}
 		// Stable ordering for deterministic bytes.
 		sort.Slice(fds.File, func(i, j int) bool {
@@ -268,23 +281,31 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 		}
 		filter := schemaFilter{selectors: selectors}
 
-		g.mu.Lock()
+		// Build per-source IR + render OpenAPI per service. The IR
+		// pipeline picks up proto pools too — a proto-only namespace
+		// surfaces as `{<ns>: {<vN>: <synth-openapi-spec>}}` so the
+		// /schema/openapi tab in the UI is no longer empty when the
+		// filter narrows to a proto service.
+		_ = filter
+		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		out := map[string]map[string]any{}
-		for k, src := range g.openAPISources {
-			if g.isInternal(k.namespace) {
-				continue
+		for _, svc := range svcs {
+			doc, err := ir.RenderOpenAPI(svc)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
 			}
-			if !filter.matchPool(k) {
-				continue
-			}
-			byVer, ok := out[k.namespace]
+			byVer, ok := out[svc.Namespace]
 			if !ok {
 				byVer = map[string]any{}
-				out[k.namespace] = byVer
+				out[svc.Namespace] = byVer
 			}
-			byVer[k.version] = src.doc
+			byVer[svc.Version] = doc
 		}
-		g.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := writeJSON(w, out); err != nil {
