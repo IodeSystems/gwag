@@ -38,7 +38,23 @@ if [[ $DO_UI == 1 ]]; then
         (cd ui && pnpm run gen)
     fi
     echo "==> ui: pnpm run build"
-    (cd ui && pnpm run build)
+    if ! (cd ui && pnpm run build); then
+        # UI build failed — copy the tracked fallback into dist/ so
+        # //go:embed all:dist still has something to embed and the
+        # gateway binary surfaces a "UI bundle not built" page rather
+        # than refusing to start. dist/ is gitignored entirely; the
+        # fallback under ui/fallback/ is the only tracked placeholder.
+        echo "==> ui: build failed, falling back to ui/fallback/"
+        mkdir -p ui/dist
+        cp ui/fallback/index.html ui/dist/index.html
+    fi
+fi
+# Ensure dist/ is non-empty even on first-run / --no-ui builds, so the
+# embed succeeds without forcing a pnpm install on every Go iteration.
+if [[ ! -f ui/dist/index.html ]]; then
+    echo "==> ui: dist/ empty, seeding from ui/fallback/"
+    mkdir -p ui/dist
+    cp ui/fallback/index.html ui/dist/index.html
 fi
 
 if [[ $DO_GO == 1 ]]; then

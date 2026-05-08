@@ -1,13 +1,10 @@
 node_modules/
 .vite/
 
-# Track only the placeholder index.html so the //go:embed directive
-# in embed.go has something to embed on a fresh clone (Go fails the
-# build if the embed pattern matches zero files). `pnpm run build`
-# overwrites the placeholder and emits assets/, which stay
-# untracked but get baked into the binary at `go build` time.
-dist/*
-!dist/index.html
+# dist/ is build output only — never tracked. `pnpm run build`
+# populates it; embed.go falls back to ui/fallback/ when dist/ is
+# empty so `go build` succeeds on a fresh clone.
+dist/
 *.log
 .DS_Store
 
