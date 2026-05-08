@@ -29,11 +29,77 @@ Open items only — completed work is in *Recently Shipped*. Ordered
 by current leverage; the top items are realistic next picks for a
 fresh session.
 
-**Suggested pickups:** none of high leverage right now — every
-remaining tier-2 item is parked behind a real use case (Interface /
-Union mirror, oneOf/anyOf union mapping, richer outbound auth,
-destructive-read opt-in, UI rotate-key panel). If something becomes
-load-bearing, file it as tier 1.
+**Suggested pickups:**
+
+### IR runtime cutover (the active workstream)
+
+Half-done. Schema EXPORT is wired through `gw/ir` — `/api/schema/openapi`
+and `/api/schema/proto` ingest from the registry, transform, and render
+to target format (cross-kind synthesis works, e.g. greeter shows in
+the OpenAPI tab). The runtime path (`g.schema` + `/api/graphql`
+dispatch + `/api/schema/graphql`) still uses the old per-format
+converters in `gw/{convert,openapi,graphql_mirror,schema}.go`.
+
+Transforms are duplicated: `Hides` / `HideInternal` / `Filter` exist
+in `gw/ir/transform.go` AND inline in `buildSchemaLocked`.
+
+Remaining work to make IR the single source of truth, in commit-sized
+chunks:
+
+1. **`SchemaID` on IR + Dispatcher interface + DispatchRegistry.**
+   No behavior change; just structure. ~0.5 day.
+2. **`BackpressureMiddleware` standalone** wrapping a `Dispatcher`.
+   ~0.5 day. Deduplicates today's three inline copies.
+3. **`protoDispatcher`** — extract `gw/schema.go::buildPoolMethodField`
+   resolver closure into a struct method. Wrap with middleware at
+   render time. ~1 day.
+4. **`openAPIDispatcher`** + **`graphQLDispatcher`** — same shape.
+   ~1 day each.
+5. **`RenderGraphQLRuntime(svcs, registry)`** walks IR + registry,
+   builds `*graphql.Schema` with resolvers that look up Dispatchers
+   via SchemaID. Cuts over `buildSchemaLocked`; deletes old converters.
+   ~1-2 days. Highest risk: schema parity (multi-version naming,
+   subscription field collisions, hide-and-inject middleware all
+   need to behave identically).
+6. **Test churn.** ~1-2 days for ~70 existing tests.
+
+Behavior decision needed for step 5: today proto pools render as
+**nested namespace objects** (`Query.greeter.hello`, `Query.greeter.v1.hello`)
+while OpenAPI/GraphQL ingest render flat (`Query.admin_listPeers`).
+The IR's `MultiVersionPrefix` only does flat. Two options:
+
+- **(A) Same-behavior:** encode both strategies in the renderer
+  (~5-6 days total). Existing UI / consumers unchanged.
+- **(B) Simplify to flat-everywhere:** delete the proto nested-
+  object code; ~2 days total but **breaks the UI's existing
+  queries** (`{ greeter { hello } }` → `{ greeter_hello }`).
+
+### Bidirectional canonical-message gateway (long-term vision)
+
+Beyond the runtime cutover: any-format-in / any-format-out, with the
+IR as the canonical message contract. Today only GraphQL ingress
+exists. Layered additions on top of the Dispatcher abstraction:
+
+- **HTTP/JSON ingress** — gateway exposes `/<package>.<Service>/<method>`
+  (or REST paths from OpenAPI's HTTPMethod/HTTPPath) accepting
+  JSON bodies, dispatching via canonical args. ~3-4 days.
+- **gRPC ingress for arbitrary services** — dynamic
+  `grpc.UnknownServiceHandler`-based proxy that catches every
+  `/<svc>/<method>` invocation and routes through canonical
+  args. ~4-5 days.
+- **Subscription transport-agnosticism** — NATS broker / HMAC
+  /channel naming live next to the GraphQL transport today;
+  same symmetric work to make them transport-agnostic. ~3 days.
+
+Don't start these until the Dispatcher abstraction (steps 1-6) is
+landed and parity-tested.
+
+### Existing tier-2 tail (parked behind real use cases)
+
+Interface / Union typed-mirror polish, oneOf/anyOf richer mapping,
+service-account token / OAuth-JWT translation outbound auth,
+destructive-read opt-in, UI rotate-key panel. Promote to tier 1 if
+something becomes load-bearing.
 
 ### Token rotation (kid in tokens)
 
@@ -331,6 +397,20 @@ entry/storage, dist embed.
 (Last n commits worth knowing about for context. Update on commit; trim
 older entries when they get stale.)
 
+- `bc13f77` IR phase 6: wire `/api/schema/openapi` + `/api/schema/proto`
+  through IR. Greeter (proto) shows up in the OpenAPI tab as a
+  synthesized spec; admin (huma OpenAPI) shows up in proto SDL. New
+  `gw/schema_ir.go::gatewayServicesAsIR` helper composes ingest +
+  transforms; both endpoints use it.
+- `b053241` IR phase 4-5: transforms (Filter, HideInternal, Hides,
+  MultiVersionPrefix) + cross-kind render tests.
+- `26f4384` IR phase 2-3: OpenAPI + GraphQL ingest/render with
+  round-trips. Slot-wrapping refinements (Repeated / Required /
+  ItemRequired on Field/Arg/Operation) so GraphQL's `[T!]!` survives.
+- `debae40` IR phase 1: types (Service / Operation / Type / Field as
+  superset) + proto ingest/render with round-trip via Origin
+  shortcut. `gw/ir/` package, decoupled from `gw/`.
+- `bench/` — local benchmark + demo stack (history above this).
 - *(uncommitted)* `bench/` — local benchmark + demo stack.
   `up.sh` boots a 1-gateway + 1-greeter cluster with Prometheus
   (`:19090`, picked above the common port range so it doesn't
