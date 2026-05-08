@@ -61,6 +61,15 @@ func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, e
 	if hide := g.hidesSet(); len(hide) > 0 {
 		ir.Hides(out, hide)
 	}
+
+	// Stamp SchemaIDs once Namespace/Version are set and the working
+	// set is final. Renderers that build runtime resolvers look up
+	// Dispatchers by SchemaID; keeping the stamp here means every
+	// IR consumer sees populated ids without reaching into the
+	// per-source ingest paths.
+	for _, svc := range out {
+		ir.PopulateSchemaIDs(svc)
+	}
 	return out, nil
 }
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/graphql-go/graphql"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // assembleLocked builds the gateway's canonical (unfiltered) GraphQL
@@ -365,81 +364,24 @@ func buildPoolMethodField(
 	metrics Metrics,
 	bp BackpressureOptions,
 ) (*graphql.Field, error) {
-	inputDesc := md.Input()
-	outputDesc := md.Output()
-
-	args, err := tb.argsFromMessage(inputDesc)
+	args, err := tb.argsFromMessage(md.Input())
 	if err != nil {
 		return nil, err
 	}
-	outputType, err := tb.objectFromMessage(outputDesc)
+	outputType, err := tb.objectFromMessage(md.Output())
 	if err != nil {
 		return nil, err
 	}
 
-	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
-	ns, ver := p.key.namespace, p.key.version
-
-	dispatch := Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
-		start := time.Now()
-
-		// Acquire a slot. Fast path: pool.sem nil (unbounded) or
-		// has immediate capacity. Slow path: queue, observe dwell,
-		// time out per MaxWaitTime.
-		if p.sem != nil {
-			waitStart := time.Now()
-			select {
-			case p.sem <- struct{}{}:
-				metrics.RecordDwell(ns, ver, method, "unary", time.Since(waitStart))
-			default:
-				depth := int(p.queueing.Add(1))
-				metrics.SetQueueDepth(ns, ver, "unary", depth)
-				dwell, err := waitForSlot(ctx, p.sem, bp.MaxWaitTime)
-				now := int(p.queueing.Add(-1))
-				metrics.SetQueueDepth(ns, ver, "unary", now)
-				metrics.RecordDwell(ns, ver, method, "unary", dwell)
-				if err != nil {
-					reason := "wait_timeout"
-					rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
-					metrics.RecordBackoff(ns, ver, method, "unary", reason)
-					metrics.RecordDispatch(ns, ver, method, time.Since(start), rejErr)
-					return nil, rejErr
-				}
-			}
-			defer func() { <-p.sem }()
-		}
-
-		r := p.pickReplica()
-		if r == nil {
-			err := fmt.Errorf("gateway: no live replicas for %s/%s", ns, ver)
-			metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
-			return nil, err
-		}
-		r.inflight.Add(1)
-		defer r.inflight.Add(-1)
-		resp := dynamicpb.NewMessage(outputDesc)
-		err := r.conn.Invoke(ctx, method, req, resp)
-		metrics.RecordDispatch(ns, ver, method, time.Since(start), err)
-		if err != nil {
-			return nil, err
-		}
-		return resp, nil
-	})
-	wrapped := chain(dispatch)
+	label := methodLabel(sd, md)
+	core := newProtoDispatcher(p, sd, md, chain, metrics)
+	dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
 
 	return &graphql.Field{
 		Type: outputType,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			req := dynamicpb.NewMessage(inputDesc)
-			if err := argsToMessage(rp.Args, req); err != nil {
-				return nil, err
-			}
-			resp, err := wrapped(rp.Context, req)
-			if err != nil {
-				return nil, err
-			}
-			return messageToMap(resp.(*dynamicpb.Message)), nil
+			return dispatcher.Dispatch(rp.Context, rp.Args)
 		},
 	}, nil
 }

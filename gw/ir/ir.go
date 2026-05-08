@@ -135,6 +135,13 @@ type Operation struct {
 	Description string
 	Deprecated  string
 
+	// SchemaID is the registry key for the runtime Dispatcher that
+	// serves this operation. Empty until PopulateSchemaIDs is called
+	// (which the gateway does once Namespace/Version are assigned to
+	// the containing Service). Renderers that build runtime resolvers
+	// look the Dispatcher up by this id; transforms preserve it.
+	SchemaID SchemaID
+
 	Args []*Arg
 
 	// Output is the return type. Repeated/Required carry the

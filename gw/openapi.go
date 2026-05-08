@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
@@ -692,62 +691,15 @@ func (g *Gateway) buildOpenAPIField(tb *openAPITypeBuilder, src *openAPISource, 
 	if err != nil {
 		return nil, err
 	}
-	method := op.Method
-	pathTemplate := op.Path
-	forwardHeaders := src.forwardHeaders
 
-	bp := g.cfg.backpressure
-	metrics := g.cfg.metrics
-	ns := src.namespace
-	ver := src.version
-	methodLabel := method + " " + pathTemplate
+	core := newOpenAPIDispatcher(src, op.Op, op.Method, op.Path, g.cfg.metrics)
+	dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, g.cfg.metrics, g.cfg.backpressure))(core)
 
 	return &graphql.Field{
 		Type: out,
 		Args: args,
 		Resolve: func(rp graphql.ResolveParams) (any, error) {
-			start := time.Now()
-			// Acquire a slot. Fast path: src.sem nil (unbounded) or has
-			// immediate capacity. Slow path: queue, observe dwell, time
-			// out per MaxWaitTime. Mirrors the proto pool path in
-			// schema.go so HTTP dispatch shares the same backpressure
-			// surface as gRPC dispatch.
-			if src.sem != nil {
-				waitStart := time.Now()
-				select {
-				case src.sem <- struct{}{}:
-					metrics.RecordDwell(ns, ver, methodLabel, "unary", time.Since(waitStart))
-				default:
-					depth := int(src.queueing.Add(1))
-					metrics.SetQueueDepth(ns, ver, "unary", depth)
-					dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
-					now := int(src.queueing.Add(-1))
-					metrics.SetQueueDepth(ns, ver, "unary", now)
-					metrics.RecordDwell(ns, ver, methodLabel, "unary", dwell)
-					if err != nil {
-						metrics.RecordBackoff(ns, ver, methodLabel, "unary", "wait_timeout")
-						rejErr := Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
-						metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), rejErr)
-						return nil, rejErr
-					}
-				}
-				defer func() { <-src.sem }()
-			}
-
-			r := src.pickReplica()
-			if r == nil {
-				err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", ns, ver))
-				metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
-				return nil, err
-			}
-			r.inflight.Add(1)
-			defer r.inflight.Add(-1)
-			resp, err := dispatchOpenAPI(rp.Context, method, r.baseURL, pathTemplate, op.Op, rp.Args, forwardHeaders, r.httpClient)
-			metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
-			if err != nil {
-				return nil, err
-			}
-			return resp, nil
+			return dispatcher.Dispatch(rp.Context, rp.Args)
 		},
 	}, nil
 }
