@@ -1,12 +1,11 @@
+/** Internal type. DO NOT USE DIRECTLY. */
+type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
+/** Internal type. DO NOT USE DIRECTLY. */
+export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import type { GraphQLClient, RequestOptions } from 'graphql-request';
 import gql from 'graphql-tag';
 export type Maybe<T> = T | null;
 export type InputMaybe<T> = Maybe<T>;
-export type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
-export type MakeOptional<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]?: Maybe<T[SubKey]> };
-export type MakeMaybe<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]: Maybe<T[SubKey]> };
-export type MakeEmpty<T extends { [key: string]: unknown }, K extends keyof T> = { [_ in K]?: never };
-export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 type GraphQLClientRequestHeaders = RequestOptions['requestHeaders'];
 /** All built-in and custom scalars, mapped to their actual values */
 export type Scalars = {
@@ -16,7 +15,7 @@ export type Scalars = {
   Int: { input: number; output: number; }
   Float: { input: number; output: number; }
   /** 64-bit integer encoded as a decimal string. OpenAPI integer fields with format=int64/uint64 land here; graphql-go's built-in Int is signed 32-bit and would lose precision (or null out entirely) for values above 2^31. */
-  Long: { input: any; output: any; }
+  Long: { input: unknown; output: unknown; }
 };
 
 export type AdminMutationNamespace = {
@@ -200,29 +199,29 @@ export type Admin_SignOutBody = {
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DashboardQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string } | null> } | null, listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string } | null> } | null } };
+export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: string } | null> } | null, listServices: { environment: string | null, services: Array<{ namespace: string, version: string } | null> } | null } };
 
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listServices: { __typename?: 'admin_ServicesOutBody', environment: string | null, services: Array<{ __typename?: 'admin_ServiceInfo', namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { environment: string | null, services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
 
 export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type PeersQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listPeers: { __typename?: 'admin_PeersOutBody', peers: Array<{ __typename?: 'admin_PeerInfo', nodeId: string, name: string | null, joinedUnixMs: any } | null> } | null } };
+export type PeersQuery = { admin: { listPeers: { peers: Array<{ nodeId: string, name: string | null, joinedUnixMs: unknown } | null> } | null } };
 
 export type InjectorsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type InjectorsQuery = { __typename?: 'Query', admin: { __typename?: 'AdminQueryNamespace', listInjectors: { __typename?: 'admin_InjectorsOutBody', injectors: Array<{ __typename?: 'admin_InjectorInfo', kind: string, typeName: string | null, path: string | null, headerName: string | null, hide: boolean, nullable: boolean, state: string, registeredAt: { __typename?: 'admin_RegisteredAtInfo', file: string | null, line: any | null, function: string | null }, landings: Array<{ __typename?: 'admin_InjectorLandingInfo', kind: string, namespace: string | null, version: string | null, op: string | null, typeName: string | null, fieldName: string | null, argName: string | null, headerName: string | null } | null> } | null> } | null } };
+export type InjectorsQuery = { admin: { listInjectors: { injectors: Array<{ kind: string, typeName: string | null, path: string | null, headerName: string | null, hide: boolean, nullable: boolean, state: string, registeredAt: { file: string | null, line: unknown, function: string | null }, landings: Array<{ kind: string, namespace: string | null, version: string | null, op: string | null, typeName: string | null, fieldName: string | null, argName: string | null, headerName: string | null } | null> } | null> } | null } };
 
 export type ForgetPeerMutationVariables = Exact<{
-  nodeId: Scalars['String']['input'];
+  nodeId: string;
 }>;
 
 
-export type ForgetPeerMutation = { __typename?: 'Mutation', admin: { __typename?: 'AdminMutationNamespace', forgetPeer: { __typename?: 'admin_ForgetOutBody', removed: boolean, newReplicas: number } | null } };
+export type ForgetPeerMutation = { admin: { forgetPeer: { removed: boolean, newReplicas: number } | null } };
 
 
 export const DashboardDocument = gql`

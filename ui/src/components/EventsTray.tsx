@@ -24,7 +24,7 @@ export default function EventsTray({ open, onClose }: EventsTrayProps) {
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: 440, p: 3 }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>
             Events
           </Typography>
@@ -55,7 +55,7 @@ export default function EventsTray({ open, onClose }: EventsTrayProps) {
                   p: 1,
                 }}
               >
-                <Stack direction="row" alignItems="center" spacing={1}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                   <Chip
                     size="small"
                     label={e.id}

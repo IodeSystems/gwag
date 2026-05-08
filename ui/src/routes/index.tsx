@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Card, CardContent, Grid2 as Grid, Typography } from '@mui/material';
+import { Card, CardContent, Grid, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { sdk } from '@/api/client';
 
