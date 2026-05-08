@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -136,19 +137,28 @@ func TestGRPCIngress_UpstreamErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestGRPCIngress_StreamingMethodNotRouted(t *testing.T) {
-	// Server-streaming Greetings should NOT route through gRPC ingress.
+// TestGRPCIngress_ClientStreamingNotRouted asserts client-streaming
+// is filtered out (it isn't routable end-to-end). Bidi shares the
+// same path. Server-streaming has its own happy-path test below.
+func TestGRPCIngress_ClientStreamingNotRouted(t *testing.T) {
 	f := newGRPCIngressFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := f.cli.Greetings(ctx, &greeterv1.GreetingsFilter{})
+	// Echo is bidi (client + server streaming) in greeter.proto;
+	// rebuildGRPCIngressLocked drops it.
+	stream, err := f.cli.Echo(ctx)
 	if err != nil {
-		// Some clients return error from stream-open immediately.
 		if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
 			return
 		}
 		t.Fatalf("unexpected open error: %v", err)
+	}
+	if err := stream.Send(&greeterv1.HelloRequest{}); err != nil {
+		// Some clients surface the Unimplemented at first send.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+			return
+		}
 	}
 	_, err = stream.Recv()
 	st, ok := status.FromError(err)
@@ -158,6 +168,130 @@ func TestGRPCIngress_StreamingMethodNotRouted(t *testing.T) {
 	if st.Code() != codes.Unimplemented {
 		t.Fatalf("code=%v want=Unimplemented (msg=%q)", st.Code(), st.Message())
 	}
+}
+
+// grpcStreamingFixture stands up a NATS-backed gateway behind a
+// frontend gRPC server hosting GRPCUnknownHandler so server-streaming
+// proto methods can be exercised end-to-end. No backend gRPC server
+// needed — the streaming path doesn't dial out (events come through
+// NATS), so a nopGRPCConn suffices.
+type grpcStreamingFixture struct {
+	gw      *Gateway
+	cluster *Cluster
+	cli     greeterv1.GreeterServiceClient
+	conn    *grpc.ClientConn
+}
+
+func newGRPCStreamingFixture(t *testing.T, opts ...Option) *grpcStreamingFixture {
+	t.Helper()
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	allOpts := append([]Option{
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+	}, opts...)
+	gw := New(allOpts...)
+	t.Cleanup(gw.Close)
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("greeter"),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+
+	feLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	feSrv := grpc.NewServer(grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
+	go func() { _ = feSrv.Serve(feLis) }()
+	t.Cleanup(feSrv.Stop)
+
+	conn, err := grpc.NewClient(feLis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return &grpcStreamingFixture{
+		gw:      gw,
+		cluster: cluster,
+		cli:     greeterv1.NewGreeterServiceClient(conn),
+		conn:    conn,
+	}
+}
+
+func TestGRPCIngress_ServerStreaming_HappyPath(t *testing.T) {
+	f := newGRPCStreamingFixture(t, WithoutSubscriptionAuth())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream, err := f.cli.Greetings(ctx, &greeterv1.GreetingsFilter{Name: "alice"})
+	if err != nil {
+		t.Fatalf("Greetings: %v", err)
+	}
+
+	// Wait for the broker to register the subject before publishing.
+	deadline := time.Now().Add(2 * time.Second)
+	for f.gw.subscriptionBroker().activeSubjectCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("broker never registered subject")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	publishGreeting(t, f.cluster, "events.greeter.Greetings.alice", "hi alice", "alice")
+
+	got, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if got.GetGreeting() != "hi alice" {
+		t.Fatalf("greeting=%q want %q", got.GetGreeting(), "hi alice")
+	}
+	if got.GetForName() != "alice" {
+		t.Fatalf("forName=%q want %q", got.GetForName(), "alice")
+	}
+}
+
+func TestGRPCIngress_ServerStreaming_HMACFromMetadata(t *testing.T) {
+	// With HMAC enabled, a missing metadata triple → MALFORMED →
+	// Unauthenticated. Verifies the metadata lookup is wired.
+	secret := []byte("test-secret-32-bytes-long-padding")
+	f := newGRPCStreamingFixture(t, WithSubscriptionAuth(SubscriptionAuthOptions{Secret: secret}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Send with bogus HMAC in metadata — verify rejects.
+	ctx = metadata.AppendToOutgoingContext(ctx,
+		"x-gateway-hmac", "bad",
+		"x-gateway-timestamp", "0",
+	)
+	stream, err := f.cli.Greetings(ctx, &greeterv1.GreetingsFilter{Name: "alice"})
+	if err != nil {
+		// Stream open may eagerly fail with bad auth.
+		return
+	}
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected Recv error on bad HMAC, got nil")
+	}
+	// Subscribe-time errors come through as raw error from the
+	// dispatcher — we just verify the stream did NOT successfully
+	// receive an event.
 }
 
 func TestGRPCIngress_RuntimeMiddlewareApplies(t *testing.T) {

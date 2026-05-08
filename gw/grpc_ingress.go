@@ -8,16 +8,25 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
-// grpcIngressRoute is one (METHOD URL) → proto-native handler entry.
-// Distinct from ingressRoute (HTTP/JSON) because gRPC ingress skips
-// the canonical-args round trip — wire bytes deserialize into a
-// dynamicpb.Message of the input descriptor and feed straight into
-// the chained Handler the canonical protoDispatcher uses.
+// grpcIngressRoute is one (METHOD URL) → handler entry. Distinct
+// from ingressRoute (HTTP/JSON) because gRPC ingress skips the
+// canonical-args round trip on unary calls — wire bytes deserialize
+// into a dynamicpb.Message of the input descriptor and feed straight
+// into the chained Handler the canonical protoDispatcher uses.
+//
+// Streaming routes go through the canonical-args ir.Dispatcher
+// (protoSubscriptionDispatcher) since subscribeNATS already keys off
+// args; the input message converts to args once via messageToMap,
+// metadata headers add hmac/timestamp/kid, and each delivered event
+// gets re-encoded to dynamicpb on the wire.
 //
 // Built once per assembleLocked from the live pool set and discarded
 // on rebuild. Atomic-swap so the unknown-service handler doesn't
@@ -26,23 +35,33 @@ type grpcIngressRoute struct {
 	pool       *pool
 	inputDesc  protoreflect.MessageDescriptor
 	outputDesc protoreflect.MessageDescriptor
-	handler    Handler // chain(inner): user runtime middleware around pickReplica+Invoke+RecordDispatch
-	bp         BackpressureConfig
+	streaming  bool
+
+	// Unary path: chain(inner) with the matching backpressure config.
+	handler Handler
+	bp      BackpressureConfig
+
+	// Streaming path: ir.Dispatcher whose Dispatch returns a chan any
+	// of decoded event maps from subscribeNATS.
+	streamDispatcher ir.Dispatcher
 }
 
 type grpcIngressTable struct {
 	routes map[string]*grpcIngressRoute // key: "/<svcFullName>/<methodName>"
 }
 
-// rebuildGRPCIngressLocked walks every proto pool's unary RPCs and
-// emits one route per method, capturing the same chained Handler the
-// canonical protoDispatcher uses (so transforms apply identically)
-// alongside the per-pool BackpressureConfig.
+// rebuildGRPCIngressLocked walks every proto pool's RPCs and emits
+// one route per method. Unary routes capture the same chained
+// Handler the canonical protoDispatcher uses (so transforms apply
+// identically) alongside the per-pool BackpressureConfig. Server-
+// streaming routes capture the protoSubscriptionDispatcher already
+// registered in g.dispatchers — subscribeNATS handles HMAC + stream-
+// slot acquisition + broker fanout.
 //
-// Internal namespaces and streaming methods are skipped — the
-// subscription path is graphql-ws today; HTTP/SSE / gRPC server-
-// streaming follow in the subscription-transport-agnosticism
-// workstream.
+// Bidi / client-streaming methods are skipped — egress doesn't
+// support them and there's no canonical args shape to forward.
+// Internal namespaces (`_*` or AsInternal) skip just like the
+// GraphQL surface skips them.
 //
 // Caller holds g.mu.
 func (g *Gateway) rebuildGRPCIngressLocked() {
@@ -60,12 +79,30 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 			methods := sd.Methods()
 			for j := 0; j < methods.Len(); j++ {
 				md := methods.Get(j)
-				if md.IsStreamingClient() || md.IsStreamingServer() {
+				if md.IsStreamingClient() {
+					// bidi/client-streaming — egress can't synthesise
+					// these and ingress has no canonical-args shape.
+					continue
+				}
+				path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+				if md.IsStreamingServer() {
+					sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
+					sd := g.dispatchers.Get(sid)
+					if sd == nil {
+						continue
+					}
+					t.routes[path] = &grpcIngressRoute{
+						pool:             p,
+						inputDesc:        md.Input(),
+						outputDesc:       md.Output(),
+						streaming:        true,
+						streamDispatcher: sd,
+					}
 					continue
 				}
 				inner := newProtoInvocationHandler(p, sd, md, metrics)
 				label := methodLabel(sd, md)
-				t.routes[fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())] = &grpcIngressRoute{
+				t.routes[path] = &grpcIngressRoute{
 					pool:       p,
 					inputDesc:  md.Input(),
 					outputDesc: md.Output(),
@@ -85,15 +122,20 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 //	srv := grpc.NewServer(grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
 //	cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
 //
-// The handler decodes wire bytes into a dynamicpb.Message of the
-// target method's input descriptor, applies per-pool backpressure,
-// runs the same chained Handler the canonical protoDispatcher uses
-// (so HideAndInject / Hides / user runtime middleware all apply),
-// and writes the dynamicpb response back. Skipping canonical args
-// avoids two map↔message conversions on the proto→proto hot path.
+// Unary RPCs decode wire bytes into a dynamicpb.Message of the target
+// method's input descriptor, apply per-pool backpressure, and run the
+// chained Handler the canonical protoDispatcher uses (so HideAndInject
+// / Hides / user runtime middleware all apply). Skipping canonical
+// args avoids two map↔message conversions on the proto→proto path.
 //
-// Unary only. Server-streaming RPCs aren't routed here — clients
-// connect through the subscription transport instead. Unmatched
+// Server-streaming RPCs route through the canonical-args
+// protoSubscriptionDispatcher: messageToMap on the input plus
+// hmac/timestamp/kid pulled from gRPC metadata
+// (`x-gateway-hmac`/`-timestamp`/`-kid`) feed subscribeNATS, which
+// handles HMAC verify, stream-slot acquisition, and broker fanout.
+// Each delivered event re-encodes to dynamicpb on the wire.
+//
+// Bidi / client-streaming RPCs return Unimplemented. Unmatched
 // methods return Unimplemented.
 //
 // Safe to call before any service is registered; the handler reads
@@ -130,6 +172,10 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return status.Errorf(codes.Unimplemented, "ingress: no route for %s", method)
 	}
 
+	if route.streaming {
+		return g.serveGRPCStreamingUnknown(stream, route)
+	}
+
 	req := dynamicpb.NewMessage(route.inputDesc)
 	if err := stream.RecvMsg(req); err != nil {
 		// EOF / cancellation propagate as-is so client sees the right
@@ -154,6 +200,71 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return ingressGRPCStatus(err)
 	}
 	return stream.SendMsg(resp)
+}
+
+// gRPC metadata keys the streaming ingress consults for subscription
+// auth handles. Lowercase per gRPC convention; "x-gateway-" prefixed
+// to avoid colliding with anything the upstream service might forward.
+const (
+	mdSubscribeHMAC      = "x-gateway-hmac"
+	mdSubscribeTimestamp = "x-gateway-timestamp"
+	mdSubscribeKid       = "x-gateway-kid"
+)
+
+func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grpcIngressRoute) error {
+	req := dynamicpb.NewMessage(route.inputDesc)
+	if err := stream.RecvMsg(req); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return status.Errorf(codes.InvalidArgument, "ingress: decode request: %v", err)
+	}
+
+	args := messageToMap(req)
+	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+		if v := md.Get(mdSubscribeHMAC); len(v) > 0 {
+			args["hmac"] = v[0]
+		}
+		if v := md.Get(mdSubscribeTimestamp); len(v) > 0 {
+			args["timestamp"] = v[0]
+		}
+		if v := md.Get(mdSubscribeKid); len(v) > 0 {
+			args["kid"] = v[0]
+		}
+	}
+
+	ctx := withInjectCache(stream.Context())
+
+	out, err := route.streamDispatcher.Dispatch(ctx, args)
+	if err != nil {
+		return ingressGRPCStatus(err)
+	}
+	ch, ok := out.(chan any)
+	if !ok {
+		return status.Error(codes.Internal, "ingress: subscription dispatcher returned non-channel")
+	}
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case ev, open := <-ch:
+			if !open {
+				return nil
+			}
+			evMap, ok := ev.(map[string]any)
+			if !ok {
+				continue
+			}
+			outMsg := dynamicpb.NewMessage(route.outputDesc)
+			if err := argsToMessage(evMap, outMsg); err != nil {
+				continue
+			}
+			if err := stream.SendMsg(outMsg); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // acquireBackpressureSlot is the slot-acquisition prologue shared by
