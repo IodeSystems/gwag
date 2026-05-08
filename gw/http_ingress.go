@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 // rebuilt on every assembleLocked, so dispatcher churn doesn't strand
 // stale entries.
 //
-// Two shapes today:
+// Three shapes today:
 //
 //   - ingressShapeProtoPost: exact-match path; the request JSON body
 //     is the canonical args verbatim. Lookups go through
@@ -28,6 +29,12 @@ import (
 //     plus declared param/body locations; canonical args are
 //     assembled from path segments, the URL query, and the JSON body.
 //     Lookups walk ingressTable.templated until segs match.
+//   - ingressShapeSubscription: GET /<pkg>.<Service>/<method> for a
+//     server-streaming proto method. Args come from query params
+//     (input fields plus hmac/timestamp/kid auth); response is
+//     text/event-stream — one `data:` frame per published event,
+//     terminating with `event: complete` when the upstream channel
+//     closes.
 type ingressRoute struct {
 	method     string
 	path       string // exact match for proto-style; "" when templated
@@ -64,6 +71,12 @@ const (
 	// the JSON body all flow into canonical args; the underlying
 	// openAPIDispatcher already knows which to send where on egress.
 	ingressShapeOpenAPI
+
+	// ingressShapeSubscription: GET /<pkg>.<Service>/<method> on a
+	// server-streaming proto method. Query params land in canonical
+	// args (input fields + hmac/timestamp/kid). Dispatch returns a
+	// chan any of decoded events that the handler streams as SSE.
+	ingressShapeSubscription
 )
 
 // ingressTable holds the route set assembled for the current schema.
@@ -78,21 +91,23 @@ type ingressTable struct {
 }
 
 // rebuildIngressLocked walks every proto pool's RPCs and every
-// OpenAPI source's operations, emitting one route per unary op
+// OpenAPI source's operations, emitting one route per ingestible op
 // pointing at the dispatcher already registered in g.dispatchers.
 // Caller holds g.mu.
 //
-// Server-streaming methods are skipped — subscriptions live on a
-// separate transport (graphql-ws today; HTTP/SSE planned). Internal
-// namespaces (`_*` or AsInternal) are skipped just like the GraphQL
-// surface skips them.
+// Proto unary lands at POST /<pkg>.<Service>/<method>; proto server-
+// streaming lands at GET on the same path (SSE response). Bidi /
+// client-streaming are skipped — egress doesn't support them and
+// ingress can't synthesise them. Internal namespaces (`_*` or
+// AsInternal) are skipped just like the GraphQL surface skips them.
 func (g *Gateway) rebuildIngressLocked() {
 	t := &ingressTable{
 		exact:     map[string]*ingressRoute{},
 		templated: map[string][]*ingressRoute{},
 	}
 
-	// Proto-style: POST /<pkg>.<Service>/<method>
+	// Proto-style: POST /<pkg>.<Service>/<method> for unary,
+	// GET on the same path for server-streaming (text/event-stream).
 	for _, p := range g.pools {
 		if g.isInternal(p.key.namespace) {
 			continue
@@ -103,7 +118,9 @@ func (g *Gateway) rebuildIngressLocked() {
 			methods := sd.Methods()
 			for j := 0; j < methods.Len(); j++ {
 				md := methods.Get(j)
-				if md.IsStreamingClient() || md.IsStreamingServer() {
+				if md.IsStreamingClient() {
+					// bidi/client-streaming aren't routable — egress doesn't
+					// support them, ingress can't synthesise them.
 					continue
 				}
 				sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
@@ -112,6 +129,16 @@ func (g *Gateway) rebuildIngressLocked() {
 					continue
 				}
 				path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+				if md.IsStreamingServer() {
+					t.exact[http.MethodGet+" "+path] = &ingressRoute{
+						method:     http.MethodGet,
+						path:       path,
+						schemaID:   sid,
+						dispatcher: d,
+						shape:      ingressShapeSubscription,
+					}
+					continue
+				}
 				t.exact[http.MethodPost+" "+path] = &ingressRoute{
 					method:     http.MethodPost,
 					path:       path,
@@ -251,14 +278,17 @@ func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool)
 // IngressHandler returns an http.Handler that accepts inbound
 // requests in the registered services' native shapes:
 //
-//   - Proto: POST /<pkg>.<Service>/<method> with a JSON body whose
-//     top-level fields are the canonical args.
+//   - Proto unary: POST /<pkg>.<Service>/<method> with a JSON body
+//     whose top-level fields are the canonical args.
+//   - Proto server-streaming: GET /<pkg>.<Service>/<method> with
+//     query params for the input fields plus hmac/timestamp/kid;
+//     response is text/event-stream — one `data:` frame per event.
 //   - OpenAPI: each operation's declared HTTPMethod + HTTPPath, with
 //     path / query / body decoded into canonical args.
 //
-// Both go through the same ir.Dispatcher chain the GraphQL resolver
-// uses, so runtime middleware (Hides, HideAndInject, user Pairs)
-// and per-pool backpressure apply identically.
+// All shapes go through the same ir.Dispatcher chain the GraphQL
+// resolver uses, so runtime middleware (Hides, HideAndInject, user
+// Pairs) and per-pool backpressure apply identically.
 //
 // Unmatched paths return JSON 404. The handler is safe to call
 // before Handler() — schema assembly triggers the same way.
@@ -300,6 +330,11 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	ctx := withInjectCache(r.Context())
 	ctx = WithHTTPRequest(ctx, r)
 
+	if route.shape == ingressShapeSubscription {
+		streamSSE(ctx, w, route, args)
+		return
+	}
+
 	out, err := route.dispatcher.Dispatch(ctx, args)
 	if err != nil {
 		writeIngressDispatchError(w, err)
@@ -309,6 +344,63 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		return
+	}
+}
+
+// streamSSE dispatches a subscription and pumps the resulting event
+// channel out to the client as text/event-stream. One `data:` frame
+// per event (JSON-encoded payload). When the upstream channel closes,
+// the handler emits `event: complete\ndata: {}` and returns. ctx
+// cancels propagate down to subscribeNATS, which releases stream
+// slots and unwinds the broker fanout.
+//
+// Pre-dispatch errors (HMAC verify fail, slot-acquire timeout) come
+// back as Reject — written as a regular JSON error envelope, no SSE
+// frame, so HTTP status carries the failure code. Post-stream-open
+// errors are vanishingly rare and already filtered by the broker;
+// when they do occur, the connection just closes.
+func streamSSE(ctx context.Context, w http.ResponseWriter, route *ingressRoute, args map[string]any) {
+	out, err := route.dispatcher.Dispatch(ctx, args)
+	if err != nil {
+		writeIngressDispatchError(w, err)
+		return
+	}
+	ch, ok := out.(chan any)
+	if !ok {
+		writeIngressError(w, http.StatusInternalServerError, "subscription dispatcher returned non-channel")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeIngressError(w, http.StatusInternalServerError, "streaming not supported by ResponseWriter")
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-ch:
+			if !ok {
+				_, _ = io.WriteString(w, "event: complete\ndata: {}\n\n")
+				flusher.Flush()
+				return
+			}
+			b, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
 	}
 }
 
@@ -363,11 +455,29 @@ func matchSegs(segs []routeSeg, parts []string) (map[string]string, bool) {
 
 // buildIngressArgs assembles the canonical args map for one
 // dispatch. Proto-style routes pull the body in verbatim; OpenAPI
-// routes mix path / query / body.
+// routes mix path / query / body; subscription routes (SSE) take
+// every query param as-is — input fields plus hmac/timestamp/kid.
 func buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[string]string) (map[string]any, error) {
 	switch route.shape {
 	case ingressShapeProtoPost:
 		return decodeJSONObject(r.Body)
+	case ingressShapeSubscription:
+		args := map[string]any{}
+		for name, vs := range r.URL.Query() {
+			if len(vs) == 0 {
+				continue
+			}
+			if len(vs) == 1 {
+				args[name] = vs[0]
+			} else {
+				ifs := make([]any, len(vs))
+				for i, s := range vs {
+					ifs[i] = s
+				}
+				args[name] = ifs
+			}
+		}
+		return args, nil
 	case ingressShapeOpenAPI:
 		args := map[string]any{}
 		for k, v := range pathParams {

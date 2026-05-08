@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"time"
 
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
@@ -180,9 +181,11 @@ func optionalString(args map[string]any, name string) (string, bool) {
 	return s, true
 }
 
-// asInt64 coerces a GraphQL Int (which graphql-go decodes as int) to
-// int64 so we can compare timestamps. Some clients send numbers as
-// float64 (JSON default) — handle that too.
+// asInt64 coerces a numeric arg to int64 so we can compare timestamps.
+// Sources: graphql-go's int (graphql.Int field), float64 (JSON default
+// without UseNumber), json.Number (HTTP/JSON ingress decoder), and
+// string (HTTP query params on SSE subscribe). Anything else is a
+// type error the caller surfaces as MALFORMED.
 func asInt64(v any) (int64, bool) {
 	switch n := v.(type) {
 	case int:
@@ -193,6 +196,20 @@ func asInt64(v any) (int64, bool) {
 		return n, true
 	case float64:
 		return int64(n), true
+	case interface{ Int64() (int64, error) }:
+		// json.Number satisfies this (and isn't directly importable
+		// here without bringing encoding/json into a non-JSON file).
+		x, err := n.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return x, true
+	case string:
+		x, err := strconv.ParseInt(n, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return x, true
 	}
 	return 0, false
 }
