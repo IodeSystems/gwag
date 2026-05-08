@@ -42,19 +42,13 @@ func (g *Gateway) assembleLocked() error {
 //
 // Caller holds g.mu. Returns the built schema; does NOT store it.
 func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
-	pol := &policy{hides: map[protoreflect.FullName]bool{}}
-	for _, p := range g.pairs {
-		for _, t := range p.Hides {
-			pol.hides[t] = true
-		}
-	}
+	hidesSet := g.hidesSet()
 
-	tb := &typeBuilder{
-		policy:  pol,
-		objects: map[protoreflect.FullName]*graphql.Object{},
-		inputs:  map[protoreflect.FullName]*graphql.InputObject{},
-		enums:   map[protoreflect.FullName]*graphql.Enum{},
-	}
+	// One *IRTypeBuilder serves every proto pool — proto FullNames
+	// are globally unique, so a merged Types map is collision-free
+	// and a shared builder dedupes *graphql.Object instances across
+	// pools (same Object reused under Query and Subscription roots).
+	protoTB := newProtoIRTypeBuilder(g.pools, hidesSet)
 
 	chain := g.runtimeChain()
 	rootFields := graphql.Fields{}
@@ -85,7 +79,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		// versioned sub-objects below register additional aliases
 		// (`<vN>_<rpc>`) so both surfaces resolve through the same
 		// dispatcher.
-		latestRPCs, err := buildPoolRPCs(g.dispatchers, tb, latest, chain, g.cfg.metrics, g.cfg.backpressure, "")
+		latestRPCs, err := buildPoolRPCs(g.dispatchers, protoTB, hidesSet, latest, chain, g.cfg.metrics, g.cfg.backpressure, "")
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +93,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		// (Subscription-only namespaces hit this; their fields land on
 		// the Subscription root instead.)
 		for _, p := range pools {
-			versionedRPCs, err := buildPoolRPCs(g.dispatchers, tb, p, chain, g.cfg.metrics, g.cfg.backpressure, p.key.version+"_")
+			versionedRPCs, err := buildPoolRPCs(g.dispatchers, protoTB, hidesSet, p, chain, g.cfg.metrics, g.cfg.backpressure, p.key.version+"_")
 			if err != nil {
 				return nil, err
 			}
@@ -205,7 +199,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	// (String!) + timestamp (Int!). Subscribe resolver is a no-op stub
 	// until the WebSocket transport lands; SDL still surfaces them so
 	// codegen pipelines can generate typed subscriptions today.
-	subFields, err := g.buildSubscriptionFields(tb, filter)
+	subFields, err := g.buildSubscriptionFields(protoTB, hidesSet, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +240,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 // buildGraphQLFields — Subscription is flat (graphql-go doesn't
 // support nested namespace objects under Subscription), so we
 // disambiguate by name rather than by structure.
-func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) (graphql.Fields, error) {
+func (g *Gateway) buildSubscriptionFields(tb *IRTypeBuilder, hides map[string]bool, filter schemaFilter) (graphql.Fields, error) {
 	out := graphql.Fields{}
 
 	byNS := map[string][]*pool{}
@@ -283,7 +277,7 @@ func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) 
 					if !(md.IsStreamingServer() && !md.IsStreamingClient()) {
 						continue
 					}
-					field, err := g.buildSubscriptionField(tb, p, sd, md)
+					field, err := g.buildSubscriptionField(tb, hides, p, sd, md)
 					if err != nil {
 						return nil, err
 					}
@@ -306,12 +300,13 @@ func (g *Gateway) buildSubscriptionFields(tb *typeBuilder, filter schemaFilter) 
 }
 
 func (g *Gateway) buildSubscriptionField(
-	tb *typeBuilder,
+	tb *IRTypeBuilder,
+	hides map[string]bool,
 	p *pool,
 	sd protoreflect.ServiceDescriptor,
 	md protoreflect.MethodDescriptor,
 ) (*graphql.Field, error) {
-	args, err := tb.argsFromMessage(md.Input())
+	args, err := protoArgsFromMessage(tb, md.Input(), hides)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +321,7 @@ func (g *Gateway) buildSubscriptionField(
 	// the signed payload.
 	args["kid"] = &graphql.ArgumentConfig{Type: graphql.String}
 
-	outputType, err := tb.objectFromMessage(md.Output())
+	outputType, err := protoOutputObject(tb, md.Output())
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +352,7 @@ func (g *Gateway) buildSubscriptionField(
 // for the versioned sub-object alias. Both aliases register the
 // same dispatcher under different keys so a query selecting
 // `greeter.hello` and `greeter.v1.hello` both resolve.
-func buildPoolRPCs(registry *ir.DispatchRegistry, tb *typeBuilder, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions, flatPrefix string) (graphql.Fields, error) {
+func buildPoolRPCs(registry *ir.DispatchRegistry, tb *IRTypeBuilder, hides map[string]bool, p *pool, chain Middleware, metrics Metrics, bp BackpressureOptions, flatPrefix string) (graphql.Fields, error) {
 	out := graphql.Fields{}
 	services := p.file.Services()
 	for i := 0; i < services.Len(); i++ {
@@ -368,7 +363,7 @@ func buildPoolRPCs(registry *ir.DispatchRegistry, tb *typeBuilder, p *pool, chai
 			if md.IsStreamingClient() || md.IsStreamingServer() {
 				continue
 			}
-			field, err := buildPoolMethodField(registry, tb, p, sd, md, chain, metrics, bp, flatPrefix)
+			field, err := buildPoolMethodField(registry, tb, hides, p, sd, md, chain, metrics, bp, flatPrefix)
 			if err != nil {
 				return nil, err
 			}
@@ -380,7 +375,8 @@ func buildPoolRPCs(registry *ir.DispatchRegistry, tb *typeBuilder, p *pool, chai
 
 func buildPoolMethodField(
 	registry *ir.DispatchRegistry,
-	tb *typeBuilder,
+	tb *IRTypeBuilder,
+	hides map[string]bool,
 	p *pool,
 	sd protoreflect.ServiceDescriptor,
 	md protoreflect.MethodDescriptor,
@@ -389,11 +385,11 @@ func buildPoolMethodField(
 	bp BackpressureOptions,
 	flatPrefix string,
 ) (*graphql.Field, error) {
-	args, err := tb.argsFromMessage(md.Input())
+	args, err := protoArgsFromMessage(tb, md.Input(), hides)
 	if err != nil {
 		return nil, err
 	}
-	outputType, err := tb.objectFromMessage(md.Output())
+	outputType, err := protoOutputObject(tb, md.Output())
 	if err != nil {
 		return nil, err
 	}
@@ -457,9 +453,3 @@ func (g *Gateway) runtimeChain() Middleware {
 	}
 }
 
-// policy collects schema-rewrite directives extracted from Pairs prior
-// to type construction (graphql-go does not let us mutate input fields
-// post-hoc, so all hide rules must apply during NewObject).
-type policy struct {
-	hides map[protoreflect.FullName]bool
-}
