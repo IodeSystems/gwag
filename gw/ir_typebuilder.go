@@ -328,11 +328,15 @@ func (b *IRTypeBuilder) objectFor(t *ir.Type) *graphql.Object {
 		Fields: graphql.FieldsThunk(func() graphql.Fields {
 			fields := graphql.Fields{}
 			for _, f := range t.Fields {
+				key := b.naming.FieldName(f.Name)
+				if !isValidGraphQLIdent(key) {
+					continue
+				}
 				ft, err := b.Output(f.Type, f.Repeated, f.Required, f.ItemRequired)
 				if err != nil {
 					continue
 				}
-				fields[b.naming.FieldName(f.Name)] = &graphql.Field{
+				fields[key] = &graphql.Field{
 					Type:              ft,
 					Description:       f.Description,
 					DeprecationReason: f.Deprecated,
@@ -362,11 +366,15 @@ func (b *IRTypeBuilder) inputObjectFor(t *ir.Type) *graphql.InputObject {
 		Fields: graphql.InputObjectConfigFieldMapThunk(func() graphql.InputObjectConfigFieldMap {
 			fields := graphql.InputObjectConfigFieldMap{}
 			for _, f := range t.Fields {
+				key := b.naming.FieldName(f.Name)
+				if !isValidGraphQLIdent(key) {
+					continue
+				}
 				ft, err := b.Input(f.Type, f.Repeated, f.Required, f.ItemRequired)
 				if err != nil {
 					continue
 				}
-				fields[b.naming.FieldName(f.Name)] = &graphql.InputObjectFieldConfig{
+				fields[key] = &graphql.InputObjectFieldConfig{
 					Type:        ft,
 					Description: f.Description,
 				}
@@ -379,6 +387,29 @@ func (b *IRTypeBuilder) inputObjectFor(t *ir.Type) *graphql.InputObject {
 	})
 	b.inputs[t.Name] = io
 	return io
+}
+
+// isValidGraphQLIdent reports whether s matches GraphQL's identifier
+// regex /^[_A-Za-z][_A-Za-z0-9]*$/. Used to filter out source-format
+// quirks that aren't queryable as GraphQL fields — JSON-Schema's
+// `$schema` keyword on huma response bodies is the motivating case
+// (huma stamps it on every response struct; graphql-go rejects the
+// schema build outright otherwise). Same posture as graphql-go's
+// builtin name validator.
+func isValidGraphQLIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			continue
+		}
+		if i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (b *IRTypeBuilder) enumFor(t *ir.Type) *graphql.Enum {

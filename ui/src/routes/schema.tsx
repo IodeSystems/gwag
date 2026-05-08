@@ -239,7 +239,7 @@ function FilterDialog({
 
   const all = useMemo(() => {
     const out: ServiceKey[] = [];
-    for (const s of data?.admin_listServices?.services ?? []) {
+    for (const s of data?.admin?.listServices?.services ?? []) {
       if (s) out.push({ namespace: s.namespace, version: s.version });
     }
     out.sort((a, b) =>
