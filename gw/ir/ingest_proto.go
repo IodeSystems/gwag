@@ -19,12 +19,16 @@ import (
 func IngestProto(fd protoreflect.FileDescriptor) []*Service {
 	fileProto := protodesc.ToFileDescriptorProto(fd)
 
-	// Build the per-file Type registry once; every service in the
-	// file shares it, since proto messages live at the file (or
-	// package) scope, not inside a service.
+	// Build the Type registry. Per-file messages first, then walk
+	// imports transitively so a service that returns a message from
+	// an imported file still has the message's IR Type entry
+	// available — necessary for the IR-driven type-builder wiring
+	// to resolve cross-file refs without falling back to the
+	// descriptor graph.
 	types := map[string]*Type{}
 	walkMessages(fd.Messages(), types)
 	walkEnums(fd.Enums(), types)
+	walkImports(fd, types, map[string]bool{string(fd.Path()): true})
 
 	out := []*Service{}
 	services := fd.Services()
@@ -100,6 +104,27 @@ func ingestProtoMethod(md protoreflect.MethodDescriptor, fileProto *descriptorpb
 		})
 	}
 	return op
+}
+
+// walkImports recurses through fd.Imports(), accumulating Messages
+// and Enums from each imported file's top-level into dst. visited
+// is keyed by file Path() so dependency diamonds don't cycle. Same
+// well-known imports (e.g. google/protobuf/descriptor.proto)
+// register their Messages too — harmless, since the type-builder
+// only materialises types that are actually referenced.
+func walkImports(fd protoreflect.FileDescriptor, dst map[string]*Type, visited map[string]bool) {
+	imports := fd.Imports()
+	for i := 0; i < imports.Len(); i++ {
+		imp := imports.Get(i)
+		path := string(imp.Path())
+		if visited[path] {
+			continue
+		}
+		visited[path] = true
+		walkMessages(imp.FileDescriptor.Messages(), dst)
+		walkEnums(imp.FileDescriptor.Enums(), dst)
+		walkImports(imp.FileDescriptor, dst, visited)
+	}
 }
 
 func walkMessages(ms protoreflect.MessageDescriptors, dst map[string]*Type) {
