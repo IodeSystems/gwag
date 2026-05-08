@@ -85,6 +85,13 @@ type Gateway struct {
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
+
+	// warnedEventsAuth tracks (namespace, version) tuples we've already
+	// emitted a deprecation warning for, so heartbeat-driven re-registers
+	// don't spam logs. Keyed on "<ns>:<ver>". The SubscriptionAuthorizer
+	// delegate path under _events_auth/v1 is being collapsed in favor of
+	// the signer-as-API model — see plan §2.
+	warnedEventsAuth sync.Map
 }
 
 type Option func(*config)
@@ -591,6 +598,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	if e.maxConcurrencyPerInstance < 0 {
 		return fmt.Errorf("gateway: pool %s/%s: max_concurrency_per_instance must be ≥ 0", e.namespace, e.version)
 	}
+	g.warnSubscribeDelegateDeprecated(e.namespace, e.version)
 	key := poolKey{namespace: e.namespace, version: e.version}
 	p, exists := g.pools[key]
 	if exists {

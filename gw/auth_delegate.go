@@ -10,6 +10,33 @@ import (
 	"google.golang.org/grpc"
 )
 
+// warnSubscribeDelegateDeprecated emits a one-time-per-(ns,ver)
+// deprecation log when a service registers under the
+// SubscriptionAuthorizer delegate namespace (`_events_auth`). The
+// wire path stays functional for one release; plan §2 removes it
+// outright after. Returns true the first time it fires for a given
+// tuple — false on subsequent re-registers (heartbeat-driven joins,
+// replica adds). Tests use the bool; production callers ignore it.
+//
+// Routed through the embedded NATS warn channel when a cluster is
+// configured (mirrors warnUnsupportedStreaming); fmt.Println
+// otherwise.
+func (g *Gateway) warnSubscribeDelegateDeprecated(ns, ver string) bool {
+	if ns != authorizerNamespace {
+		return false
+	}
+	if _, loaded := g.warnedEventsAuth.LoadOrStore(ns+":"+ver, struct{}{}); loaded {
+		return false
+	}
+	msg := fmt.Sprintf("gateway: deprecation: service registered under %s/%s — the SubscriptionAuthorizer delegate is going away. Migrate to gateway.WithSignerSecret(...) and have the calling service do its own authz before invoking SignSubscriptionToken (plan §2).", ns, ver)
+	if g.cfg.cluster != nil {
+		g.cfg.cluster.Server.Warnf("%s", msg)
+	} else {
+		fmt.Println(msg)
+	}
+	return true
+}
+
 // consultSubscribeDelegate calls AuthorizeSign on the registered
 // SubscriptionAuthorizer if one is present. Returns:
 //   - (UNSPECIFIED, "", nil) when no delegate is registered (caller
