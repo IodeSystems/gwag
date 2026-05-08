@@ -60,9 +60,17 @@ func main() {
 		GatewayAddr: *gatewayAddr,
 		ServiceAddr: *advertise,
 		InstanceID:  "greeter@" + *addr,
-		Services: []controlclient.Service{
-			{Namespace: "greeter", Version: *version, FileDescriptor: greeterv1.File_greeter_proto},
-		},
+		Services: []controlclient.Service{{
+			Namespace:      "greeter",
+			Version:        *version,
+			FileDescriptor: greeterv1.File_greeter_proto,
+			// Each greeter instance handles up to 16 concurrent unary
+			// dispatches; the pool aggregates to 64 across all
+			// replicas. Demonstrates the per-binding caps that ship
+			// in cpv1.ServiceBinding.
+			MaxConcurrency:            64,
+			MaxConcurrencyPerInstance: 16,
+		}},
 	})
 	if err != nil {
 		log.Fatalf("self-register: %v", err)
