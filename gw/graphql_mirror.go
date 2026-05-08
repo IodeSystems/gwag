@@ -8,6 +8,8 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 	"github.com/graphql-go/graphql/language/printer"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 // graphQLMirror walks the introspection model of one downstream
@@ -16,9 +18,10 @@ import (
 // covered; Interfaces, Unions, and Subscription roots are skipped
 // with a registration-time log line so operators see what's missing.
 type graphQLMirror struct {
-	src     *graphQLSource
-	metrics Metrics
-	bp      BackpressureOptions
+	src         *graphQLSource
+	metrics     Metrics
+	bp          BackpressureOptions
+	dispatchers *ir.DispatchRegistry
 	// isLatest controls whether this mirror's fields and types use
 	// the bare "<ns>_" prefix (true, single-version or current) or
 	// the disambiguated "<ns>_<vN>_" prefix (false, older version).
@@ -33,20 +36,21 @@ type graphQLMirror struct {
 	unions            map[string]*graphql.Union
 }
 
-func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions) *graphQLMirror {
+func newGraphQLMirror(src *graphQLSource, metrics Metrics, bp BackpressureOptions, dispatchers *ir.DispatchRegistry) *graphQLMirror {
 	if metrics == nil {
 		metrics = noopMetrics{}
 	}
 	return &graphQLMirror{
-		src:      src,
-		metrics:  metrics,
-		bp:       bp,
-		isLatest: true,
-		objects:  map[string]*graphql.Object{},
-		inputs:   map[string]*graphql.InputObject{},
-		enums:    map[string]*graphql.Enum{},
-		scalars:  map[string]*graphql.Scalar{},
-		unions:   map[string]*graphql.Union{},
+		src:         src,
+		metrics:     metrics,
+		bp:          bp,
+		dispatchers: dispatchers,
+		isLatest:    true,
+		objects:     map[string]*graphql.Object{},
+		inputs:      map[string]*graphql.InputObject{},
+		enums:       map[string]*graphql.Enum{},
+		scalars:     map[string]*graphql.Scalar{},
+		unions:      map[string]*graphql.Union{},
 	}
 }
 
@@ -456,8 +460,17 @@ func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldCo
 func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) graphql.FieldResolveFn {
 	core := newGraphQLDispatcher(m, remoteFieldName, opLabel, m.metrics)
 	dispatcher := BackpressureMiddleware(graphQLBackpressureConfig(m.src, core.label, m.metrics, m.bp))(core)
+	sid := ir.MakeSchemaID(m.src.namespace, m.src.version, opLabel+"_"+remoteFieldName)
+	if m.dispatchers != nil {
+		m.dispatchers.Set(sid, dispatcher)
+	}
 	return func(rp graphql.ResolveParams) (any, error) {
 		ctx := withGraphQLForwardInfo(rp.Context, &rp.Info)
+		if m.dispatchers != nil {
+			if d := m.dispatchers.Get(sid); d != nil {
+				return d.Dispatch(ctx, rp.Args)
+			}
+		}
 		return dispatcher.Dispatch(ctx, rp.Args)
 	}
 }
