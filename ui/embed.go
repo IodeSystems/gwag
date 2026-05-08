@@ -8,10 +8,11 @@
 //	cd ui && pnpm install && pnpm run build   # populates dist/
 //	go build ./...                              # embeds dist/* into the binary
 //
-// On a fresh clone before the first `pnpm run build`, dist/ contains
-// only a placeholder index.html that asks the developer to run the
-// UI build. The Go build itself succeeds either way — that placeholder
-// is committed to satisfy the embed pattern.
+// dist/ is gitignored entirely — only generated content lives there.
+// The tracked placeholder is `ui/fallback/index.html`; bin/build seeds
+// (or recovers) dist/index.html from that fallback when pnpm run build
+// fails or hasn't run yet, so //go:embed all:dist always finds at
+// least one file. Run bin/build before `go build` on a fresh clone.
 package ui
 
 import (
