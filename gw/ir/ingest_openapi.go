@@ -82,6 +82,27 @@ func openapiSchemaToType(name string, ref *openapi3.SchemaRef) *Type {
 		OriginKind:  KindOpenAPI,
 		Origin:      ref,
 	}
+	// oneOf / anyOf at the schema root → TypeUnion with named
+	// variants. Inline (non-$ref) variants are skipped since the IR
+	// has no native synthesized-name story for them — operators
+	// hitting that case should declare a named component schema.
+	// Discriminator metadata stays accessible via Origin (the
+	// *openapi3.SchemaRef) when the renderer needs it.
+	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
+		variants := s.OneOf
+		if len(variants) == 0 {
+			variants = s.AnyOf
+		}
+		t.TypeKind = TypeUnion
+		for _, v := range variants {
+			if v == nil || v.Ref == "" {
+				continue
+			}
+			parts := strings.Split(v.Ref, "/")
+			t.Variants = append(t.Variants, parts[len(parts)-1])
+		}
+		return t
+	}
 	if pt := primaryOpenAPIType(s); pt == "string" && len(s.Enum) > 0 {
 		t.TypeKind = TypeEnum
 		for _, v := range s.Enum {

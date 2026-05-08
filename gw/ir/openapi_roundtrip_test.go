@@ -220,3 +220,100 @@ func TestOpenAPIRoundtripSynthesis(t *testing.T) {
 		t.Errorf("synthesized doc missing components.schemas.Pet")
 	}
 }
+
+// openapiUnionSpec exercises the oneOf ingest path: top-level union
+// in components.schemas with $ref'd named variants + a discriminator.
+// The IR captures variants by name; the spec discriminator survives
+// in Origin (same-kind round-trip) but isn't on the canonical Type.
+const openapiUnionSpec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {
+    "/animal": {
+      "get": {
+        "operationId": "getAnimal",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Animal"}}}
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Dog": {"type": "object", "properties": {"bark": {"type": "boolean"}}},
+      "Animal": {
+        "oneOf": [
+          {"$ref": "#/components/schemas/Cat"},
+          {"$ref": "#/components/schemas/Dog"}
+        ],
+        "discriminator": {"propertyName": "kind"}
+      }
+    }
+  }
+}`
+
+func TestOpenAPIIngest_OneOf(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openapiUnionSpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	svc := IngestOpenAPI(doc)
+	animal, ok := svc.Types["Animal"]
+	if !ok {
+		t.Fatal("Animal missing from Types")
+	}
+	if animal.TypeKind != TypeUnion {
+		t.Fatalf("Animal TypeKind = %v, want TypeUnion", animal.TypeKind)
+	}
+	if got, want := animal.Variants, []string{"Cat", "Dog"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Animal Variants = %v, want %v", got, want)
+	}
+}
+
+// TestOpenAPIRoundtripSynthesis_OneOf exercises the cross-kind
+// render: clear Origin so the renderer takes the synthesis path,
+// then verify oneOf comes back out with $ref-shaped variants.
+func TestOpenAPIRoundtripSynthesis_OneOf(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openapiUnionSpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+	svc.Origin = nil
+	for _, t := range svc.Types {
+		t.Origin = nil
+	}
+
+	out, err := RenderOpenAPI(svc)
+	if err != nil {
+		t.Fatalf("RenderOpenAPI: %v", err)
+	}
+	animalRef, ok := out.Components.Schemas["Animal"]
+	if !ok || animalRef.Value == nil {
+		t.Fatal("synthesized doc missing components.schemas.Animal")
+	}
+	if got := len(animalRef.Value.OneOf); got != 2 {
+		t.Fatalf("Animal OneOf len = %d, want 2", got)
+	}
+	for i, want := range []string{
+		"#/components/schemas/Cat",
+		"#/components/schemas/Dog",
+	} {
+		if got := animalRef.Value.OneOf[i].Ref; got != want {
+			t.Errorf("OneOf[%d].Ref = %q, want %q", i, got, want)
+		}
+	}
+}

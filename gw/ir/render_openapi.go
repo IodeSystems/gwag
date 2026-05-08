@@ -55,6 +55,8 @@ func RenderOpenAPI(svc *Service) (*openapi3.T, error) {
 			doc.Components.Schemas[t.Name] = renderOpenAPIObject(t)
 		case TypeEnum:
 			doc.Components.Schemas[t.Name] = renderOpenAPIEnum(t)
+		case TypeUnion:
+			doc.Components.Schemas[t.Name] = renderOpenAPIUnion(t)
 		}
 	}
 
@@ -149,6 +151,28 @@ func renderOpenAPIObject(t *Type) *openapi3.SchemaRef {
 			Description: t.Description,
 			Properties:  props,
 			Required:    required,
+		},
+	}
+}
+
+// renderOpenAPIUnion projects a TypeUnion into an OpenAPI oneOf
+// schema with one $ref per Variant. Same-kind shortcut returns the
+// captured *openapi3.SchemaRef when present so discriminator
+// metadata round-trips verbatim.
+func renderOpenAPIUnion(t *Type) *openapi3.SchemaRef {
+	if t.OriginKind == KindOpenAPI {
+		if r, ok := t.Origin.(*openapi3.SchemaRef); ok && r != nil {
+			return r
+		}
+	}
+	refs := make([]*openapi3.SchemaRef, 0, len(t.Variants))
+	for _, v := range t.Variants {
+		refs = append(refs, &openapi3.SchemaRef{Ref: "#/components/schemas/" + v})
+	}
+	return &openapi3.SchemaRef{
+		Value: &openapi3.Schema{
+			Description: t.Description,
+			OneOf:       refs,
 		},
 	}
 }
