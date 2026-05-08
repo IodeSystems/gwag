@@ -3,6 +3,11 @@
 Source of truth for open work, design decisions, and the rationale
 behind both. Read at session start. Update whenever scope shifts.
 
+Each work item follows the same shape: **the push** (one paragraph
+on why this exists and where it sits), **done** (commits / facts
+that are settled), **todo** (commit-sized chunks), and **followups**
+(things noticed mid-flight that don't block the push).
+
 Tier 1 = correctness / production-blocking. Tier 2 = design-completing
 features. Tier 3 = operational polish. Known limitations = called out
 intentionally; not currently planned to fix.
@@ -14,9 +19,7 @@ intentionally; not currently planned to fix.
 **Empty.** Inbound admin auth, outbound auth v1, and every
 load-bearing glue surface (admin / OpenAPI / gRPC unary /
 subscriptions / schema rebuild / ForgetPeer / cross-gateway
-dispatch) have e2e tests. Outbound-auth alternatives moved to
-tier 2; the test follow-ups (cosmetic log spam, broader cluster
-scenarios) are tracked under tier 3 / tier 2 as appropriate.
+dispatch) have e2e tests.
 
 If a new production-blocking item shows up, file it here. Daily
 work draws from tier 2.
@@ -25,217 +28,104 @@ work draws from tier 2.
 
 ## Tier 2 — design-completing
 
-Open items only — completed work is in *Recently Shipped*. Ordered
-by current leverage; the top items are realistic next picks for a
-fresh session.
+### IR runtime cutover (active workstream)
 
-**Suggested pickups:**
+**The push.** Make IR the default — every code path
+(ingest, runtime, export, transforms) goes through `gw/ir` instead
+of the per-format converters in `gw/{convert,openapi,graphql_mirror,schema}.go`.
+Schema EXPORT already flows through IR (`/api/schema/openapi`,
+`/api/schema/proto`, cross-kind synthesis: ingest → transform →
+render); the runtime path (`g.schema` + `/api/graphql` dispatch +
+`/api/schema/graphql`) and the inline copies of
+`Hides` / `HideInternal` / `Filter` in `buildSchemaLocked` are the
+remaining holdouts. Once IR is canonical, transformers compose at
+one layer instead of two and we can benchmark + optimize the
+runtime: dispatchers built from IR should be allocation- and
+cache-friendly enough to approach hand-written / code-generated
+handlers (open question whether we get there with reflection +
+struct-of-handlers, or whether per-schema codegen is worth it).
 
-### IR runtime cutover (the active workstream)
+**Done.**
+- [x] IR types — `Service` / `Operation` / `Type` / `Field` as superset
+- [x] Proto ingest + render with round-trip via Origin shortcut
+- [x] OpenAPI + GraphQL ingest / render with round-trips
+- [x] Transforms (`Filter`, `HideInternal`, `Hides`) + cross-kind render tests
+- [x] `/api/schema/openapi` + `/api/schema/proto` wired through IR
+- [x] Nested namespaces — `Service.Groups` for graphql round-trip
+- [x] `SchemaID` on IR + `Dispatcher` interface + `DispatchRegistry` (`gw/ir/dispatch.go`); `gatewayServicesAsIR` stamps SchemaIDs once Namespace/Version are assigned
+- [x] `BackpressureMiddleware` (`gw/backpressure.go`) wrapping an `ir.Dispatcher` — slot acquire + dwell + queue depth + backoff metric, returns `Reject(CodeResourceExhausted)` on timeout
+- [x] `protoDispatcher` (`gw/proto_dispatcher.go`) — `buildPoolMethodField` resolver is now `dispatcher.Dispatch(rp.Context, rp.Args)`; user runtime middleware chain still wraps the proto-shaped Handler inside the dispatcher
+- [x] `openAPIDispatcher` (`gw/openapi_dispatcher.go`) — same shape; OpenAPI field resolver is a one-liner over the wrapped dispatcher
+- [x] `graphQLDispatcher` (`gw/graphql_dispatcher.go`) — same shape; ResolveInfo (selection-set + variables) plumbed into the dispatcher via `withGraphQLForwardInfo` context value because canonical args alone can't reconstruct an upstream query. Three inline backpressure copies are now gone.
 
-Schema EXPORT is wired through `gw/ir` — `/api/schema/openapi`,
-`/api/schema/proto`, and (cross-kind) synthesis all flow
-ingest → transform → render. The runtime path (`g.schema` +
-`/api/graphql` dispatch + `/api/schema/graphql`) still uses the old
-per-format converters in `gw/{convert,openapi,graphql_mirror,schema}.go`.
+**Todo.**
+- [ ] **Multi-version render-side fold + `RenderGraphQLRuntime(svcs, registry)`.** Walks IR + registry, composes same-namespace services into a single synthesized Group tree (latest at top, older as `vN` sub-groups), builds `*graphql.Schema` with resolvers that look up Dispatchers via SchemaID. Cuts over `buildSchemaLocked`; deletes the old converters. ~1-2 days. **Highest risk** — parity for hide-and-inject middleware and subscription field collisions.
+- [ ] **UI rewrite.** Nested-everywhere means `admin_listPeers` → `admin.listPeers`, `admin_forgetPeer` (Mutation) → `admin.forgetPeer`. Multi-version OpenAPI sources change too: `pets_v1_getPet` → `pets.v1.getPet`. UI admin pages + any typed query consumer need migration (graphql-codegen regenerates from the new SDL). ~0.5-1 day.
+- [ ] **Test churn.** ~70 tests assert flat field names (`admin_listPeers` etc.); most need rewriting. ~1-2 days.
+- [ ] **Dispatch benchmark harness.** Before/after numbers per dispatch path (proto / OpenAPI / graphql-mirror) under `bench/` — RPS, p50/p99, allocs/op, B/op. Establishes the parity baseline so the optimization work below has a target to beat. ~1 day.
+- [ ] **Allocation + cache-friendliness pass on dispatchers.** With Dispatcher extracted, per-call hot path is small enough to profile. Look for: arg unmarshal allocations, response-shape map building, dynamicpb churn, `graphql.ResolveParams` field walks. Goal is to close the gap to hand-written handlers; spike a per-schema codegen path (`go:generate` from IR) only if reflection-based is leaving meaningful headroom. ~2-3 days, scope-dependent.
 
-Transforms are duplicated: `Hides` / `HideInternal` / `Filter` exist
-in `gw/ir/transform.go` AND inline in `buildSchemaLocked`.
+**Conventions** (settled, see `gw/ir/render_graphql.go`):
+- GraphQL renders nested everywhere; proto / OpenAPI flatten via `FlatOperations`. IR carries the structure; each format honors it as far as the format permits.
+- Container type names: `<PathPascal><Kind>Namespace`. Top-level `greeter` (Query) → `GreeterQueryNamespace`; sub `v1` → `GreeterQueryV1Namespace`. The kind suffix prevents collisions when the same namespace hosts both queries and mutations.
+- Subscription groups flatten to `<group>_<op>` because graphql-go doesn't support nested types under Subscription (`gw/schema.go:231`).
+- A namespace with both queries and mutations (e.g. `admin`) emits as two sibling Groups under Service — one per kind.
+- `MultiVersionPrefix` was deleted (no production callers); the replacement is the render-side fold above.
 
-**IR is now a tree.** `Service.Operations` is the flat list of
-top-level ops; `Service.Groups []*OperationGroup` carries nested
-namespaces (graphql ingest builds these from object-typed fields
-whose return type recursively contains a field-with-args).
-`Service.FlatOperations()` walks the tree depth-first and joins
-names with `_` for renderers that can't nest (proto / openapi).
+**Followups discovered.**
+- *SDL→introspection round-trip gap.* `TestGraphQLIngest_NestedNamespaces` / `TestGraphQLRender_NestedNamespaces` exercise ingest → render in halves rather than a true wire round-trip. If a real upstream graphql server emitted the gateway's nested-namespace SDL and the gateway introspected it back, the existing logic works (the heuristic recognizes the nested shape) — just untested end-to-end.
 
-**Render conventions** (in `gw/ir/render_graphql.go`):
-- Nested-namespace render: GraphQL keeps the tree.
-- Container type names: `<PathPascal><Kind>Namespace`. Top-level
-  `greeter` (Query) → `GreeterQueryNamespace`; sub `v1` →
-  `GreeterQueryV1Namespace`. Same group name under Mutation gets
-  a `MutationNamespace` suffix so collisions don't happen.
-- Subscription groups flatten to `<group>_<op>` because graphql-go
-  doesn't support nested types under Subscription
-  (`gw/schema.go:231` comment).
-- Single Group is bound to one `OpKind`. A namespace with both
-  queries and mutations (e.g. `admin`) emits as two sibling
-  Groups under Service — one per kind.
+---
 
-**Multi-version composition is unimplemented.** Today's renderer
-emits each Service's groups independently; if two Services share
-a namespace at v1 + v2, the SDL gets two top-level fields
-(`greeterV1`, `greeterV2`) rather than `Query.greeter` (latest)
-+ `Query.greeter.v1` (older). The runtime cutover needs a
-render-side composition step that folds same-namespace services
-into one synthesized group whose latest version's ops sit at the
-top + non-latest versions become `vN` sub-groups. `MultiVersionPrefix`
-was deleted (no production callers); its replacement is this
-render-side fold.
+### Multi-protocol ingress (long-term vision)
 
-Remaining work to make IR the single source of truth, in commit-sized
-chunks:
+**The push.** Match the egress matrix on the ingress side: today
+the gateway dispatches *out* in three protocols (gRPC, HTTP/JSON,
+GraphQL) but only accepts *in* over GraphQL. With the IR as the
+canonical message contract, the same Dispatcher can serve
+inbound HTTP/JSON or gRPC calls — operations are unary (request /
+response) or server-streaming (subscriptions over NATS). Bidi /
+client-streaming stays out of scope per the decisions log; we
+filter those with a warning and offer NATS pub/sub as the
+streaming story. Each item below layers on top of the Dispatcher
+abstraction; don't start before that abstraction is landed and
+parity-tested.
 
-1. **`SchemaID` on IR + Dispatcher interface + DispatchRegistry.**
-   No behavior change; just structure. ~0.5 day.
-2. **`BackpressureMiddleware` standalone** wrapping a `Dispatcher`.
-   ~0.5 day. Deduplicates today's three inline copies.
-3. **`protoDispatcher`** — extract `gw/schema.go::buildPoolMethodField`
-   resolver closure into a struct method. Wrap with middleware at
-   render time. ~1 day.
-4. **`openAPIDispatcher`** + **`graphQLDispatcher`** — same shape.
-   ~1 day each.
-5. **Multi-version render-side fold + `RenderGraphQLRuntime(svcs, registry)`**
-   — walks IR + registry, composes same-namespace services into a
-   single synthesized Group tree (latest at top, older as `vN` sub-
-   groups), builds `*graphql.Schema` with resolvers that look up
-   Dispatchers via SchemaID. Cuts over `buildSchemaLocked`; deletes
-   old converters. ~1-2 days. Highest risk: parity for hide-and-inject
-   middleware and subscription field collisions.
-6. **UI rewrite.** Going nested-everywhere means `admin_listPeers` →
-   `admin.listPeers`, `admin_forgetPeer` (Mutation) → `admin.forgetPeer`.
-   Multi-version OpenAPI ingest sources change too:
-   `pets_v1_getPet` → `pets.v1.getPet`. UI's admin pages + any
-   typed query consumer needs migration (graphql-codegen will
-   regenerate from the new SDL). ~0.5-1 day.
-7. **Test churn.** ~1-2 days for ~70 existing tests — most assertions
-   on flat field names (`admin_listPeers` etc.) need rewriting.
+**Todo.**
+- [ ] **HTTP/JSON ingress.** Gateway exposes `/<package>.<Service>/<method>` (or REST paths from OpenAPI's HTTPMethod/HTTPPath) accepting JSON bodies, dispatching via canonical args. ~3-4 days.
+- [ ] **gRPC ingress for arbitrary services.** Dynamic `grpc.UnknownServiceHandler`-based proxy that catches every `/<svc>/<method>` invocation and routes through canonical args. Unary only — server-streaming RPCs at this ingress would still need to publish to NATS, same contract as today. ~4-5 days.
+- [ ] **Subscription transport-agnosticism.** NATS broker / HMAC / channel naming live next to the GraphQL transport today; the ingress work above needs the same subscribe story available over HTTP/SSE or gRPC server-streaming so a non-GraphQL client can subscribe. Symmetric refactor to make subs transport-agnostic. ~3 days.
 
-**Decision settled:** GraphQL render is nested everywhere; proto and
-OpenAPI flatten via `FlatOperations`. The IR was extended to model
-the nesting structurally rather than picking a flat-vs-nested fork
-at the renderer. The user's mental model: "IR has the structure;
-each format honors it as far as the format permits."
-
-**Test gap:** there's no SDL→introspection conversion, so the
-graphql round-trip test (`TestGraphQLIngest_NestedNamespaces` /
-`TestGraphQLRender_NestedNamespaces`) checks ingest → render in
-two halves rather than a true wire round-trip. If a real upstream
-graphql server emitted the gateway's nested-namespace SDL and the
-gateway introspected it back, the existing logic works (heuristic
-recognizes the nested shape) — just untested end-to-end.
-
-### Bidirectional canonical-message gateway (long-term vision)
-
-Beyond the runtime cutover: any-format-in / any-format-out, with the
-IR as the canonical message contract. Today only GraphQL ingress
-exists. Layered additions on top of the Dispatcher abstraction:
-
-- **HTTP/JSON ingress** — gateway exposes `/<package>.<Service>/<method>`
-  (or REST paths from OpenAPI's HTTPMethod/HTTPPath) accepting
-  JSON bodies, dispatching via canonical args. ~3-4 days.
-- **gRPC ingress for arbitrary services** — dynamic
-  `grpc.UnknownServiceHandler`-based proxy that catches every
-  `/<svc>/<method>` invocation and routes through canonical
-  args. ~4-5 days.
-- **Subscription transport-agnosticism** — NATS broker / HMAC
-  /channel naming live next to the GraphQL transport today;
-  same symmetric work to make them transport-agnostic. ~3 days.
-
-Don't start these until the Dispatcher abstraction (steps 1-6) is
-landed and parity-tested.
+---
 
 ### Existing tier-2 tail (parked behind real use cases)
 
-Interface / Union typed-mirror polish, oneOf/anyOf richer mapping,
-service-account token / OAuth-JWT translation outbound auth,
-destructive-read opt-in, UI rotate-key panel. Promote to tier 1 if
-something becomes load-bearing.
+**The push.** None individually — these are first-class versions
+of capabilities that are already composable today. Promote to tier
+1 if any becomes load-bearing for a real deployment.
 
-### Token rotation (kid in tokens)
-
-Done — see `325aaf4` (verifier + standalone signer) and the
-follow-on commit (RPC kid in/out) under Recently Shipped. Future
-work would be the UI side: a "rotate key" panel that shows the
-configured kid set, with a "set active" toggle. Park until an
-operator asks.
-
-### Downstream GraphQL ingestion: subscriptions
-
-Done — see Recently Shipped. v1 plus the multiplexer (one upstream
-WS per source, operation-level fanout matching `broker.go`) both
-shipped. AddGraphQL queries / mutations / subscriptions are now at
-full parity with the OpenAPI side.
-
-### Downstream GraphQL ingestion: dynamic registration
-
-Done — see Recently Shipped. Future work: GraphQL ingest
-multi-replica + load balancing (see suggested pickups).
-
-### Downstream GraphQL ingestion: Interface / Union typed mirror
-
-Done — see Recently Shipped. Both INTERFACE and UNION map to
-`graphql.NewUnion` over `possibleTypes`. ResolveType reads
-`__typename`. Inline-fragment type-conditions are un-prefixed on the
-forwarded query. Carrying graphql.Interface (with shared fields)
-isn't worth the thunk-build gymnastics for a forwarding role.
-
-### Outbound auth pass-through alternatives
-
-`Authorization` is forwarded by default; `ForwardHeaders(...)`
-overrides per-source. `WithOpenAPIClient(*http.Client)` (gateway-
-wide default) and `OpenAPIClient(c)` (per-source override) let
-operators plug in any transport — mTLS, custom RoundTripper, signed
-URLs, retry/timeout policy. That covers the common cases.
-
-Open design forks for richer scenarios:
-- **Service-account token**: a built-in helper that wraps a
-  RoundTripper and refreshes a token on schedule. Today this is
-  achievable via a custom `*http.Client`; promote to first-class
-  when a real deployment wants it.
-- **OAuth/JWT translation**: gateway exchanges the inbound token
-  for a service-specific token via a configurable issuer. Heavier;
-  composable today, first-class when needed.
-
-### Admin auth follow-ups
-
-Auto-internal `_*` namespaces and admin auth metrics shipped
-(commit `01b1a3a`). Remaining:
-- *Destructive read opt-in.* `AdminMiddleware` lets every GET
-  through for the UI. Once a destructive read shows up
-  (`/admin/peers/{id}/inspect-state` etc.), gate it explicitly via
-  a per-route flag rather than flipping the global GET policy.
-  Parked until a real destructive read needs it.
-
-### OpenAPI oneOf / anyOf → GraphQL Union
-
-Done — see Recently Shipped. When every variant resolves to a known
-Object, the gateway emits a `graphql.NewUnion` over them. ResolveType
-prefers `discriminator.propertyName` (with `discriminator.mapping`
-overriding the default schema-name resolution); falls back to a
-"first variant whose required props are all present on the value"
-heuristic. Variants that aren't clean objects (primitives, mixed
-arrays) keep the JSON scalar fallback. Input side stays JSON scalar
-— GraphQL has no input unions.
+**Todo.**
+- [ ] **Service-account token outbound auth.** Built-in helper that wraps a RoundTripper and refreshes a token on schedule. Achievable now via custom `*http.Client`; first-class when a deployment wants it.
+- [ ] **OAuth/JWT translation outbound auth.** Gateway exchanges the inbound token for a service-specific token via a configurable issuer. Composable today, first-class when needed.
+- [ ] **Destructive read opt-in.** `AdminMiddleware` lets every GET through for the UI. When a destructive read shows up (`/admin/peers/{id}/inspect-state`), gate it explicitly via a per-route flag rather than flipping the global GET policy. Parked until a real destructive read needs it.
+- [ ] **UI rotate-key panel.** Shows the configured kid set, with a "set active" toggle. Token rotation itself is done; the panel ships when an operator asks.
+- [ ] **Interface / Union typed-mirror polish + oneOf/anyOf richer mapping.** Both base cases shipped; richer projections (carrying `graphql.Interface` with shared fields, more elaborate union resolution) wait for a use case.
 
 ---
 
 ## Tier 3 — operational polish
 
-- **Connection-rate limiting / per-IP caps.** Reject excessive new WS
-  connections per IP / per token. Prevents trivial DoS on the
-  WebSocket terminator. Use a token bucket; configurable knob.
-- **k8s + docker-compose example deployments.** YAML manifests for the
-  3-gateway cluster from `examples/multi`. Shows how to wire `--nats-peer`,
-  health probe, drain-on-shutdown.
-- **NATS server log noise control.** Currently routes log everything
-  at INFO (tests pile up server-banner output too). Expose a
-  `Logger`/`LogLevel` field on `ClusterOptions` and a corresponding
-  `--nats-log-level` CLI flag.
-- **Metrics / tracing example middleware.** Concrete `Pair` showing
-  OpenTelemetry / Prometheus-app-level integration on top of what
-  the gateway already emits.
-- **Cluster.Close vs Gateway.Close lifecycle docs.** Document the
-  shutdown sequence: `gw.Drain` → `srv.GracefulStop` →
-  `cluster.Close`. Out-of-order calls are OK but the example should
-  show the right sequence.
-- **Heartbeat-to-wrong-gateway smoothing.** When a service heartbeats
-  to a gateway that didn't receive its Register, fall back to checking
-  the registry KV instead of forcing re-register. Smaller window of
-  dispatch failure during gateway failover.
-- **Sub-fanout drop policy configurable.** Today a slow consumer drops
-  events. Operator might want "kick the slow one" instead. Per-consumer
-  watermark + configurable behaviour.
+**The push.** Knobs and ergonomics for operators. Nothing here
+blocks shipping; pick up opportunistically.
+
+**Todo.**
+- [ ] **Connection-rate limiting / per-IP caps.** Reject excessive new WS connections per IP / per token. Token bucket; configurable knob. Prevents trivial DoS on the WebSocket terminator.
+- [ ] **k8s + docker-compose example deployments.** YAML manifests for the 3-gateway cluster from `examples/multi`. Shows how to wire `--nats-peer`, health probe, drain-on-shutdown.
+- [ ] **NATS server log noise control.** Routes log everything at INFO; tests pile up server-banner output too. Expose a `Logger`/`LogLevel` field on `ClusterOptions` and a `--nats-log-level` CLI flag.
+- [ ] **Metrics / tracing example middleware.** Concrete `Pair` showing OpenTelemetry / Prometheus-app-level integration on top of what the gateway already emits.
+- [ ] **Cluster.Close vs Gateway.Close lifecycle docs.** Document the shutdown sequence: `gw.Drain` → `srv.GracefulStop` → `cluster.Close`. Out-of-order calls are OK; the example should show the right sequence.
+- [ ] **Heartbeat-to-wrong-gateway smoothing.** When a service heartbeats to a gateway that didn't receive its Register, fall back to checking the registry KV instead of forcing re-register. Smaller dispatch-failure window during gateway failover.
+- [ ] **Sub-fanout drop policy configurable.** Today a slow consumer drops events. Operator might want "kick the slow one" instead. Per-consumer watermark + configurable behaviour.
 
 ---
 
@@ -429,7 +319,3 @@ React + MUI v6 + TanStack Router admin console at `ui/`.
 
 Pages: Dashboard, Services, Peers (with Forget mutation), Schema
 viewer. Vite proxies `/graphql`, `/schema`, `/health` to the gateway.
-
-UI-side tier-2 work is tracked under the Tier 2 heading: token
-entry/storage, dist embed.
-

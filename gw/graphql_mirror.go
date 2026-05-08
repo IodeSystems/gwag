@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
@@ -455,94 +454,11 @@ func (m *graphQLMirror) argsConfig(args []*introspectionInputV) (graphql.FieldCo
 // downstream operation the same way OpenAPI dispatch slices by
 // `<HTTP_METHOD> <pathTemplate>`.
 func (m *graphQLMirror) forwardingResolver(remoteFieldName, opLabel string) graphql.FieldResolveFn {
-	src := m.src
-	metrics := m.metrics
-	bp := m.bp
-	ns := src.namespace
-	ver := src.version
-	methodLabel := opLabel + " " + remoteFieldName
+	core := newGraphQLDispatcher(m, remoteFieldName, opLabel, m.metrics)
+	dispatcher := BackpressureMiddleware(graphQLBackpressureConfig(m.src, core.label, m.metrics, m.bp))(core)
 	return func(rp graphql.ResolveParams) (any, error) {
-		start := time.Now()
-		record := func(err error) error {
-			metrics.RecordDispatch(ns, ver, methodLabel, time.Since(start), err)
-			return err
-		}
-		// Acquire a slot. Fast path: src.sem nil (unbounded) or has
-		// immediate capacity. Slow path: queue, observe dwell, time out
-		// per MaxWaitTime. Mirrors the OpenAPI resolver so all three
-		// dispatch paths share the same backpressure surface.
-		if src.sem != nil {
-			waitStart := time.Now()
-			select {
-			case src.sem <- struct{}{}:
-				metrics.RecordDwell(ns, ver, methodLabel, "unary", time.Since(waitStart))
-			default:
-				depth := int(src.queueing.Add(1))
-				metrics.SetQueueDepth(ns, ver, "unary", depth)
-				dwell, err := waitForSlot(rp.Context, src.sem, bp.MaxWaitTime)
-				now := int(src.queueing.Add(-1))
-				metrics.SetQueueDepth(ns, ver, "unary", now)
-				metrics.RecordDwell(ns, ver, methodLabel, "unary", dwell)
-				if err != nil {
-					metrics.RecordBackoff(ns, ver, methodLabel, "unary", "wait_timeout")
-					return nil, record(Reject(CodeResourceExhausted, fmt.Sprintf("%s: %s", ns, err.Error())))
-				}
-			}
-			defer func() { <-src.sem }()
-		}
-		if len(rp.Info.FieldASTs) == 0 {
-			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", remoteFieldName)))
-		}
-		field := rp.Info.FieldASTs[0]
-		rewritten := m.rewriteFieldForRemote(field, remoteFieldName)
-		opType := ast.OperationTypeQuery
-		var varDefs []*ast.VariableDefinition
-		if op, ok := rp.Info.Operation.(*ast.OperationDefinition); ok && op != nil {
-			if op.Operation == ast.OperationTypeMutation {
-				opType = ast.OperationTypeMutation
-			}
-			varDefs = op.VariableDefinitions
-		}
-		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-			Operation:           opType,
-			VariableDefinitions: varDefs,
-			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-				Selections: []ast.Selection{rewritten},
-			}),
-		})
-		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-		raw := printer.Print(doc)
-		printed, ok := raw.(string)
-		if !ok {
-			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
-		}
-		query := printed
-
-		r := src.pickReplica()
-		if r == nil {
-			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", ns)))
-		}
-		r.inflight.Add(1)
-		defer r.inflight.Add(-1)
-		resp, err := dispatchGraphQL(rp.Context, r.httpClient, r.endpoint, query, rp.Info.VariableValues, src.forwardHeaders)
-		if err != nil {
-			return nil, record(err)
-		}
-		if len(resp.Errors) > 0 {
-			// Surface the first error back to the local client so they
-			// see what the remote complained about. Application-level
-			// remote errors classify as INTERNAL — there's no portable
-			// status code in the GraphQL error envelope.
-			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql remote: %s", resp.Errors[0])))
-		}
-		var data map[string]any
-		if len(resp.Data) > 0 {
-			if err := jsonUnmarshalLoose(resp.Data, &data); err != nil {
-				return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql decode data: %s", err.Error())))
-			}
-		}
-		record(nil)
-		return data[remoteFieldName], nil
+		ctx := withGraphQLForwardInfo(rp.Context, &rp.Info)
+		return dispatcher.Dispatch(ctx, rp.Args)
 	}
 }
 
