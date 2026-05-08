@@ -55,7 +55,21 @@ type Service struct {
 	// renderers ignore it (their grouping is by namespace).
 	ServiceName string
 
+	// Operations directly under this service's root. proto/OpenAPI
+	// ingest leave Groups empty and put every method here. GraphQL
+	// ingest classifies each root field: bare operations land here,
+	// fields whose return type is a "namespace-shaped" object move
+	// into Groups (see OperationGroup).
 	Operations []*Operation
+
+	// Groups model GraphQL's "object-type-as-namespace" pattern —
+	// recursive sub-namespaces with their own operations and further
+	// nested groups. Empty for proto / OpenAPI ingest. The GraphQL
+	// renderer emits each Group as a synthesized Object type;
+	// proto / OpenAPI renderers walk the tree depth-first and join
+	// path segments with `_` so the flat method names round-trip.
+	Groups []*OperationGroup
+
 	// Types are keyed by their canonical full name. Proto uses
 	// "<package>.<Name>"; OpenAPI uses the components/schemas key;
 	// GraphQL uses the unprefixed type Name. Cross-kind renderers
@@ -70,6 +84,31 @@ type Service struct {
 	//   *introspectionSchema slice or JSON (KindGraphQL)
 	OriginKind Kind
 	Origin     any
+}
+
+// OperationGroup is one nested namespace under a Service (or under
+// another Group). Used for GraphQL's object-type-as-namespace
+// pattern: in SDL terms, a Group is the field on the parent Object
+// whose return type is itself an Object containing operations.
+//
+// proto / OpenAPI have no native equivalent — their renderers
+// flatten by joining the path with `_`. The graphql renderer emits
+// a synthesized container type per group, named `<parentName><Name>`
+// pascal-cased (e.g. greeter → GreeterNamespace, then v1 →
+// GreeterV1Namespace under it).
+//
+// Kind binds the group to one of GraphQL's three root operation
+// types — every Operation inside (transitively) shares this Kind
+// since a single GraphQL field on Query can't host a Mutation. A
+// namespace that needs both queries and mutations (e.g. admin)
+// emits as two sibling Groups under Service: one with Kind=OpQuery,
+// one with Kind=OpMutation.
+type OperationGroup struct {
+	Name        string
+	Description string
+	Kind        OpKind
+	Operations  []*Operation
+	Groups      []*OperationGroup // recursive
 }
 
 // OpKind groups operations by invocation shape so cross-kind
@@ -259,6 +298,37 @@ const (
 	ScalarID        // GraphQL ID
 	ScalarTimestamp // proto google.protobuf.Timestamp / openapi format=date-time
 )
+
+// FlatOperations returns Service.Operations plus every operation
+// transitively contained in Service.Groups, with each grouped op's
+// Name path-joined by "_" (e.g. group "greeter" → group "v1" → op
+// "hello" renders as "greeter_v1_hello"). Renderers that don't
+// natively model nested namespaces (proto, OpenAPI) call this so
+// the flat method-name space the source format requires is
+// derived deterministically from the IR tree.
+//
+// Operations from Groups are deep-copied; top-level Operations are
+// returned by reference. Callers that mutate the slice should not
+// rely on the top-level pointers being unique.
+func (s *Service) FlatOperations() []*Operation {
+	out := append([]*Operation(nil), s.Operations...)
+	for _, g := range s.Groups {
+		flattenGroupOps(g, "", &out)
+	}
+	return out
+}
+
+func flattenGroupOps(g *OperationGroup, prefix string, out *[]*Operation) {
+	pre := prefix + g.Name + "_"
+	for _, op := range g.Operations {
+		clone := *op
+		clone.Name = pre + op.Name
+		*out = append(*out, &clone)
+	}
+	for _, sub := range g.Groups {
+		flattenGroupOps(sub, pre, out)
+	}
+}
 
 // IsBuiltin reports whether the ref points at a primitive scalar
 // (no Service.Types lookup needed).

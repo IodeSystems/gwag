@@ -63,8 +63,10 @@ func RenderOpenAPI(svc *Service) (*openapi3.T, error) {
 	// streaming shape and the gateway's existing /api/schema/openapi
 	// path was unary-only. Same-kind shortcut already preserves
 	// these for OpenAPI-origin services (which never have them
-	// anyway).
-	for _, op := range svc.Operations {
+	// anyway). Service.Groups flatten via FlatOperations so nested
+	// namespaces collapse to underscored op names + synthesized
+	// paths.
+	for _, op := range svc.FlatOperations() {
 		if op.Kind == OpSubscription || op.StreamingClient {
 			continue
 		}

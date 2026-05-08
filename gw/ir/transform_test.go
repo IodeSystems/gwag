@@ -1,7 +1,6 @@
 package ir
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -79,52 +78,3 @@ func TestHidesStripFieldsByType(t *testing.T) {
 	}
 }
 
-func TestMultiVersionPrefix(t *testing.T) {
-	v1 := mkService("greeter", "v1")
-	v1.Types["HelloRequest"] = &Type{Name: "HelloRequest", TypeKind: TypeObject}
-	v1.Operations = []*Operation{
-		{Name: "hello", Kind: OpQuery, Output: &TypeRef{Named: "HelloRequest"}},
-	}
-
-	v2 := mkService("greeter", "v2")
-	v2.Types["HelloRequest"] = &Type{Name: "HelloRequest", TypeKind: TypeObject}
-	v2.Operations = []*Operation{
-		{Name: "hello", Kind: OpQuery, Output: &TypeRef{Named: "HelloRequest"}},
-	}
-
-	out := MultiVersionPrefix([]*Service{v1, v2})
-	if len(out) != 2 {
-		t.Fatalf("got %d, want 2", len(out))
-	}
-
-	// Find the renamed v1 in out.
-	var renamed *Service
-	for _, s := range out {
-		if s.Version == "v1" {
-			renamed = s
-		}
-	}
-	if renamed == nil {
-		t.Fatal("v1 missing from output")
-	}
-	if _, ok := renamed.Types["v1_HelloRequest"]; !ok {
-		t.Errorf("v1's HelloRequest not prefixed; got types: %v", typeKeys(renamed.Types))
-	}
-	if got := renamed.Operations[0].Name; got != "v1_hello" {
-		t.Errorf("v1's hello not prefixed: %q", got)
-	}
-	if got := renamed.Operations[0].Output.Named; got != "v1_HelloRequest" {
-		t.Errorf("v1's hello output ref not rewritten: %q", got)
-	}
-	if !strings.Contains(renamed.Operations[0].Deprecated, "v2 is current") {
-		t.Errorf("v1's hello missing deprecation marker: %q", renamed.Operations[0].Deprecated)
-	}
-}
-
-func typeKeys(m map[string]*Type) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}

@@ -90,8 +90,11 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 	// synthesize <Op>Request / <Op>Response messages from Args /
 	// Output and add them to the file's MessageType. proto3 needs
 	// concrete input/output types — we don't import
-	// google.protobuf.Empty just to point at it.
-	if len(svc.Operations) > 0 {
+	// google.protobuf.Empty just to point at it. Service.Groups
+	// flattens via FlatOperations so nested namespaces from a
+	// GraphQL ingest project to dotted-prefix proto method names.
+	flatOps := svc.FlatOperations()
+	if len(flatOps) > 0 {
 		serviceName := svc.ServiceName
 		if serviceName == "" {
 			serviceName = "Service"
@@ -99,7 +102,7 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 		sp := &descriptorpb.ServiceDescriptorProto{
 			Name: &serviceName,
 		}
-		for _, op := range svc.Operations {
+		for _, op := range flatOps {
 			if op.OriginKind == KindProto {
 				if mp, ok := op.Origin.(*descriptorpb.MethodDescriptorProto); ok && mp != nil {
 					sp.Method = append(sp.Method, mp)
