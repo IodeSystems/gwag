@@ -132,8 +132,8 @@ func TestDynamicOpenAPI_HashMismatchRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected hash-mismatch error, got nil")
 	}
-	if !strings.Contains(err.Error(), "different spec hash") {
-		t.Fatalf("error: %v (want 'different spec hash')", err)
+	if !strings.Contains(err.Error(), "different schema hash") {
+		t.Fatalf("error: %v (want 'different schema hash')", err)
 	}
 }
 

@@ -105,8 +105,77 @@ func TestSchemaRebuild_HashMismatchRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected hash-mismatch error, got nil")
 	}
-	if !strings.Contains(err.Error(), "different proto hash") {
-		t.Fatalf("error message: %v (want 'different proto hash')", err)
+	if !strings.Contains(err.Error(), "different schema hash") {
+		t.Fatalf("error message: %v (want 'different schema hash')", err)
+	}
+}
+
+// Plan §4: an `unstable` slot is single-occupant, so a re-register
+// with a different schema replaces the prior pool rather than
+// rejecting like vN. Same-hash multi-replica unstable still piles
+// into the existing pool (covered by SameHashJoinsPool below).
+func TestSchemaRebuild_UnstableSwapsOnDifferentHash(t *testing.T) {
+	gw := newSchemaTestGateway(t)
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("svc"),
+		Version("unstable"),
+	); err != nil {
+		t.Fatalf("first AddProtoDescriptor: %v", err)
+	}
+	// Different proto, same (ns, ver=unstable). Must succeed (swap),
+	// not reject like vN.
+	if err := gw.AddProtoDescriptor(
+		eav1.File_gw_proto_eventsauth_v1_eventsauth_proto,
+		To(nopGRPCConn{}),
+		As("svc"),
+		Version("unstable"),
+	); err != nil {
+		t.Fatalf("unstable swap rejected: %v", err)
+	}
+	gw.mu.Lock()
+	p := gw.pools[poolKey{namespace: "svc", version: "unstable"}]
+	s := gw.slots[poolKey{namespace: "svc", version: "unstable"}]
+	gw.mu.Unlock()
+	if p == nil {
+		t.Fatal("svc:unstable pool missing post-swap")
+	}
+	if got := p.replicaCount(); got != 1 {
+		t.Errorf("post-swap replica count = %d, want 1 (the swapped-in registration only)", got)
+	}
+	if s == nil {
+		t.Fatal("slot index missing post-swap")
+	}
+	if s.kind != slotKindProto {
+		t.Errorf("slot kind = %v, want proto", s.kind)
+	}
+}
+
+// Cross-kind collision is what the slot index catches that the per-
+// kind maps couldn't: registering svc:v1 as proto then attempting to
+// also register it as openapi must reject. Without the slot index
+// each registration would land in its own map and the schema rebuild
+// would emit conflicting fields under the same namespace.
+func TestSchemaRebuild_CrossKindCollisionRejected(t *testing.T) {
+	gw := newSchemaTestGateway(t)
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("svc"),
+	); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+	err := gw.AddOpenAPIBytes(
+		[]byte(minimalOpenAPISpec),
+		To("http://localhost:9999"),
+		As("svc"),
+	)
+	if err == nil {
+		t.Fatal("expected cross-kind collision; got nil")
+	}
+	if !strings.Contains(err.Error(), "already registered as proto") {
+		t.Fatalf("error %v missing kind-mismatch info", err)
 	}
 }
 

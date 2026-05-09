@@ -79,10 +79,12 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		g.graphQLSources = map[poolKey]*graphQLSource{}
 	}
 	key := poolKey{namespace: ns, version: ver}
-	if existing, ok := g.graphQLSources[key]; ok {
-		if existing.hash != hash {
-			return fmt.Errorf("gateway: AddGraphQL: %s/%s already registered with different schema hash", ns, ver)
-		}
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0)
+	if err != nil {
+		return fmt.Errorf("gateway: AddGraphQL: %w", err)
+	}
+	if existed {
+		existing := g.graphQLSources[key]
 		existing.addReplica(&graphQLReplica{
 			endpoint:   endpoint,
 			httpClient: httpClient,
@@ -116,7 +118,10 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 // addGraphQLSourceLocked is the control-plane / reconciler entry
 // point. Idempotent under hash equality: a duplicate register with
 // matching introspection bytes appends a new replica to the existing
-// source; mismatched hash rejects. Caller holds g.mu.
+// source. Caller holds g.mu.
+//
+// Tier policy (unstable swap, vN immutability, cross-kind reject) is
+// centralized in `registerSlotLocked` — see slot.go.
 //
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
@@ -141,10 +146,12 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		httpClient = http.DefaultClient
 	}
 	key := poolKey{namespace: ns, version: ver}
-	if existing, ok := g.graphQLSources[key]; ok {
-		if existing.hash != hash {
-			return fmt.Errorf("graphql: %s/%s already registered with different schema hash", ns, ver)
-		}
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0)
+	if err != nil {
+		return fmt.Errorf("graphql: %w", err)
+	}
+	if existed {
+		existing := g.graphQLSources[key]
 		// Idempotent: replay of the same KV value (same replicaID) is
 		// a no-op.
 		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
@@ -160,6 +167,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 	}
 	intro, err := parseIntrospectionData(rawIntro)
 	if err != nil {
+		delete(g.slots, key)
 		return fmt.Errorf("graphql: parse introspection %s/%s: %w", ns, ver, err)
 	}
 	src := &graphQLSource{
@@ -199,7 +207,9 @@ func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, ver, replicaID string) {
 		return
 	}
 	if src.replicaCount() == 0 {
-		delete(g.graphQLSources, poolKey{namespace: ns, version: ver})
+		key := poolKey{namespace: ns, version: ver}
+		delete(g.graphQLSources, key)
+		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
 		}
@@ -224,6 +234,7 @@ func (g *Gateway) removeGraphQLSourcesByOwnerLocked(owner string) int {
 		removed += n
 		if s.replicaCount() == 0 {
 			delete(g.graphQLSources, k)
+			g.releaseSlotLocked(k)
 			rebuild = true
 		}
 	}

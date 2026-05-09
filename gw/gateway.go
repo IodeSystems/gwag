@@ -25,7 +25,18 @@ import (
 )
 
 type Gateway struct {
-	mu             sync.Mutex
+	mu sync.Mutex
+
+	// slots is the §4 single-occupant index per (namespace, version).
+	// Every registration goes through `registerSlotLocked` first to
+	// enforce the tier policy (unstable swap / vN immutability /
+	// cross-kind reject); the per-kind map below it (pools /
+	// openAPISources / graphQLSources) holds the dispatch state.
+	// Phase 2 of the slot-registry refactor (plan §4) pre-distills
+	// `*ir.Service` onto the slot and drops the per-kind maps so
+	// schema rebuild can iterate slots directly.
+	slots map[poolKey]*slot
+
 	pools          map[poolKey]*pool
 	internal       map[string]bool // namespaces hidden from the public schema
 	transforms     []Transform
@@ -500,6 +511,10 @@ func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...Ser
 	if err != nil {
 		return fmt.Errorf("gateway: hash %s: %w", fd.Path(), err)
 	}
+	ver, _, err := parseVersion(sc.version)
+	if err != nil {
+		return fmt.Errorf("gateway: AddProtoDescriptor(%s): %w", fd.Path(), err)
+	}
 	addr := fmt.Sprintf("descriptor:%s", fd.Path())
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -508,7 +523,7 @@ func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...Ser
 	}
 	return g.joinPoolLocked(poolEntry{
 		namespace:                 ns,
-		version:                   "v1",
+		version:                   ver,
 		hash:                      hash,
 		file:                      fd,
 		addr:                      addr,
@@ -547,6 +562,10 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	if err != nil {
 		return fmt.Errorf("gateway: hash %s: %w", path, err)
 	}
+	ver, _, err := parseVersion(sc.version)
+	if err != nil {
+		return fmt.Errorf("gateway: AddProto(%s): %w", path, err)
+	}
 	addr := fmt.Sprintf("addproto:%s", path)
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -555,7 +574,7 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	}
 	return g.joinPoolLocked(poolEntry{
 		namespace:                 ns,
-		version:                   "v1",
+		version:                   ver,
 		hash:                      hash,
 		file:                      fd,
 		addr:                      addr,
@@ -591,6 +610,9 @@ type poolEntry struct {
 // joinPoolLocked finds or creates the pool for (namespace, version) and
 // adds a replica. Pool creation triggers a schema rebuild; replica
 // churn within an existing pool does not. Caller must hold g.mu.
+//
+// Tier policy (unstable swap, vN immutability, cross-kind reject)
+// is centralized in `registerSlotLocked` — see slot.go.
 func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	if e.maxConcurrency < 0 {
 		return fmt.Errorf("gateway: pool %s/%s: max_concurrency must be ≥ 0", e.namespace, e.version)
@@ -600,29 +622,25 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	}
 	g.warnSubscribeDelegateDeprecated(e.namespace, e.version)
 	key := poolKey{namespace: e.namespace, version: e.version}
-	p, exists := g.pools[key]
-	if exists {
-		if p.hash != e.hash {
-			return fmt.Errorf("gateway: pool %s/%s exists with different proto hash", e.namespace, e.version)
-		}
-		// Concurrency caps are captured on first-create and frozen for
-		// the pool's lifetime — later joins must agree. Mismatched
-		// caps mean either a control-plane misconfiguration or a
-		// rolling deploy that changed the registration shape; surface
-		// loudly so it doesn't silently drift.
-		if e.maxConcurrency != p.maxConcurrency || e.maxConcurrencyPerInstance != p.maxConcurrencyPerInstance {
-			return fmt.Errorf("gateway: pool %s/%s exists with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
-				e.namespace, e.version, p.maxConcurrency, p.maxConcurrencyPerInstance, e.maxConcurrency, e.maxConcurrencyPerInstance)
-		}
+	existed, err := g.registerSlotLocked(slotKindProto, key, e.hash, e.maxConcurrency, e.maxConcurrencyPerInstance)
+	if err != nil {
+		return fmt.Errorf("gateway: %w", err)
+	}
+	if existed {
+		p := g.pools[key]
 		p.addReplica(g.newReplica(p, e))
 		g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 		return nil
 	}
 	_, n, err := parseVersion(e.version)
 	if err != nil {
+		// parseVersion already accepted this version on its first run
+		// (registerSlotLocked uses the same key) — defensive: roll the
+		// slot back so the gateway state stays in sync.
+		delete(g.slots, key)
 		return fmt.Errorf("gateway: %w", err)
 	}
-	p = &pool{
+	p := &pool{
 		key:                       key,
 		versionN:                  n,
 		file:                      e.file,
@@ -688,6 +706,7 @@ func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, 
 	g.publishServiceChange(adminEventsActionDeregistered, ns, ver, r.addr, uint32(p.replicaCount()))
 	if p.replicaCount() == 0 {
 		delete(g.pools, key)
+		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			return r, g.assembleLocked()
 		}
@@ -713,6 +732,7 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 		g.publishServiceChange(adminEventsActionDeregistered, key.namespace, key.version, "", uint32(p.replicaCount()))
 		if p.replicaCount() == 0 {
 			delete(g.pools, key)
+			g.releaseSlotLocked(key)
 			rebuild = true
 		}
 	}

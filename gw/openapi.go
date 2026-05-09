@@ -105,16 +105,12 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		httpClient = g.cfg.openAPIHTTP
 	}
 	key := poolKey{namespace: ns, version: ver}
-	if existing, ok := g.openAPISources[key]; ok {
-		// Same hash → idempotent multi-replica add. Different hash →
-		// configuration drift; reject.
-		if existing.hash != hash {
-			return fmt.Errorf("gateway: AddOpenAPI: %s/%s already registered with different spec hash", ns, ver)
-		}
-		if sc.maxConcurrency != existing.maxConcurrency || sc.maxConcurrencyPerInstance != existing.maxConcurrencyPerInstance {
-			return fmt.Errorf("gateway: AddOpenAPI: %s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
-				ns, ver, existing.maxConcurrency, existing.maxConcurrencyPerInstance, sc.maxConcurrency, sc.maxConcurrencyPerInstance)
-		}
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, sc.maxConcurrency, sc.maxConcurrencyPerInstance)
+	if err != nil {
+		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", label, err)
+	}
+	if existed {
+		existing := g.openAPISources[key]
 		existing.addReplica(newOpenAPIReplica(existing, openAPIReplicaInit{
 			baseURL:    addr,
 			httpClient: httpClient,
@@ -354,8 +350,10 @@ func (s *openAPISource) replicaCount() int {
 // addOpenAPISourceLocked is the internal hook the control-plane and
 // reconciler share. Idempotent under hash equality: a duplicate
 // register with matching bytes appends a new replica to the existing
-// source (HTTP analogue of joinPoolLocked). Rejects mismatched hash
-// or mismatched concurrency caps. Caller holds g.mu.
+// source (HTTP analogue of joinPoolLocked). Caller holds g.mu.
+//
+// Tier policy (unstable swap, vN immutability, cross-kind reject) is
+// centralized in `registerSlotLocked` — see slot.go.
 //
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
@@ -364,7 +362,7 @@ func (s *openAPISource) replicaCount() int {
 // maxConcurrency / maxConcurrencyPerInstance carry the
 // ServiceBinding's per-binding caps (0 → gateway default for
 // service-level, unbounded per-instance). Frozen at first
-// registration.
+// registration (overwritten on unstable swap).
 func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string, maxConcurrency, maxConcurrencyPerInstance int) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
@@ -388,14 +386,12 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		addr = "http://" + addr
 	}
 	key := poolKey{namespace: ns, version: ver}
-	if existing, ok := g.openAPISources[key]; ok {
-		if existing.hash != hash {
-			return fmt.Errorf("openapi: %s/%s already registered with different spec hash", ns, ver)
-		}
-		if maxConcurrency != existing.maxConcurrency || maxConcurrencyPerInstance != existing.maxConcurrencyPerInstance {
-			return fmt.Errorf("openapi: %s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
-				ns, ver, existing.maxConcurrency, existing.maxConcurrencyPerInstance, maxConcurrency, maxConcurrencyPerInstance)
-		}
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, maxConcurrency, maxConcurrencyPerInstance)
+	if err != nil {
+		return fmt.Errorf("openapi: %w", err)
+	}
+	if existed {
+		existing := g.openAPISources[key]
 		// Idempotent: if a replica with the same id already lives
 		// here, treat as no-op (reconciler replays).
 		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
@@ -413,9 +409,11 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	loader.IsExternalRefsAllowed = false
 	doc, err := loader.LoadFromData(specBytes)
 	if err != nil {
+		delete(g.slots, key)
 		return fmt.Errorf("openapi: parse %s/%s: %w", ns, ver, err)
 	}
 	if err := doc.Validate(loader.Context); err != nil {
+		delete(g.slots, key)
 		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
 	src := &openAPISource{
@@ -460,7 +458,9 @@ func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, ver, replicaID string) {
 		return
 	}
 	if src.replicaCount() == 0 {
-		delete(g.openAPISources, poolKey{namespace: ns, version: ver})
+		key := poolKey{namespace: ns, version: ver}
+		delete(g.openAPISources, key)
+		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
 		}
@@ -485,6 +485,7 @@ func (g *Gateway) removeOpenAPISourcesByOwnerLocked(owner string) int {
 		removed += n
 		if s.replicaCount() == 0 {
 			delete(g.openAPISources, k)
+			g.releaseSlotLocked(k)
 			rebuild = true
 		}
 	}
