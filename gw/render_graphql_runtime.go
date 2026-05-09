@@ -41,6 +41,23 @@ type RuntimeOptions struct {
 	// with the gateway's full pool map. nil = per-service (safe for
 	// single-pool fixtures).
 	SharedProtoBuilder *IRTypeBuilder
+
+	// StableVN, when non-nil, drives plan §4's `stable` alias: for
+	// each namespace whose entry is > 0, the renderer emits a
+	// `stable` sub-field on the synthesized namespace container
+	// aliasing whichever service in `svcs` has version "v<N>" matching
+	// the entry. Subscriptions emit flat under `<ns>_stable_<op>` /
+	// `<ns>_stable_<group>_<op>`.
+	//
+	// When the target vN isn't present in `svcs` (because every
+	// replica of that cut has deregistered), the alias is omitted —
+	// stable's monotonic property still lives in the gateway's
+	// side-state (so the alias snaps back when the cut returns), but
+	// the schema can't reference types we haven't built. Followup
+	// work in plan §4 will preserve stale-vN IR so dispatches via
+	// `stable` keep returning a "no live replicas" error in that
+	// transient state.
+	StableVN map[string]int
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired
@@ -166,8 +183,9 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 			builders[svc] = tb
 		}
 
+		stableSvc := pickStableSvc(services, opts.StableVN[ns])
 		for _, kind := range []ir.OpKind{ir.OpQuery, ir.OpMutation} {
-			field, err := buildNamespaceFold(ns, services, latest, latestReason, builders, kind, registry)
+			field, err := buildNamespaceFold(ns, services, latest, latestReason, builders, kind, registry, stableSvc)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("runtime: ns %s kind %v: %w", ns, kind, err)
 			}
@@ -202,6 +220,15 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 				return nil, nil, nil, fmt.Errorf("runtime: ns %s subscription: %w", ns, err)
 			}
 		}
+		if stableSvc != nil {
+			depReason := ""
+			if stableSvc != latest {
+				depReason = latestReason
+			}
+			if err := addSubscriptionFlat(subs, stableSvc, builders[stableSvc], ns+"_stable_", depReason, registry); err != nil {
+				return nil, nil, nil, fmt.Errorf("runtime: ns %s stable subscription: %w", ns, err)
+			}
+		}
 	}
 
 	return queries, mutations, subs, nil
@@ -210,9 +237,11 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 // buildNamespaceFold synthesises one Query/Mutation root field for
 // `ns`: a container Object whose fields are latest's ops/groups
 // flat at top, plus a `vN` sub-field per version (including latest)
-// addressing that specific version's content. Returns nil when no
-// service in the namespace has content of this Kind.
-func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, latestReason string, builders map[*ir.Service]*IRTypeBuilder, kind ir.OpKind, registry *ir.DispatchRegistry) (*graphql.Field, error) {
+// addressing that specific version's content. When stableSvc is
+// non-nil, an additional `stable` sub-field aliases that service's
+// content (plan §4). Returns nil when no service in the namespace
+// has content of this Kind.
+func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, latestReason string, builders map[*ir.Service]*IRTypeBuilder, kind ir.OpKind, registry *ir.DispatchRegistry, stableSvc *ir.Service) (*graphql.Field, error) {
 	nsPath := pascalCaseRuntime(ns)
 	kindSfx := kindSuffixForRuntime(kind)
 
@@ -250,6 +279,35 @@ func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, l
 			return nil, fmt.Errorf("version sub-group %q collides with op", svc.Version)
 		}
 		nsFields[svc.Version] = verField
+	}
+
+	if stableSvc != nil {
+		depReason := ""
+		if stableSvc != latest {
+			depReason = latestReason
+		}
+		stablePath := nsPath + "Stable"
+		stableFields := graphql.Fields{}
+		if err := addServiceContent(stableFields, stableSvc, builders[stableSvc], kind, stablePath, depReason, registry); err != nil {
+			return nil, fmt.Errorf("stable: %w", err)
+		}
+		if len(stableFields) > 0 {
+			stableContainer := graphql.NewObject(graphql.ObjectConfig{
+				Name:   stablePath + kindSfx + "Namespace",
+				Fields: stableFields,
+			})
+			stableField := &graphql.Field{
+				Type:    graphql.NewNonNull(stableContainer),
+				Resolve: func(rp graphql.ResolveParams) (any, error) { return struct{}{}, nil },
+			}
+			if depReason != "" {
+				stableField.DeprecationReason = depReason
+			}
+			if _, exists := nsFields["stable"]; exists {
+				return nil, fmt.Errorf("stable sub-group collides with op")
+			}
+			nsFields["stable"] = stableField
+		}
 	}
 
 	if len(nsFields) == 0 {
@@ -570,6 +628,25 @@ func newRuntimeTypeBuilder(svc *ir.Service, opts RuntimeOptions, isLatest bool) 
 	default:
 		return nil, fmt.Errorf("runtime: unsupported OriginKind %v on %s/%s", svc.OriginKind, svc.Namespace, svc.Version)
 	}
+}
+
+// pickStableSvc finds the service in `services` whose Version is
+// "v<vN>" (the per-namespace stable target). Returns nil when vN is
+// 0 (the namespace has never registered a numbered cut) or when no
+// matching service is currently in the build. The latter case
+// covers a transient — the cut's last replica has deregistered but
+// the gateway-side stable record stays put per the monotonic rule —
+// so the renderer simply omits the alias until the cut returns.
+func pickStableSvc(services []*ir.Service, vN int) *ir.Service {
+	if vN <= 0 {
+		return nil
+	}
+	for _, svc := range services {
+		if parseRuntimeVersionN(svc.Version) == vN {
+			return svc
+		}
+	}
+	return nil
 }
 
 // parseRuntimeVersionN extracts a numeric version index from a

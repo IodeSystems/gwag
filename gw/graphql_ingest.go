@@ -108,6 +108,7 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	})
 	s.graphql = src
 	g.bakeSlotIRLocked(s)
+	g.advanceStableLocked(ns, verN)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -187,6 +188,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 	})
 	s.graphql = src
 	g.bakeSlotIRLocked(s)
+	g.advanceStableLocked(ns, verN)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}

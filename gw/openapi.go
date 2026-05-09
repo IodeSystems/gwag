@@ -139,6 +139,7 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	}))
 	s.openapi = src
 	g.bakeSlotIRLocked(s)
+	g.advanceStableLocked(ns, verN)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -438,6 +439,7 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	}))
 	s.openapi = src
 	g.bakeSlotIRLocked(s)
+	g.advanceStableLocked(ns, verN)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}

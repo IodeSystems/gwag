@@ -79,6 +79,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,
+		StableVN:           g.stableSnapshotLocked(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime render: %w", err)

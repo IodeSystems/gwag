@@ -40,6 +40,14 @@ type Gateway struct {
 	internal   map[string]bool // namespaces hidden from the public schema
 	transforms []Transform
 	schema     atomic.Pointer[graphql.Schema]
+
+	// stableVN tracks the highest-ever-seen "vN" per namespace.
+	// Monotonic; only advances. Read at schema-build time so the
+	// renderer can emit a `stable` sub-field aliasing the matching
+	// vN's content. See `gw/stable.go`. Cluster-wide convergence is
+	// reconciler-driven today; KV-persisted recovery for fresh nodes
+	// joining mid-life is a plan §4 follow-up.
+	stableVN map[string]int
 	cfg        *config
 	cp         *controlPlane
 	peers      *peerTracker
@@ -661,6 +669,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	p.addReplica(g.newReplica(p, e))
 	s.proto = p
 	g.bakeSlotIRLocked(s)
+	g.advanceStableLocked(e.namespace, n)
 	g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 	if g.schema.Load() != nil {
 		// Pool creation always rebuilds — covers all three cases:
