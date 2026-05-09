@@ -214,6 +214,11 @@ func main() {
 	if mtls != nil {
 		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(mtls)))
 	}
+	// Mount GRPCUnknownHandler on the same gRPC server that hosts
+	// ControlPlane — gw doc's recommended pattern. Any registered
+	// service (proto / OpenAPI / GraphQL) becomes reachable as gRPC
+	// at /<svc.FullName>/<method> via the IR-translation layer.
+	grpcOpts = append(grpcOpts, grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
 	srv := grpc.NewServer(grpcOpts...)
 	cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
 
@@ -238,6 +243,11 @@ func main() {
 	// is the zdx-go convention.
 	mux := http.NewServeMux()
 	mux.Handle("/api/graphql", gw.Handler())
+	// REST-shape ingress: any registered service becomes reachable as
+	// HTTP/JSON. Proto services land at POST /<pkg>.<Service>/<method>;
+	// OpenAPI services at their declared path/method. Mounted under
+	// /api/ingress/ so it doesn't collide with the SPA catch-all on /.
+	mux.Handle("/api/ingress/", http.StripPrefix("/api/ingress", gw.IngressHandler()))
 	mux.Handle("/api/schema", gw.SchemaHandler()) // back-compat alias
 	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
 	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())

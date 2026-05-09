@@ -73,7 +73,9 @@ Scale + load:
   bin/bench status
   bin/bench gw add
   bin/bench service add greeter --version v2
-  bin/bench traffic --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
+  bin/bench traffic graphql --target http://${LAN_IP}:18080/api/graphql --rps 200 --duration 30s
+  bin/bench traffic grpc    --target http://${LAN_IP}:18080 --grpc-target ${LAN_IP}:50090 --service greeter --method Hello --args '{"name":"world"}' --rps 200 --duration 30s
+  bin/bench traffic openapi --target http://${LAN_IP}:18080 --service greeter --operation Hello --args '{"name":"world"}' --rps 200 --duration 30s
 
 Tear down:
   bin/bench down              # purges .run/ by default

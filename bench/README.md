@@ -69,18 +69,51 @@ file-SD picks up the new scrape target within ~10s without a reload.
 
 ## Traffic
 
+The traffic generator picks one of three subcommands by ingress
+format. All three target the same registered service through the
+gateway's IR-translation layer — apples-to-apples per-format cost.
+
 ```
-bin/bench traffic \
+# GraphQL — POST a query to /api/graphql
+bin/bench traffic graphql \
   --target http://localhost:18080/api/graphql \
-  --target http://localhost:18081/api/graphql \
-  --rps 500 --duration 30s --concurrency 32
+  --rps 500 --duration 30s
+
+# gRPC — unary RPC via gw.GRPCUnknownHandler on the control-plane port
+bin/bench traffic grpc \
+  --target http://localhost:18080 \
+  --grpc-target localhost:50090 \
+  --service greeter --method Hello \
+  --args '{"name":"world"}' \
+  --rps 500 --duration 30s
+
+# OpenAPI — HTTP/JSON via gw.IngressHandler at /api/ingress/...
+bin/bench traffic openapi \
+  --target http://localhost:18080 \
+  --service greeter --operation Hello \
+  --args '{"name":"world"}' \
+  --rps 500 --duration 30s
 ```
 
-- `--rps` is per-target. Two targets at `--rps 500` is 1k/s total.
-- `--concurrency` caps simultaneous in-flight per target. Saturation
-  drops are counted as errors (`drop` category) so a too-low cap
-  shows up in the summary.
-- `--query` overrides the default greeter query.
+Shared flags across all three: `--rps`, `--duration`, `--concurrency`,
+`--timeout`, `--target`, `--server-metrics`. Run
+`traffic <sub> --help` for per-subcommand flag lists.
+
+- `--target` is repeatable / comma-separable for multi-gateway runs;
+  `--rps` is per-target.
+- `--concurrency` caps simultaneous in-flight per target. Default is
+  `0` = auto = `max(64, rps/20)`, scaling the headroom with load so
+  the bench client doesn't silently cap throughput. Saturation drops
+  are counted as errors (`drop` category) so a too-low cap shows up
+  in the summary, and the runner prints a Little's-law advisor at
+  end-of-run when `concurrency × p50 < target rps`.
+- `traffic graphql --query '{...}'` overrides the default greeter query.
+- `traffic grpc/openapi --args '{...}'` provides the request payload;
+  resolved against the gateway-rendered FDS (`/api/schema/proto`) or
+  spec (`/api/schema/openapi`). For body-shaped openapi ops the args
+  are sent as both query and body so it works regardless of how the
+  spec declares input (the proto-→-OpenAPI synthesis currently
+  declares unary args as query; see `docs/plan.md`).
 
 Summary blocks: per-target row with RPS / P50 / P95 / P99 / OK /
 ERRS / CODES, plus example response bodies per status code (so a
@@ -88,7 +121,11 @@ ERRS / CODES, plus example response bodies per status code (so a
 follows: per-(namespace, version, method) RPS / P50 / P95 / P99 /
 COUNT / CODES from the gateway's own histograms (server view; lower
 bound per bucket means short requests look pessimistic — use the
-client row for sub-millisecond precision).
+client row for sub-millisecond precision). Below that, a per-ingress
+request-time row pulls `request_duration_seconds` and
+`request_self_seconds` (mean + p95) so operators can see "client p50
+= 3.5 ms; gateway self = 0.8 ms; greeter dispatch = 2.7 ms" at a
+glance — the answer to "is this on us?" without writing PromQL.
 
 ## Tear down
 
@@ -123,8 +160,11 @@ bench/
 - Single host only. Multi-host benchmarking (real network latency,
   separate containers) is a future follow-up — none of this requires
   k8s, but the orchestrator scripts assume `localhost`.
-- Only `greeter` (gRPC) backends are wired up. OpenAPI and
-  downstream-GraphQL benchmark backends are noted in `docs/plan.md`
-  as a follow-up.
+- Only `greeter` (gRPC-registered) backends are wired up. The three
+  traffic adapters can all hit greeter via different ingress formats
+  (graphql / grpc / openapi) thanks to the IR translation, so format
+  comparisons work today. Adding an OpenAPI- or downstream-GraphQL-
+  registered demo backend is noted in `docs/plan.md` as a follow-up
+  for cross-kind ingress completeness.
 - Removing the only gateway tears down the JetStream registry. For
   failover testing add at least one extra gateway first.
