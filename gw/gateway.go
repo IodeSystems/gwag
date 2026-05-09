@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -16,6 +17,10 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/gqlerrors"
+	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/parser"
+	"github.com/graphql-go/graphql/language/source"
 	"github.com/graphql-go/handler"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -112,6 +117,12 @@ type Gateway struct {
 	wsMu    sync.Mutex
 	wsConns map[uintptr]context.CancelFunc
 
+	// docCache caches parsed + validated *ast.Document for repeat
+	// queries so the hot path skips graphql-go's parse + ValidateDocument
+	// (the leg that profiles at ~27% CPU and ~70% of allocations on
+	// reflection dispatch). nil when WithoutDocCache() is set.
+	docCache *docCache
+
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
@@ -136,6 +147,13 @@ type config struct {
 	signerSecret []byte
 	openAPIHTTP  *http.Client
 	pprof        bool
+
+	// docCache* control the parsed + validated AST cache exposed via
+	// gw.Handler(). 0 → defaults; docCacheDisabled bypasses the cache
+	// entirely.
+	docCacheSize     int
+	docCacheMaxQuery int
+	docCacheDisabled bool
 
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
@@ -472,6 +490,42 @@ func WithPprof() Option {
 	return func(cfg *config) { cfg.pprof = true }
 }
 
+// Default sizing for the parsed+validated AST cache. graphql-go's
+// parse + validate path allocates ~24 KB per request from its visitor
+// alone — caching the validated AST at the cost of (1024 × ~typical
+// query size) ≈ low-tens-of-MB is a strong tradeoff for any workload
+// that re-issues the same query.
+const (
+	defaultDocCacheSize     = 1024
+	defaultDocCacheMaxQuery = 64 * 1024
+)
+
+// WithDocCacheSize sets the maximum number of distinct query strings
+// retained in the parsed+validated AST cache (LRU eviction past it).
+// Default 1024. Pass 0 to disable; equivalent to WithoutDocCache().
+func WithDocCacheSize(n int) Option {
+	return func(cfg *config) {
+		cfg.docCacheSize = n
+		if n == 0 {
+			cfg.docCacheDisabled = true
+		}
+	}
+}
+
+// WithDocCacheMaxQueryBytes sets the per-query byte cap above which a
+// query bypasses the cache. Default 64 KiB. 0 → no per-query cap.
+func WithDocCacheMaxQueryBytes(n int) Option {
+	return func(cfg *config) { cfg.docCacheMaxQuery = n }
+}
+
+// WithoutDocCache disables the parsed+validated AST cache. Use when
+// memory headroom matters more than throughput, or when every request
+// has a unique query string (in which case the cache only adds an
+// allocation per request).
+func WithoutDocCache() Option {
+	return func(cfg *config) { cfg.docCacheDisabled = true }
+}
+
 func New(opts ...Option) *Gateway {
 	cfg := &config{
 		backpressure: DefaultBackpressure,
@@ -507,6 +561,17 @@ func New(opts ...Option) *Gateway {
 	}
 	if cfg.backpressure.MaxStreamsTotal > 0 {
 		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)
+	}
+	if !cfg.docCacheDisabled {
+		size := cfg.docCacheSize
+		if size <= 0 {
+			size = defaultDocCacheSize
+		}
+		maxQ := cfg.docCacheMaxQuery
+		if maxQ <= 0 {
+			maxQ = defaultDocCacheMaxQuery
+		}
+		g.docCache = newDocCache(size, maxQ)
 	}
 	return g
 }
@@ -974,19 +1039,94 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		schema := g.schema.Load()
-		gh := handler.New(&handler.Config{
-			Schema:   schema,
-			Pretty:   true,
-			GraphiQL: true,
-		})
 		ctx, accum := withDispatchAccumulator(r.Context())
 		ctx = withInjectCache(ctx)
 		ctx = WithHTTPRequest(ctx, r)
 		start := time.Now()
-		gh.ServeHTTP(w, r.WithContext(ctx))
+		if isGraphiQLRequest(r) {
+			// Browser UI render — rare, never on the hot path. Defer to
+			// graphql-go/handler so we don't have to maintain our own
+			// GraphiQL HTML template.
+			gh := handler.New(&handler.Config{
+				Schema:   schema,
+				Pretty:   true,
+				GraphiQL: true,
+			})
+			gh.ServeHTTP(w, r.WithContext(ctx))
+		} else {
+			g.serveGraphQLJSON(ctx, schema, w, r)
+		}
 		total := time.Since(start)
 		g.cfg.metrics.RecordRequest("graphql", total, total-time.Duration(accum.Load()))
 	})
+}
+
+// isGraphiQLRequest mirrors graphql-go/handler's GraphiQL trigger:
+// non-raw browser requests asking for text/html and not application/json.
+// We detect this up front so the JSON hot path doesn't need to thread
+// through handler.Handler.
+func isGraphiQLRequest(r *http.Request) bool {
+	if _, raw := r.URL.Query()["raw"]; raw {
+		return false
+	}
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") {
+		return false
+	}
+	return strings.Contains(accept, "text/html")
+}
+
+// serveGraphQLJSON is the GraphQL execute + JSON response path with
+// the parsed+validated AST cache inserted between request parsing and
+// graphql.Execute. Equivalent in behavior to graphql-go/handler.New
+// with Pretty: true on a hit; on a miss we go through parser.Parse +
+// graphql.ValidateDocument once and store the result.
+func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, w http.ResponseWriter, r *http.Request) {
+	opts := handler.NewRequestOptions(r)
+
+	var (
+		execAST   *ast.Document
+		validErrs []gqlerrors.FormattedError
+	)
+
+	if entry, ok := g.docCache.lookup(schema, opts.Query); ok {
+		execAST = entry.doc
+		validErrs = entry.errs
+	} else {
+		src := source.NewSource(&source.Source{Body: []byte(opts.Query), Name: "GraphQL request"})
+		parsedAST, parseErr := parser.Parse(parser.ParseParams{Source: src})
+		if parseErr != nil {
+			validErrs = gqlerrors.FormatErrors(parseErr)
+		} else {
+			vr := graphql.ValidateDocument(schema, parsedAST, nil)
+			if !vr.IsValid {
+				validErrs = vr.Errors
+			}
+			execAST = parsedAST
+		}
+		g.docCache.store(schema, opts.Query, execAST, validErrs)
+	}
+
+	var result *graphql.Result
+	if len(validErrs) > 0 {
+		result = &graphql.Result{Errors: validErrs}
+	} else {
+		result = graphql.Execute(graphql.ExecuteParams{
+			Schema:        *schema,
+			AST:           execAST,
+			OperationName: opts.OperationName,
+			Args:          opts.Variables,
+			Context:       ctx,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// Pretty JSON matches graphql-go/handler's default; cost is 0.65%
+	// of bytes on the pre-cache profile so keep it for readability.
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "\t")
+	_ = enc.Encode(result)
 }
 
 // SchemaHandler returns an http.Handler that exports the GraphQL
