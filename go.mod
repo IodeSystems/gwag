@@ -24,7 +24,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.23.1 // indirect
-	github.com/go-openapi/swag v0.26.0 // indirect
 	github.com/go-openapi/swag/jsonname v0.26.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
@@ -52,5 +51,10 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260504160031-60b97b32f348 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// graphql-go fork at github.com/IodeSystems/graphql adds Plan +
+// PlanQuery + ExecutePlan so we can cache parsed+validated+planned
+// query state, not just the AST. See plan-cache branch + the benches
+// in the fork.
+replace github.com/graphql-go/graphql => /home/nthalk/local/src/iodesystems/graphql

@@ -50,6 +50,7 @@ type docCacheItem struct {
 type docCacheEntry struct {
 	schema *graphql.Schema
 	doc    *ast.Document
+	plan   *graphql.Plan // nil when validation failed (errs is set)
 	errs   []gqlerrors.FormattedError
 }
 
@@ -95,7 +96,7 @@ func (c *docCache) lookup(schema *graphql.Schema, query string) (*docCacheEntry,
 	return item.e, true
 }
 
-func (c *docCache) store(schema *graphql.Schema, query string, doc *ast.Document, errs []gqlerrors.FormattedError) {
+func (c *docCache) store(schema *graphql.Schema, query string, doc *ast.Document, plan *graphql.Plan, errs []gqlerrors.FormattedError) {
 	if c == nil || c.maxEntries <= 0 {
 		return
 	}
@@ -108,11 +109,12 @@ func (c *docCache) store(schema *graphql.Schema, query string, doc *ast.Document
 		item := el.Value.(*docCacheItem)
 		item.e.schema = schema
 		item.e.doc = doc
+		item.e.plan = plan
 		item.e.errs = errs
 		c.order.MoveToFront(el)
 		return
 	}
-	item := &docCacheItem{key: query, e: &docCacheEntry{schema: schema, doc: doc, errs: errs}}
+	item := &docCacheItem{key: query, e: &docCacheEntry{schema: schema, doc: doc, plan: plan, errs: errs}}
 	el := c.order.PushFront(item)
 	c.entries[query] = el
 	for c.order.Len() > c.maxEntries {

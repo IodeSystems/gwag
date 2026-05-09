@@ -1086,11 +1086,13 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 
 	var (
 		execAST   *ast.Document
+		execPlan  *graphql.Plan
 		validErrs []gqlerrors.FormattedError
 	)
 
 	if entry, ok := g.docCache.lookup(schema, opts.Query); ok {
 		execAST = entry.doc
+		execPlan = entry.plan
 		validErrs = entry.errs
 	} else {
 		src := source.NewSource(&source.Source{Body: []byte(opts.Query), Name: "GraphQL request"})
@@ -1101,16 +1103,39 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 			vr := graphql.ValidateDocument(schema, parsedAST, nil)
 			if !vr.IsValid {
 				validErrs = vr.Errors
+			} else {
+				// Plan once at miss time; the plan covers the whole
+				// schema-shape work — collectFields, getFieldDef
+				// lookups, literal-arg coercion, sub-selection trees.
+				// Future requests with the same query reuse it.
+				p, planErr := graphql.PlanQuery(schema, parsedAST, opts.OperationName)
+				if planErr != nil {
+					validErrs = gqlerrors.FormatErrors(planErr)
+				} else {
+					execPlan = p
+				}
 			}
 			execAST = parsedAST
 		}
-		g.docCache.store(schema, opts.Query, execAST, validErrs)
+		g.docCache.store(schema, opts.Query, execAST, execPlan, validErrs)
 	}
 
 	var result *graphql.Result
-	if len(validErrs) > 0 {
+	switch {
+	case len(validErrs) > 0:
 		result = &graphql.Result{Errors: validErrs}
-	} else {
+	case execPlan != nil:
+		result = graphql.ExecutePlan(execPlan, graphql.ExecuteParams{
+			Schema:        *schema,
+			AST:           execAST,
+			OperationName: opts.OperationName,
+			Args:          opts.Variables,
+			Context:       ctx,
+		})
+	default:
+		// Should be unreachable — validation passed but plan is nil
+		// only when graphql.Execute would also fail. Keep behavior
+		// identical for safety.
 		result = graphql.Execute(graphql.ExecuteParams{
 			Schema:        *schema,
 			AST:           execAST,

@@ -13,7 +13,7 @@ func TestDocCacheLookupMissThenHit(t *testing.T) {
 	if _, ok := c.lookup(schema, "{x}"); ok {
 		t.Fatal("empty cache should miss")
 	}
-	c.store(schema, "{x}", &ast.Document{}, nil)
+	c.store(schema, "{x}", &ast.Document{}, nil, nil)
 	e, ok := c.lookup(schema, "{x}")
 	if !ok || e == nil {
 		t.Fatalf("expected hit, got ok=%v entry=%v", ok, e)
@@ -27,7 +27,7 @@ func TestDocCacheSchemaInvalidates(t *testing.T) {
 	c := newDocCache(8, 0)
 	schemaA := &graphql.Schema{}
 	schemaB := &graphql.Schema{}
-	c.store(schemaA, "{x}", &ast.Document{}, nil)
+	c.store(schemaA, "{x}", &ast.Document{}, nil, nil)
 	if _, ok := c.lookup(schemaB, "{x}"); ok {
 		t.Fatal("entry validated against schemaA must not satisfy schemaB lookup")
 	}
@@ -40,9 +40,9 @@ func TestDocCacheSchemaInvalidates(t *testing.T) {
 func TestDocCacheLRUEviction(t *testing.T) {
 	c := newDocCache(2, 0)
 	schema := &graphql.Schema{}
-	c.store(schema, "a", &ast.Document{}, nil)
-	c.store(schema, "b", &ast.Document{}, nil)
-	c.store(schema, "c", &ast.Document{}, nil) // evicts "a" (oldest)
+	c.store(schema, "a", &ast.Document{}, nil, nil)
+	c.store(schema, "b", &ast.Document{}, nil, nil)
+	c.store(schema, "c", &ast.Document{}, nil, nil) // evicts "a" (oldest)
 	if _, ok := c.lookup(schema, "a"); ok {
 		t.Fatal("LRU eviction: 'a' should have been evicted")
 	}
@@ -51,7 +51,7 @@ func TestDocCacheLRUEviction(t *testing.T) {
 	}
 	// Looking up 'b' moved it to the front; 'c' is now LRU.
 	// Storing 'd' should evict 'c'.
-	c.store(schema, "d", &ast.Document{}, nil)
+	c.store(schema, "d", &ast.Document{}, nil, nil)
 	if _, ok := c.lookup(schema, "c"); ok {
 		t.Fatal("'c' should have been evicted after 'b' moved to front")
 	}
@@ -67,11 +67,11 @@ func TestDocCacheSkipsLargeQueries(t *testing.T) {
 	c := newDocCache(8, 16) // 16-byte cap
 	schema := &graphql.Schema{}
 	tooBig := "0123456789abcdefXX" // 18 bytes
-	c.store(schema, tooBig, &ast.Document{}, nil)
+	c.store(schema, tooBig, &ast.Document{}, nil, nil)
 	if _, ok := c.lookup(schema, tooBig); ok {
 		t.Fatal("over-cap query should not have been cached")
 	}
-	c.store(schema, "small", &ast.Document{}, nil)
+	c.store(schema, "small", &ast.Document{}, nil, nil)
 	if _, ok := c.lookup(schema, "small"); !ok {
 		t.Fatal("under-cap query should be cached")
 	}
@@ -83,5 +83,5 @@ func TestDocCacheNilSafe(t *testing.T) {
 		t.Fatal("nil cache lookup must return false")
 	}
 	// store on nil is a no-op
-	c.store(nil, "x", &ast.Document{}, nil)
+	c.store(nil, "x", &ast.Document{}, nil, nil)
 }
