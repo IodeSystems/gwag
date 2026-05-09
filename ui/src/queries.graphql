@@ -72,6 +72,38 @@ query ServiceStats($namespace: String!, $version: String!) {
   }
 }
 
+query DeprecatedStats {
+  admin {
+    deprecatedStats(window: "24h") {
+      window
+      services {
+        namespace
+        version
+        manualReason
+        autoReason
+        totalCount
+        totalThroughput
+        methods {
+          method
+          count
+          okCount
+          throughput
+          p50Millis
+          p95Millis
+          callers {
+            caller
+            count
+            okCount
+            throughput
+            p50Millis
+            p95Millis
+          }
+        }
+      }
+    }
+  }
+}
+
 mutation Deprecate($namespace: String!, $version: String!, $reason: String!) {
   admin {
     deprecate(

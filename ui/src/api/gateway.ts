@@ -66,6 +66,7 @@ export type AdminMutationNamespaceUndeprecateArgs = {
 
 export type AdminQueryNamespace = {
   __typename?: 'AdminQueryNamespace';
+  deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
@@ -74,6 +75,11 @@ export type AdminQueryNamespace = {
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
   stable: AdminStableQueryNamespace;
   v1: AdminV1QueryNamespace;
+};
+
+
+export type AdminQueryNamespaceDeprecatedStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -134,12 +140,18 @@ export type AdminStableMutationNamespaceUndeprecateArgs = {
 
 export type AdminStableQueryNamespace = {
   __typename?: 'AdminStableQueryNamespace';
+  deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
+};
+
+
+export type AdminStableQueryNamespaceDeprecatedStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -200,12 +212,18 @@ export type AdminV1MutationNamespaceUndeprecateArgs = {
 
 export type AdminV1QueryNamespace = {
   __typename?: 'AdminV1QueryNamespace';
+  deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
+};
+
+
+export type AdminV1QueryNamespaceDeprecatedStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -230,6 +248,16 @@ export type Query = {
   admin: AdminQueryNamespace;
 };
 
+export type Admin_CallerStatsRow = {
+  __typename?: 'admin_CallerStatsRow';
+  caller: Scalars['String']['output'];
+  count: Scalars['Long']['output'];
+  okCount: Scalars['Long']['output'];
+  p50Millis: Scalars['Long']['output'];
+  p95Millis: Scalars['Long']['output'];
+  throughput: Scalars['Float']['output'];
+};
+
 export type Admin_ChannelInfo = {
   __typename?: 'admin_ChannelInfo';
   consumers: Scalars['Long']['output'];
@@ -248,6 +276,34 @@ export type Admin_DeprecateInBodyInput = {
 export type Admin_DeprecateOutBody = {
   __typename?: 'admin_DeprecateOutBody';
   _void: Maybe<Scalars['String']['output']>;
+};
+
+export type Admin_DeprecatedMethodRow = {
+  __typename?: 'admin_DeprecatedMethodRow';
+  callers: Array<Maybe<Admin_CallerStatsRow>>;
+  count: Scalars['Long']['output'];
+  method: Scalars['String']['output'];
+  okCount: Scalars['Long']['output'];
+  p50Millis: Scalars['Long']['output'];
+  p95Millis: Scalars['Long']['output'];
+  throughput: Scalars['Float']['output'];
+};
+
+export type Admin_DeprecatedServiceRow = {
+  __typename?: 'admin_DeprecatedServiceRow';
+  autoReason: Maybe<Scalars['String']['output']>;
+  manualReason: Maybe<Scalars['String']['output']>;
+  methods: Array<Maybe<Admin_DeprecatedMethodRow>>;
+  namespace: Scalars['String']['output'];
+  totalCount: Scalars['Long']['output'];
+  totalThroughput: Scalars['Float']['output'];
+  version: Scalars['String']['output'];
+};
+
+export type Admin_DeprecatedStatsOutBody = {
+  __typename?: 'admin_DeprecatedStatsOutBody';
+  services: Array<Maybe<Admin_DeprecatedServiceRow>>;
+  window: Scalars['String']['output'];
 };
 
 export type Admin_DrainInBodyInput = {
@@ -419,6 +475,11 @@ export type ServiceStatsQueryVariables = Exact<{
 
 export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null } };
 
+export type DeprecatedStatsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type DeprecatedStatsQuery = { admin: { deprecatedStats: { window: string, services: Array<{ namespace: string, version: string, manualReason: string | null, autoReason: string | null, totalCount: unknown, totalThroughput: number, methods: Array<{ method: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, callers: Array<{ caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null> } | null> } | null } };
+
 export type DeprecateMutationVariables = Exact<{
   namespace: string;
   version: string;
@@ -528,6 +589,39 @@ export const ServiceStatsDocument = gql`
   }
 }
     `;
+export const DeprecatedStatsDocument = gql`
+    query DeprecatedStats {
+  admin {
+    deprecatedStats(window: "24h") {
+      window
+      services {
+        namespace
+        version
+        manualReason
+        autoReason
+        totalCount
+        totalThroughput
+        methods {
+          method
+          count
+          okCount
+          throughput
+          p50Millis
+          p95Millis
+          callers {
+            caller
+            count
+            okCount
+            throughput
+            p50Millis
+            p95Millis
+          }
+        }
+      }
+    }
+  }
+}
+    `;
 export const DeprecateDocument = gql`
     mutation Deprecate($namespace: String!, $version: String!, $reason: String!) {
   admin {
@@ -627,6 +721,9 @@ export function getSdk(client: GraphQLClient, withWrapper: SdkFunctionWrapper = 
     },
     ServiceStats(variables: ServiceStatsQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ServiceStatsQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<ServiceStatsQuery>({ document: ServiceStatsDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'ServiceStats', 'query', variables);
+    },
+    DeprecatedStats(variables?: DeprecatedStatsQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<DeprecatedStatsQuery> {
+      return withWrapper((wrappedRequestHeaders) => client.request<DeprecatedStatsQuery>({ document: DeprecatedStatsDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'DeprecatedStats', 'query', variables);
     },
     Deprecate(variables: DeprecateMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<DeprecateMutation> {
       return withWrapper((wrappedRequestHeaders) => client.request<DeprecateMutation>({ document: DeprecateDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Deprecate', 'mutation', variables);

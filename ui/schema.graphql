@@ -15,18 +15,19 @@ type AdminMutationNamespace {
 }
 
 type AdminQueryNamespace {
+  deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
-  serviceStats(version: String!, window: String, namespace: String!): admin_ServiceStatsOutBody
+  serviceStats(window: String, namespace: String!, version: String!): admin_ServiceStatsOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
   stable: AdminStableQueryNamespace!
   v1: AdminV1QueryNamespace!
 }
 
 type AdminStableMutationNamespace {
-  deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
@@ -35,6 +36,7 @@ type AdminStableMutationNamespace {
 }
 
 type AdminStableQueryNamespace {
+  deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
@@ -44,7 +46,7 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
@@ -53,6 +55,7 @@ type AdminV1MutationNamespace {
 }
 
 type AdminV1QueryNamespace {
+  deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
@@ -72,6 +75,15 @@ type Query {
   admin: AdminQueryNamespace!
 }
 
+type admin_CallerStatsRow {
+  caller: String!
+  count: Long!
+  okCount: Long!
+  p50Millis: Long!
+  p95Millis: Long!
+  throughput: Float!
+}
+
 type admin_ChannelInfo {
   consumers: Long!
   subject: String!
@@ -87,6 +99,31 @@ input admin_DeprecateInBodyInput {
 
 type admin_DeprecateOutBody {
   _void: String
+}
+
+type admin_DeprecatedMethodRow {
+  callers: [admin_CallerStatsRow]!
+  count: Long!
+  method: String!
+  okCount: Long!
+  p50Millis: Long!
+  p95Millis: Long!
+  throughput: Float!
+}
+
+type admin_DeprecatedServiceRow {
+  autoReason: String
+  manualReason: String
+  methods: [admin_DeprecatedMethodRow]!
+  namespace: String!
+  totalCount: Long!
+  totalThroughput: Float!
+  version: String!
+}
+
+type admin_DeprecatedStatsOutBody {
+  services: [admin_DeprecatedServiceRow]!
+  window: String!
 }
 
 input admin_DrainInBodyInput {
