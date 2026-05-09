@@ -17,7 +17,6 @@ query Dashboard {
       }
     }
     listServices {
-      environment
       services {
         namespace
         version
@@ -29,7 +28,6 @@ query Dashboard {
 query Services {
   admin {
     listServices {
-      environment
       services {
         namespace
         version

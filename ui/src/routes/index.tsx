@@ -21,19 +21,10 @@ function Dashboard() {
 
   const peers = data?.admin?.listPeers?.peers ?? [];
   const services = data?.admin?.listServices?.services ?? [];
-  const env = data?.admin?.listServices?.environment ?? '(unset)';
 
   return (
     <Grid container spacing={2}>
-      <Grid size={{ xs: 12, md: 4 }}>
-        <Card>
-          <CardContent>
-            <Typography color="text.secondary">Environment</Typography>
-            <Typography variant="h4">{env}</Typography>
-          </CardContent>
-        </Card>
-      </Grid>
-      <Grid size={{ xs: 12, md: 4 }}>
+      <Grid size={{ xs: 12, md: 6 }}>
         <Card>
           <CardContent>
             <Typography color="text.secondary">Cluster peers</Typography>
@@ -41,7 +32,7 @@ function Dashboard() {
           </CardContent>
         </Card>
       </Grid>
-      <Grid size={{ xs: 12, md: 4 }}>
+      <Grid size={{ xs: 12, md: 6 }}>
         <Card>
           <CardContent>
             <Typography color="text.secondary">Registered services</Typography>

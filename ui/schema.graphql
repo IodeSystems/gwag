@@ -6,6 +6,7 @@ schema {
 type AdminMutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
   v1: AdminV1MutationNamespace!
@@ -23,6 +24,7 @@ type AdminQueryNamespace {
 type AdminStableMutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
 }
 
@@ -36,6 +38,7 @@ type AdminStableQueryNamespace {
 type AdminV1MutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
 }
 
@@ -124,6 +127,15 @@ type admin_RegisteredAtInfo {
   line: Long
 }
 
+input admin_RetractStableInBodyInput {
+  targetVN: Int!
+}
+
+type admin_RetractStableOutBody {
+  newVN: Int!
+  priorVN: Int!
+}
+
 type admin_ServiceInfo {
   hashHex: String!
   namespace: String!
@@ -132,7 +144,6 @@ type admin_ServiceInfo {
 }
 
 type admin_ServicesOutBody {
-  environment: String
   services: [admin_ServiceInfo]!
 }
 

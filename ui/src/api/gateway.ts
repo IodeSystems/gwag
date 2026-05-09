@@ -22,6 +22,7 @@ export type AdminMutationNamespace = {
   __typename?: 'AdminMutationNamespace';
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
   stable: AdminStableMutationNamespace;
   v1: AdminV1MutationNamespace;
@@ -35,6 +36,12 @@ export type AdminMutationNamespaceDrainArgs = {
 
 export type AdminMutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminMutationNamespaceRetractStableArgs = {
+  body: Admin_RetractStableInBodyInput;
+  namespace: Scalars['String']['input'];
 };
 
 
@@ -56,6 +63,7 @@ export type AdminStableMutationNamespace = {
   __typename?: 'AdminStableMutationNamespace';
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
 };
 
@@ -67,6 +75,12 @@ export type AdminStableMutationNamespaceDrainArgs = {
 
 export type AdminStableMutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminStableMutationNamespaceRetractStableArgs = {
+  body: Admin_RetractStableInBodyInput;
+  namespace: Scalars['String']['input'];
 };
 
 
@@ -86,6 +100,7 @@ export type AdminV1MutationNamespace = {
   __typename?: 'AdminV1MutationNamespace';
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
 };
 
@@ -97,6 +112,12 @@ export type AdminV1MutationNamespaceDrainArgs = {
 
 export type AdminV1MutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminV1MutationNamespaceRetractStableArgs = {
+  body: Admin_RetractStableInBodyInput;
+  namespace: Scalars['String']['input'];
 };
 
 
@@ -199,6 +220,16 @@ export type Admin_RegisteredAtInfo = {
   line: Maybe<Scalars['Long']['output']>;
 };
 
+export type Admin_RetractStableInBodyInput = {
+  targetVN: Scalars['Int']['input'];
+};
+
+export type Admin_RetractStableOutBody = {
+  __typename?: 'admin_RetractStableOutBody';
+  newVN: Scalars['Int']['output'];
+  priorVN: Scalars['Int']['output'];
+};
+
 export type Admin_ServiceInfo = {
   __typename?: 'admin_ServiceInfo';
   hashHex: Scalars['String']['output'];
@@ -209,7 +240,6 @@ export type Admin_ServiceInfo = {
 
 export type Admin_ServicesOutBody = {
   __typename?: 'admin_ServicesOutBody';
-  environment: Maybe<Scalars['String']['output']>;
   services: Array<Maybe<Admin_ServiceInfo>>;
 };
 
@@ -231,12 +261,12 @@ export type Admin_SignOutBody = {
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: string } | null> } | null, listServices: { environment: string | null, services: Array<{ namespace: string, version: string } | null> } | null } };
+export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: string } | null> } | null, listServices: { services: Array<{ namespace: string, version: string } | null> } | null } };
 
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { admin: { listServices: { environment: string | null, services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
 
 export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -265,7 +295,6 @@ export const DashboardDocument = gql`
       }
     }
     listServices {
-      environment
       services {
         namespace
         version
@@ -278,7 +307,6 @@ export const ServicesDocument = gql`
     query Services {
   admin {
     listServices {
-      environment
       services {
         namespace
         version
