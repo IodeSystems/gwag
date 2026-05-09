@@ -228,6 +228,13 @@ message ListServicesResponse {
   // ClusterName values directly when they need physical isolation.
   reserved 2;
   reserved "environment";
+  // Per-namespace stable alias target. Keys are namespaces; values
+  // are the integer N such that <ns>.stable currently aliases vN.
+  // Plan §4: monotonic; advances at registration, decreases only via
+  // RetractStable. Operators (and the UI) compute "this row is the
+  // current stable target" by matching ServiceInfo.version == fmt
+  // ("v%d", stable_vn[namespace]).
+  map<string, uint32> stable_vn = 3;
 }
 
 message ServiceInfo {
