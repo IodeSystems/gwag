@@ -133,6 +133,16 @@ type config struct {
 	// registration and renders in the schema. nil → default policy
 	// (all three: unstable / stable / vN). See WithAllowTier.
 	allowedTiers *AllowedTiers
+
+	// callerHeaders is the inbound HTTP-header allowlist consulted to
+	// derive a caller-id label per dispatch (plan §5). Empty → every
+	// dispatch gets caller="unknown". The caller string lands as a
+	// dimension on the in-process stats registry and as a Prometheus
+	// label on go_api_gateway_dispatch_duration_seconds; operators
+	// own the cardinality by choosing bounded headers
+	// (X-Caller-Service) or accept the User-Agent blast radius
+	// explicitly.
+	callerHeaders []string
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -169,6 +179,25 @@ func (t AllowedTiers) describe() string {
 		return "(none)"
 	}
 	return strings.Join(parts, ",")
+}
+
+// WithCallerHeaders configures the inbound HTTP-header allowlist used
+// to derive a caller-id label on every dispatch. Headers are checked
+// in order; the first non-empty value wins. When no header matches —
+// or no list is configured — caller defaults to "unknown".
+//
+// Cardinality is operator-controlled:
+//   - X-Caller-Service is bounded by your service registry → safe.
+//   - User-Agent is unbounded for public-internet traffic → only safe
+//     behind authenticated ingress where caller = service name.
+//
+// Plan §5: the caller string lands as a dimension on the in-process
+// stats registry (admin UI consumes it) and as a Prometheus label on
+// go_api_gateway_dispatch_duration_seconds.
+func WithCallerHeaders(headers ...string) Option {
+	return func(cfg *config) {
+		cfg.callerHeaders = append([]string(nil), headers...)
+	}
 }
 
 // WithAllowTier restricts the version tiers this gateway accepts at
@@ -441,8 +470,11 @@ func New(opts ...Option) *Gateway {
 		cfg.adminToken = tok
 	}
 	life, cancel := context.WithCancel(context.Background())
+	if pm, ok := cfg.metrics.(*prometheusMetrics); ok {
+		pm.callerHeaders = cfg.callerHeaders
+	}
 	stats := newStatsRegistry()
-	cfg.metrics = &statsRecordingMetrics{Metrics: cfg.metrics, stats: stats}
+	cfg.metrics = &statsRecordingMetrics{Metrics: cfg.metrics, stats: stats, callerHeaders: cfg.callerHeaders}
 	g := &Gateway{
 		cfg:         cfg,
 		slots:       map[poolKey]*slot{},

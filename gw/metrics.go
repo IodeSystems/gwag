@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -21,8 +22,10 @@ type Metrics interface {
 	// have no version axis — the method label (gRPC method path,
 	// "<HTTP_METHOD> <pathTemplate>" for OpenAPI, or
 	// "<query|mutation> <fieldName>" for downstream GraphQL), the
-	// elapsed duration, and the dispatch error (nil on success).
-	RecordDispatch(namespace, version, method string, d time.Duration, err error)
+	// elapsed duration, and the dispatch error (nil on success). ctx
+	// carries the inbound request so impls can look up caller-id via
+	// callerFromContext (plan §5).
+	RecordDispatch(ctx context.Context, namespace, version, method string, d time.Duration, err error)
 
 	// RecordDwell is called for every successful slot acquisition
 	// with the time spent waiting in the queue. d=0 when no queueing
@@ -87,7 +90,8 @@ type Metrics interface {
 // noopMetrics is the sink used when WithoutMetrics is set.
 type noopMetrics struct{}
 
-func (noopMetrics) RecordDispatch(string, string, string, time.Duration, error) {}
+func (noopMetrics) RecordDispatch(context.Context, string, string, string, time.Duration, error) {
+}
 func (noopMetrics) RecordDwell(string, string, string, string, time.Duration)   {}
 func (noopMetrics) RecordBackoff(string, string, string, string, string)        {}
 func (noopMetrics) SetQueueDepth(string, string, string, int)                   {}
@@ -103,27 +107,28 @@ func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      
 // Created by newPrometheusMetrics; the registry is exposed via
 // MetricsHandler.
 type prometheusMetrics struct {
-	registry     *prometheus.Registry
-	hist         *prometheus.HistogramVec
-	dwell        *prometheus.HistogramVec
-	backoff      *prometheus.CounterVec
-	depth        *prometheus.GaugeVec
-	streams      *prometheus.GaugeVec
-	streamsTotal prometheus.Gauge
-	subAuth      *prometheus.CounterVec
-	signAuth     *prometheus.CounterVec
-	adminAuth    *prometheus.CounterVec
-	gqlSubFanout *prometheus.CounterVec
-	gqlSubActive *prometheus.GaugeVec
+	registry      *prometheus.Registry
+	hist          *prometheus.HistogramVec
+	dwell         *prometheus.HistogramVec
+	backoff       *prometheus.CounterVec
+	depth         *prometheus.GaugeVec
+	streams       *prometheus.GaugeVec
+	streamsTotal  prometheus.Gauge
+	subAuth       *prometheus.CounterVec
+	signAuth      *prometheus.CounterVec
+	adminAuth     *prometheus.CounterVec
+	gqlSubFanout  *prometheus.CounterVec
+	gqlSubActive  *prometheus.GaugeVec
+	callerHeaders []string
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
 	reg := prometheus.NewRegistry()
 	hist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "go_api_gateway_dispatch_duration_seconds",
-		Help:    "Duration of dispatches (gRPC pools, OpenAPI sources, downstream-GraphQL sources) from the GraphQL surface to a backing replica.",
+		Help:    "Duration of dispatches (gRPC pools, OpenAPI sources, downstream-GraphQL sources) from the GraphQL surface to a backing replica. caller is extracted via WithCallerHeaders; defaults to \"unknown\".",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"namespace", "version", "method", "code"})
+	}, []string{"namespace", "version", "method", "code", "caller"})
 	dwell := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "go_api_gateway_pool_queue_dwell_seconds",
 		Help: "Time a dispatch waited for an in-flight slot in its pool.",
@@ -183,12 +188,12 @@ func newPrometheusMetrics() *prometheusMetrics {
 	}
 }
 
-func (m *prometheusMetrics) RecordDispatch(namespace, version, method string, d time.Duration, err error) {
+func (m *prometheusMetrics) RecordDispatch(ctx context.Context, namespace, version, method string, d time.Duration, err error) {
 	code := "ok"
 	if err != nil {
 		code = classifyError(err)
 	}
-	m.hist.WithLabelValues(namespace, version, method, code).Observe(d.Seconds())
+	m.hist.WithLabelValues(namespace, version, method, code, callerFromContext(ctx, m.callerHeaders)).Observe(d.Seconds())
 }
 
 func (m *prometheusMetrics) RecordDwell(namespace, version, method, kind string, d time.Duration) {

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -26,11 +27,11 @@ import (
 // keyed-generic so adding replica is one more call site, not a new
 // shape.
 
-// statsKey identifies a single stats series. Today only (ns, ver,
-// method) is populated — per-replica dimensions come later via a
-// non-empty Replica field with no other API change.
+// statsKey identifies a single stats series. (caller) is "unknown"
+// when the inbound request didn't match any header in WithCallerHeaders;
+// per-replica dimensions come later via the same shape pattern.
 type statsKey struct {
-	namespace, version, method string
+	namespace, version, method, caller string
 }
 
 // numLatencyBuckets sized so a single bucket fits in two cache lines
@@ -182,16 +183,39 @@ func newMethodStats() *methodStats {
 // single seam.
 type statsRecordingMetrics struct {
 	Metrics
-	stats *statsRegistry
+	stats         *statsRegistry
+	callerHeaders []string
+}
+
+// callerFromContext returns the first non-empty inbound header value
+// matching `headers`, or "unknown" when none match (or no HTTP request
+// is on the context, e.g. in-process registrations / cluster
+// reconcilers). Plan §5: operators control header allowlist via
+// WithCallerHeaders; default empty list always returns "unknown".
+func callerFromContext(ctx context.Context, headers []string) string {
+	if len(headers) == 0 {
+		return "unknown"
+	}
+	r := HTTPRequestFromContext(ctx)
+	if r == nil {
+		return "unknown"
+	}
+	for _, h := range headers {
+		if v := r.Header.Get(h); v != "" {
+			return v
+		}
+	}
+	return "unknown"
 }
 
 // nowFunc is overridable for tests; production passes time.Now.
 var nowFunc = time.Now
 
-func (s *statsRecordingMetrics) RecordDispatch(namespace, version, method string, d time.Duration, err error) {
-	s.Metrics.RecordDispatch(namespace, version, method, d, err)
+func (s *statsRecordingMetrics) RecordDispatch(ctx context.Context, namespace, version, method string, d time.Duration, err error) {
+	s.Metrics.RecordDispatch(ctx, namespace, version, method, d, err)
 	if s.stats != nil {
-		s.stats.record(statsKey{namespace: namespace, version: version, method: method}, d, err == nil, nowFunc())
+		caller := callerFromContext(ctx, s.callerHeaders)
+		s.stats.record(statsKey{namespace: namespace, version: version, method: method, caller: caller}, d, err == nil, nowFunc())
 	}
 }
 
@@ -262,12 +286,15 @@ func (m *methodStats) windowFor(window time.Duration) *statsWindow {
 }
 
 // MethodStatsSnapshot is one row of the operator panel: a single
-// (namespace, version, method) measured over a named window. Public
-// so admin endpoints / UI codegen can consume it directly.
+// (namespace, version, method, caller) measured over a named window.
+// Caller is "unknown" when no caller-header allowlist is configured
+// or no allowed header was present on the inbound request. Public so
+// admin endpoints / UI codegen can consume it directly.
 type MethodStatsSnapshot struct {
 	Namespace string
 	Version   string
 	Method    string
+	Caller    string
 	StatsSnapshot
 }
 
@@ -305,7 +332,10 @@ func (g *Gateway) Snapshot(window time.Duration, now time.Time) []MethodStatsSna
 		if a.version != b.version {
 			return a.version < b.version
 		}
-		return a.method < b.method
+		if a.method != b.method {
+			return a.method < b.method
+		}
+		return a.caller < b.caller
 	})
 	out := make([]MethodStatsSnapshot, 0, len(keys))
 	for _, k := range keys {
@@ -317,6 +347,7 @@ func (g *Gateway) Snapshot(window time.Duration, now time.Time) []MethodStatsSna
 			Namespace:     k.namespace,
 			Version:       k.version,
 			Method:        k.method,
+			Caller:        k.caller,
 			StatsSnapshot: snap,
 		})
 	}

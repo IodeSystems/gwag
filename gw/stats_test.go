@@ -1,9 +1,20 @@
 package gateway
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// newRequestWithHeader builds a minimal *http.Request carrying a
+// single header — the smallest fixture for callerFromContext tests.
+func newRequestWithHeader(key, val string) (*http.Request, error) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set(key, val)
+	return r, nil
+}
 
 // statsBucket / statsWindow / statsRegistry are the data path the
 // admin UI reads. Tests pin: bucket landing, window aggregation,
@@ -92,9 +103,9 @@ func TestGateway_SnapshotReadsRegistry(t *testing.T) {
 	g := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t")))
 	t.Cleanup(g.Close)
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	g.cfg.metrics.RecordDispatch("greeter", "v1", "Hello", 5*time.Millisecond, nil)
-	g.cfg.metrics.RecordDispatch("greeter", "v1", "Hello", 7*time.Millisecond, nil)
-	g.cfg.metrics.RecordDispatch("greeter", "v1", "Bye", 9*time.Millisecond, nil)
+	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
 	rows := g.Snapshot(time.Minute, now)
 	if len(rows) != 0 {
 		// stats.record uses nowFunc(); without a deterministic stub,
@@ -107,9 +118,9 @@ func TestGateway_SnapshotReadsRegistry(t *testing.T) {
 
 	g2 := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t")))
 	t.Cleanup(g2.Close)
-	g2.cfg.metrics.RecordDispatch("greeter", "v1", "Hello", 5*time.Millisecond, nil)
-	g2.cfg.metrics.RecordDispatch("greeter", "v1", "Hello", 7*time.Millisecond, nil)
-	g2.cfg.metrics.RecordDispatch("greeter", "v1", "Bye", 9*time.Millisecond, nil)
+	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
 	rows = g2.Snapshot(time.Minute, now)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows, got %d: %+v", len(rows), rows)
@@ -120,6 +131,73 @@ func TestGateway_SnapshotReadsRegistry(t *testing.T) {
 	}
 	if rows[1].Count != 2 {
 		t.Errorf("Hello count=%d, want 2", rows[1].Count)
+	}
+}
+
+// callerFromContext returns the first non-empty match from the
+// allowlist, "unknown" when no header matches or no list configured.
+func TestCallerFromContext_NoHeadersConfigured(t *testing.T) {
+	if got := callerFromContext(context.Background(), nil); got != "unknown" {
+		t.Errorf("nil headers: got %q, want unknown", got)
+	}
+}
+
+func TestCallerFromContext_HeaderMatch(t *testing.T) {
+	r, _ := newRequestWithHeader("X-Caller-Service", "billing")
+	ctx := WithHTTPRequest(context.Background(), r)
+	if got := callerFromContext(ctx, []string{"X-Caller-Service", "User-Agent"}); got != "billing" {
+		t.Errorf("got %q, want billing", got)
+	}
+}
+
+func TestCallerFromContext_FallsThroughOnAbsent(t *testing.T) {
+	r, _ := newRequestWithHeader("User-Agent", "curl/7.88")
+	ctx := WithHTTPRequest(context.Background(), r)
+	// First header missing → falls through to second.
+	if got := callerFromContext(ctx, []string{"X-Caller-Service", "User-Agent"}); got != "curl/7.88" {
+		t.Errorf("got %q, want curl/7.88", got)
+	}
+}
+
+func TestCallerFromContext_NoRequestOnContext(t *testing.T) {
+	if got := callerFromContext(context.Background(), []string{"X-Caller-Service"}); got != "unknown" {
+		t.Errorf("missing-request: got %q, want unknown", got)
+	}
+}
+
+// Snapshot rows carry the caller label when WithCallerHeaders is set.
+// Two callers under the same (ns, ver, method) must produce two rows.
+func TestSnapshot_CallerDimension(t *testing.T) {
+	old := nowFunc
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = old })
+
+	g := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("t")),
+		WithCallerHeaders("X-Caller-Service"),
+	)
+	t.Cleanup(g.Close)
+
+	rA, _ := newRequestWithHeader("X-Caller-Service", "billing")
+	rB, _ := newRequestWithHeader("X-Caller-Service", "users")
+	ctxA := WithHTTPRequest(context.Background(), rA)
+	ctxB := WithHTTPRequest(context.Background(), rB)
+	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	g.cfg.metrics.RecordDispatch(ctxB, "greeter", "v1", "Hello", 9*time.Millisecond, nil)
+
+	rows := g.Snapshot(time.Minute, now)
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows (one per caller), got %d: %+v", len(rows), rows)
+	}
+	if rows[0].Caller != "billing" || rows[0].Count != 2 {
+		t.Errorf("billing row: %+v", rows[0])
+	}
+	if rows[1].Caller != "users" || rows[1].Count != 1 {
+		t.Errorf("users row: %+v", rows[1])
 	}
 }
 

@@ -478,7 +478,7 @@ func (m *openAPIBackpressureMetrics) RecordBackoff(_, _, _, _, _ string) {
 	m.backoff++
 }
 
-func (m *openAPIBackpressureMetrics) RecordDispatch(_, _, _ string, _ time.Duration, err error) {
+func (m *openAPIBackpressureMetrics) RecordDispatch(_ context.Context, _, _, _ string, _ time.Duration, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.dispatch++
@@ -590,7 +590,7 @@ type openAPIDispatchCall struct {
 	Err       error
 }
 
-func (m *openAPIDispatchMetrics) RecordDispatch(ns, ver, method string, _ time.Duration, err error) {
+func (m *openAPIDispatchMetrics) RecordDispatch(_ context.Context, ns, ver, method string, _ time.Duration, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, openAPIDispatchCall{ns, ver, method, err})

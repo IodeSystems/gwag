@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -243,7 +244,7 @@ type graphQLIngestDispatchCall struct {
 	Err       error
 }
 
-func (m *graphQLIngestDispatchMetrics) RecordDispatch(ns, ver, method string, _ time.Duration, err error) {
+func (m *graphQLIngestDispatchMetrics) RecordDispatch(_ context.Context, ns, ver, method string, _ time.Duration, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, graphQLIngestDispatchCall{ns, ver, method, err})
