@@ -571,6 +571,13 @@ func New(opts ...Option) *Gateway {
 			MaxQueryBytes: cfg.docCacheMaxQuery,
 			Normalize:     cfg.docCacheNormalize,
 		})
+		// Surface the cache's hit/miss counters as Prometheus
+		// counters at scrape time. Skipped silently when the
+		// operator plugged in a custom Metrics impl — those callers
+		// own their own collectors.
+		if pm := unwrapPrometheusMetrics(cfg.metrics); pm != nil {
+			pm.registry.MustRegister(newPlanCacheCollector(g.planCache))
+		}
 	}
 	return g
 }
