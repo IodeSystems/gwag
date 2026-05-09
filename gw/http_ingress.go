@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 
@@ -335,13 +336,23 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := withInjectCache(r.Context())
-	ctx = WithHTTPRequest(ctx, r)
-
 	if route.shape == ingressShapeSubscription {
+		// SSE subscription lifetime is open-ended; request_*_seconds is
+		// not meaningful here. Skip the accumulator + recording.
+		ctx := withInjectCache(r.Context())
+		ctx = WithHTTPRequest(ctx, r)
 		streamSSE(ctx, w, route, args)
 		return
 	}
+
+	ctx, accum := withDispatchAccumulator(r.Context())
+	ctx = withInjectCache(ctx)
+	ctx = WithHTTPRequest(ctx, r)
+	start := time.Now()
+	defer func() {
+		total := time.Since(start)
+		g.cfg.metrics.RecordRequest("http", total, total-time.Duration(accum.Load()))
+	}()
 
 	out, err := route.dispatcher.Dispatch(ctx, args)
 	if err != nil {

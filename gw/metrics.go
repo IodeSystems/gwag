@@ -85,6 +85,15 @@ type Metrics interface {
 	// downstream-GraphQL subscription fanouts (distinct upstream
 	// subscriptions) for a source.
 	SetGraphQLSubFanoutsActive(namespace string, active int)
+
+	// RecordRequest is called once per inbound request, after the
+	// response has been written, with the wall-clock total and the
+	// gateway's self-time (total minus the per-request dispatch
+	// accumulator). ingress identifies the entry point: "graphql"
+	// (gw.Handler()), "http" (IngressHandler), "grpc"
+	// (GRPCUnknownHandler). No namespace label — one request can fan
+	// out to many — see plan §3.
+	RecordRequest(ingress string, total, self time.Duration)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
@@ -102,6 +111,7 @@ func (noopMetrics) RecordSignAuth(string)                                       
 func (noopMetrics) RecordAdminAuth(string, string)                              {}
 func (noopMetrics) RecordGraphQLSubFanout(string, string)                       {}
 func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      {}
+func (noopMetrics) RecordRequest(string, time.Duration, time.Duration)          {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
 // Created by newPrometheusMetrics; the registry is exposed via
@@ -119,6 +129,8 @@ type prometheusMetrics struct {
 	adminAuth     *prometheus.CounterVec
 	gqlSubFanout  *prometheus.CounterVec
 	gqlSubActive  *prometheus.GaugeVec
+	reqDuration   *prometheus.HistogramVec
+	reqSelf       *prometheus.HistogramVec
 	callerHeaders []string
 }
 
@@ -171,7 +183,17 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_graphql_sub_fanouts_active",
 		Help: "Current count of active downstream-GraphQL subscription fanouts (distinct upstream subscriptions) per source.",
 	}, []string{"namespace"})
-	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive)
+	reqDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "go_api_gateway_request_duration_seconds",
+		Help:    "Wall-clock duration of inbound requests, by ingress entry point (graphql, http, grpc).",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"ingress"})
+	reqSelf := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "go_api_gateway_request_self_seconds",
+		Help:    "Per-request gateway self-time: wall-clock total minus the per-request dispatch accumulator. Pair with request_duration_seconds for the upstream slice.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"ingress"})
+	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -185,6 +207,8 @@ func newPrometheusMetrics() *prometheusMetrics {
 		adminAuth:    adminAuth,
 		gqlSubFanout: gqlSubFanout,
 		gqlSubActive: gqlSubActive,
+		reqDuration:  reqDuration,
+		reqSelf:      reqSelf,
 	}
 }
 
@@ -234,6 +258,17 @@ func (m *prometheusMetrics) RecordGraphQLSubFanout(namespace, event string) {
 
 func (m *prometheusMetrics) SetGraphQLSubFanoutsActive(namespace string, active int) {
 	m.gqlSubActive.WithLabelValues(namespace).Set(float64(active))
+}
+
+func (m *prometheusMetrics) RecordRequest(ingress string, total, self time.Duration) {
+	m.reqDuration.WithLabelValues(ingress).Observe(total.Seconds())
+	if self < 0 {
+		// Clock skew or accumulator races on extremely short requests
+		// can momentarily push self negative; clamp so the histogram
+		// stays interpretable.
+		self = 0
+	}
+	m.reqSelf.WithLabelValues(ingress).Observe(self.Seconds())
 }
 
 // classifyError maps an error to a stable label value. gRPC status

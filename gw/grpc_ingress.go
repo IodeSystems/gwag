@@ -178,6 +178,7 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 	}
 
 	if route.streaming {
+		// Subscription lifetime is open-ended; skip request_*_seconds.
 		return g.serveGRPCStreamingUnknown(stream, route)
 	}
 
@@ -193,7 +194,13 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return status.Errorf(codes.InvalidArgument, "ingress: decode request: %v", err)
 	}
 
-	ctx := withInjectCache(stream.Context())
+	ctx, accum := withDispatchAccumulator(stream.Context())
+	ctx = withInjectCache(ctx)
+	start := time.Now()
+	defer func() {
+		total := time.Since(start)
+		g.cfg.metrics.RecordRequest("grpc", total, total-time.Duration(accum.Load()))
+	}()
 
 	release, err := acquireBackpressureSlot(ctx, route.bp)
 	if err != nil {

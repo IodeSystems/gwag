@@ -954,6 +954,9 @@ func (g *Gateway) Handler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isWebSocketUpgrade(r) {
+			// WebSocket subscriptions live as long as the client stays
+			// connected; request_*_seconds is a per-request histogram,
+			// not a per-stream-lifetime one. Skip recording.
 			g.serveWebSocket(w, r)
 			return
 		}
@@ -963,9 +966,13 @@ func (g *Gateway) Handler() http.Handler {
 			Pretty:   true,
 			GraphiQL: true,
 		})
-		ctx := withInjectCache(r.Context())
+		ctx, accum := withDispatchAccumulator(r.Context())
+		ctx = withInjectCache(ctx)
 		ctx = WithHTTPRequest(ctx, r)
+		start := time.Now()
 		gh.ServeHTTP(w, r.WithContext(ctx))
+		total := time.Since(start)
+		g.cfg.metrics.RecordRequest("graphql", total, total-time.Duration(accum.Load()))
 	})
 }
 
