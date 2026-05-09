@@ -48,6 +48,13 @@ type Gateway struct {
 	// reconciler-driven today; KV-persisted recovery for fresh nodes
 	// joining mid-life is a plan §4 follow-up.
 	stableVN map[string]int
+
+	// stats is the in-process rolling stats registry — 1m / 1h / 24h
+	// per (namespace, version, method) windowed call counts +
+	// throughput + p50/p95 latency. The admin UI reads it directly
+	// (no Prometheus dependency); Prometheus stays canonical for
+	// long-window history. See gw/stats.go.
+	stats *statsRegistry
 	cfg        *config
 	cp         *controlPlane
 	peers      *peerTracker
@@ -434,6 +441,8 @@ func New(opts ...Option) *Gateway {
 		cfg.adminToken = tok
 	}
 	life, cancel := context.WithCancel(context.Background())
+	stats := newStatsRegistry()
+	cfg.metrics = &statsRecordingMetrics{Metrics: cfg.metrics, stats: stats}
 	g := &Gateway{
 		cfg:         cfg,
 		slots:       map[poolKey]*slot{},
@@ -442,6 +451,7 @@ func New(opts ...Option) *Gateway {
 		life:        life,
 		lifeCancel:  cancel,
 		dispatchers: ir.NewDispatchRegistry(),
+		stats:       stats,
 	}
 	if cfg.backpressure.MaxStreamsTotal > 0 {
 		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)

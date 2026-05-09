@@ -251,11 +251,19 @@ func classifyError(err error) string {
 // MetricsHandler returns an http.Handler serving the Prometheus
 // scrape endpoint. Returns http.NotFoundHandler when metrics are
 // disabled (WithoutMetrics) or replaced with a non-Prometheus sink.
+//
+// Unwraps statsRecordingMetrics — cfg.metrics is wrapped at New() so
+// every RecordDispatch also feeds the in-process stats registry; the
+// Prometheus registry itself sits on the underlying impl.
 func (g *Gateway) MetricsHandler() http.Handler {
 	if g.cfg.metrics == nil {
 		return http.NotFoundHandler()
 	}
-	pm, ok := g.cfg.metrics.(*prometheusMetrics)
+	m := g.cfg.metrics
+	if w, ok := m.(*statsRecordingMetrics); ok {
+		m = w.Metrics
+	}
+	pm, ok := m.(*prometheusMetrics)
 	if !ok {
 		return http.NotFoundHandler()
 	}
