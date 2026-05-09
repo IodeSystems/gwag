@@ -16,11 +16,18 @@ import (
 const (
 	peersBucketName    = "go-api-gateway-peers"
 	registryBucketName = "go-api-gateway-registry"
+	stableBucketName   = "go-api-gateway-stable"
 
 	peerTTL     = 30 * time.Second
 	peerRefresh = 10 * time.Second
 
 	registryTTL = 30 * time.Second
+
+	// stableTTL is 0 — stable_vN is monotonic per plan §4 and must
+	// survive any deregister/restart cycle. The bucket is the only
+	// way a fresh node joining mid-life recovers the historical max
+	// when the target vN's last replica is currently absent.
+	stableTTL = 0
 
 	maxReplicas = 3
 )
@@ -43,6 +50,7 @@ type peerTracker struct {
 	js     jetstream.JetStream
 	peers  jetstream.KeyValue
 	reg    jetstream.KeyValue
+	stable jetstream.KeyValue
 
 	nodeID string
 	self   []byte
@@ -52,6 +60,8 @@ type peerTracker struct {
 
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	stableDone chan struct{}
 
 	currentR atomic.Int32
 
@@ -108,6 +118,23 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		}
 	}
 
+	stable, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:   stableBucketName,
+		Replicas: 1,
+		TTL:      stableTTL,
+	})
+	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("stable bucket: %w", err)
+	}
+	if stable == nil {
+		stable, err = cl.JS.KeyValue(ctx, stableBucketName)
+		if err != nil {
+			g.mu.Unlock()
+			return nil, fmt.Errorf("stable bucket open: %w", err)
+		}
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -120,15 +147,17 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 
 	tctx, cancel := context.WithCancel(ctx)
 	t := &peerTracker{
-		gw:     g,
-		js:     cl.JS,
-		peers:  peers,
-		reg:    reg,
-		nodeID: cl.NodeID,
-		self:   selfBytes,
-		live:   map[string]struct{}{cl.NodeID: {}},
-		cancel: cancel,
-		done:   make(chan struct{}),
+		gw:         g,
+		js:         cl.JS,
+		peers:      peers,
+		reg:        reg,
+		stable:     stable,
+		nodeID:     cl.NodeID,
+		self:       selfBytes,
+		live:       map[string]struct{}{cl.NodeID: {}},
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		stableDone: make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -149,6 +178,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 
 	go t.refreshLoop(tctx)
 	go t.watchLoop(tctx)
+	go t.stableWatchLoop(tctx)
 	return t, nil
 }
 
@@ -228,8 +258,8 @@ func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	t.currentR.Store(int32(desired))
 }
 
-// setReplicas updates both buckets. If one update fails we still try
-// the other; caller decides whether to retry.
+// setReplicas updates all three buckets. If one update fails we still
+// try the others; caller decides whether to retry.
 func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -240,6 +270,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	}{
 		{peersBucketName, peerTTL},
 		{registryBucketName, registryTTL},
+		{stableBucketName, stableTTL},
 	} {
 		_, err := t.js.UpdateKeyValue(c, jetstream.KeyValueConfig{
 			Bucket:   b.name,
@@ -292,5 +323,8 @@ func (t *peerTracker) stop() {
 	}
 	t.cancel()
 	<-t.done
+	if t.stableDone != nil {
+		<-t.stableDone
+	}
 	t.rec.stop()
 }
