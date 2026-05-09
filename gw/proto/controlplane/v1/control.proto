@@ -223,9 +223,11 @@ message ListServicesRequest {}
 
 message ListServicesResponse {
   repeated ServiceInfo services = 1;
-  // Environment label of the cluster this gateway runs in (the
-  // --environment flag). Empty for unlabelled clusters.
-  string environment = 2;
+  // Field 2 was `string environment` (cluster's --environment label).
+  // Dropped along with the flag in plan §4 — operators pick distinct
+  // ClusterName values directly when they need physical isolation.
+  reserved 2;
+  reserved "environment";
 }
 
 message ServiceInfo {
