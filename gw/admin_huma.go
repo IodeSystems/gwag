@@ -342,6 +342,171 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "deprecatedStats",
+		Method:      http.MethodGet,
+		Path:        "/admin/services/deprecated/stats",
+		Summary:     "Cross-service report of every deprecated (namespace, version) with per-method + per-caller breakdown, sorted by call volume desc. The 'should I retire this?' panel — high-traffic deprecated services bubble up; zero-traffic ones surface as 'safe to retire' candidates at the bottom. Plan §5.",
+	}, func(ctx context.Context, in *deprecatedStatsIn) (*deprecatedStatsOut, error) {
+		window, err := parseStatsWindow(in.Window)
+		if err != nil {
+			return nil, err
+		}
+
+		// Source-of-truth for deprecation matches the SDL renderer's
+		// rule: manual = slot.deprecationReason (echoed by ListServices
+		// as ManualDeprecationReason); auto = "v<max> is current" for
+		// any (ns, ver) whose vN is strictly below the namespace's
+		// highest registered cut. Reuse cp.ListServices so this stays
+		// in lockstep with what the dashboard's Services list flags.
+		svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{})
+		if err != nil {
+			return nil, err
+		}
+		maxVN := map[string]int{}
+		for _, s := range svcResp.GetServices() {
+			ns := s.GetNamespace()
+			n := parseRuntimeVersionN(s.GetVersion())
+			if cur, ok := maxVN[ns]; !ok || n > cur {
+				maxVN[ns] = n
+			}
+		}
+		type depKey struct{ ns, ver string }
+		type depReasons struct{ manual, auto string }
+		deprecated := map[depKey]depReasons{}
+		for _, s := range svcResp.GetServices() {
+			ns := s.GetNamespace()
+			ver := s.GetVersion()
+			manual := s.GetManualDeprecationReason()
+			auto := ""
+			if max, ok := maxVN[ns]; ok && parseRuntimeVersionN(ver) < max {
+				auto = fmt.Sprintf("v%d is current", max)
+			}
+			if manual == "" && auto == "" {
+				continue
+			}
+			deprecated[depKey{ns, ver}] = depReasons{manual, auto}
+		}
+
+		rows := g.Snapshot(window, nowFunc())
+
+		// Group: service → methods → callers. Total counts roll up so
+		// the operator panel can sort either level by call volume.
+		type methodAgg struct {
+			callers []callerStatsRow
+			count, okCount uint64
+			throughput float64
+			p50, p95 time.Duration
+		}
+		type serviceAgg struct {
+			reasons depReasons
+			methods map[string]*methodAgg
+			totalCount uint64
+			totalThroughput float64
+		}
+		services := map[depKey]*serviceAgg{}
+		ensureService := func(k depKey, r depReasons) *serviceAgg {
+			a := services[k]
+			if a == nil {
+				a = &serviceAgg{reasons: r, methods: map[string]*methodAgg{}}
+				services[k] = a
+			}
+			return a
+		}
+		// Seed every deprecated (ns, ver) so zero-traffic services
+		// still surface — the "safe to retire" answer is a row with
+		// totalCount == 0, not an absent row.
+		for k, r := range deprecated {
+			ensureService(k, r)
+		}
+		for _, r := range rows {
+			k := depKey{r.Namespace, r.Version}
+			reasons, ok := deprecated[k]
+			if !ok {
+				continue
+			}
+			a := ensureService(k, reasons)
+			m := a.methods[r.Method]
+			if m == nil {
+				m = &methodAgg{}
+				a.methods[r.Method] = m
+			}
+			m.callers = append(m.callers, callerStatsRow{
+				Caller:     r.Caller,
+				Count:      r.Count,
+				OkCount:    r.OkCount,
+				Throughput: r.Throughput,
+				P50Millis:  int64(r.P50 / time.Millisecond),
+				P95Millis:  int64(r.P95 / time.Millisecond),
+			})
+			m.count += r.Count
+			m.okCount += r.OkCount
+			m.throughput += r.Throughput
+			if r.P50 > m.p50 {
+				m.p50 = r.P50
+			}
+			if r.P95 > m.p95 {
+				m.p95 = r.P95
+			}
+			a.totalCount += r.Count
+			a.totalThroughput += r.Throughput
+		}
+
+		out := &deprecatedStatsOut{}
+		out.Body.Window = in.Window
+		out.Body.Services = []deprecatedServiceRow{}
+		for k, a := range services {
+			row := deprecatedServiceRow{
+				Namespace:       k.ns,
+				Version:         k.ver,
+				ManualReason:    a.reasons.manual,
+				AutoReason:      a.reasons.auto,
+				TotalCount:      a.totalCount,
+				TotalThroughput: a.totalThroughput,
+				Methods:         []deprecatedMethodRow{},
+			}
+			for method, m := range a.methods {
+				// Caller breakdown sorted by count desc; the
+				// operator's "who's still hitting this" question.
+				sort.Slice(m.callers, func(i, j int) bool {
+					if m.callers[i].Count != m.callers[j].Count {
+						return m.callers[i].Count > m.callers[j].Count
+					}
+					return m.callers[i].Caller < m.callers[j].Caller
+				})
+				row.Methods = append(row.Methods, deprecatedMethodRow{
+					Method:     method,
+					Count:      m.count,
+					OkCount:    m.okCount,
+					Throughput: m.throughput,
+					P50Millis:  int64(m.p50 / time.Millisecond),
+					P95Millis:  int64(m.p95 / time.Millisecond),
+					Callers:    m.callers,
+				})
+			}
+			sort.Slice(row.Methods, func(i, j int) bool {
+				if row.Methods[i].Count != row.Methods[j].Count {
+					return row.Methods[i].Count > row.Methods[j].Count
+				}
+				return row.Methods[i].Method < row.Methods[j].Method
+			})
+			out.Body.Services = append(out.Body.Services, row)
+		}
+		// Service rows: high-traffic first (the "chase this") then
+		// quiet ones at the bottom (the "safe to retire").
+		sort.Slice(out.Body.Services, func(i, j int) bool {
+			a, b := out.Body.Services[i], out.Body.Services[j]
+			if a.TotalCount != b.TotalCount {
+				return a.TotalCount > b.TotalCount
+			}
+			if a.Namespace != b.Namespace {
+				return a.Namespace < b.Namespace
+			}
+			return a.Version < b.Version
+		})
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -543,6 +708,59 @@ type servicesStatsOut struct {
 	Body struct {
 		Window   string            `json:"window"`
 		Services []serviceStatsRow `json:"services"`
+	}
+}
+
+// deprecatedStatsIn — window match the per-service variants. See
+// serviceStatsIn for the enum-vs-plain-string note.
+type deprecatedStatsIn struct {
+	Window string `query:"window" default:"24h"`
+}
+
+// callerStatsRow is the per-caller leaf of the deprecated-services
+// drilldown. Mirrors methodStatsOut minus the Method field, which
+// hangs one level above on deprecatedMethodRow.
+type callerStatsRow struct {
+	Caller     string  `json:"caller"`
+	Count      uint64  `json:"count"`
+	OkCount    uint64  `json:"okCount"`
+	Throughput float64 `json:"throughput"`
+	P50Millis  int64   `json:"p50Millis"`
+	P95Millis  int64   `json:"p95Millis"`
+}
+
+// deprecatedMethodRow rolls per-(method) stats with a nested caller
+// breakdown. Method-level percentiles take the worst across callers
+// (max), matching the servicesStats aggregate posture.
+type deprecatedMethodRow struct {
+	Method     string           `json:"method"`
+	Count      uint64           `json:"count"`
+	OkCount    uint64           `json:"okCount"`
+	Throughput float64          `json:"throughput"`
+	P50Millis  int64            `json:"p50Millis"`
+	P95Millis  int64            `json:"p95Millis"`
+	Callers    []callerStatsRow `json:"callers"`
+}
+
+// deprecatedServiceRow is one (namespace, version) entry. Either
+// ManualReason or AutoReason is non-empty (often both); the UI shows
+// both badges so operators distinguish "older vN" from "operator
+// flagged it." Methods empty + TotalCount 0 ⇒ deprecated but no
+// recorded traffic in the window: a "safe to retire" candidate.
+type deprecatedServiceRow struct {
+	Namespace       string                `json:"namespace"`
+	Version         string                `json:"version"`
+	ManualReason    string                `json:"manualReason,omitempty"`
+	AutoReason      string                `json:"autoReason,omitempty"`
+	TotalCount      uint64                `json:"totalCount"`
+	TotalThroughput float64               `json:"totalThroughput"`
+	Methods         []deprecatedMethodRow `json:"methods"`
+}
+
+type deprecatedStatsOut struct {
+	Body struct {
+		Window   string                 `json:"window"`
+		Services []deprecatedServiceRow `json:"services"`
 	}
 }
 
