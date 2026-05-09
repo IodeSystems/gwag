@@ -121,6 +121,117 @@ type config struct {
 	adminDataDir string
 	signerSecret []byte
 	openAPIHTTP  *http.Client
+
+	// allowedTiers gates which version tiers the gateway accepts at
+	// registration and renders in the schema. nil → default policy
+	// (all three: unstable / stable / vN). See WithAllowTier.
+	allowedTiers *AllowedTiers
+}
+
+// AllowedTiers expresses which §4 version tiers a gateway will accept
+// at registration time and surface in the rendered schema. The zero
+// value rejects everything; use WithAllowTier (or default — i.e. no
+// option) to populate it.
+//
+//   - Unstable: registrations with version="unstable" accepted.
+//   - VN: registrations with version="v<N>" accepted.
+//   - Stable: the schema-render `<ns>.stable` alias is emitted. Stable
+//     itself is not a registerable version (it's a computed alias),
+//     so this gates rendering only.
+type AllowedTiers struct {
+	Unstable bool
+	Stable   bool
+	VN       bool
+}
+
+// describe returns a human-readable summary of the allow set, for
+// rejection error messages. Order matches the canonical order tiers
+// are listed in the plan and the --allow-tier flag.
+func (t AllowedTiers) describe() string {
+	parts := make([]string, 0, 3)
+	if t.Unstable {
+		parts = append(parts, "unstable")
+	}
+	if t.Stable {
+		parts = append(parts, "stable")
+	}
+	if t.VN {
+		parts = append(parts, "vN")
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, ",")
+}
+
+// WithAllowTier restricts the version tiers this gateway accepts at
+// registration and renders in the schema. Plan §4: production
+// deployments restrict to "stable","vN" or "vN" alone; dev gateways
+// accept all three.
+//
+// Pass any combination of "unstable", "stable", "vN". Unknown values
+// are silently ignored — operators control the spelling at the boot
+// flag boundary (`--allow-tier`). Calling with no arguments yields a
+// gateway that rejects every registration; calling with all three
+// matches the default-when-unset behavior.
+//
+// Effect on registration:
+//   - "unstable" missing: registrations with version="unstable" are
+//     rejected with a clear error.
+//   - "vN" missing: registrations with numbered versions are rejected.
+//
+// Effect on schema render:
+//   - "stable" missing: the `<ns>.stable` alias is omitted even when
+//     a `vN` cut is registered. Callers wanting evergreen-without-
+//     recodegen must move to a numbered cut.
+//
+// "stable" itself is never a registerable version — `parseVersion`
+// rejects it. The flag controls only whether the alias surfaces.
+func WithAllowTier(tiers ...string) Option {
+	return func(cfg *config) {
+		t := AllowedTiers{}
+		for _, s := range tiers {
+			switch s {
+			case "unstable":
+				t.Unstable = true
+			case "stable":
+				t.Stable = true
+			case "vN":
+				t.VN = true
+			}
+		}
+		cfg.allowedTiers = &t
+	}
+}
+
+// effectiveAllowedTiers returns the tier policy in force. nil-on-cfg
+// means the operator never called WithAllowTier; the default is
+// permissive (all three).
+func (g *Gateway) effectiveAllowedTiers() AllowedTiers {
+	if g.cfg.allowedTiers == nil {
+		return AllowedTiers{Unstable: true, Stable: true, VN: true}
+	}
+	return *g.cfg.allowedTiers
+}
+
+// checkVersionTierAllowed returns an error if `version` (canonical
+// post-parseVersion form: "unstable" or "v<N>") is not in the
+// gateway's --allow-tier policy. Plan §4 boot gate: the single hot
+// path every registration crosses (registerSlotLocked) calls this
+// before allocating a slot, and the control plane Register RPC
+// double-checks before writing to the registry KV in cluster mode.
+func (g *Gateway) checkVersionTierAllowed(version string) error {
+	t := g.effectiveAllowedTiers()
+	if version == "unstable" {
+		if !t.Unstable {
+			return fmt.Errorf("tier %q is not in --allow-tier policy (allowed: %s)", "unstable", t.describe())
+		}
+		return nil
+	}
+	if !t.VN {
+		return fmt.Errorf("tier %q is not in --allow-tier policy (allowed: %s)", "vN", t.describe())
+	}
+	return nil
 }
 
 // SubscriptionAuthOptions configures HMAC verification for incoming

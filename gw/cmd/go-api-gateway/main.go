@@ -44,6 +44,32 @@ type protoSpec struct {
 	addr string
 }
 
+// parseAllowTier validates a --allow-tier comma-list against the
+// canonical set ("unstable", "stable", "vN"). Empty is rejected — at
+// least one tier must be allowed for a meaningful gateway. Whitespace
+// around tokens is tolerated so the flag value can be quoted with
+// spaces in shell scripts. Plan §4 boot gate.
+func parseAllowTier(s string) ([]string, error) {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t == "" {
+			continue
+		}
+		switch t {
+		case "unstable", "stable", "vN":
+			out = append(out, t)
+		default:
+			return nil, fmt.Errorf("unknown tier %q (want unstable, stable, or vN)", t)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("at least one tier required")
+	}
+	return out, nil
+}
+
 type protoFlag []protoSpec
 
 func (p *protoFlag) String() string { return fmt.Sprint(*p) }
@@ -88,6 +114,7 @@ func runGateway() {
 	var protos protoFlag
 	flag.Var(&protos, "proto", "PATH=[NS@]ADDR (repeatable)")
 	addr := flag.String("addr", ":8080", "HTTP listen address")
+	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: go-api-gateway [--addr :8080] --proto PATH=[NS@]ADDR ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       go-api-gateway peer (list|forget) ...")
@@ -99,7 +126,12 @@ func runGateway() {
 		os.Exit(2)
 	}
 
-	gw := gateway.New()
+	tiers, err := parseAllowTier(*allowTier)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "--allow-tier: %v\n", err)
+		os.Exit(2)
+	}
+	gw := gateway.New(gateway.WithAllowTier(tiers...))
 	for _, p := range protos {
 		opts := []gateway.ServiceOption{gateway.To(p.addr)}
 		if p.ns != "" {

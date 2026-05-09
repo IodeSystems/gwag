@@ -382,3 +382,39 @@ func TestStableSDLContainsAlias(t *testing.T) {
 		t.Errorf("SDL missing `type PetsStableQueryNamespace`:\n%s", sdl)
 	}
 }
+
+// --allow-tier without "stable" suppresses the schema alias even when
+// numbered cuts are registered. Plan §4: production deployments that
+// only want pinned vN can drop the alias entirely.
+func TestStableAliasSuppressedByAllowTier(t *testing.T) {
+	gw := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("ignored")),
+		WithAllowTier("vN"),
+	)
+	t.Cleanup(gw.Close)
+	_ = gw.Handler()
+
+	if err := gw.AddProtoDescriptor(
+		greeterv1.File_greeter_proto,
+		To(nopGRPCConn{}),
+		As("greeter"),
+		Version("v1"),
+	); err != nil {
+		t.Fatalf("v1 register: %v", err)
+	}
+
+	schema := gw.schema.Load()
+	if schema == nil {
+		t.Fatal("schema not assembled")
+	}
+	greeter, ok := schema.QueryType().Fields()["greeter"]
+	if !ok {
+		t.Fatal("Query.greeter missing")
+	}
+	greeterContainer := greeter.Type.(*graphql.NonNull).OfType.(*graphql.Object)
+	if _, has := greeterContainer.Fields()["stable"]; has {
+		t.Errorf("Query.greeter.stable surfaced under --allow-tier=vN; fields: %v", fieldNames(greeterContainer.Fields()))
+	}
+}

@@ -75,11 +75,15 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		return nil, err
 	}
 	long, jsonScalar := openAPISharedScalars()
+	var stableSnap map[string]int
+	if g.effectiveAllowedTiers().Stable {
+		stableSnap = g.stableSnapshotLocked()
+	}
 	queries, mutations, runtimeSubs, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,
-		StableVN:           g.stableSnapshotLocked(),
+		StableVN:           stableSnap,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime render: %w", err)

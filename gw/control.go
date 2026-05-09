@@ -212,6 +212,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			if err != nil {
 				return nil, fmt.Errorf("controlplane: %w", err)
 			}
+			if err := cp.gw.checkVersionTierAllowed(ver); err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
 			k := nsverKey{ns, ver}
 			if used[k] {
 				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
@@ -248,6 +251,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			if err != nil {
 				return nil, fmt.Errorf("controlplane: %w", err)
 			}
+			if err := cp.gw.checkVersionTierAllowed(ver); err != nil {
+				return nil, fmt.Errorf("controlplane: %w", err)
+			}
 			k := nsverKey{ns, ver}
 			if used[k] {
 				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
@@ -282,6 +288,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		}
 		ver, _, err := parseVersion(b.GetVersion())
 		if err != nil {
+			return nil, fmt.Errorf("controlplane: %w", err)
+		}
+		if err := cp.gw.checkVersionTierAllowed(ver); err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
 		k := nsverKey{ns, ver}

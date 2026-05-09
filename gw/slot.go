@@ -94,6 +94,9 @@ type slot struct {
 //
 // Caller holds g.mu.
 func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int) (existed bool, err error) {
+	if err := g.checkVersionTierAllowed(key.version); err != nil {
+		return false, err
+	}
 	if g.slots == nil {
 		g.slots = map[poolKey]*slot{}
 	}

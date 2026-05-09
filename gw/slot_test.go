@@ -163,6 +163,76 @@ func TestRegisterSlot_Unstable_SwapAcrossKinds(t *testing.T) {
 	}
 }
 
+// --allow-tier policy (plan §4): registerSlotLocked is the single
+// site every register flows through, so the tier gate lives there.
+// The default (WithAllowTier never called) accepts every tier; an
+// explicit allow-list rejects everything outside it with a clear
+// "tier %q is not in --allow-tier policy" message.
+func TestRegisterSlot_AllowTier_DefaultAcceptsAll(t *testing.T) {
+	g := newSlotGateway(t)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{20}, 0, 0); err != nil {
+		t.Errorf("default policy rejected unstable: %v", err)
+	}
+	if _, err := g.registerSlotLocked(slotKindProto, key("b", "v1"), [32]byte{21}, 0, 0); err != nil {
+		t.Errorf("default policy rejected vN: %v", err)
+	}
+}
+
+func TestRegisterSlot_AllowTier_VNOnly_RejectsUnstable(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")), WithAllowTier("vN"))
+	t.Cleanup(g.Close)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{22}, 0, 0); err != nil {
+		t.Errorf("vN allowed but rejected: %v", err)
+	}
+	_, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{23}, 0, 0)
+	if err == nil {
+		t.Fatalf("expected reject for unstable when --allow-tier=vN; got nil")
+	}
+	if !strings.Contains(err.Error(), "not in --allow-tier policy") {
+		t.Errorf("error %q missing policy phrasing", err.Error())
+	}
+	if !strings.Contains(err.Error(), "\"unstable\"") {
+		t.Errorf("error %q should name the rejected tier", err.Error())
+	}
+}
+
+func TestRegisterSlot_AllowTier_UnstableOnly_RejectsVN(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")), WithAllowTier("unstable"))
+	t.Cleanup(g.Close)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{24}, 0, 0); err != nil {
+		t.Errorf("unstable allowed but rejected: %v", err)
+	}
+	_, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{25}, 0, 0)
+	if err == nil {
+		t.Fatalf("expected reject for vN when --allow-tier=unstable; got nil")
+	}
+	if !strings.Contains(err.Error(), "\"vN\"") {
+		t.Errorf("error %q should name the rejected tier", err.Error())
+	}
+}
+
+// "stable" in the allow set never gates registration — it's a
+// computed alias, not a registerable version. Passing only "stable"
+// rejects every actual register.
+func TestRegisterSlot_AllowTier_StableOnly_RejectsRegistrations(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")), WithAllowTier("stable"))
+	t.Cleanup(g.Close)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{26}, 0, 0); err == nil {
+		t.Errorf("expected reject for vN when --allow-tier=stable")
+	}
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{27}, 0, 0); err == nil {
+		t.Errorf("expected reject for unstable when --allow-tier=stable")
+	}
+}
+
 func TestReleaseSlotLocked_DropsIndex(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
