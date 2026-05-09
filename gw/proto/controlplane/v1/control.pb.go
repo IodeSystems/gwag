@@ -1062,9 +1062,14 @@ type ServiceInfo struct {
 	// Identical bytes ⇒ identical hash across clusters/protoc versions.
 	HashHex string `protobuf:"bytes,3,opt,name=hash_hex,json=hashHex,proto3" json:"hash_hex,omitempty"`
 	// Number of live replicas backing this (namespace, version) pool.
-	ReplicaCount  uint32 `protobuf:"varint,4,opt,name=replica_count,json=replicaCount,proto3" json:"replica_count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ReplicaCount uint32 `protobuf:"varint,4,opt,name=replica_count,json=replicaCount,proto3" json:"replica_count,omitempty"`
+	// Operator-set deprecation reason (plan §5). Empty = no manual
+	// deprecation. Auto-deprecation (older `vN`) is computed by the UI
+	// from `version` + the namespace's latest `vN`; the renderer
+	// OR-combines both — either source lights up `@deprecated` in SDL.
+	ManualDeprecationReason string `protobuf:"bytes,5,opt,name=manual_deprecation_reason,json=manualDeprecationReason,proto3" json:"manual_deprecation_reason,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ServiceInfo) Reset() {
@@ -1123,6 +1128,13 @@ func (x *ServiceInfo) GetReplicaCount() uint32 {
 		return x.ReplicaCount
 	}
 	return 0
+}
+
+func (x *ServiceInfo) GetManualDeprecationReason() string {
+	if x != nil {
+		return x.ManualDeprecationReason
+	}
+	return ""
 }
 
 type SignSubscriptionTokenRequest struct {
@@ -1660,12 +1672,13 @@ const file_control_proto_rawDesc = "" +
 	"\tstable_vn\x18\x03 \x03(\v2;.gateway.controlplane.v1.ListServicesResponse.StableVnEntryR\bstableVn\x1a;\n" +
 	"\rStableVnEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03R\venvironment\"\x85\x01\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03R\venvironment\"\xc1\x01\n" +
 	"\vServiceInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x19\n" +
 	"\bhash_hex\x18\x03 \x01(\tR\ahashHex\x12#\n" +
-	"\rreplica_count\x18\x04 \x01(\rR\freplicaCount\"k\n" +
+	"\rreplica_count\x18\x04 \x01(\rR\freplicaCount\x12:\n" +
+	"\x19manual_deprecation_reason\x18\x05 \x01(\tR\x17manualDeprecationReason\"k\n" +
 	"\x1cSignSubscriptionTokenRequest\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +

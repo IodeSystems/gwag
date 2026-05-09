@@ -258,6 +258,11 @@ message ServiceInfo {
   string hash_hex = 3;
   // Number of live replicas backing this (namespace, version) pool.
   uint32 replica_count = 4;
+  // Operator-set deprecation reason (plan §5). Empty = no manual
+  // deprecation. Auto-deprecation (older `vN`) is computed by the UI
+  // from `version` + the namespace's latest `vN`; the renderer
+  // OR-combines both — either source lights up `@deprecated` in SDL.
+  string manual_deprecation_reason = 5;
 }
 
 // SubscribeAuthCode is the result of an attempted subscribe. Both the
