@@ -248,6 +248,37 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "serviceStats",
+		Method:      http.MethodGet,
+		Path:        "/admin/services/{namespace}/{version}/stats",
+		Summary:     "Per-method rolling stats (1m / 1h / 24h windows) for one (namespace, version). Plan §5.",
+	}, func(_ context.Context, in *serviceStatsIn) (*serviceStatsOut, error) {
+		window, err := parseStatsWindow(in.Window)
+		if err != nil {
+			return nil, err
+		}
+		rows := g.Snapshot(window, nowFunc())
+		out := &serviceStatsOut{}
+		out.Body.Window = in.Window
+		out.Body.Methods = []methodStatsOut{}
+		for _, r := range rows {
+			if r.Namespace != in.Namespace || r.Version != in.Version {
+				continue
+			}
+			out.Body.Methods = append(out.Body.Methods, methodStatsOut{
+				Method:        r.Method,
+				Caller:        r.Caller,
+				Count:         r.Count,
+				OkCount:       r.OkCount,
+				Throughput:    r.Throughput,
+				P50Millis:     int64(r.P50 / time.Millisecond),
+				P95Millis:     int64(r.P95 / time.Millisecond),
+			})
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -390,6 +421,45 @@ type undeprecateOut struct {
 	Body struct {
 		PriorReason string `json:"priorReason"`
 	}
+}
+
+// serviceStatsIn — window defaults to "1m". Plan §5 followup adds
+// by=replica when per-replica stats land.
+type serviceStatsIn struct {
+	Namespace string `path:"namespace"`
+	Version   string `path:"version"`
+	Window    string `query:"window" enum:"1m,1h,24h" default:"1m"`
+}
+
+type methodStatsOut struct {
+	Method     string  `json:"method"`
+	Caller     string  `json:"caller"`
+	Count      uint64  `json:"count"`
+	OkCount    uint64  `json:"okCount"`
+	Throughput float64 `json:"throughput"`
+	P50Millis  int64   `json:"p50Millis"`
+	P95Millis  int64   `json:"p95Millis"`
+}
+
+type serviceStatsOut struct {
+	Body struct {
+		Window  string           `json:"window"`
+		Methods []methodStatsOut `json:"methods"`
+	}
+}
+
+// parseStatsWindow maps the operator-friendly window strings
+// (matching the huma enum) to the registry's time.Duration windows.
+func parseStatsWindow(s string) (time.Duration, error) {
+	switch s {
+	case "", "1m":
+		return time.Minute, nil
+	case "1h":
+		return time.Hour, nil
+	case "24h":
+		return 24 * time.Hour, nil
+	}
+	return 0, fmt.Errorf("unknown window %q (want 1m, 1h, or 24h)", s)
 }
 
 type drainIn struct {

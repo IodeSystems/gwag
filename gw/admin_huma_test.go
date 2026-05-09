@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newAdminRouter wires the huma admin mux behind AdminMiddleware so
@@ -166,3 +167,63 @@ func TestAdminHuma_Channels_ReflectsActiveSubjects(t *testing.T) {
 
 // silence unused for older toolchains
 var _ = context.Background
+
+func TestAdminHuma_ServiceStats_Window1m(t *testing.T) {
+	old := nowFunc
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = old })
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "users", "v1", "List", 12*time.Millisecond, nil)
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/greeter/v1/stats?window=1m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Window  string `json:"window"`
+		Methods []struct {
+			Method  string `json:"method"`
+			Caller  string `json:"caller"`
+			Count   uint64 `json:"count"`
+			OkCount uint64 `json:"okCount"`
+		} `json:"methods"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Window != "1m" {
+		t.Errorf("window=%q, want 1m", out.Window)
+	}
+	if len(out.Methods) != 2 {
+		t.Fatalf("got %d methods, want 2 (only greeter/v1 rows): %+v", len(out.Methods), out.Methods)
+	}
+	// Sorted: Bye then Hello.
+	if out.Methods[0].Method != "Bye" || out.Methods[0].Count != 1 {
+		t.Errorf("Bye row=%+v", out.Methods[0])
+	}
+	if out.Methods[1].Method != "Hello" || out.Methods[1].Count != 2 {
+		t.Errorf("Hello row=%+v", out.Methods[1])
+	}
+}
+
+func TestAdminHuma_ServiceStats_RejectsBadWindow(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/greeter/v1/stats?window=5m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("expected non-200 for bad window; got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
