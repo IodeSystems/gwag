@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -214,20 +213,39 @@ func (p *pool) replicaCount() int {
 	return len(*cur)
 }
 
-// parseVersion turns "v3", "3", "v10" into 3, 3, 10. Empty string is
-// treated as v1. Anything not parseable returns an error and the
-// registration is rejected — keeps "latest" semantics unambiguous.
+// parseVersion canonicalises the registration version string. The
+// accepted alphabet is "unstable" plus "vN" for integer N ≥ 1; empty
+// defaults to "v1" to preserve the proto's documented default. The
+// returned numeric index is the integer N for "vN", and 0 for
+// "unstable" — a sentinel that sorts before any real cut, matching
+// `parseRuntimeVersionN`'s posture for non-numeric inputs.
+//
+// "stable" is rejected explicitly: it is a computed alias to the
+// highest-ever-seen "vN" for the namespace, never a registerable
+// version. Bare digits ("3"), uppercase ("V3"), zero-prefixed ("v0",
+// "v01") and anything else are rejected with a clear error so the
+// tier model (unstable / stable / vN — see plan §4) stays the only
+// vocabulary in registry KV.
 func parseVersion(s string) (canonical string, n int, err error) {
 	if s == "" {
 		return "v1", 1, nil
 	}
-	digits := s
-	if strings.HasPrefix(digits, "v") || strings.HasPrefix(digits, "V") {
-		digits = digits[1:]
+	if s == "unstable" {
+		return "unstable", 0, nil
+	}
+	if s == "stable" {
+		return "", 0, fmt.Errorf("version %q: stable is a computed alias; register vN instead", s)
+	}
+	if len(s) < 2 || s[0] != 'v' {
+		return "", 0, fmt.Errorf("version %q: must be \"unstable\" or \"vN\" (N ≥ 1)", s)
+	}
+	digits := s[1:]
+	if digits[0] == '0' {
+		return "", 0, fmt.Errorf("version %q: must be \"unstable\" or \"vN\" (N ≥ 1; no leading zeros)", s)
 	}
 	n, err = strconv.Atoi(digits)
-	if err != nil || n < 0 {
-		return "", 0, fmt.Errorf("version %q: must be vN or N (non-negative integer)", s)
+	if err != nil || n < 1 {
+		return "", 0, fmt.Errorf("version %q: must be \"unstable\" or \"vN\" (N ≥ 1)", s)
 	}
 	return "v" + strconv.Itoa(n), n, nil
 }

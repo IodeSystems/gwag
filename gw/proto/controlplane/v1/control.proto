@@ -84,13 +84,23 @@ message ServiceBinding {
   // which is conventionally the dependent file rather than its imports.
   string file_name = 3;
 
-  // Service version, e.g. "v1", "v2", "v10" (the leading "v" is
-  // optional). Multiple versions of the same namespace coexist; the
-  // highest live version is "latest" and surfaces flat under the
-  // namespace. Older versions are addressable via name-disambiguated
-  // fields ("<ns>_<vN>_<op>" / "<ns>_<vN>_<TypeName>") carrying
-  // GraphQL @deprecated. Defaults to "v1" if empty. Honored for all
-  // three binding forms (proto / openapi / graphql).
+  // Service version. Accepted values: "unstable" (the mutable
+  // single-overwrite slot — each register replaces the prior one for
+  // this namespace) or "vN" for integer N ≥ 1 (locked once
+  // registered; differing schema-hash for an existing vN is rejected
+  // as AlreadyExists, "cut v(N+1)"). "stable" is a computed alias to
+  // the highest-ever-seen vN and is NOT directly registerable —
+  // requests with version="stable" are rejected with a clear error.
+  // Bare digits ("3"), uppercase ("V3"), zero-prefixed ("v0", "v01")
+  // and other strings are rejected. Empty defaults to "v1" for
+  // back-compat with services that don't set the field.
+  //
+  // Multiple vN versions of the same namespace coexist; the highest
+  // live vN is "latest" and surfaces flat under the namespace. Older
+  // versions are addressable via name-disambiguated fields
+  // ("<ns>_<vN>_<op>" / "<ns>_<vN>_<TypeName>") carrying GraphQL
+  // @deprecated. Honored for all three binding forms (proto / openapi
+  // / graphql).
   string version = 4;
 
   // Raw OpenAPI 3.x spec bytes (JSON or YAML; kin-openapi parses
