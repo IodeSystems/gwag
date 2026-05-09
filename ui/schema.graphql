@@ -7,6 +7,7 @@ type AdminMutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+  stable: AdminStableMutationNamespace!
   v1: AdminV1MutationNamespace!
 }
 
@@ -15,7 +16,21 @@ type AdminQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  stable: AdminStableQueryNamespace!
   v1: AdminV1QueryNamespace!
+}
+
+type AdminStableMutationNamespace {
+  drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
+  forgetPeer(nodeId: String!): admin_ForgetOutBody
+  signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+}
+
+type AdminStableQueryNamespace {
+  listChannels: admin_ChannelsOutBody
+  listInjectors: admin_InjectorsOutBody
+  listPeers: admin_PeersOutBody
+  listServices: admin_ServicesOutBody
 }
 
 type AdminV1MutationNamespace {

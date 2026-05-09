@@ -23,6 +23,7 @@ export type AdminMutationNamespace = {
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
+  stable: AdminStableMutationNamespace;
   v1: AdminV1MutationNamespace;
 };
 
@@ -47,7 +48,38 @@ export type AdminQueryNamespace = {
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  stable: AdminStableQueryNamespace;
   v1: AdminV1QueryNamespace;
+};
+
+export type AdminStableMutationNamespace = {
+  __typename?: 'AdminStableMutationNamespace';
+  drain: Maybe<Admin_DrainOutBody>;
+  forgetPeer: Maybe<Admin_ForgetOutBody>;
+  signSubscriptionToken: Maybe<Admin_SignOutBody>;
+};
+
+
+export type AdminStableMutationNamespaceDrainArgs = {
+  body: Admin_DrainInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceForgetPeerArgs = {
+  nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminStableMutationNamespaceSignSubscriptionTokenArgs = {
+  body: Admin_SignInBodyInput;
+};
+
+export type AdminStableQueryNamespace = {
+  __typename?: 'AdminStableQueryNamespace';
+  listChannels: Maybe<Admin_ChannelsOutBody>;
+  listInjectors: Maybe<Admin_InjectorsOutBody>;
+  listPeers: Maybe<Admin_PeersOutBody>;
+  listServices: Maybe<Admin_ServicesOutBody>;
 };
 
 export type AdminV1MutationNamespace = {
