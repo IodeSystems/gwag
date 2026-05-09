@@ -54,7 +54,9 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		r := p.pickReplica()
 		if r == nil {
 			err := fmt.Errorf("gateway: no live replicas for %s/%s", ns, ver)
-			metrics.RecordDispatch(ctx, ns, ver, method, time.Since(start), err)
+			elapsed := time.Since(start)
+			metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+			addDispatchTime(ctx, elapsed)
 			return nil, err
 		}
 		// Per-instance cap: acquired AFTER pickReplica because the
@@ -64,7 +66,9 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		// gRPC ingress prologue otherwise).
 		releaseInstance, err := acquireReplicaSlot(ctx, r, p, method, metrics, bpOpts)
 		if err != nil {
-			metrics.RecordDispatch(ctx, ns, ver, method, time.Since(start), err)
+			elapsed := time.Since(start)
+			metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+			addDispatchTime(ctx, elapsed)
 			return nil, err
 		}
 		defer releaseInstance()
@@ -72,7 +76,9 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		if len(headers) > 0 {
 			injected, err := applyHeaderInjectors(ctx, headers)
 			if err != nil {
-				metrics.RecordDispatch(ctx, ns, ver, method, time.Since(start), err)
+				elapsed := time.Since(start)
+				metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+				addDispatchTime(ctx, elapsed)
 				return nil, err
 			}
 			if len(injected) > 0 {
@@ -88,7 +94,9 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		defer r.inflight.Add(-1)
 		resp := acquireDynamicMessage(outputDesc)
 		err = r.conn.Invoke(ctx, method, req, resp)
-		metrics.RecordDispatch(ctx, ns, ver, method, time.Since(start), err)
+		elapsed := time.Since(start)
+		metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+		addDispatchTime(ctx, elapsed)
 		if err != nil {
 			releaseDynamicMessage(outputDesc, resp)
 			return nil, err

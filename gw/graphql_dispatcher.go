@@ -73,7 +73,9 @@ func (d *graphQLDispatcher) Dispatch(ctx context.Context, _ map[string]any) (any
 func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
 	start := time.Now()
 	record := func(err error) error {
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, time.Since(start), err)
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
 		return err
 	}
 

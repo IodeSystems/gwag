@@ -54,12 +54,16 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	r := d.src.pickReplica()
 	if r == nil {
 		err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, time.Since(start), err)
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
 		return nil, err
 	}
 	releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, d.src, d.label, d.metrics, d.bp)
 	if err != nil {
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, time.Since(start), err)
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
 		return nil, err
 	}
 	defer releaseInstance()
@@ -67,7 +71,9 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	r.inflight.Add(1)
 	defer r.inflight.Add(-1)
 	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient)
-	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, time.Since(start), err)
+	elapsed := time.Since(start)
+	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+	addDispatchTime(ctx, elapsed)
 	if err != nil {
 		return nil, err
 	}
