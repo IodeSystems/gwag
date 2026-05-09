@@ -44,6 +44,18 @@ service ControlPlane {
   // consults a registered SubscriptionAuthorizer delegate before
   // signing.
   rpc SignSubscriptionToken(SignSubscriptionTokenRequest) returns (SignSubscriptionTokenResponse);
+
+  // RetractStable moves a namespace's `stable` alias backward to
+  // `target_vN`. Operator-driven; never automatic. Plan §4: stable
+  // is monotonic across registration, so the only way it decreases
+  // is this RPC (and the corresponding admin/retractStable huma
+  // route). Refuses to skip past a vN that isn't currently in the
+  // build — `target_vN` must have a live registration so `stable`
+  // continues to surface a real schema. Persists in the cluster
+  // stable KV bucket so the retract survives restarts and reaches
+  // every peer; emits a service-change event so peers re-render
+  // immediately.
+  rpc RetractStable(RetractStableRequest) returns (RetractStableResponse);
 }
 
 message RegisterRequest {
@@ -264,6 +276,26 @@ message SignSubscriptionTokenRequest {
   // "<kid>\n<channel>\n<timestamp>". UNKNOWN_KID is returned when the
   // gateway has no secret for the given kid.
   string kid = 3;
+}
+
+message RetractStableRequest {
+  // GraphQL namespace whose `stable` alias should be retracted.
+  string namespace = 1;
+
+  // The vN to retract `stable` to. Must currently have a live
+  // registration on the cluster — refusing the call when target_vN
+  // isn't in the build prevents `stable` from pointing at a missing
+  // schema. Must also be strictly less than the current stable
+  // value; raising stable is the registration path, not this RPC.
+  uint32 target_v_n = 2;
+}
+
+message RetractStableResponse {
+  // Stable's vN before the retract. 0 when no stable was set.
+  uint32 prior_v_n = 1;
+  // Stable's vN after the retract. Equals the request's target_v_n
+  // on success.
+  uint32 new_v_n = 2;
 }
 
 message SignSubscriptionTokenResponse {

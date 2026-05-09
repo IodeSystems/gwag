@@ -27,6 +27,7 @@ const (
 	ControlPlane_ForgetPeer_FullMethodName            = "/gateway.controlplane.v1.ControlPlane/ForgetPeer"
 	ControlPlane_ListServices_FullMethodName          = "/gateway.controlplane.v1.ControlPlane/ListServices"
 	ControlPlane_SignSubscriptionToken_FullMethodName = "/gateway.controlplane.v1.ControlPlane/SignSubscriptionToken"
+	ControlPlane_RetractStable_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/RetractStable"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -69,6 +70,17 @@ type ControlPlaneClient interface {
 	// consults a registered SubscriptionAuthorizer delegate before
 	// signing.
 	SignSubscriptionToken(ctx context.Context, in *SignSubscriptionTokenRequest, opts ...grpc.CallOption) (*SignSubscriptionTokenResponse, error)
+	// RetractStable moves a namespace's `stable` alias backward to
+	// `target_vN`. Operator-driven; never automatic. Plan §4: stable
+	// is monotonic across registration, so the only way it decreases
+	// is this RPC (and the corresponding admin/retractStable huma
+	// route). Refuses to skip past a vN that isn't currently in the
+	// build — `target_vN` must have a live registration so `stable`
+	// continues to surface a real schema. Persists in the cluster
+	// stable KV bucket so the retract survives restarts and reaches
+	// every peer; emits a service-change event so peers re-render
+	// immediately.
+	RetractStable(ctx context.Context, in *RetractStableRequest, opts ...grpc.CallOption) (*RetractStableResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -159,6 +171,16 @@ func (c *controlPlaneClient) SignSubscriptionToken(ctx context.Context, in *Sign
 	return out, nil
 }
 
+func (c *controlPlaneClient) RetractStable(ctx context.Context, in *RetractStableRequest, opts ...grpc.CallOption) (*RetractStableResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetractStableResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_RetractStable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -199,6 +221,17 @@ type ControlPlaneServer interface {
 	// consults a registered SubscriptionAuthorizer delegate before
 	// signing.
 	SignSubscriptionToken(context.Context, *SignSubscriptionTokenRequest) (*SignSubscriptionTokenResponse, error)
+	// RetractStable moves a namespace's `stable` alias backward to
+	// `target_vN`. Operator-driven; never automatic. Plan §4: stable
+	// is monotonic across registration, so the only way it decreases
+	// is this RPC (and the corresponding admin/retractStable huma
+	// route). Refuses to skip past a vN that isn't currently in the
+	// build — `target_vN` must have a live registration so `stable`
+	// continues to surface a real schema. Persists in the cluster
+	// stable KV bucket so the retract survives restarts and reaches
+	// every peer; emits a service-change event so peers re-render
+	// immediately.
+	RetractStable(context.Context, *RetractStableRequest) (*RetractStableResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -232,6 +265,9 @@ func (UnimplementedControlPlaneServer) ListServices(context.Context, *ListServic
 }
 func (UnimplementedControlPlaneServer) SignSubscriptionToken(context.Context, *SignSubscriptionTokenRequest) (*SignSubscriptionTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignSubscriptionToken not implemented")
+}
+func (UnimplementedControlPlaneServer) RetractStable(context.Context, *RetractStableRequest) (*RetractStableResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetractStable not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -398,6 +434,24 @@ func _ControlPlane_SignSubscriptionToken_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_RetractStable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetractStableRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).RetractStable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_RetractStable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).RetractStable(ctx, req.(*RetractStableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -436,6 +490,10 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SignSubscriptionToken",
 			Handler:    _ControlPlane_SignSubscriptionToken_Handler,
+		},
+		{
+			MethodName: "RetractStable",
+			Handler:    _ControlPlane_RetractStable_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
