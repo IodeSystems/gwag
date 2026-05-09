@@ -20,12 +20,21 @@ export type Scalars = {
 
 export type AdminMutationNamespace = {
   __typename?: 'AdminMutationNamespace';
+  deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
   stable: AdminStableMutationNamespace;
+  undeprecate: Maybe<Admin_UndeprecateOutBody>;
   v1: AdminV1MutationNamespace;
+};
+
+
+export type AdminMutationNamespaceDeprecateArgs = {
+  body: Admin_DeprecateInBodyInput;
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
 };
 
 
@@ -49,22 +58,51 @@ export type AdminMutationNamespaceSignSubscriptionTokenArgs = {
   body: Admin_SignInBodyInput;
 };
 
+
+export type AdminMutationNamespaceUndeprecateArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+};
+
 export type AdminQueryNamespace = {
   __typename?: 'AdminQueryNamespace';
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesStats: Maybe<Admin_ServicesStatsOutBody>;
   stable: AdminStableQueryNamespace;
   v1: AdminV1QueryNamespace;
 };
 
+
+export type AdminQueryNamespaceServiceStatsArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminQueryNamespaceServicesStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
 export type AdminStableMutationNamespace = {
   __typename?: 'AdminStableMutationNamespace';
+  deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
+  undeprecate: Maybe<Admin_UndeprecateOutBody>;
+};
+
+
+export type AdminStableMutationNamespaceDeprecateArgs = {
+  body: Admin_DeprecateInBodyInput;
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
 };
 
 
@@ -88,20 +126,49 @@ export type AdminStableMutationNamespaceSignSubscriptionTokenArgs = {
   body: Admin_SignInBodyInput;
 };
 
+
+export type AdminStableMutationNamespaceUndeprecateArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+};
+
 export type AdminStableQueryNamespace = {
   __typename?: 'AdminStableQueryNamespace';
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesStats: Maybe<Admin_ServicesStatsOutBody>;
+};
+
+
+export type AdminStableQueryNamespaceServiceStatsArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminStableQueryNamespaceServicesStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
 };
 
 export type AdminV1MutationNamespace = {
   __typename?: 'AdminV1MutationNamespace';
+  deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
+  undeprecate: Maybe<Admin_UndeprecateOutBody>;
+};
+
+
+export type AdminV1MutationNamespaceDeprecateArgs = {
+  body: Admin_DeprecateInBodyInput;
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
 };
 
 
@@ -125,12 +192,32 @@ export type AdminV1MutationNamespaceSignSubscriptionTokenArgs = {
   body: Admin_SignInBodyInput;
 };
 
+
+export type AdminV1MutationNamespaceUndeprecateArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+};
+
 export type AdminV1QueryNamespace = {
   __typename?: 'AdminV1QueryNamespace';
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesStats: Maybe<Admin_ServicesStatsOutBody>;
+};
+
+
+export type AdminV1QueryNamespaceServiceStatsArgs = {
+  namespace: Scalars['String']['input'];
+  version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminV1QueryNamespaceServicesStatsArgs = {
+  window: InputMaybe<Scalars['String']['input']>;
 };
 
 export type Mutation = {
@@ -152,6 +239,15 @@ export type Admin_ChannelInfo = {
 export type Admin_ChannelsOutBody = {
   __typename?: 'admin_ChannelsOutBody';
   channels: Array<Maybe<Admin_ChannelInfo>>;
+};
+
+export type Admin_DeprecateInBodyInput = {
+  reason: Scalars['String']['input'];
+};
+
+export type Admin_DeprecateOutBody = {
+  __typename?: 'admin_DeprecateOutBody';
+  _void: Maybe<Scalars['String']['output']>;
 };
 
 export type Admin_DrainInBodyInput = {
@@ -201,6 +297,17 @@ export type Admin_InjectorsOutBody = {
   injectors: Array<Maybe<Admin_InjectorInfo>>;
 };
 
+export type Admin_MethodStatsOut = {
+  __typename?: 'admin_MethodStatsOut';
+  caller: Scalars['String']['output'];
+  count: Scalars['Long']['output'];
+  method: Scalars['String']['output'];
+  okCount: Scalars['Long']['output'];
+  p50Millis: Scalars['Long']['output'];
+  p95Millis: Scalars['Long']['output'];
+  throughput: Scalars['Float']['output'];
+};
+
 export type Admin_PeerInfo = {
   __typename?: 'admin_PeerInfo';
   joinedUnixMs: Scalars['Long']['output'];
@@ -233,8 +340,26 @@ export type Admin_RetractStableOutBody = {
 export type Admin_ServiceInfo = {
   __typename?: 'admin_ServiceInfo';
   hashHex: Scalars['String']['output'];
+  manualDeprecationReason: Maybe<Scalars['String']['output']>;
   namespace: Scalars['String']['output'];
   replicaCount: Scalars['Int']['output'];
+  version: Scalars['String']['output'];
+};
+
+export type Admin_ServiceStatsOutBody = {
+  __typename?: 'admin_ServiceStatsOutBody';
+  methods: Array<Maybe<Admin_MethodStatsOut>>;
+  window: Scalars['String']['output'];
+};
+
+export type Admin_ServiceStatsRow = {
+  __typename?: 'admin_ServiceStatsRow';
+  count: Scalars['Long']['output'];
+  namespace: Scalars['String']['output'];
+  okCount: Scalars['Long']['output'];
+  p50Millis: Scalars['Long']['output'];
+  p95Millis: Scalars['Long']['output'];
+  throughput: Scalars['Float']['output'];
   version: Scalars['String']['output'];
 };
 
@@ -242,6 +367,12 @@ export type Admin_ServicesOutBody = {
   __typename?: 'admin_ServicesOutBody';
   services: Array<Maybe<Admin_ServiceInfo>>;
   stableVN: Array<Maybe<Admin_StableVnEntry>>;
+};
+
+export type Admin_ServicesStatsOutBody = {
+  __typename?: 'admin_ServicesStatsOutBody';
+  services: Array<Maybe<Admin_ServiceStatsRow>>;
+  window: Scalars['String']['output'];
 };
 
 export type Admin_SignInBodyInput = {
@@ -265,6 +396,11 @@ export type Admin_StableVnEntry = {
   vN: Scalars['Int']['output'];
 };
 
+export type Admin_UndeprecateOutBody = {
+  __typename?: 'admin_UndeprecateOutBody';
+  priorReason: Scalars['String']['output'];
+};
+
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -273,7 +409,32 @@ export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: stri
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number, manualDeprecationReason: string | null } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null, servicesStats: { window: string, services: Array<{ namespace: string, version: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null } };
+
+export type ServiceStatsQueryVariables = Exact<{
+  namespace: string;
+  version: string;
+}>;
+
+
+export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null } };
+
+export type DeprecateMutationVariables = Exact<{
+  namespace: string;
+  version: string;
+  reason: string;
+}>;
+
+
+export type DeprecateMutation = { admin: { deprecate: { __typename: 'admin_DeprecateOutBody' } | null } };
+
+export type UndeprecateMutationVariables = Exact<{
+  namespace: string;
+  version: string;
+}>;
+
+
+export type UndeprecateMutation = { admin: { undeprecate: { priorReason: string } | null } };
 
 export type RetractStableMutationVariables = Exact<{
   namespace: string;
@@ -327,11 +488,60 @@ export const ServicesDocument = gql`
         version
         hashHex
         replicaCount
+        manualDeprecationReason
       }
       stableVN {
         namespace
         vN
       }
+    }
+    servicesStats(window: "24h") {
+      window
+      services {
+        namespace
+        version
+        count
+        okCount
+        throughput
+        p50Millis
+        p95Millis
+      }
+    }
+  }
+}
+    `;
+export const ServiceStatsDocument = gql`
+    query ServiceStats($namespace: String!, $version: String!) {
+  admin {
+    serviceStats(namespace: $namespace, version: $version, window: "24h") {
+      window
+      methods {
+        method
+        caller
+        count
+        okCount
+        throughput
+        p50Millis
+        p95Millis
+      }
+    }
+  }
+}
+    `;
+export const DeprecateDocument = gql`
+    mutation Deprecate($namespace: String!, $version: String!, $reason: String!) {
+  admin {
+    deprecate(namespace: $namespace, version: $version, body: {reason: $reason}) {
+      __typename
+    }
+  }
+}
+    `;
+export const UndeprecateDocument = gql`
+    mutation Undeprecate($namespace: String!, $version: String!) {
+  admin {
+    undeprecate(namespace: $namespace, version: $version) {
+      priorReason
     }
   }
 }
@@ -414,6 +624,15 @@ export function getSdk(client: GraphQLClient, withWrapper: SdkFunctionWrapper = 
     },
     Services(variables?: ServicesQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ServicesQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<ServicesQuery>({ document: ServicesDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Services', 'query', variables);
+    },
+    ServiceStats(variables: ServiceStatsQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ServiceStatsQuery> {
+      return withWrapper((wrappedRequestHeaders) => client.request<ServiceStatsQuery>({ document: ServiceStatsDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'ServiceStats', 'query', variables);
+    },
+    Deprecate(variables: DeprecateMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<DeprecateMutation> {
+      return withWrapper((wrappedRequestHeaders) => client.request<DeprecateMutation>({ document: DeprecateDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Deprecate', 'mutation', variables);
+    },
+    Undeprecate(variables: UndeprecateMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<UndeprecateMutation> {
+      return withWrapper((wrappedRequestHeaders) => client.request<UndeprecateMutation>({ document: UndeprecateDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Undeprecate', 'mutation', variables);
     },
     RetractStable(variables: RetractStableMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<RetractStableMutation> {
       return withWrapper((wrappedRequestHeaders) => client.request<RetractStableMutation>({ document: RetractStableDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'RetractStable', 'mutation', variables);

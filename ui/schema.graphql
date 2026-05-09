@@ -4,7 +4,7 @@ schema {
 }
 
 type AdminMutationNamespace {
-  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
@@ -19,14 +19,14 @@ type AdminQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
-  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
-  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
+  serviceStats(version: String!, window: String, namespace: String!): admin_ServiceStatsOutBody
+  servicesStats(window: String): admin_ServicesStatsOutBody
   stable: AdminStableQueryNamespace!
   v1: AdminV1QueryNamespace!
 }
 
 type AdminStableMutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
@@ -39,8 +39,8 @@ type AdminStableQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
-  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
-  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
+  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
+  servicesStats(window: String): admin_ServicesStatsOutBody
 }
 
 type AdminV1MutationNamespace {
@@ -57,8 +57,8 @@ type AdminV1QueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
-  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
-  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
+  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
+  servicesStats(window: String): admin_ServicesStatsOutBody
 }
 
 """64-bit integer encoded as a decimal string. OpenAPI integer fields with format=int64/uint64 land here; graphql-go's built-in Int is signed 32-bit and would lose precision (or null out entirely) for values above 2^31."""
@@ -220,10 +220,4 @@ type admin_StableVNEntry {
 
 type admin_UndeprecateOutBody {
   priorReason: String!
-}
-
-enum admin_serviceStatsWindow {
-}
-
-enum admin_servicesStatsWindow {
 }

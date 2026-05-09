@@ -493,10 +493,16 @@ type undeprecateOut struct {
 
 // serviceStatsIn — window defaults to "1m". Plan §5 followup adds
 // by=replica when per-replica stats land.
+//
+// Window is a plain string (not an `enum:` constraint) because the
+// OpenAPI → GraphQL ingest can't surface enum values that start with
+// a digit ("1m", "1h", "24h" are all invalid GraphQL identifiers).
+// parseStatsWindow validates inside the handler, so the boundary
+// check still runs.
 type serviceStatsIn struct {
 	Namespace string `path:"namespace"`
 	Version   string `path:"version"`
-	Window    string `query:"window" enum:"1m,1h,24h" default:"1m"`
+	Window    string `query:"window" default:"1m"`
 }
 
 type methodStatsOut struct {
@@ -517,9 +523,10 @@ type serviceStatsOut struct {
 }
 
 // servicesStatsIn — aggregate stats across every registered service.
-// Window strings match the per-service variant (1m, 1h, 24h).
+// Window strings match the per-service variant (1m, 1h, 24h). See
+// serviceStatsIn for the enum-vs-plain-string note.
 type servicesStatsIn struct {
-	Window string `query:"window" enum:"1m,1h,24h" default:"24h"`
+	Window string `query:"window" default:"24h"`
 }
 
 type serviceStatsRow struct {

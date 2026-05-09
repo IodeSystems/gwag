@@ -33,11 +33,61 @@ query Services {
         version
         hashHex
         replicaCount
+        manualDeprecationReason
       }
       stableVN {
         namespace
         vN
       }
+    }
+    servicesStats(window: "24h") {
+      window
+      services {
+        namespace
+        version
+        count
+        okCount
+        throughput
+        p50Millis
+        p95Millis
+      }
+    }
+  }
+}
+
+query ServiceStats($namespace: String!, $version: String!) {
+  admin {
+    serviceStats(namespace: $namespace, version: $version, window: "24h") {
+      window
+      methods {
+        method
+        caller
+        count
+        okCount
+        throughput
+        p50Millis
+        p95Millis
+      }
+    }
+  }
+}
+
+mutation Deprecate($namespace: String!, $version: String!, $reason: String!) {
+  admin {
+    deprecate(
+      namespace: $namespace
+      version: $version
+      body: { reason: $reason }
+    ) {
+      __typename
+    }
+  }
+}
+
+mutation Undeprecate($namespace: String!, $version: String!) {
+  admin {
+    undeprecate(namespace: $namespace, version: $version) {
+      priorReason
     }
   }
 }
