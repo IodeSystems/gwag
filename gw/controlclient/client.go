@@ -118,6 +118,20 @@ type Options struct {
 	// Logger is called with non-fatal events (eviction recovery,
 	// heartbeat errors). Defaults to log.Printf-equivalent.
 	Logger func(format string, args ...any)
+
+	// BuildTag, when non-empty, marks the calling binary as a release
+	// build. SelfRegister refuses any Service whose Version is
+	// "unstable" — release artifacts belong to numbered cuts (vN), not
+	// trunk's mutable slot. Plan §4 forcing function: a redeployed
+	// v3-era pod can't accidentally overwrite `unstable` because its
+	// release binary still carries v3's tag.
+	//
+	// Recommended pattern: stamp via -ldflags "-X 'main.buildTag=v1.2.3'"
+	// (or whatever the project's release machinery emits) and pass it
+	// through to controlclient.Options. Trunk CI omits it; release CI
+	// sets it. Empty defeats the lint, so don't paper over a CI bug
+	// by clearing the field — unset means "trunk", set means "release".
+	BuildTag string
 }
 
 // Registration is the live handle returned by SelfRegister. Close
@@ -144,6 +158,13 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 	}
 	if len(opts.Services) == 0 {
 		return nil, errors.New("controlclient: at least one Service required")
+	}
+	if opts.BuildTag != "" {
+		for _, s := range opts.Services {
+			if s.Version == "unstable" {
+				return nil, fmt.Errorf("controlclient: BuildTag=%q set; refusing to register %s/unstable (release builds must claim a numbered vN — see plan §4)", opts.BuildTag, s.Namespace)
+			}
+		}
 	}
 	if opts.Logger == nil {
 		opts.Logger = log.Printf

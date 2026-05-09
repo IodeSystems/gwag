@@ -43,6 +43,15 @@ func (g *greeterImpl) Hello(ctx context.Context, req *greeterv1.HelloRequest) (*
 	return &greeterv1.HelloResponse{Greeting: "Hello, " + name + "!"}, nil
 }
 
+// buildTag is stamped at link time on release builds:
+//
+//	go build -ldflags "-X 'main.buildTag=v1.2.3'" ./cmd/greeter
+//
+// Trunk CI omits the -ldflags so the binary registers as `unstable`;
+// release CI sets it to the cut version so SelfRegister refuses the
+// `unstable` slot. Plan §4 forcing function — see controlclient.Options.
+var buildTag string
+
 func main() {
 	addr := flag.String("addr", ":50051", "gRPC listen address")
 	gatewayAddr := flag.String("gateway", "localhost:50090", "Gateway control plane address")
@@ -68,6 +77,7 @@ func main() {
 		GatewayAddr: *gatewayAddr,
 		ServiceAddr: *advertise,
 		InstanceID:  "greeter@" + *addr,
+		BuildTag:    buildTag,
 		Services: []controlclient.Service{{
 			Namespace:      "greeter",
 			Version:        *version,
