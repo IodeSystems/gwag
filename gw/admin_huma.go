@@ -347,6 +347,42 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "servicesHistory",
+		Method:      http.MethodGet,
+		Path:        "/admin/services/history",
+		Summary:     "Per-bucket history per (namespace, version) for the chosen window. The public status page renders one dot per bucket — color = error ratio. Bucket widths track the underlying ring (1s / 1m / 10m for 1m / 1h / 24h). Plan §2.",
+	}, func(_ context.Context, in *servicesHistoryIn) (*servicesHistoryOut, error) {
+		window, err := parseStatsWindow(in.Window)
+		if err != nil {
+			return nil, err
+		}
+		rows := g.History(window, nowFunc())
+		out := &servicesHistoryOut{}
+		out.Body.Window = in.Window
+		out.Body.Services = []serviceHistoryRow{}
+		for _, r := range rows {
+			row := serviceHistoryRow{
+				Namespace: r.Namespace,
+				Version:   r.Version,
+				Buckets:   make([]historyBucketOut, 0, len(r.Buckets)),
+			}
+			for _, b := range r.Buckets {
+				row.Buckets = append(row.Buckets, historyBucketOut{
+					StartUnixSec: b.StartUnixSec,
+					DurationSec:  b.DurationSec,
+					Count:        b.Count,
+					OkCount:      b.OkCount,
+					P50Millis:    int64(b.P50 / time.Millisecond),
+					P95Millis:    int64(b.P95 / time.Millisecond),
+					P99Millis:    int64(b.P99 / time.Millisecond),
+				})
+			}
+			out.Body.Services = append(out.Body.Services, row)
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "deprecatedStats",
 		Method:      http.MethodGet,
 		Path:        "/admin/services/deprecated/stats",
@@ -727,6 +763,40 @@ type servicesStatsOut struct {
 // serviceStatsIn for the enum-vs-plain-string note.
 type deprecatedStatsIn struct {
 	Window string `query:"window" default:"24h"`
+}
+
+// servicesHistoryIn — per-bucket history feeds the public status
+// page. Default 1h gives 60 dots (one per minute) — a comfortable
+// strip for a desktop layout. Window strings see serviceStatsIn for
+// the enum-vs-plain-string note.
+type servicesHistoryIn struct {
+	Window string `query:"window" default:"1h"`
+}
+
+// historyBucketOut is one ring-bucket: a fixed-width slice of time.
+// The dot-strip UI renders one dot per row in the array; color is
+// (Count - OkCount) / Count.
+type historyBucketOut struct {
+	StartUnixSec int64  `json:"startUnixSec"`
+	DurationSec  int64  `json:"durationSec"`
+	Count        uint64 `json:"count"`
+	OkCount      uint64 `json:"okCount"`
+	P50Millis    int64  `json:"p50Millis"`
+	P95Millis    int64  `json:"p95Millis"`
+	P99Millis    int64  `json:"p99Millis"`
+}
+
+type serviceHistoryRow struct {
+	Namespace string             `json:"namespace"`
+	Version   string             `json:"version"`
+	Buckets   []historyBucketOut `json:"buckets"`
+}
+
+type servicesHistoryOut struct {
+	Body struct {
+		Window   string              `json:"window"`
+		Services []serviceHistoryRow `json:"services"`
+	}
 }
 
 // callerStatsRow is the per-caller leaf of the deprecated-services

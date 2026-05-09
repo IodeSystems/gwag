@@ -286,6 +286,147 @@ func (m *methodStats) windowFor(window time.Duration) *statsWindow {
 	return nil
 }
 
+// HistoryBucket is one ring-bucket: a fixed-width slice of time with
+// its dispatch count, ok-count, and percentile estimates. The public
+// status page uses these to render a strip of dots per service —
+// width = window-bucket-duration, color = error ratio. Buckets are
+// emitted oldest-first; gaps in the ring (no observations yet) are
+// surfaced as zero-count entries pinned to their wall-clock start so
+// the UI can render a continuous timeline.
+type HistoryBucket struct {
+	StartUnixSec int64
+	DurationSec  int64
+	Count        uint64
+	OkCount      uint64
+	P50          time.Duration
+	P95          time.Duration
+	P99          time.Duration
+}
+
+// historyBuckets returns the ring's buckets covering the window
+// ending at nowUnix, oldest-first. Stale buckets (whose start fell
+// outside the window) are zeroed and re-pinned to the wall-clock slot
+// they would belong to, so the caller always gets a fixed-length
+// timeline regardless of how recently the ring saw traffic.
+func (w *statsWindow) historyBuckets(nowUnix int64) []HistoryBucket {
+	out := make([]HistoryBucket, len(w.buckets))
+	bucketStart := (nowUnix / w.bucketDurSec) * w.bucketDurSec
+	// The current bucket is the youngest; walk backward in wall time
+	// so out[0] is the oldest.
+	for i := 0; i < len(w.buckets); i++ {
+		// Time slot i counts back from the head: head - (n-1-i) buckets.
+		offset := int64(len(w.buckets)-1-i) * w.bucketDurSec
+		slotStart := bucketStart - offset
+		idx := int((slotStart / w.bucketDurSec)) % len(w.buckets)
+		if idx < 0 {
+			idx += len(w.buckets)
+		}
+		b := &w.buckets[idx]
+		hb := HistoryBucket{
+			StartUnixSec: slotStart,
+			DurationSec:  w.bucketDurSec,
+		}
+		// Stale → bucket belongs to an older ring wrap; emit zero.
+		if b.bucketStartUnix == slotStart {
+			hb.Count = b.count
+			hb.OkCount = b.okCount
+			hb.P50 = histPercentile(b.latency[:], 0.50)
+			hb.P95 = histPercentile(b.latency[:], 0.95)
+			hb.P99 = histPercentile(b.latency[:], 0.99)
+		}
+		out[i] = hb
+	}
+	return out
+}
+
+// History returns one row per (namespace, version) over the chosen
+// window, with bucket-level granularity. method+caller dimensions
+// collapse into the (ns, ver) total — the public status page is
+// service-level, not method-level. window must be one of:
+// time.Minute, time.Hour, 24*time.Hour.
+//
+// Bucket widths track the underlying ring (1s / 1m / 10m
+// respectively); the UI aggregates dots if it wants a different slice
+// width.
+func (g *Gateway) History(window time.Duration, now time.Time) []ServiceHistory {
+	if g.stats == nil {
+		return nil
+	}
+	g.stats.mu.RLock()
+	keys := make([]statsKey, 0, len(g.stats.methods))
+	type ring struct{ buckets []HistoryBucket }
+	merged := map[serviceKey]*ring{}
+	for k, m := range g.stats.methods {
+		keys = append(keys, k)
+		sk := serviceKey{namespace: k.namespace, version: k.version}
+		m.mu.Lock()
+		w := m.windowFor(window)
+		if w == nil {
+			m.mu.Unlock()
+			continue
+		}
+		row := w.historyBuckets(now.Unix())
+		m.mu.Unlock()
+		dst, ok := merged[sk]
+		if !ok {
+			dst = &ring{buckets: make([]HistoryBucket, len(row))}
+			for i, b := range row {
+				dst.buckets[i] = HistoryBucket{
+					StartUnixSec: b.StartUnixSec,
+					DurationSec:  b.DurationSec,
+				}
+			}
+			merged[sk] = dst
+		}
+		for i, b := range row {
+			dst.buckets[i].Count += b.Count
+			dst.buckets[i].OkCount += b.OkCount
+			// Bucket-level percentiles roll up by max-across-callers —
+			// matches the servicesStats aggregate posture (worst case
+			// is the right summary when the question is "did any
+			// caller see slow?").
+			if b.P50 > dst.buckets[i].P50 {
+				dst.buckets[i].P50 = b.P50
+			}
+			if b.P95 > dst.buckets[i].P95 {
+				dst.buckets[i].P95 = b.P95
+			}
+			if b.P99 > dst.buckets[i].P99 {
+				dst.buckets[i].P99 = b.P99
+			}
+		}
+	}
+	g.stats.mu.RUnlock()
+	out := make([]ServiceHistory, 0, len(merged))
+	for sk, r := range merged {
+		out = append(out, ServiceHistory{
+			Namespace: sk.namespace,
+			Version:   sk.version,
+			Buckets:   r.buckets,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Version < out[j].Version
+	})
+	return out
+}
+
+// serviceKey is the rollup key for History — drops method + caller so
+// the public status surface is one row per registered (ns, ver).
+type serviceKey struct{ namespace, version string }
+
+// ServiceHistory is one row of the public status page: a time-series
+// of HistoryBuckets covering the window. The dot-strip UI renders one
+// dot per bucket, colored by error ratio (Count - OkCount) / Count.
+type ServiceHistory struct {
+	Namespace string
+	Version   string
+	Buckets   []HistoryBucket
+}
+
 // MethodStatsSnapshot is one row of the operator panel: a single
 // (namespace, version, method, caller) measured over a named window.
 // Caller is "unknown" when no caller-header allowlist is configured

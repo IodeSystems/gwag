@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -167,6 +168,97 @@ func TestAdminHuma_Channels_ReflectsActiveSubjects(t *testing.T) {
 
 // silence unused for older toolchains
 var _ = context.Background
+
+// /admin/services/history is the public-status-page backbone. Pins:
+//   - bucket array length matches the ring size for the chosen window
+//     (60 for 1m, 60 for 1h, 144 for 24h)
+//   - method+caller dimensions collapse: one row per (ns, ver)
+//   - bucket count + okCount surface; error is implied (count - ok)
+//   - empty buckets land as zero-count entries with a wall-clock
+//     pinned StartUnixSec, so the dot strip can render a continuous
+//     timeline regardless of recent traffic
+func TestAdminHuma_ServicesHistory_Window1m(t *testing.T) {
+	old := nowFunc
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = old })
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	// Two ok + one error in the current second; the error pulls the
+	// dot color toward "yellow" UI-side.
+	errResp := errors.New("upstream 500")
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, errResp)
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/history?window=1m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Window   string `json:"window"`
+		Services []struct {
+			Namespace string `json:"namespace"`
+			Version   string `json:"version"`
+			Buckets   []struct {
+				StartUnixSec int64  `json:"startUnixSec"`
+				DurationSec  int64  `json:"durationSec"`
+				Count        uint64 `json:"count"`
+				OkCount      uint64 `json:"okCount"`
+			} `json:"buckets"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Window != "1m" {
+		t.Errorf("window=%q, want 1m", out.Window)
+	}
+	if len(out.Services) != 1 {
+		t.Fatalf("want 1 service row (greeter/v1), got %d: %+v", len(out.Services), out.Services)
+	}
+	row := out.Services[0]
+	if row.Namespace != "greeter" || row.Version != "v1" {
+		t.Errorf("row=%+v", row)
+	}
+	if len(row.Buckets) != 60 {
+		t.Errorf("buckets=%d, want 60 (1s × 60 = 1m ring)", len(row.Buckets))
+	}
+	// All three observations land in the same wall-clock second; one
+	// bucket carries count=3 / ok=2.
+	var hits int
+	for _, b := range row.Buckets {
+		if b.Count > 0 {
+			hits++
+			if b.Count != 3 || b.OkCount != 2 {
+				t.Errorf("active bucket=%+v want count=3 ok=2", b)
+			}
+			if b.DurationSec != 1 {
+				t.Errorf("durationSec=%d, want 1", b.DurationSec)
+			}
+		}
+	}
+	if hits != 1 {
+		t.Errorf("hits=%d, want 1", hits)
+	}
+}
+
+func TestAdminHuma_ServicesHistory_RejectsBadWindow(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/history?window=5m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("expected non-200; got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
 
 func TestAdminHuma_ServiceStats_Window1m(t *testing.T) {
 	old := nowFunc
