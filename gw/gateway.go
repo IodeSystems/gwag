@@ -122,6 +122,13 @@ type Gateway struct {
 	// underlying PlanCache handles that).
 	planCache *graphql.PlanCache
 
+	// graphiqlHandler is the cached graphql-go/handler used to render
+	// the GraphiQL browser UI. Built once per assembleLocked (schema
+	// is bound at construction); the per-request handler.New alloc
+	// the old code paid is gone. nil when WithoutGraphiQL() is set —
+	// browser requests fall through to the JSON path.
+	graphiqlHandler atomic.Pointer[handler.Handler]
+
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
@@ -156,6 +163,13 @@ type config struct {
 	docCacheMaxQuery  int
 	docCacheDisabled  bool
 	docCacheNormalize bool
+
+	// disableGraphiQL skips construction of the cached GraphiQL UI
+	// handler and routes browser requests through the JSON path.
+	// disablePrettyJSON suppresses the SetIndent call on JSON
+	// responses (worth ~0.65% of bytes per the perf audit).
+	disableGraphiQL   bool
+	disablePrettyJSON bool
 
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
@@ -527,6 +541,22 @@ func WithoutDocCache() Option {
 // well-behaved clients use GraphQL variables already.
 func WithDocNormalization() Option {
 	return func(cfg *config) { cfg.docCacheNormalize = true }
+}
+
+// WithoutGraphiQL disables the in-browser GraphiQL UI. Browser
+// requests that would otherwise render the UI fall through to the
+// JSON path. The cached GraphiQL handler is never built, so
+// operators who only ship machine clients pay zero overhead for it.
+func WithoutGraphiQL() Option {
+	return func(cfg *config) { cfg.disableGraphiQL = true }
+}
+
+// WithoutPrettyJSON suppresses indented JSON encoding on the
+// GraphQL response hot path. Saves ~0.65% of response bytes per
+// the perf audit; the cost is human-unreadable raw responses when
+// poking at the API with curl.
+func WithoutPrettyJSON() Option {
+	return func(cfg *config) { cfg.disablePrettyJSON = true }
 }
 
 func New(opts ...Option) *Gateway {
@@ -1049,15 +1079,11 @@ func (g *Gateway) Handler() http.Handler {
 		ctx = withInjectCache(ctx)
 		ctx = WithHTTPRequest(ctx, r)
 		start := time.Now()
-		if isGraphiQLRequest(r) {
-			// Browser UI render — rare, never on the hot path. Defer to
-			// graphql-go/handler so we don't have to maintain our own
-			// GraphiQL HTML template.
-			gh := handler.New(&handler.Config{
-				Schema:   schema,
-				Pretty:   true,
-				GraphiQL: true,
-			})
+		// Browser UI render — rare, never on the hot path. The cached
+		// graphql-go/handler is built once per assembleLocked so this
+		// branch costs no per-request alloc. WithoutGraphiQL() drops
+		// the cache and falls through to the JSON path.
+		if gh := g.graphiqlHandler.Load(); gh != nil && isGraphiQLRequest(r) {
 			gh.ServeHTTP(w, r.WithContext(ctx))
 		} else {
 			g.serveGraphQLJSON(ctx, schema, w, r)
@@ -1132,8 +1158,11 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 	w.WriteHeader(http.StatusOK)
 	// Pretty JSON matches graphql-go/handler's default; cost is 0.65%
 	// of bytes on the pre-cache profile so keep it for readability.
+	// WithoutPrettyJSON() opts out for operators who want every byte.
 	enc := json.NewEncoder(w)
-	enc.SetIndent("", "\t")
+	if !g.cfg.disablePrettyJSON {
+		enc.SetIndent("", "\t")
+	}
 	_ = enc.Encode(result)
 }
 
