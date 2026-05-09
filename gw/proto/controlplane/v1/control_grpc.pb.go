@@ -28,6 +28,8 @@ const (
 	ControlPlane_ListServices_FullMethodName          = "/gateway.controlplane.v1.ControlPlane/ListServices"
 	ControlPlane_SignSubscriptionToken_FullMethodName = "/gateway.controlplane.v1.ControlPlane/SignSubscriptionToken"
 	ControlPlane_RetractStable_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/RetractStable"
+	ControlPlane_Deprecate_FullMethodName             = "/gateway.controlplane.v1.ControlPlane/Deprecate"
+	ControlPlane_Undeprecate_FullMethodName           = "/gateway.controlplane.v1.ControlPlane/Undeprecate"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -81,6 +83,17 @@ type ControlPlaneClient interface {
 	// every peer; emits a service-change event so peers re-render
 	// immediately.
 	RetractStable(ctx context.Context, in *RetractStableRequest, opts ...grpc.CallOption) (*RetractStableResponse, error)
+	// Deprecate marks a (namespace, version) as manually deprecated.
+	// The renderer OR-combines this with auto-deprecation of older
+	// `vN` cuts — either lights up `@deprecated` in SDL with the
+	// operator-supplied reason taking precedence over auto. Plan §5:
+	// operator-driven; persists in the cluster's deprecated KV bucket
+	// so the flag survives restarts and reaches every peer.
+	Deprecate(ctx context.Context, in *DeprecateRequest, opts ...grpc.CallOption) (*DeprecateResponse, error)
+	// Undeprecate clears a previously-set manual deprecation. Auto
+	// deprecation (older vN cuts) is unaffected — only the manual
+	// override is removed.
+	Undeprecate(ctx context.Context, in *UndeprecateRequest, opts ...grpc.CallOption) (*UndeprecateResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -181,6 +194,26 @@ func (c *controlPlaneClient) RetractStable(ctx context.Context, in *RetractStabl
 	return out, nil
 }
 
+func (c *controlPlaneClient) Deprecate(ctx context.Context, in *DeprecateRequest, opts ...grpc.CallOption) (*DeprecateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeprecateResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_Deprecate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) Undeprecate(ctx context.Context, in *UndeprecateRequest, opts ...grpc.CallOption) (*UndeprecateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UndeprecateResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_Undeprecate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -232,6 +265,17 @@ type ControlPlaneServer interface {
 	// every peer; emits a service-change event so peers re-render
 	// immediately.
 	RetractStable(context.Context, *RetractStableRequest) (*RetractStableResponse, error)
+	// Deprecate marks a (namespace, version) as manually deprecated.
+	// The renderer OR-combines this with auto-deprecation of older
+	// `vN` cuts — either lights up `@deprecated` in SDL with the
+	// operator-supplied reason taking precedence over auto. Plan §5:
+	// operator-driven; persists in the cluster's deprecated KV bucket
+	// so the flag survives restarts and reaches every peer.
+	Deprecate(context.Context, *DeprecateRequest) (*DeprecateResponse, error)
+	// Undeprecate clears a previously-set manual deprecation. Auto
+	// deprecation (older vN cuts) is unaffected — only the manual
+	// override is removed.
+	Undeprecate(context.Context, *UndeprecateRequest) (*UndeprecateResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -268,6 +312,12 @@ func (UnimplementedControlPlaneServer) SignSubscriptionToken(context.Context, *S
 }
 func (UnimplementedControlPlaneServer) RetractStable(context.Context, *RetractStableRequest) (*RetractStableResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RetractStable not implemented")
+}
+func (UnimplementedControlPlaneServer) Deprecate(context.Context, *DeprecateRequest) (*DeprecateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Deprecate not implemented")
+}
+func (UnimplementedControlPlaneServer) Undeprecate(context.Context, *UndeprecateRequest) (*UndeprecateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Undeprecate not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -452,6 +502,42 @@ func _ControlPlane_RetractStable_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_Deprecate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeprecateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).Deprecate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_Deprecate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).Deprecate(ctx, req.(*DeprecateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_Undeprecate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UndeprecateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).Undeprecate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_Undeprecate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).Undeprecate(ctx, req.(*UndeprecateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -494,6 +580,14 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RetractStable",
 			Handler:    _ControlPlane_RetractStable_Handler,
+		},
+		{
+			MethodName: "Deprecate",
+			Handler:    _ControlPlane_Deprecate_Handler,
+		},
+		{
+			MethodName: "Undeprecate",
+			Handler:    _ControlPlane_Undeprecate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

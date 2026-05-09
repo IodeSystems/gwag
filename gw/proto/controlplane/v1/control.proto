@@ -56,6 +56,19 @@ service ControlPlane {
   // every peer; emits a service-change event so peers re-render
   // immediately.
   rpc RetractStable(RetractStableRequest) returns (RetractStableResponse);
+
+  // Deprecate marks a (namespace, version) as manually deprecated.
+  // The renderer OR-combines this with auto-deprecation of older
+  // `vN` cuts — either lights up `@deprecated` in SDL with the
+  // operator-supplied reason taking precedence over auto. Plan §5:
+  // operator-driven; persists in the cluster's deprecated KV bucket
+  // so the flag survives restarts and reaches every peer.
+  rpc Deprecate(DeprecateRequest) returns (DeprecateResponse);
+
+  // Undeprecate clears a previously-set manual deprecation. Auto
+  // deprecation (older vN cuts) is unaffected — only the manual
+  // override is removed.
+  rpc Undeprecate(UndeprecateRequest) returns (UndeprecateResponse);
 }
 
 message RegisterRequest {
@@ -305,6 +318,35 @@ message RetractStableResponse {
   // Stable's vN after the retract. Equals the request's target_v_n
   // on success.
   uint32 new_v_n = 2;
+}
+
+message DeprecateRequest {
+  // Namespace whose (namespace, version) pair to deprecate.
+  string namespace = 1;
+  // Version, e.g. "v3" or "unstable". Must match a slot currently
+  // registered on the gateway.
+  string version = 2;
+  // Operator-friendly explanation surfaced as the `@deprecated(reason: ...)`
+  // value. Empty rejected.
+  string reason = 3;
+}
+
+message DeprecateResponse {
+  // Empty on success; the RPC error carries refusal details (slot
+  // not registered, empty reason, etc.).
+}
+
+message UndeprecateRequest {
+  string namespace = 1;
+  string version = 2;
+}
+
+message UndeprecateResponse {
+  // PriorReason carries the reason that was cleared, or "" if the
+  // (namespace, version) wasn't manually deprecated. Operators who
+  // unintentionally undeprecate can re-run Deprecate with this
+  // string to restore the prior state.
+  string prior_reason = 1;
 }
 
 message SignSubscriptionTokenResponse {
