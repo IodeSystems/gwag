@@ -58,6 +58,8 @@ func main() {
 	advertise := flag.String("advertise", "localhost:50051", "Address to advertise to the gateway")
 	version := flag.String("version", "v1", "Service version (v1, v2, ...)")
 	delay := flag.Duration("delay", 0, "Artificial delay per Hello call (for backpressure tests)")
+	maxConcurrency := flag.Uint("max-concurrency", 0, "Pool-wide cap on simultaneous unary dispatches (0 = unbounded)")
+	maxConcurrencyPerInstance := flag.Uint("max-concurrency-per-instance", 0, "Per-replica cap on simultaneous unary dispatches (0 = unbounded)")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -82,12 +84,12 @@ func main() {
 			Namespace:      "greeter",
 			Version:        *version,
 			FileDescriptor: greeterv1.File_greeter_proto,
-			// Each greeter instance handles up to 16 concurrent unary
-			// dispatches; the pool aggregates to 64 across all
-			// replicas. Demonstrates the per-binding caps that ship
-			// in cpv1.ServiceBinding.
-			MaxConcurrency:            64,
-			MaxConcurrencyPerInstance: 16,
+			// Per-binding caps default to 0 (unbounded). Use
+			// --max-concurrency / --max-concurrency-per-instance to
+			// demo the backpressure knobs that ship in
+			// cpv1.ServiceBinding.
+			MaxConcurrency:            uint32(*maxConcurrency),
+			MaxConcurrencyPerInstance: uint32(*maxConcurrencyPerInstance),
 		}},
 	})
 	if err != nil {
