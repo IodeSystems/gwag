@@ -188,6 +188,25 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "retractStable",
+		Method:      http.MethodPost,
+		Path:        "/admin/services/{namespace}/stable/retract",
+		Summary:     "Retract a namespace's `stable` alias to a lower vN. Operator-driven; refuses to skip past vNs that aren't currently registered.",
+	}, func(ctx context.Context, in *retractStableIn) (*retractStableOut, error) {
+		resp, err := cp.RetractStable(ctx, &cpv1.RetractStableRequest{
+			Namespace: in.Namespace,
+			TargetVN:  in.Body.TargetVN,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := &retractStableOut{}
+		out.Body.PriorVN = resp.GetPriorVN()
+		out.Body.NewVN = resp.GetNewVN()
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -282,6 +301,20 @@ type channelInfo struct {
 type channelsOut struct {
 	Body struct {
 		Channels []channelInfo `json:"channels"`
+	}
+}
+
+type retractStableIn struct {
+	Namespace string `path:"namespace"`
+	Body      struct {
+		TargetVN uint32 `json:"targetVN"`
+	}
+}
+
+type retractStableOut struct {
+	Body struct {
+		PriorVN uint32 `json:"priorVN"`
+		NewVN   uint32 `json:"newVN"`
 	}
 }
 

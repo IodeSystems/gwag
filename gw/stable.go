@@ -77,21 +77,51 @@ func (g *Gateway) stableSnapshotLocked() map[string]int {
 	return out
 }
 
-// observeStableFromKVLocked applies a value seen in the stable KV
-// bucket to the local map, monotonically. Caller holds g.mu.
-// Returns true when the local map advanced.
+// retractStableLocked moves stableVN[ns] to target (must be < current).
+// Returns the prior value so callers can publish change events. Caller
+// holds g.mu. The cluster KV writeback is intentionally NOT fired here:
+// retract is operator-driven and the caller (control plane) issues a
+// forced KV Put after the local map has been updated, so all peers
+// converge via the watch loop.
+func (g *Gateway) retractStableLocked(ns string, target int) (prior int) {
+	prior = g.stableVN[ns]
+	if g.stableVN == nil {
+		g.stableVN = map[string]int{}
+	}
+	g.stableVN[ns] = target
+	return prior
+}
+
+// observeStableFromKVLocked reflects a value seen in the stable KV
+// bucket into the local map. Caller holds g.mu. Returns true when the
+// local value changed.
+//
+// Reflects KV truth (not max-of-local-and-KV) because RetractStable
+// is allowed to lower the KV value via a forced Put; watchers on
+// every peer must follow that drop. Advance is still monotonic — the
+// CAS loop in writeStableMonotonic ensures the KV value only goes up
+// for register-driven advance writes — so the only way the KV value
+// decreases is an operator retract, which we want to honor.
 func (g *Gateway) observeStableFromKVLocked(ns string, vN int) bool {
-	if vN <= 0 {
+	if vN < 0 {
 		return false
 	}
 	if g.stableVN == nil {
 		g.stableVN = map[string]int{}
 	}
-	if cur := g.stableVN[ns]; vN > cur {
-		g.stableVN[ns] = vN
-		return true
+	cur, has := g.stableVN[ns]
+	if has && cur == vN {
+		return false
 	}
-	return false
+	if vN == 0 {
+		// 0 = bucket cleared (operator retract-to-none). Drop the entry
+		// rather than leave it at 0 so stableSnapshotLocked still
+		// distinguishes "never set" from "set to zero".
+		delete(g.stableVN, ns)
+		return has
+	}
+	g.stableVN[ns] = vN
+	return true
 }
 
 // writeStableMonotonic writes vN under key=ns in the stable bucket
@@ -126,6 +156,27 @@ func writeStableMonotonic(parent context.Context, kv jetstream.KeyValue, ns stri
 // errStableNotHigher signals "current KV value already meets or
 // exceeds vN" — a normal outcome, not a retry condition.
 var errStableNotHigher = errors.New("stable: KV already at >= vN")
+
+// writeStableForced unconditionally writes vN under key=ns in the
+// stable bucket — used by RetractStable to lower the value past what
+// the CAS-monotonic write path would allow. The retract path is
+// already serialised under g.mu on the calling node, so the only
+// concurrency we need to handle is a peer's advance writing a higher
+// value at the same time. Last-writer-wins is acceptable: a register
+// landing immediately after a retract is exactly the case the
+// monotonic-after-retract semantics describe (registration moves
+// stable forward; retract is idempotent on the KV until the next
+// register lands).
+func writeStableForced(ctx context.Context, kv jetstream.KeyValue, ns string, vN int) error {
+	payload, err := json.Marshal(stableKVValue{VN: vN})
+	if err != nil {
+		return fmt.Errorf("stable: marshal: %w", err)
+	}
+	if _, err := kv.Put(ctx, ns, payload); err != nil {
+		return fmt.Errorf("stable: forced put %s: %w", ns, err)
+	}
+	return nil
+}
 
 func tryWriteStable(ctx context.Context, kv jetstream.KeyValue, ns string, vN int) error {
 	entry, err := kv.Get(ctx, ns)

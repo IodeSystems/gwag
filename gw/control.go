@@ -751,6 +751,74 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 	}, nil
 }
 
+// RetractStable moves a namespace's `stable` alias backward to
+// `target_vN`. Plan §4: stable is monotonic across registration and
+// only this RPC (and its huma counterpart) decreases it. Refuses
+// when:
+//   - namespace is empty / target_vN is zero
+//   - the namespace has no stable set (nothing to retract)
+//   - target_vN >= the current stable (raising stable is the
+//     registration path)
+//   - the (namespace, "v<target_vN>") slot isn't currently registered
+//     on this gateway — the rule "doesn't skip past unregistered vNs"
+//     prevents the alias from pointing at a missing build
+//
+// Standalone gateways apply the change in-process and rebuild the
+// schema. Cluster gateways force-Put the new value into the stable
+// KV bucket; every peer's stableWatchLoop reflects it back into
+// local state and rebuilds. Either way, an admin_events_watchServices
+// frame is published so subscribers re-fetch.
+func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStableRequest) (*cpv1.RetractStableResponse, error) {
+	ns := req.GetNamespace()
+	target := int(req.GetTargetVN())
+	if ns == "" {
+		return nil, fmt.Errorf("controlplane: namespace is required")
+	}
+	if target < 1 {
+		return nil, fmt.Errorf("controlplane: target_vN must be >= 1 (clearing stable is not supported)")
+	}
+
+	cp.gw.mu.Lock()
+	prior := cp.gw.stableVN[ns]
+	if prior == 0 {
+		cp.gw.mu.Unlock()
+		return nil, fmt.Errorf("controlplane: namespace %q has no stable set", ns)
+	}
+	if target >= prior {
+		cp.gw.mu.Unlock()
+		return nil, fmt.Errorf("controlplane: target_vN=%d is not lower than current stable=v%d for namespace %q (raising stable is the registration path, not retract)",
+			target, prior, ns)
+	}
+	targetKey := poolKey{namespace: ns, version: fmt.Sprintf("v%d", target)}
+	if _, ok := cp.gw.slots[targetKey]; !ok {
+		cp.gw.mu.Unlock()
+		return nil, fmt.Errorf("controlplane: %s/v%d is not currently registered on this gateway; refusing to skip past unregistered vN", ns, target)
+	}
+	cp.gw.retractStableLocked(ns, target)
+	t := cp.gw.peers
+	rebuildErr := cp.gw.assembleLocked()
+	cp.gw.mu.Unlock()
+	if rebuildErr != nil {
+		return nil, fmt.Errorf("controlplane: schema rebuild after retract: %w", rebuildErr)
+	}
+
+	if t != nil && t.stable != nil {
+		kctx, cancel := kvCtx(ctx)
+		err := writeStableForced(kctx, t.stable, ns, target)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("controlplane: persist retract to stable KV: %w", err)
+		}
+	}
+
+	cp.gw.publishServiceChange(adminEventsActionDeregistered, ns, fmt.Sprintf("v%d", prior), "", 0)
+
+	return &cpv1.RetractStableResponse{
+		PriorVN: uint32(prior),
+		NewVN:   uint32(target),
+	}, nil
+}
+
 // ListServices returns one ServiceInfo per (namespace, version) pool
 // currently live on this gateway, with the canonical hash and replica
 // count. Cross-cluster parity check: dump from two gateways, diff.
