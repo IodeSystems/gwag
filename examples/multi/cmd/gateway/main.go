@@ -91,6 +91,7 @@ func main() {
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
 	signerSecret := flag.String("signer-secret", "", "Hex-encoded bearer for the gRPC SignSubscriptionToken RPC; admin token also works as fallback")
+	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
 
@@ -172,6 +173,9 @@ func main() {
 		}
 		gwOpts = append(gwOpts, gateway.WithSignerSecret(secret))
 	}
+	if *pprofEnable {
+		gwOpts = append(gwOpts, gateway.WithPprof())
+	}
 	gw := gateway.New(gwOpts...)
 
 	// ----------------------------------------------------------------
@@ -243,6 +247,12 @@ func main() {
 	// Bearer-gated: writes require the boot token; reads stay public so
 	// the UI's services-list/peer views work unauthenticated.
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
+	if pmux := gw.PprofMux(); pmux != nil {
+		// Bearer-gated. pprof leaks goroutine + heap state; never serve it
+		// without auth.
+		mux.Handle("/debug/pprof/", gw.AdminMiddleware(pmux))
+		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")
+	}
 	mux.Handle("/", apiOrUI(gateway.UIHandler(gwui.FS())))
 	if path := gw.AdminTokenPath(); path != "" {
 		log.Printf("admin token = %s  (persisted to %s)", gw.AdminTokenHex(), path)

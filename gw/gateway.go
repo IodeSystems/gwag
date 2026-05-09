@@ -135,6 +135,7 @@ type config struct {
 	adminDataDir string
 	signerSecret []byte
 	openAPIHTTP  *http.Client
+	pprof        bool
 
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
@@ -457,6 +458,18 @@ func WithSignerSecret(secret []byte) Option {
 // When unset, dispatches use http.DefaultClient.
 func WithOpenAPIClient(c *http.Client) Option {
 	return func(cfg *config) { cfg.openAPIHTTP = c }
+}
+
+// WithPprof opts the gateway into exposing the standard net/http/pprof
+// profiling endpoints via PprofMux. Disabled by default — pprof leaks
+// goroutine + heap state and must never be public. Pair the resulting
+// mux with whatever auth the operator chooses (in examples/multi it
+// rides under AdminMiddleware at /debug/pprof).
+//
+// When unset, PprofMux returns nil so the operator's wiring code can
+// detect the disabled state without consulting a separate flag.
+func WithPprof() Option {
+	return func(cfg *config) { cfg.pprof = true }
 }
 
 func New(opts ...Option) *Gateway {
