@@ -60,6 +60,14 @@ type slot struct {
 	maxConcurrency            int
 	maxConcurrencyPerInstance int
 
+	// deprecationReason is the operator-supplied reason set via the
+	// Deprecate admin RPC. Empty means "not manually deprecated" —
+	// auto-deprecation (older vN cuts) still applies independently.
+	// `bakeSlotIRLocked` stamps this onto every IR Service so the
+	// renderer can OR-combine. Set by setDeprecationLocked; survives
+	// across schema rebuilds (the slot itself owns it, not the IR).
+	deprecationReason string
+
 	// Request-ready IR. Populated by `bakeSlotIRLocked` on slot
 	// creation and re-baked on `Use(...)`. nil only between slot
 	// allocation and the per-kind handle being attached (a transient
@@ -108,6 +116,7 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 			hash:                      hash,
 			maxConcurrency:            maxConcurrency,
 			maxConcurrencyPerInstance: maxConcurrencyPerInstance,
+			deprecationReason:         g.deprecation[key],
 		}
 		return false, nil
 	}
@@ -246,6 +255,7 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 		svc.Namespace = s.key.namespace
 		svc.Version = s.key.version
 		svc.Internal = g.isInternal(s.key.namespace)
+		svc.Deprecated = s.deprecationReason
 	}
 	raw = ir.HideInternal(raw)
 	g.applySchemaRewrites(raw)

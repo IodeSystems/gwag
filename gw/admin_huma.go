@@ -213,6 +213,41 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "deprecate",
+		Method:      http.MethodPost,
+		Path:        "/admin/services/{namespace}/{version}/deprecate",
+		Summary:     "Manually deprecate a (namespace, version). The reason surfaces as @deprecated in SDL alongside any auto-deprecation of older vN cuts.",
+	}, func(ctx context.Context, in *deprecateIn) (*deprecateOut, error) {
+		_, err := cp.Deprecate(ctx, &cpv1.DeprecateRequest{
+			Namespace: in.Namespace,
+			Version:   in.Version,
+			Reason:    in.Body.Reason,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &deprecateOut{}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "undeprecate",
+		Method:      http.MethodPost,
+		Path:        "/admin/services/{namespace}/{version}/undeprecate",
+		Summary:     "Clear a previously-set manual deprecation. Auto-deprecation (older vN cuts) is unaffected.",
+	}, func(ctx context.Context, in *undeprecateIn) (*undeprecateOut, error) {
+		resp, err := cp.Undeprecate(ctx, &cpv1.UndeprecateRequest{
+			Namespace: in.Namespace,
+			Version:   in.Version,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := &undeprecateOut{}
+		out.Body.PriorReason = resp.GetPriorReason()
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -330,6 +365,30 @@ type retractStableOut struct {
 	Body struct {
 		PriorVN uint32 `json:"priorVN"`
 		NewVN   uint32 `json:"newVN"`
+	}
+}
+
+type deprecateIn struct {
+	Namespace string `path:"namespace"`
+	Version   string `path:"version"`
+	Body      struct {
+		Reason string `json:"reason"`
+	}
+}
+
+type deprecateOut struct {
+	Body struct {
+	}
+}
+
+type undeprecateIn struct {
+	Namespace string `path:"namespace"`
+	Version   string `path:"version"`
+}
+
+type undeprecateOut struct {
+	Body struct {
+		PriorReason string `json:"priorReason"`
 	}
 }
 

@@ -55,6 +55,13 @@ type Gateway struct {
 	// (no Prometheus dependency); Prometheus stays canonical for
 	// long-window history. See gw/stats.go.
 	stats *statsRegistry
+
+	// deprecation is the side-state mirror of the cluster
+	// `go-api-gateway-deprecated` KV bucket. The watch loop
+	// populates it; registerSlotLocked reads it to stamp newly-
+	// joining slots that already have a deprecation set (covers the
+	// reconciler-arrives-after-watch race). Plan §5.
+	deprecation map[poolKey]string
 	cfg        *config
 	cp         *controlPlane
 	peers      *peerTracker

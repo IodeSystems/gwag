@@ -14,20 +14,25 @@ import (
 )
 
 const (
-	peersBucketName    = "go-api-gateway-peers"
-	registryBucketName = "go-api-gateway-registry"
-	stableBucketName   = "go-api-gateway-stable"
+	peersBucketName      = "go-api-gateway-peers"
+	registryBucketName   = "go-api-gateway-registry"
+	stableBucketName     = "go-api-gateway-stable"
+	deprecatedBucketName = "go-api-gateway-deprecated"
 
 	peerTTL     = 30 * time.Second
 	peerRefresh = 10 * time.Second
 
 	registryTTL = 30 * time.Second
 
-	// stableTTL is 0 — stable_vN is monotonic per plan §4 and must
-	// survive any deregister/restart cycle. The bucket is the only
-	// way a fresh node joining mid-life recovers the historical max
-	// when the target vN's last replica is currently absent.
-	stableTTL = 0
+	// stableTTL / deprecatedTTL are 0 — both states are operator-set
+	// and must survive any deregister/restart cycle. Stable is
+	// monotonic (advances at registration, decreases only via
+	// RetractStable per plan §4); deprecated is operator-toggled per
+	// (ns, ver) per plan §5. The buckets are the only way a fresh
+	// node joining mid-life recovers state when the relevant
+	// replicas are temporarily absent.
+	stableTTL     = 0
+	deprecatedTTL = 0
 
 	maxReplicas = 3
 )
@@ -46,22 +51,24 @@ type peerEntry struct {
 // peerTracker is created on the first Gateway.startClusterTracking
 // call. It owns the refresh + watch goroutines and the live peer set.
 type peerTracker struct {
-	gw     *Gateway
-	js     jetstream.JetStream
-	peers  jetstream.KeyValue
-	reg    jetstream.KeyValue
-	stable jetstream.KeyValue
+	gw         *Gateway
+	js         jetstream.JetStream
+	peers      jetstream.KeyValue
+	reg        jetstream.KeyValue
+	stable     jetstream.KeyValue
+	deprecated jetstream.KeyValue
 
 	nodeID string
 	self   []byte
 
-	mu      sync.Mutex
-	live    map[string]struct{} // active peer NodeIDs (incl. self)
+	mu   sync.Mutex
+	live map[string]struct{} // active peer NodeIDs (incl. self)
 
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	stableDone chan struct{}
+	stableDone     chan struct{}
+	deprecatedDone chan struct{}
 
 	currentR atomic.Int32
 
@@ -135,6 +142,23 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		}
 	}
 
+	deprecated, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:   deprecatedBucketName,
+		Replicas: 1,
+		TTL:      deprecatedTTL,
+	})
+	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("deprecated bucket: %w", err)
+	}
+	if deprecated == nil {
+		deprecated, err = cl.JS.KeyValue(ctx, deprecatedBucketName)
+		if err != nil {
+			g.mu.Unlock()
+			return nil, fmt.Errorf("deprecated bucket open: %w", err)
+		}
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -147,17 +171,19 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 
 	tctx, cancel := context.WithCancel(ctx)
 	t := &peerTracker{
-		gw:         g,
-		js:         cl.JS,
-		peers:      peers,
-		reg:        reg,
-		stable:     stable,
-		nodeID:     cl.NodeID,
-		self:       selfBytes,
-		live:       map[string]struct{}{cl.NodeID: {}},
-		cancel:     cancel,
-		done:       make(chan struct{}),
-		stableDone: make(chan struct{}),
+		gw:             g,
+		js:             cl.JS,
+		peers:          peers,
+		reg:            reg,
+		stable:         stable,
+		deprecated:     deprecated,
+		nodeID:         cl.NodeID,
+		self:           selfBytes,
+		live:           map[string]struct{}{cl.NodeID: {}},
+		cancel:         cancel,
+		done:           make(chan struct{}),
+		stableDone:     make(chan struct{}),
+		deprecatedDone: make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -179,6 +205,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.refreshLoop(tctx)
 	go t.watchLoop(tctx)
 	go t.stableWatchLoop(tctx)
+	go t.deprecatedWatchLoop(tctx)
 	return t, nil
 }
 
@@ -325,6 +352,9 @@ func (t *peerTracker) stop() {
 	<-t.done
 	if t.stableDone != nil {
 		<-t.stableDone
+	}
+	if t.deprecatedDone != nil {
+		<-t.deprecatedDone
 	}
 	t.rec.stop()
 }

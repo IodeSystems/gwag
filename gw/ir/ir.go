@@ -49,6 +49,13 @@ type Service struct {
 	// default. Transforms.HideInternal drops them.
 	Internal bool
 
+	// Deprecated, when non-empty, stamps `@deprecated(reason: ...)`
+	// on every field projecting from this service. OR-combined with
+	// the renderer's auto-deprecation of older `vN` cuts — either
+	// trigger lights up the directive. Set by manual operator action
+	// (cp.Deprecate); the renderer doesn't write here.
+	Deprecated string
+
 	// ServiceName is the proto-level service identifier, e.g.
 	// "GreeterService" — relevant when rendering back to proto so
 	// methods nest under the right service. OpenAPI / GraphQL

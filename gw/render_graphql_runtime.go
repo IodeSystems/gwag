@@ -208,10 +208,11 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 		// graphql-ingest contributes mirror subscriptions.
 		for _, svc := range services {
 			isLatest := svc == latest
-			depReason := ""
+			autoReason := ""
 			if !isLatest {
-				depReason = latestReason
+				autoReason = latestReason
 			}
+			depReason := combineDepReason(svc.Deprecated, autoReason)
 			prefix := ns + "_"
 			if !isLatest {
 				prefix = ns + "_" + svc.Version + "_"
@@ -221,10 +222,11 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 			}
 		}
 		if stableSvc != nil {
-			depReason := ""
+			autoReason := ""
 			if stableSvc != latest {
-				depReason = latestReason
+				autoReason = latestReason
 			}
+			depReason := combineDepReason(stableSvc.Deprecated, autoReason)
 			if err := addSubscriptionFlat(subs, stableSvc, builders[stableSvc], ns+"_stable_", depReason, registry); err != nil {
 				return nil, nil, nil, fmt.Errorf("runtime: ns %s stable subscription: %w", ns, err)
 			}
@@ -232,6 +234,18 @@ func RenderGraphQLRuntimeFields(svcs []*ir.Service, registry *ir.DispatchRegistr
 	}
 
 	return queries, mutations, subs, nil
+}
+
+// combineDepReason returns the @deprecated reason that should land on
+// every field projecting from a service. Manual operator-set reason
+// wins; auto-deprecation (older `vN` cuts) is the fallback. Empty
+// string means "not deprecated." Plan §5: either trigger lights up
+// the directive, hence "OR-combine."
+func combineDepReason(manual, auto string) string {
+	if manual != "" {
+		return manual
+	}
+	return auto
 }
 
 // buildNamespaceFold synthesises one Query/Mutation root field for
@@ -246,16 +260,22 @@ func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, l
 	kindSfx := kindSuffixForRuntime(kind)
 
 	nsFields := graphql.Fields{}
-	if err := addServiceContent(nsFields, latest, builders[latest], kind, nsPath, "", registry); err != nil {
+	// `latest` content surfaces flat at top — operators expect the
+	// latest cut to look unprefixed. Manual deprecation on `latest`
+	// still propagates (auto-reason is empty for latest, so combineDep
+	// just returns svc.Deprecated).
+	latestDep := combineDepReason(latest.Deprecated, "")
+	if err := addServiceContent(nsFields, latest, builders[latest], kind, nsPath, latestDep, registry); err != nil {
 		return nil, fmt.Errorf("latest content: %w", err)
 	}
 
 	for _, svc := range services {
 		isLatest := svc == latest
-		depReason := ""
+		autoReason := ""
 		if !isLatest {
-			depReason = latestReason
+			autoReason = latestReason
 		}
+		depReason := combineDepReason(svc.Deprecated, autoReason)
 		verPath := nsPath + pascalCaseRuntime(svc.Version)
 		verFields := graphql.Fields{}
 		if err := addServiceContent(verFields, svc, builders[svc], kind, verPath, depReason, registry); err != nil {
@@ -282,10 +302,11 @@ func buildNamespaceFold(ns string, services []*ir.Service, latest *ir.Service, l
 	}
 
 	if stableSvc != nil {
-		depReason := ""
+		autoReason := ""
 		if stableSvc != latest {
-			depReason = latestReason
+			autoReason = latestReason
 		}
+		depReason := combineDepReason(stableSvc.Deprecated, autoReason)
 		stablePath := nsPath + "Stable"
 		stableFields := graphql.Fields{}
 		if err := addServiceContent(stableFields, stableSvc, builders[stableSvc], kind, stablePath, depReason, registry); err != nil {
