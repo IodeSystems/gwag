@@ -462,22 +462,36 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *ir.Operation, registry *ir.Dis
 		out = o
 	}
 	sid := op.SchemaID
-	dispatch := func(rp graphql.ResolveParams) (any, error) {
-		d := registry.Get(sid)
-		if d == nil {
-			return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
+	// Only graphql-ingest dispatchers need rp.Info to forward the
+	// caller's selection-set verbatim (canonical args alone can't
+	// reconstruct an upstream query). proto/openapi dispatchers
+	// ignore the key, so we skip the context.WithValue alloc on the
+	// hot path for them — bench profile showed this as the largest
+	// gw-side per-request context allocation.
+	var dispatch graphql.FieldResolveFn
+	if op.OriginKind == ir.KindGraphQL {
+		dispatch = func(rp graphql.ResolveParams) (any, error) {
+			d := registry.Get(sid)
+			if d == nil {
+				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
+			}
+			// Guard against nil Context (test fixtures call
+			// graphql.Do without one); context.WithValue panics on a
+			// nil parent.
+			ctx := rp.Context
+			if ctx != nil {
+				ctx = withGraphQLForwardInfo(ctx, &rp.Info)
+			}
+			return d.Dispatch(ctx, rp.Args)
 		}
-		// graphql-ingest dispatchers need rp.Info to forward the
-		// caller's selection-set verbatim (canonical args alone can't
-		// reconstruct an upstream query). proto/openapi dispatchers
-		// ignore the key, so setting it unconditionally is safe — but
-		// guard against nil Context (test fixtures call graphql.Do
-		// without one), since context.WithValue panics on nil parent.
-		ctx := rp.Context
-		if ctx != nil {
-			ctx = withGraphQLForwardInfo(ctx, &rp.Info)
+	} else {
+		dispatch = func(rp graphql.ResolveParams) (any, error) {
+			d := registry.Get(sid)
+			if d == nil {
+				return nil, Reject(CodeInternal, fmt.Sprintf("gateway: no dispatcher for %s", sid))
+			}
+			return d.Dispatch(rp.Context, rp.Args)
 		}
-		return d.Dispatch(ctx, rp.Args)
 	}
 	if op.Kind == ir.OpSubscription {
 		return &graphql.Field{
