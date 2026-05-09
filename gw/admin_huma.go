@@ -81,6 +81,13 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				ReplicaCount: s.GetReplicaCount(),
 			})
 		}
+		out.Body.StableVN = []stableVNEntry{}
+		for ns, vN := range resp.GetStableVn() {
+			out.Body.StableVN = append(out.Body.StableVN, stableVNEntry{
+				Namespace: ns,
+				VN:        vN,
+			})
+		}
 		return out, nil
 	})
 
@@ -253,9 +260,19 @@ type serviceInfo struct {
 	ReplicaCount uint32 `json:"replicaCount"`
 }
 
+// stableVNEntry surfaces the per-namespace stable alias target. Plan §4
+// monotonic invariant: VN advances at registration, decreases only via
+// RetractStable. The UI matches `serviceInfo.version == "v" + VN` to
+// flag which row is the current stable target.
+type stableVNEntry struct {
+	Namespace string `json:"namespace"`
+	VN        uint32 `json:"vN"`
+}
+
 type servicesOut struct {
 	Body struct {
-		Services []serviceInfo `json:"services"`
+		Services []serviceInfo   `json:"services"`
+		StableVN []stableVNEntry `json:"stableVN"`
 	}
 }
 

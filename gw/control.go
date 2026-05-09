@@ -862,6 +862,15 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			ReplicaCount: uint32(replicaCount),
 		})
 	}
+	if len(cp.gw.stableVN) > 0 {
+		out.StableVn = make(map[string]uint32, len(cp.gw.stableVN))
+		for ns, vN := range cp.gw.stableVN {
+			if cp.gw.internal[ns] {
+				continue
+			}
+			out.StableVn[ns] = uint32(vN)
+		}
+	}
 	cp.gw.mu.Unlock()
 	sort.Slice(out.Services, func(i, j int) bool {
 		a, b := out.Services[i], out.Services[j]
