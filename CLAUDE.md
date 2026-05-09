@@ -27,17 +27,25 @@ pub/sub with HMAC channel auth.
 1. Services register at runtime via control plane gRPC (proto **or**
    OpenAPI bindings) or boot-time via `AddProto` / `AddOpenAPI` /
    `AddGraphQL`.
-2. Proto registrations populate per-`(namespace, version)` *pools*
-   with N replicas, hash-gated. OpenAPI registrations populate
-   per-namespace *sources* with N replicas (least-in-flight pick).
-   Downstream GraphQL = boot-time mirror, prefixed types, forwarding
-   resolver.
-3. The schema is rebuilt on every pool/source create/destroy. SDL +
-   introspection + transformed FDS exposed at
+2. Every registration occupies one *slot* per `(namespace, version)`
+   in `g.slots`, kind-tagged (proto / openapi / graphql). The slot
+   owns the per-kind dispatch handle (`slot.proto` is a `pool` with
+   replicas, sems, FileDescriptor; `slot.openapi` is an
+   `openAPISource`; `slot.graphql` is a `graphQLSource`) and the
+   request-ready IR (`slot.ir`) baked at registration time. Multi-
+   replica adds against the slot; cross-kind collision rejects;
+   `unstable` swaps; `vN` is locked. `registerSlotLocked` is the
+   single tier-policy decision site.
+3. The schema is rebuilt on every slot create/destroy. Schema
+   rebuild is one iteration over `g.slots` reading `slot.ir`
+   (already post-transform, post-internal-filter, schema-IDs
+   populated); the per-kind ingest happens once at registration
+   only. SDL + introspection + transformed FDS exposed at
    `/schema/{graphql,proto,openapi}`.
 4. Multi-gateway clusters share the registry via JetStream KV;
-   reconcilers on every node sync local pool/source state from a KV
-   watch (proto and OpenAPI bindings ride in the same value shape).
+   reconcilers on every node sync local slot state from a KV
+   watch (proto, OpenAPI, and GraphQL bindings ride in the same
+   value shape; `slot.kind` picks the install / remove path).
 5. Server-streaming RPCs become GraphQL subscription fields backed
    by NATS pub/sub. HMAC verify on subscribe; sign-side gate is the
    admin/boot token plus optional `WithSignerSecret` (gRPC peer calls
@@ -67,7 +75,12 @@ Inside `gw/` (package `gateway` unless noted):
 ```
 gw/
   gateway.go               Top-level Gateway, Options, http handlers
-  pools.go                 Pool, replica, descriptor hashing (canonical)
+  slot.go                  Per-(ns,ver) slot index + tier policy:
+                           registerSlotLocked, evictSlotLocked,
+                           bakeSlotIRLocked, protoSlot/openAPISlot/
+                           graphQLSlot accessors, collectSlotIRLocked
+  pools.go                 Pool, replica, descriptor hashing (canonical
+                           — slot.proto holds an instance per slot)
   schema.go                GraphQL assembly: rootFields, query/subscription
   control.go               gRPC control plane: Register/Heartbeat/Deregister
                            + Sign/List/Forget admin RPCs
@@ -76,7 +89,7 @@ gw/
                            self-ingested via OpenAPI to surface as
                            admin_* GraphQL fields (dogfood)
   peers.go                 Peers KV bucket + monotonic R bump
-  reconciler.go            Watches registry KV, syncs local pool state
+  reconciler.go            Watches registry KV, syncs local slot state
   broker.go                Sub-fanout: shared NATS subs across N WebSockets
   subscriptions.go         graphql-ws WS lifecycle + schema-time wiring
   auth_subscribe.go        HMAC verify + SubscribeAuthCode
@@ -128,7 +141,11 @@ gw/
   graphql_ingest_test.go      AddGraphQL: prefix mirror + forwarding
   grpc_dispatch_test.go       In-process grpc.Server + GraphQL → gRPC
   openapi_test.go             Httptest backend + GraphQL → HTTP/JSON
-  schema_rebuild_test.go      Pool create/destroy + hash collision
+  schema_rebuild_test.go      Slot create/destroy + hash collision
+                              + unstable swap + cross-kind reject
+  slot_test.go                registerSlotLocked policy table:
+                              fresh / idempotent / unstable swap /
+                              vN reject (kind, hash, caps)
   subscriptions_test.go       Embedded NATS + WebSocket round-trip
 ```
 
@@ -179,7 +196,8 @@ for the generated bindings.
   new admin operations.
 - **`ServiceOption`** applies to every registration entry point
   (`AddProto`, `AddProtoDescriptor`, `AddOpenAPI`, `AddOpenAPIBytes`,
-  `AddGraphQL`). Available options: `To`, `As`, `AsInternal`,
+  `AddGraphQL`). Available options: `To`, `As`, `Version` (`unstable`
+  or `vN` per plan §4 — empty defaults to `v1`), `AsInternal`,
   `ForwardHeaders` (HTTP header allowlist), `OpenAPIClient`
   (per-source `*http.Client`).
 

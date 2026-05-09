@@ -333,8 +333,9 @@ $ go-api-gateway sign          --gateway gw1.internal:50090 \
 - `peer forget` only succeeds against a node whose KV entry has
   expired (safe shrink); `peer list` shows live entries.
 - `services list` returns `(namespace, version, hash, replica_count)`
-  for cross-cluster parity checks — identical hashes across two
-  clusters mean identical proto bytes.
+  for every registered service across all binding kinds (proto,
+  OpenAPI, downstream GraphQL) — identical hashes across two
+  clusters mean identical schema bytes for the same kind.
 - `schema fetch` GETs the gateway's `/schema` endpoint as SDL (or
   introspection JSON via `--json`) for client codegen.
 - `schema diff --strict` fails CI when a candidate schema would break
