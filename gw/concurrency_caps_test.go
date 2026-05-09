@@ -224,7 +224,7 @@ func TestMaxConcurrency_ControlPlaneRoundTrip(t *testing.T) {
 	}
 
 	gw.mu.Lock()
-	p := gw.pools[poolKey{namespace: "greeter", version: "v1"}]
+	p := gw.protoSlot(poolKey{namespace: "greeter", version: "v1"})
 	gw.mu.Unlock()
 	if p == nil {
 		t.Fatal("pool not created")

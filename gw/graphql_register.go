@@ -6,41 +6,8 @@ import (
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
-// graphQLServicesAsIRLocked distills the downstream-GraphQL ingest
-// sources matching `filter` into ir.Services. Sibling of
-// protoServicesAsIRLocked / openAPIServicesAsIRLocked.
-//
-// IngestGraphQL parses the source's cached introspection JSON; failed
-// parses are skipped silently (matches the pre-cutover posture in
-// gatewayServicesAsIR — a malformed introspection is logged at boot
-// and shouldn't take down schema rebuilds).
-//
-// Caller holds g.mu.
-func (g *Gateway) graphQLServicesAsIRLocked(filter schemaFilter) ([]*ir.Service, error) {
-	out := []*ir.Service{}
-	for k, src := range g.graphQLSources {
-		if !filter.matchPool(k) {
-			continue
-		}
-		svc, err := ir.IngestGraphQL(src.rawIntrospection)
-		if err != nil {
-			continue
-		}
-		svc.Namespace = k.namespace
-		svc.Version = k.version
-		svc.Internal = g.isInternal(k.namespace)
-		out = append(out, svc)
-	}
-	out = ir.HideInternal(out)
-	g.applySchemaRewrites(out)
-	for _, svc := range out {
-		ir.PopulateSchemaIDs(svc)
-	}
-	return out, nil
-}
-
 // registerGraphQLDispatchersLocked walks the IR services produced by
-// graphQLServicesAsIRLocked and registers one backpressure-wrapped
+// the slot-IR collection and registers one backpressure-wrapped
 // graphQLDispatcher per Operation, keyed by op.SchemaID.
 //
 // The dispatcher captures a *graphQLMirror so it can reuse
@@ -66,7 +33,7 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		if svc.OriginKind != ir.KindGraphQL {
 			continue
 		}
-		src := g.graphQLSources[poolKey{namespace: svc.Namespace, version: svc.Version}]
+		src := g.graphQLSlot(poolKey{namespace: svc.Namespace, version: svc.Version})
 		if src == nil {
 			continue
 		}
@@ -89,7 +56,7 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		if svc.OriginKind != ir.KindGraphQL {
 			continue
 		}
-		src := g.graphQLSources[poolKey{namespace: svc.Namespace, version: svc.Version}]
+		src := g.graphQLSlot(poolKey{namespace: svc.Namespace, version: svc.Version})
 		if src == nil {
 			continue
 		}

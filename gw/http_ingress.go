@@ -108,7 +108,11 @@ func (g *Gateway) rebuildIngressLocked() {
 
 	// Proto-style: POST /<pkg>.<Service>/<method> for unary,
 	// GET on the same path for server-streaming (text/event-stream).
-	for _, p := range g.pools {
+	for _, slot := range g.slots {
+		if slot.kind != slotKindProto {
+			continue
+		}
+		p := slot.proto
 		if g.isInternal(p.key.namespace) {
 			continue
 		}
@@ -151,7 +155,11 @@ func (g *Gateway) rebuildIngressLocked() {
 	}
 
 	// OpenAPI: route at each op's declared HTTPMethod/HTTPPath.
-	for k, src := range g.openAPISources {
+	for k, slot := range g.slots {
+		if slot.kind != slotKindOpenAPI {
+			continue
+		}
+		src := slot.openapi
 		if g.isInternal(k.namespace) {
 			continue
 		}

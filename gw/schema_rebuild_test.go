@@ -135,7 +135,7 @@ func TestSchemaRebuild_UnstableSwapsOnDifferentHash(t *testing.T) {
 		t.Fatalf("unstable swap rejected: %v", err)
 	}
 	gw.mu.Lock()
-	p := gw.pools[poolKey{namespace: "svc", version: "unstable"}]
+	p := gw.protoSlot(poolKey{namespace: "svc", version: "unstable"})
 	s := gw.slots[poolKey{namespace: "svc", version: "unstable"}]
 	gw.mu.Unlock()
 	if p == nil {
@@ -198,7 +198,7 @@ func TestSchemaRebuild_SameHashJoinsPool(t *testing.T) {
 		t.Fatalf("second AddProtoDescriptor (same hash): %v", err)
 	}
 	gw.mu.Lock()
-	p := gw.pools[poolKey{namespace: "greeter", version: "v1"}]
+	p := gw.protoSlot(poolKey{namespace: "greeter", version: "v1"})
 	gw.mu.Unlock()
 	if p == nil {
 		t.Fatal("greeter pool missing")
@@ -249,7 +249,7 @@ func TestSchemaRebuild_UnderscoreNamespaceAutoInternal(t *testing.T) {
 	}
 	// Pool is still registered (dispatchable from hooks etc.).
 	gw.mu.Lock()
-	_, ok := gw.pools[poolKey{namespace: "_secret_ns", version: "v1"}]
+	ok := gw.protoSlot(poolKey{namespace: "_secret_ns", version: "v1"}) != nil
 	gw.mu.Unlock()
 	if !ok {
 		t.Fatal("_secret_ns pool missing from registry")
@@ -397,7 +397,7 @@ func TestSchemaRebuild_AsInternalHidesFromQuery(t *testing.T) {
 	// But the pool exists — internal services are dispatchable from
 	// hooks even though they don't surface in the public schema.
 	gw.mu.Lock()
-	_, ok := gw.pools[poolKey{namespace: "hidden", version: "v1"}]
+	ok := gw.protoSlot(poolKey{namespace: "hidden", version: "v1"}) != nil
 	gw.mu.Unlock()
 	if !ok {
 		t.Fatal("internal pool missing from registry")

@@ -70,7 +70,11 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 	metrics := g.cfg.metrics
 	bpOpts := g.cfg.backpressure
 	t := &grpcIngressTable{routes: map[string]*grpcIngressRoute{}}
-	for _, p := range g.pools {
+	for _, slot := range g.slots {
+		if slot.kind != slotKindProto {
+			continue
+		}
+		p := slot.proto
 		if g.isInternal(p.key.namespace) {
 			continue
 		}

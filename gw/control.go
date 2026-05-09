@@ -758,17 +758,32 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 	cp.gw.mu.Lock()
 	out := &cpv1.ListServicesResponse{
 		Environment: cp.gw.environmentLabel(),
-		Services:    make([]*cpv1.ServiceInfo, 0, len(cp.gw.pools)),
+		Services:    make([]*cpv1.ServiceInfo, 0, len(cp.gw.slots)),
 	}
-	for k, p := range cp.gw.pools {
+	for k, s := range cp.gw.slots {
 		if cp.gw.internal[k.namespace] {
 			continue
+		}
+		var replicaCount int
+		switch s.kind {
+		case slotKindProto:
+			if s.proto != nil {
+				replicaCount = s.proto.replicaCount()
+			}
+		case slotKindOpenAPI:
+			if s.openapi != nil {
+				replicaCount = s.openapi.replicaCount()
+			}
+		case slotKindGraphQL:
+			if s.graphql != nil {
+				replicaCount = s.graphql.replicaCount()
+			}
 		}
 		out.Services = append(out.Services, &cpv1.ServiceInfo{
 			Namespace:    k.namespace,
 			Version:      k.version,
-			HashHex:      hex.EncodeToString(p.hash[:]),
-			ReplicaCount: uint32(p.replicaCount()),
+			HashHex:      hex.EncodeToString(s.hash[:]),
+			ReplicaCount: uint32(replicaCount),
 		})
 	}
 	cp.gw.mu.Unlock()

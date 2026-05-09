@@ -241,7 +241,7 @@ func TestDynamicGraphQL_MultiReplica(t *testing.T) {
 	}
 
 	gw.mu.Lock()
-	src := gw.graphQLSources[poolKey{namespace: "pets", version: "v1"}]
+	src := gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"})
 	gw.mu.Unlock()
 	if src == nil {
 		t.Fatal("no pets source")
@@ -276,7 +276,7 @@ func TestDynamicGraphQL_MultiReplica(t *testing.T) {
 		t.Fatalf("Deregister A: %v", err)
 	}
 	gw.mu.Lock()
-	if got := gw.graphQLSources[poolKey{namespace: "pets", version: "v1"}].replicaCount(); got != 1 {
+	if got := gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"}).replicaCount(); got != 1 {
 		gw.mu.Unlock()
 		t.Fatalf("after deregister A: replicaCount = %d, want 1", got)
 	}
@@ -333,7 +333,7 @@ func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		b.gw.mu.Lock()
-		_, ok := b.gw.graphQLSources[poolKey{namespace: "pets", version: "v1"}]
+		ok := b.gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"}) != nil
 		b.gw.mu.Unlock()
 		if ok {
 			break
@@ -341,7 +341,7 @@ func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	b.gw.mu.Lock()
-	_, ok := b.gw.graphQLSources[poolKey{namespace: "pets", version: "v1"}]
+	ok := b.gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"}) != nil
 	b.gw.mu.Unlock()
 	if !ok {
 		t.Fatal("pets graphQLSource never appeared on gateway B")

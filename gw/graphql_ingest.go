@@ -75,16 +75,14 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if sc.internal {
 		g.internal[ns] = true
 	}
-	if g.graphQLSources == nil {
-		g.graphQLSources = map[poolKey]*graphQLSource{}
-	}
 	key := poolKey{namespace: ns, version: ver}
 	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0)
 	if err != nil {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
+	s := g.slots[key]
 	if existed {
-		existing := g.graphQLSources[key]
+		existing := s.graphql
 		existing.addReplica(&graphQLReplica{
 			endpoint:   endpoint,
 			httpClient: httpClient,
@@ -108,7 +106,8 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		endpoint:   endpoint,
 		httpClient: httpClient,
 	})
-	g.graphQLSources[key] = src
+	s.graphql = src
+	g.bakeSlotIRLocked(s)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -138,9 +137,6 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		return fmt.Errorf("graphql: %w", err)
 	}
 	ver = canonicalVer
-	if g.graphQLSources == nil {
-		g.graphQLSources = map[poolKey]*graphQLSource{}
-	}
 	httpClient := g.cfg.openAPIHTTP
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -150,8 +146,9 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 	if err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}
+	s := g.slots[key]
 	if existed {
-		existing := g.graphQLSources[key]
+		existing := s.graphql
 		// Idempotent: replay of the same KV value (same replicaID) is
 		// a no-op.
 		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
@@ -188,7 +185,8 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		owner:      owner,
 		httpClient: httpClient,
 	})
-	g.graphQLSources[key] = src
+	s.graphql = src
+	g.bakeSlotIRLocked(s)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -199,16 +197,15 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 // (ns, ver, replicaID). When the source's last replica leaves, the
 // source itself is deleted and the schema rebuilt. Caller holds g.mu.
 func (g *Gateway) removeGraphQLReplicaByIDLocked(ns, ver, replicaID string) {
-	src, ok := g.graphQLSources[poolKey{namespace: ns, version: ver}]
-	if !ok {
+	key := poolKey{namespace: ns, version: ver}
+	src := g.graphQLSlot(key)
+	if src == nil {
 		return
 	}
 	if src.removeReplicaByID(replicaID) == nil {
 		return
 	}
 	if src.replicaCount() == 0 {
-		key := poolKey{namespace: ns, version: ver}
-		delete(g.graphQLSources, key)
 		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
@@ -226,14 +223,17 @@ func (g *Gateway) removeGraphQLSourcesByOwnerLocked(owner string) int {
 	}
 	removed := 0
 	rebuild := false
-	for k, s := range g.graphQLSources {
+	for k, slot := range g.slots {
+		if slot.kind != slotKindGraphQL {
+			continue
+		}
+		s := slot.graphql
 		n := s.removeReplicasByOwner(owner)
 		if n == 0 {
 			continue
 		}
 		removed += n
 		if s.replicaCount() == 0 {
-			delete(g.graphQLSources, k)
 			g.releaseSlotLocked(k)
 			rebuild = true
 		}

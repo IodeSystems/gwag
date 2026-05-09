@@ -53,7 +53,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	// proto package don't trip graphql-go's duplicate-named-type
 	// rejection (proto FullNames are globally unique, so a single
 	// merged Types map is collision-free).
-	protoTB := newProtoIRTypeBuilder(g.pools, hidesSet)
+	protoTB := newProtoIRTypeBuilder(g.slots, hidesSet)
 
 	rootFields := graphql.Fields{}
 
@@ -63,30 +63,18 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	// separate render calls that would each emit a `<ns>` root field
 	// and collide on merge). Per-kind dispatcher registration runs
 	// first, then service distillation, then the render.
+	// IR is pre-baked on each slot (see bakeSlotIRLocked). Schema
+	// rebuild is now a single iteration over g.slots — no per-kind
+	// walk, no transform pass.
+	allSvcs := g.collectSlotIRLocked(filter)
 	g.registerProtoDispatchersLocked(filter)
-	protoSvcs, err := g.protoServicesAsIRLocked(filter)
-	if err != nil {
+	if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
 		return nil, err
 	}
-	openSvcs, err := g.openAPIServicesAsIRLocked(filter)
-	if err != nil {
-		return nil, err
-	}
-	if err := g.registerOpenAPIDispatchersLocked(openSvcs); err != nil {
-		return nil, err
-	}
-	gqlSvcs, err := g.graphQLServicesAsIRLocked(filter)
-	if err != nil {
-		return nil, err
-	}
-	if err := g.registerGraphQLDispatchersLocked(gqlSvcs); err != nil {
+	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
 		return nil, err
 	}
 	long, jsonScalar := openAPISharedScalars()
-	allSvcs := make([]*ir.Service, 0, len(protoSvcs)+len(openSvcs)+len(gqlSvcs))
-	allSvcs = append(allSvcs, protoSvcs...)
-	allSvcs = append(allSvcs, openSvcs...)
-	allSvcs = append(allSvcs, gqlSvcs...)
 	queries, mutations, runtimeSubs, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,

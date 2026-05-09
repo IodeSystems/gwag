@@ -144,7 +144,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if p, ok := g.pools[poolKey{namespace: ns, version: ver}]; ok {
+	if p := g.protoSlot(poolKey{namespace: ns, version: ver}); p != nil {
 		if existing := p.findReplicaByID(replicaID); existing != nil {
 			return // already known
 		}
@@ -187,20 +187,20 @@ func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
 	g.mu.Lock()
 	key := poolKey{namespace: ns, version: ver}
-	// Try the OpenAPI side first — sources are keyed by (ns, ver).
-	// If we find one, drop just this replica; the source dies when
-	// its last replica leaves.
-	if _, isOpenAPI := g.openAPISources[key]; isOpenAPI {
-		g.removeOpenAPIReplicaByIDLocked(ns, ver, replicaID)
-		g.mu.Unlock()
-		return
-	}
-	// GraphQL sources support multi-replica too; drop the matching
-	// replica, source dies when last replica leaves.
-	if _, isGraphQL := g.graphQLSources[key]; isGraphQL {
-		g.removeGraphQLReplicaByIDLocked(ns, ver, replicaID)
-		g.mu.Unlock()
-		return
+	// Slot kind decides which removal path applies — the slot is the
+	// source of truth, so a single switch replaces the previous "look
+	// in three maps in order" pattern.
+	if s := g.slots[key]; s != nil {
+		switch s.kind {
+		case slotKindOpenAPI:
+			g.removeOpenAPIReplicaByIDLocked(ns, ver, replicaID)
+			g.mu.Unlock()
+			return
+		case slotKindGraphQL:
+			g.removeGraphQLReplicaByIDLocked(ns, ver, replicaID)
+			g.mu.Unlock()
+			return
+		}
 	}
 	rep, err := g.removeReplicaByIDLocked(ns, ver, replicaID)
 	g.mu.Unlock()

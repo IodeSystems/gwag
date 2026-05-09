@@ -141,15 +141,12 @@ func TestRegisterSlot_Unstable_SwapAcrossKinds(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	// Pretend the prior occupant left some per-kind state behind so we
-	// can verify evictSlotLocked clears it on the swap.
-	if g.openAPISources == nil {
-		g.openAPISources = map[poolKey]*openAPISource{}
-	}
-	g.openAPISources[key("greeter", "unstable")] = &openAPISource{}
+	// Pretend the prior occupant left per-kind state on the slot so
+	// we can verify evictSlotLocked clears it on the swap.
 	if _, err := g.registerSlotLocked(slotKindOpenAPI, key("greeter", "unstable"), [32]byte{9}, 0, 0); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
+	g.slots[key("greeter", "unstable")].openapi = &openAPISource{}
 	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{10}, 0, 0)
 	if err != nil {
 		t.Fatalf("cross-kind unstable swap: %v", err)
@@ -157,12 +154,12 @@ func TestRegisterSlot_Unstable_SwapAcrossKinds(t *testing.T) {
 	if existed {
 		t.Fatalf("existed=true for cross-kind unstable swap")
 	}
-	if _, stillThere := g.openAPISources[key("greeter", "unstable")]; stillThere {
-		t.Errorf("evictSlotLocked left openAPISources[%v] populated after kind change", key("greeter", "unstable"))
-	}
 	got := g.slots[key("greeter", "unstable")]
 	if got == nil || got.kind != slotKindProto {
 		t.Errorf("slot did not adopt new kind: %+v", got)
+	}
+	if got.openapi != nil {
+		t.Errorf("evictSlotLocked left slot.openapi populated after kind change")
 	}
 }
 

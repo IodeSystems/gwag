@@ -4,13 +4,13 @@ import (
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
-// gatewayServicesAsIR walks the gateway's three source registries —
-// proto pools, OpenAPI sources, GraphQL ingest sources — and
-// distills each into an ir.Service. Selectors filter the result;
-// internal namespaces are dropped; every Transform.Schema rewrite is
-// applied (e.g. HideType strips hidden fields). Every entry's Origin
-// is the source descriptor / spec, so a same-kind render reproduces
-// the original verbatim.
+// gatewayServicesAsIR returns the gateway's pre-baked slot IR
+// filtered by `selectors`. Each slot's `slot.ir` is already
+// transformed (HideInternal, schema rewrites, proto subscription
+// auth args, SchemaIDs populated) at registration time — see
+// `bakeSlotIRLocked` in slot.go. This function is thin by design:
+// the cost of producing IR for the gateway moved from O(N
+// rebuilds × N ingests) to O(1 ingest at registration).
 //
 // Caller passes the ParseSelectors output (or nil for "all").
 func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, error) {
@@ -18,56 +18,10 @@ func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, e
 	defer g.mu.Unlock()
 
 	out := []*ir.Service{}
-
-	// Proto pools.
-	for _, p := range g.pools {
-		svcs := ir.IngestProto(p.file)
-		for _, svc := range svcs {
-			svc.Namespace = p.key.namespace
-			svc.Version = p.key.version
-			svc.Internal = g.isInternal(p.key.namespace)
-			out = append(out, svc)
-		}
+	for _, s := range g.slots {
+		out = append(out, s.ir...)
 	}
-
-	// OpenAPI sources.
-	for k, src := range g.openAPISources {
-		svc := ir.IngestOpenAPI(src.doc)
-		svc.Namespace = k.namespace
-		svc.Version = k.version
-		svc.Internal = g.isInternal(k.namespace)
-		out = append(out, svc)
-	}
-
-	// Downstream-GraphQL ingest sources. The introspection lives
-	// as raw JSON on the source — feed it straight into the IR.
-	for k, src := range g.graphQLSources {
-		svc, err := ir.IngestGraphQL(src.rawIntrospection)
-		if err != nil {
-			continue
-		}
-		svc.Namespace = k.namespace
-		svc.Version = k.version
-		svc.Internal = g.isInternal(k.namespace)
-		out = append(out, svc)
-	}
-
-	// Apply transforms. Order matters: schema rewrites shouldn't drop
-	// fields from internal-only services we'll filter out anyway, but
-	// it also doesn't hurt; HideInternal first cuts the working set.
-	out = ir.HideInternal(out)
-	out = ir.Filter(out, selectors)
-	g.applySchemaRewrites(out)
-
-	// Stamp SchemaIDs once Namespace/Version are set and the working
-	// set is final. Renderers that build runtime resolvers look up
-	// Dispatchers by SchemaID; keeping the stamp here means every
-	// IR consumer sees populated ids without reaching into the
-	// per-source ingest paths.
-	for _, svc := range out {
-		ir.PopulateSchemaIDs(svc)
-	}
-	return out, nil
+	return ir.Filter(out, selectors), nil
 }
 
 // irSelectorsFromSchema converts a parsed []serviceSelector (the

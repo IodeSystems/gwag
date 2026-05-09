@@ -181,9 +181,9 @@ func waitForPool(t *testing.T, gw *Gateway, ns, ver string, timeout time.Duratio
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		gw.mu.Lock()
-		p, ok := gw.pools[poolKey{namespace: ns, version: ver}]
+		p := gw.protoSlot(poolKey{namespace: ns, version: ver})
 		gw.mu.Unlock()
-		if ok && p.replicaCount() > 0 {
+		if p != nil && p.replicaCount() > 0 {
 			return p
 		}
 		time.Sleep(50 * time.Millisecond)

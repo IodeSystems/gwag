@@ -37,16 +37,13 @@ type Gateway struct {
 	// schema rebuild can iterate slots directly.
 	slots map[poolKey]*slot
 
-	pools          map[poolKey]*pool
-	internal       map[string]bool // namespaces hidden from the public schema
-	transforms     []Transform
-	schema         atomic.Pointer[graphql.Schema]
-	cfg            *config
-	cp             *controlPlane
-	peers          *peerTracker
-	broker         *subBroker
-	openAPISources map[poolKey]*openAPISource
-	graphQLSources map[poolKey]*graphQLSource
+	internal   map[string]bool // namespaces hidden from the public schema
+	transforms []Transform
+	schema     atomic.Pointer[graphql.Schema]
+	cfg        *config
+	cp         *controlPlane
+	peers      *peerTracker
+	broker     *subBroker
 
 	// dispatchers holds one ir.Dispatcher per (namespace, version,
 	// flat-op-name) populated by the per-format field builders during
@@ -320,7 +317,7 @@ func New(opts ...Option) *Gateway {
 	life, cancel := context.WithCancel(context.Background())
 	g := &Gateway{
 		cfg:         cfg,
-		pools:       map[poolKey]*pool{},
+		slots:       map[poolKey]*slot{},
 		internal:    map[string]bool{},
 		wsConns:     map[uintptr]context.CancelFunc{},
 		life:        life,
@@ -626,8 +623,9 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	if err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}
+	s := g.slots[key]
 	if existed {
-		p := g.pools[key]
+		p := s.proto
 		p.addReplica(g.newReplica(p, e))
 		g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 		return nil
@@ -661,7 +659,8 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		p.streamSem = make(chan struct{}, g.cfg.backpressure.MaxStreams)
 	}
 	p.addReplica(g.newReplica(p, e))
-	g.pools[key] = p
+	s.proto = p
+	g.bakeSlotIRLocked(s)
 	g.publishServiceChange(adminEventsActionRegistered, e.namespace, e.version, e.addr, uint32(p.replicaCount()))
 	if g.schema.Load() != nil {
 		// Pool creation always rebuilds — covers all three cases:
@@ -695,8 +694,8 @@ func (g *Gateway) newReplica(p *pool, e poolEntry) *replica {
 // not found.
 func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, error) {
 	key := poolKey{namespace: ns, version: ver}
-	p, ok := g.pools[key]
-	if !ok {
+	p := g.protoSlot(key)
+	if p == nil {
 		return nil, nil
 	}
 	r := p.removeReplicaByID(replicaID)
@@ -705,7 +704,6 @@ func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, 
 	}
 	g.publishServiceChange(adminEventsActionDeregistered, ns, ver, r.addr, uint32(p.replicaCount()))
 	if p.replicaCount() == 0 {
-		delete(g.pools, key)
 		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			return r, g.assembleLocked()
@@ -720,7 +718,11 @@ func (g *Gateway) removeReplicaByIDLocked(ns, ver, replicaID string) (*replica, 
 // populated pool doesn't change the schema).
 func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err error) {
 	rebuild := false
-	for key, p := range g.pools {
+	for key, s := range g.slots {
+		if s.kind != slotKindProto {
+			continue
+		}
+		p := s.proto
 		n := p.removeReplicasByOwner(owner)
 		if n == 0 {
 			continue
@@ -731,7 +733,6 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 		// because the replica list (and addrs) is already gone.
 		g.publishServiceChange(adminEventsActionDeregistered, key.namespace, key.version, "", uint32(p.replicaCount()))
 		if p.replicaCount() == 0 {
-			delete(g.pools, key)
 			g.releaseSlotLocked(key)
 			rebuild = true
 		}
@@ -745,10 +746,25 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 // Use appends Transforms to the gateway. Each Transform may carry any
 // combination of schema-rewrite rules (Schema) and runtime middleware
 // (Runtime); empty halves no-op.
+//
+// Schema-half rewrites (HideType / HidePath / NullableType /
+// NullablePath — the IR-mutating injectors) are baked into each
+// slot's cached IR at registration time, so adding new ones via
+// Use(...) requires re-baking every existing slot. Runtime-half
+// middleware and header injectors are captured into dispatcher
+// closures at the next schema rebuild — those track via the same
+// path they did before.
 func (g *Gateway) Use(transforms ...Transform) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.transforms = append(g.transforms, transforms...)
+	// Re-bake every slot so the new schema-half rewrites take effect
+	// in slot.ir without waiting for a register/dereg event. Use(...)
+	// itself does NOT trigger a schema rebuild — the existing
+	// "transforms apply on next rebuild" semantics are preserved;
+	// what changes is that slot.ir already reflects the new injectors
+	// when the next rebuild reads it.
+	g.rebakeAllSlotsLocked()
 }
 
 // Handler returns the http.Handler that serves the GraphQL schema.

@@ -173,31 +173,41 @@ func collectInjectorRecords(transforms []Transform) []InjectorRecord {
 func (g *Gateway) collectIRRawLocked() ([]*ir.Service, error) {
 	out := []*ir.Service{}
 
-	for _, p := range g.pools {
-		svcs := ir.IngestProto(p.file)
-		for _, svc := range svcs {
-			svc.Namespace = p.key.namespace
-			svc.Version = p.key.version
-			svc.Internal = g.isInternal(p.key.namespace)
+	for k, s := range g.slots {
+		switch s.kind {
+		case slotKindProto:
+			if s.proto == nil {
+				continue
+			}
+			svcs := ir.IngestProto(s.proto.file)
+			for _, svc := range svcs {
+				svc.Namespace = k.namespace
+				svc.Version = k.version
+				svc.Internal = g.isInternal(k.namespace)
+				out = append(out, svc)
+			}
+		case slotKindOpenAPI:
+			if s.openapi == nil {
+				continue
+			}
+			svc := ir.IngestOpenAPI(s.openapi.doc)
+			svc.Namespace = k.namespace
+			svc.Version = k.version
+			svc.Internal = g.isInternal(k.namespace)
+			out = append(out, svc)
+		case slotKindGraphQL:
+			if s.graphql == nil {
+				continue
+			}
+			svc, err := ir.IngestGraphQL(s.graphql.rawIntrospection)
+			if err != nil {
+				continue
+			}
+			svc.Namespace = k.namespace
+			svc.Version = k.version
+			svc.Internal = g.isInternal(k.namespace)
 			out = append(out, svc)
 		}
-	}
-	for k, src := range g.openAPISources {
-		svc := ir.IngestOpenAPI(src.doc)
-		svc.Namespace = k.namespace
-		svc.Version = k.version
-		svc.Internal = g.isInternal(k.namespace)
-		out = append(out, svc)
-	}
-	for k, src := range g.graphQLSources {
-		svc, err := ir.IngestGraphQL(src.rawIntrospection)
-		if err != nil {
-			continue
-		}
-		svc.Namespace = k.namespace
-		svc.Version = k.version
-		svc.Internal = g.isInternal(k.namespace)
-		out = append(out, svc)
 	}
 	return out, nil
 }

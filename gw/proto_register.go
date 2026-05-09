@@ -24,7 +24,11 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 	headers := g.headerInjectorSnapshot()
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
-	for _, p := range g.pools {
+	for _, slot := range g.slots {
+		if slot.kind != slotKindProto {
+			continue
+		}
+		p := slot.proto
 		if !filter.matchPool(p.key) {
 			continue
 		}
@@ -52,41 +56,6 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 			}
 		}
 	}
-}
-
-// protoServicesAsIRLocked distills the proto pools matching `filter`
-// into ir.Services. Mirrors the proto branch of gatewayServicesAsIR
-// but doesn't take g.mu (caller holds it) and stays scoped to the
-// proto cutover — OpenAPI / GraphQL remain on their own field
-// builders until steps 4 & 5. Internal namespaces drop via
-// HideInternal; per-Transform schema rewrites strip hidden message fields.
-//
-// Each returned Service has Namespace / Version / Internal stamped
-// before HideInternal + Filter run, and SchemaIDs populated last so
-// RenderGraphQLRuntime can resolve dispatchers by op.SchemaID.
-//
-// Caller holds g.mu.
-func (g *Gateway) protoServicesAsIRLocked(filter schemaFilter) ([]*ir.Service, error) {
-	out := []*ir.Service{}
-	for _, p := range g.pools {
-		if !filter.matchPool(p.key) {
-			continue
-		}
-		svcs := ir.IngestProto(p.file)
-		for _, svc := range svcs {
-			svc.Namespace = p.key.namespace
-			svc.Version = p.key.version
-			svc.Internal = g.isInternal(p.key.namespace)
-			out = append(out, svc)
-		}
-	}
-	out = ir.HideInternal(out)
-	g.applySchemaRewrites(out)
-	for _, svc := range out {
-		injectProtoSubscriptionAuthArgs(svc)
-		ir.PopulateSchemaIDs(svc)
-	}
-	return out, nil
 }
 
 // injectProtoSubscriptionAuthArgs appends the gateway's HMAC-auth

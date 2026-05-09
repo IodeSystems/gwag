@@ -165,12 +165,12 @@ func (g *Gateway) subscriptionBroker() *subBroker {
 	return g.broker
 }
 
-// lookupPool returns the pool for (ns, ver) under g.mu.
+// lookupPool returns the proto pool for (ns, ver) under g.mu.
 func (g *Gateway) lookupPool(ns, ver string) (*pool, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	p, ok := g.pools[poolKey{namespace: ns, version: ver}]
-	return p, ok
+	p := g.protoSlot(poolKey{namespace: ns, version: ver})
+	return p, p != nil
 }
 
 // ---------------------------------------------------------------------

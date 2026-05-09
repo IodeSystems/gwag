@@ -96,9 +96,6 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if sc.internal {
 		g.internal[ns] = true
 	}
-	if g.openAPISources == nil {
-		g.openAPISources = map[poolKey]*openAPISource{}
-	}
 	hash := sha256.Sum256(specBytes)
 	httpClient := sc.httpClient
 	if httpClient == nil {
@@ -109,8 +106,9 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", label, err)
 	}
+	s := g.slots[key]
 	if existed {
-		existing := g.openAPISources[key]
+		existing := s.openapi
 		existing.addReplica(newOpenAPIReplica(existing, openAPIReplicaInit{
 			baseURL:    addr,
 			httpClient: httpClient,
@@ -139,7 +137,8 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		baseURL:    addr,
 		httpClient: httpClient,
 	}))
-	g.openAPISources[key] = src
+	s.openapi = src
+	g.bakeSlotIRLocked(s)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -378,9 +377,6 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		return fmt.Errorf("openapi: %w", err)
 	}
 	ver = canonicalVer
-	if g.openAPISources == nil {
-		g.openAPISources = map[poolKey]*openAPISource{}
-	}
 	addr := strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
 		addr = "http://" + addr
@@ -390,8 +386,9 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
+	s := g.slots[key]
 	if existed {
-		existing := g.openAPISources[key]
+		existing := s.openapi
 		// Idempotent: if a replica with the same id already lives
 		// here, treat as no-op (reconciler replays).
 		if replicaID != "" && existing.findReplicaByID(replicaID) != nil {
@@ -439,7 +436,8 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		owner:      owner,
 		httpClient: g.cfg.openAPIHTTP,
 	}))
-	g.openAPISources[key] = src
+	s.openapi = src
+	g.bakeSlotIRLocked(s)
 	if g.schema.Load() != nil {
 		return g.assembleLocked()
 	}
@@ -450,16 +448,15 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 // (ns, ver, replicaID). When the source's last replica leaves, the
 // source itself is deleted and the schema rebuilt. Caller holds g.mu.
 func (g *Gateway) removeOpenAPIReplicaByIDLocked(ns, ver, replicaID string) {
-	src, ok := g.openAPISources[poolKey{namespace: ns, version: ver}]
-	if !ok {
+	key := poolKey{namespace: ns, version: ver}
+	src := g.openAPISlot(key)
+	if src == nil {
 		return
 	}
 	if src.removeReplicaByID(replicaID) == nil {
 		return
 	}
 	if src.replicaCount() == 0 {
-		key := poolKey{namespace: ns, version: ver}
-		delete(g.openAPISources, key)
 		g.releaseSlotLocked(key)
 		if g.schema.Load() != nil {
 			_ = g.assembleLocked()
@@ -477,14 +474,17 @@ func (g *Gateway) removeOpenAPISourcesByOwnerLocked(owner string) int {
 	}
 	removed := 0
 	rebuild := false
-	for k, s := range g.openAPISources {
+	for k, slot := range g.slots {
+		if slot.kind != slotKindOpenAPI {
+			continue
+		}
+		s := slot.openapi
 		n := s.removeReplicasByOwner(owner)
 		if n == 0 {
 			continue
 		}
 		removed += n
 		if s.replicaCount() == 0 {
-			delete(g.openAPISources, k)
 			g.releaseSlotLocked(k)
 			rebuild = true
 		}

@@ -249,8 +249,10 @@ func TestGRPCE2E_NoLiveReplicasAfterRemoval(t *testing.T) {
 	// removeReplicasByOwner stores its result.
 	f.gw.mu.Lock()
 	empty := []*replica{}
-	for _, p := range f.gw.pools {
-		p.replicas.Store(&empty)
+	for _, slot := range f.gw.slots {
+		if slot.kind == slotKindProto && slot.proto != nil {
+			slot.proto.replicas.Store(&empty)
+		}
 	}
 	f.gw.mu.Unlock()
 

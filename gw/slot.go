@@ -1,6 +1,10 @@
 package gateway
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/iodesystems/go-api-gateway/gw/ir"
+)
 
 // slotKind tags which registration form occupies a slot. Plan §4's
 // tier model is single-slot per (namespace, version), and a single
@@ -29,15 +33,22 @@ func (k slotKind) String() string {
 }
 
 // slot is the per-(namespace, version) registration record. One slot
-// per (ns, ver); the slot's kind picks which per-kind structure
-// (g.pools / g.openAPISources / g.graphQLSources) holds the dispatch
-// state.
+// per (ns, ver); the slot's kind picks which per-kind dispatch
+// handle (`proto` / `openapi` / `graphql`) carries the format-specific
+// state. The slot is the canonical management-side index — every
+// registration goes through `registerSlotLocked`, every iteration
+// (schema rebuild, admin lists, FDS export, dispatcher registration,
+// inject inventory, reconciler delete-routing) goes through
+// `g.slots`.
 //
-// Phase 1 (this commit) wires the slot index alongside the existing
-// per-kind maps and centralizes the §4 tier policy at
-// `registerSlotLocked`. Phase 2 will pre-distill `*ir.Service` at
-// registration into a `slot.ir` field, drop the three parallel maps,
-// and make schema rebuild iterate slots — see plan §4.
+// `ir` is the request-ready IR baked at slot creation: ingest +
+// internal-flag stamp + `applySchemaRewrites` (HideType / HidePath /
+// NullableType / NullablePath — the schema-half of every Transform) +
+// proto subscription auth-arg injection + `PopulateSchemaIDs`. Schema
+// rebuild reads this directly; no per-kind walk, no transform pass.
+// `Use(...)` is the single invalidator: it appends to `g.transforms`
+// and re-bakes every slot's IR (cheap; ingest + transforms over
+// already-loaded handles).
 type slot struct {
 	key  poolKey
 	kind slotKind
@@ -48,6 +59,21 @@ type slot struct {
 	hash                      [32]byte
 	maxConcurrency            int
 	maxConcurrencyPerInstance int
+
+	// Request-ready IR. Populated by `bakeSlotIRLocked` on slot
+	// creation and re-baked on `Use(...)`. nil only between slot
+	// allocation and the per-kind handle being attached (a transient
+	// in-mu state inside `joinPoolLocked` / `addOpenAPISourceLocked`
+	// / `addGraphQLSourceLocked`).
+	ir []*ir.Service
+
+	// Exactly one of these is non-nil based on kind. The per-kind
+	// struct holds the format handle (`*pool.file`, `*openAPISource.doc`,
+	// `*graphQLSource.introspection`), the original schema bytes for
+	// `/schema/*` re-emit, the replicas, and the backpressure sems.
+	proto   *pool
+	openapi *openAPISource
+	graphql *graphQLSource
 }
 
 // registerSlotLocked applies the §4 tier policy at registration time.
@@ -119,30 +145,141 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 	return false, nil
 }
 
-// evictSlotLocked drops the per-kind dispatch storage backing a slot.
-// Used by unstable swaps when the prior occupant is being replaced.
-// The slot index entry is left to the caller (overwritten with the
-// new occupant in the swap path; deleted by `releaseSlotLocked` when
-// the last replica leaves on the natural deregister path). Caller
-// holds g.mu.
+// evictSlotLocked drops the per-kind dispatch storage and IR cache
+// backing a slot. Used by unstable swaps when the prior occupant is
+// being replaced. The slot index entry is overwritten by the swap
+// path with the new occupant. Caller holds g.mu.
 func (g *Gateway) evictSlotLocked(s *slot) {
 	g.publishServiceChange(adminEventsActionDeregistered, s.key.namespace, s.key.version, "", 0)
-	switch s.kind {
-	case slotKindProto:
-		delete(g.pools, s.key)
-	case slotKindOpenAPI:
-		delete(g.openAPISources, s.key)
-	case slotKindGraphQL:
-		delete(g.graphQLSources, s.key)
-	}
+	s.proto = nil
+	s.openapi = nil
+	s.graphql = nil
+	s.ir = nil
 }
 
 // releaseSlotLocked drops the slot index entry. Called by per-kind
 // removal helpers (`removeReplicaByIDLocked`,
 // `removeReplicasByOwnerLocked`, and the OpenAPI / GraphQL analogues)
-// when a pool/source empties and is deleted from its per-kind map —
-// keeps the slot index synchronized with the per-kind maps. Caller
+// when a pool/source empties on the natural deregister path. Caller
 // holds g.mu.
 func (g *Gateway) releaseSlotLocked(key poolKey) {
 	delete(g.slots, key)
+}
+
+// protoSlot returns the proto pool stored on the slot at `key`, or
+// nil if no slot exists at `key` or the slot's kind is not proto.
+// Caller holds g.mu.
+func (g *Gateway) protoSlot(key poolKey) *pool {
+	s := g.slots[key]
+	if s == nil || s.kind != slotKindProto {
+		return nil
+	}
+	return s.proto
+}
+
+// openAPISlot returns the OpenAPI source stored on the slot at `key`,
+// or nil. Caller holds g.mu.
+func (g *Gateway) openAPISlot(key poolKey) *openAPISource {
+	s := g.slots[key]
+	if s == nil || s.kind != slotKindOpenAPI {
+		return nil
+	}
+	return s.openapi
+}
+
+// graphQLSlot returns the GraphQL source stored on the slot at `key`,
+// or nil. Caller holds g.mu.
+func (g *Gateway) graphQLSlot(key poolKey) *graphQLSource {
+	s := g.slots[key]
+	if s == nil || s.kind != slotKindGraphQL {
+		return nil
+	}
+	return s.graphql
+}
+
+// bakeSlotIRLocked fills `s.ir` from the slot's per-kind handle,
+// applying the gateway's current schema-half transforms in the same
+// order the legacy `*ServicesAsIRLocked` walks did:
+//
+//  1. Ingest the format handle into raw `[]*ir.Service`.
+//  2. Stamp Namespace / Version / Internal on each.
+//  3. Apply `HideInternal` (drops services whose namespace is `_*`
+//     so they never reach the public schema).
+//  4. Apply every Transform.Schema rewrite (HideType / HidePath /
+//     NullableType / NullablePath — the IR-mutating injectors).
+//  5. Inject HMAC subscription auth args (proto only).
+//  6. Populate SchemaIDs so dispatchers can be looked up by
+//     op.SchemaID at request time.
+//
+// Caller holds g.mu. The slot's per-kind handle (`s.proto` /
+// `s.openapi` / `s.graphql`) must be set before calling.
+func (g *Gateway) bakeSlotIRLocked(s *slot) {
+	var raw []*ir.Service
+	switch s.kind {
+	case slotKindProto:
+		if s.proto == nil {
+			return
+		}
+		raw = ir.IngestProto(s.proto.file)
+	case slotKindOpenAPI:
+		if s.openapi == nil {
+			return
+		}
+		raw = []*ir.Service{ir.IngestOpenAPI(s.openapi.doc)}
+	case slotKindGraphQL:
+		if s.graphql == nil {
+			return
+		}
+		svc, err := ir.IngestGraphQL(s.graphql.rawIntrospection)
+		if err != nil {
+			s.ir = nil
+			return
+		}
+		raw = []*ir.Service{svc}
+	default:
+		return
+	}
+	for _, svc := range raw {
+		svc.Namespace = s.key.namespace
+		svc.Version = s.key.version
+		svc.Internal = g.isInternal(s.key.namespace)
+	}
+	raw = ir.HideInternal(raw)
+	g.applySchemaRewrites(raw)
+	if s.kind == slotKindProto {
+		for _, svc := range raw {
+			injectProtoSubscriptionAuthArgs(svc)
+		}
+	}
+	for _, svc := range raw {
+		ir.PopulateSchemaIDs(svc)
+	}
+	s.ir = raw
+}
+
+// rebakeAllSlotsLocked re-bakes every slot's IR. Use(...) calls this
+// after appending to `g.transforms` so the cached IR reflects the
+// new injector set without waiting for a register/dereg event.
+// Caller holds g.mu.
+func (g *Gateway) rebakeAllSlotsLocked() {
+	for _, s := range g.slots {
+		g.bakeSlotIRLocked(s)
+	}
+}
+
+// collectSlotIRLocked walks every slot whose key matches `filter` and
+// returns the concatenation of each slot's pre-baked IR. The result
+// is the same shape the legacy `*ServicesAsIRLocked` functions
+// produced — already post-transform, post-internal-filter, with
+// SchemaIDs populated — but without the per-kind ingest each rebuild.
+// Caller holds g.mu.
+func (g *Gateway) collectSlotIRLocked(filter schemaFilter) []*ir.Service {
+	out := make([]*ir.Service, 0, len(g.slots))
+	for _, s := range g.slots {
+		if !filter.matchPool(s.key) {
+			continue
+		}
+		out = append(out, s.ir...)
+	}
+	return out
 }
