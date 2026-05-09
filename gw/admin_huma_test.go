@@ -227,3 +227,113 @@ func TestAdminHuma_ServiceStats_RejectsBadWindow(t *testing.T) {
 		t.Fatalf("expected non-200 for bad window; got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestAdminHuma_ServicesStats_Aggregate confirms the /admin/services/stats
+// route collapses per-(method, caller) rows into one row per
+// (namespace, version) — the shape the Services list pulls so it can
+// render columns without N round-trips. Counts and throughput sum;
+// percentile fields take the max ("worst method drives the row").
+func TestAdminHuma_ServicesStats_Aggregate(t *testing.T) {
+	old := nowFunc
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = old })
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
+	gw.cfg.metrics.RecordDispatch(context.Background(), "users", "v1", "List", 12*time.Millisecond, nil)
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/stats?window=1m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Window   string `json:"window"`
+		Services []struct {
+			Namespace string `json:"namespace"`
+			Version   string `json:"version"`
+			Count     uint64 `json:"count"`
+			OkCount   uint64 `json:"okCount"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Window != "1m" {
+		t.Errorf("window=%q, want 1m", out.Window)
+	}
+	if len(out.Services) != 2 {
+		t.Fatalf("got %d rows, want 2 (greeter/v1 + users/v1): %+v", len(out.Services), out.Services)
+	}
+	// Sorted: greeter then users.
+	if out.Services[0].Namespace != "greeter" || out.Services[0].Version != "v1" || out.Services[0].Count != 3 {
+		t.Errorf("greeter row=%+v want count=3 (Hello x2 + Bye)", out.Services[0])
+	}
+	if out.Services[1].Namespace != "users" || out.Services[1].Version != "v1" || out.Services[1].Count != 1 {
+		t.Errorf("users row=%+v want count=1", out.Services[1])
+	}
+}
+
+// TestAdminHuma_ListServices_ManualDeprecationReason confirms that a
+// service flipped via the Deprecate RPC surfaces its reason on the
+// listServices response — the field the UI consumes to render the
+// "manual" half of the deprecated badge.
+func TestAdminHuma_ListServices_ManualDeprecationReason(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	// Plant a deprecation in the side-state mirror; the next slot
+	// registration stamps it onto the slot via registerSlotLocked
+	// (plan §5 deprecate path).
+	gw.mu.Lock()
+	if gw.deprecation == nil {
+		gw.deprecation = map[poolKey]string{}
+	}
+	gw.deprecation[poolKey{namespace: "users", version: "v1"}] = "rotated to v2"
+	// Insert a synthetic slot so ListServices has something to walk.
+	if gw.slots == nil {
+		gw.slots = map[poolKey]*slot{}
+	}
+	gw.slots[poolKey{namespace: "users", version: "v1"}] = &slot{
+		kind:              slotKindProto,
+		deprecationReason: "rotated to v2",
+	}
+	gw.mu.Unlock()
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Services []struct {
+			Namespace               string `json:"namespace"`
+			Version                 string `json:"version"`
+			ManualDeprecationReason string `json:"manualDeprecationReason"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range out.Services {
+		if s.Namespace == "users" && s.Version == "v1" {
+			found = true
+			if s.ManualDeprecationReason != "rotated to v2" {
+				t.Errorf("manualDeprecationReason=%q, want %q", s.ManualDeprecationReason, "rotated to v2")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("users/v1 missing from response: %+v", out.Services)
+	}
+}

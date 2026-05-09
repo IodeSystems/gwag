@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -75,10 +76,11 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out.Body.Services = []serviceInfo{}
 		for _, s := range resp.GetServices() {
 			out.Body.Services = append(out.Body.Services, serviceInfo{
-				Namespace:    s.GetNamespace(),
-				Version:      s.GetVersion(),
-				HashHex:      s.GetHashHex(),
-				ReplicaCount: s.GetReplicaCount(),
+				Namespace:               s.GetNamespace(),
+				Version:                 s.GetVersion(),
+				HashHex:                 s.GetHashHex(),
+				ReplicaCount:            s.GetReplicaCount(),
+				ManualDeprecationReason: s.GetManualDeprecationReason(),
 			})
 		}
 		out.Body.StableVN = []stableVNEntry{}
@@ -279,6 +281,67 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "servicesStats",
+		Method:      http.MethodGet,
+		Path:        "/admin/services/stats",
+		Summary:     "Aggregate per-(namespace, version) rolling stats across every registered service. The Services list pulls one row per (ns, ver) without N round-trips. Plan §5.",
+	}, func(_ context.Context, in *servicesStatsIn) (*servicesStatsOut, error) {
+		window, err := parseStatsWindow(in.Window)
+		if err != nil {
+			return nil, err
+		}
+		rows := g.Snapshot(window, nowFunc())
+		// Aggregate: collapse per-(method, caller) rows into a single
+		// per-(namespace, version) record. Counts sum, throughput sums,
+		// and the percentile fields take the max — a worst-case readout
+		// is the right summary for a list column ("the slowest method
+		// in this service ran at p95=X"). Per-method drill-down stays
+		// available via the existing /admin/services/{ns}/{ver}/stats.
+		type aggKey struct{ ns, ver string }
+		type agg struct {
+			count, okCount uint64
+			throughput     float64
+			p50, p95       time.Duration
+		}
+		bucket := map[aggKey]*agg{}
+		for _, r := range rows {
+			k := aggKey{r.Namespace, r.Version}
+			a := bucket[k]
+			if a == nil {
+				a = &agg{}
+				bucket[k] = a
+			}
+			a.count += r.Count
+			a.okCount += r.OkCount
+			a.throughput += r.Throughput
+			if r.P50 > a.p50 {
+				a.p50 = r.P50
+			}
+			if r.P95 > a.p95 {
+				a.p95 = r.P95
+			}
+		}
+		out := &servicesStatsOut{}
+		out.Body.Window = in.Window
+		out.Body.Services = []serviceStatsRow{}
+		for k, a := range bucket {
+			out.Body.Services = append(out.Body.Services, serviceStatsRow{
+				Namespace:  k.ns,
+				Version:    k.ver,
+				Count:      a.count,
+				OkCount:    a.okCount,
+				Throughput: a.throughput,
+				P50Millis:  int64(a.p50 / time.Millisecond),
+				P95Millis:  int64(a.p95 / time.Millisecond),
+			})
+		}
+		// Stable order for UI diff-friendliness; map iteration is
+		// nondeterministic on its own.
+		sortServiceStatsRows(out.Body.Services)
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -324,6 +387,11 @@ type serviceInfo struct {
 	Version      string `json:"version"`
 	HashHex      string `json:"hashHex"`
 	ReplicaCount uint32 `json:"replicaCount"`
+	// ManualDeprecationReason is the operator-set reason from
+	// Deprecate/Undeprecate (plan §5). Empty = no manual
+	// deprecation. Auto-deprecation (older `vN`) is computed by the
+	// UI from `version` plus the namespace's latest registered `vN`.
+	ManualDeprecationReason string `json:"manualDeprecationReason,omitempty"`
 }
 
 // stableVNEntry surfaces the per-namespace stable alias target. Plan §4
@@ -446,6 +514,38 @@ type serviceStatsOut struct {
 		Window  string           `json:"window"`
 		Methods []methodStatsOut `json:"methods"`
 	}
+}
+
+// servicesStatsIn — aggregate stats across every registered service.
+// Window strings match the per-service variant (1m, 1h, 24h).
+type servicesStatsIn struct {
+	Window string `query:"window" enum:"1m,1h,24h" default:"24h"`
+}
+
+type serviceStatsRow struct {
+	Namespace  string  `json:"namespace"`
+	Version    string  `json:"version"`
+	Count      uint64  `json:"count"`
+	OkCount    uint64  `json:"okCount"`
+	Throughput float64 `json:"throughput"`
+	P50Millis  int64   `json:"p50Millis"`
+	P95Millis  int64   `json:"p95Millis"`
+}
+
+type servicesStatsOut struct {
+	Body struct {
+		Window   string            `json:"window"`
+		Services []serviceStatsRow `json:"services"`
+	}
+}
+
+func sortServiceStatsRows(rows []serviceStatsRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Namespace != rows[j].Namespace {
+			return rows[i].Namespace < rows[j].Namespace
+		}
+		return rows[i].Version < rows[j].Version
+	})
 }
 
 // parseStatsWindow maps the operator-friendly window strings

@@ -4,11 +4,13 @@ schema {
 }
 
 type AdminMutationNamespace {
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
+  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
   v1: AdminV1MutationNamespace!
 }
 
@@ -17,15 +19,19 @@ type AdminQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
+  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
   stable: AdminStableQueryNamespace!
   v1: AdminV1QueryNamespace!
 }
 
 type AdminStableMutationNamespace {
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
 
 type AdminStableQueryNamespace {
@@ -33,13 +39,17 @@ type AdminStableQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
+  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
 }
 
 type AdminV1MutationNamespace {
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
-  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
 
 type AdminV1QueryNamespace {
@@ -47,6 +57,8 @@ type AdminV1QueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  serviceStats(namespace: String!, version: String!, window: admin_serviceStatsWindow): admin_ServiceStatsOutBody
+  servicesStats(window: admin_servicesStatsWindow): admin_ServicesStatsOutBody
 }
 
 """64-bit integer encoded as a decimal string. OpenAPI integer fields with format=int64/uint64 land here; graphql-go's built-in Int is signed 32-bit and would lose precision (or null out entirely) for values above 2^31."""
@@ -67,6 +79,14 @@ type admin_ChannelInfo {
 
 type admin_ChannelsOutBody {
   channels: [admin_ChannelInfo]!
+}
+
+input admin_DeprecateInBodyInput {
+  reason: String!
+}
+
+type admin_DeprecateOutBody {
+  _void: String
 }
 
 input admin_DrainInBodyInput {
@@ -111,6 +131,16 @@ type admin_InjectorsOutBody {
   injectors: [admin_InjectorInfo]!
 }
 
+type admin_MethodStatsOut {
+  caller: String!
+  count: Long!
+  method: String!
+  okCount: Long!
+  p50Millis: Long!
+  p95Millis: Long!
+  throughput: Float!
+}
+
 type admin_PeerInfo {
   joinedUnixMs: Long!
   name: String
@@ -138,14 +168,35 @@ type admin_RetractStableOutBody {
 
 type admin_ServiceInfo {
   hashHex: String!
+  manualDeprecationReason: String
   namespace: String!
   replicaCount: Int!
+  version: String!
+}
+
+type admin_ServiceStatsOutBody {
+  methods: [admin_MethodStatsOut]!
+  window: String!
+}
+
+type admin_ServiceStatsRow {
+  count: Long!
+  namespace: String!
+  okCount: Long!
+  p50Millis: Long!
+  p95Millis: Long!
+  throughput: Float!
   version: String!
 }
 
 type admin_ServicesOutBody {
   services: [admin_ServiceInfo]!
   stableVN: [admin_StableVNEntry]!
+}
+
+type admin_ServicesStatsOutBody {
+  services: [admin_ServiceStatsRow]!
+  window: String!
 }
 
 input admin_SignInBodyInput {
@@ -165,4 +216,14 @@ type admin_SignOutBody {
 type admin_StableVNEntry {
   namespace: String!
   vN: Int!
+}
+
+type admin_UndeprecateOutBody {
+  priorReason: String!
+}
+
+enum admin_serviceStatsWindow {
+}
+
+enum admin_servicesStatsWindow {
 }

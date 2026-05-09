@@ -856,10 +856,11 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			}
 		}
 		out.Services = append(out.Services, &cpv1.ServiceInfo{
-			Namespace:    k.namespace,
-			Version:      k.version,
-			HashHex:      hex.EncodeToString(s.hash[:]),
-			ReplicaCount: uint32(replicaCount),
+			Namespace:               k.namespace,
+			Version:                 k.version,
+			HashHex:                 hex.EncodeToString(s.hash[:]),
+			ReplicaCount:            uint32(replicaCount),
+			ManualDeprecationReason: s.deprecationReason,
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {
