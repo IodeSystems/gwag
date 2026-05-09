@@ -25,9 +25,6 @@ func (g *Gateway) HealthHandler() http.Handler {
 			"status":         status,
 			"active_streams": g.streamGlobal.Load(),
 		}
-		if env := g.environmentLabel(); env != "" {
-			body["environment"] = env
-		}
 		if g.cfg.cluster != nil {
 			body["node_id"] = g.cfg.cluster.NodeID
 		}

@@ -931,10 +931,6 @@ func (g *Gateway) Handler() http.Handler {
 //	GET /schema/proto?service=ns:ver             → FileDescriptorSet (binary)
 //	GET /schema/openapi?service=ns               → re-emit ingested OpenAPI specs
 //
-// The X-Gateway-Environment header carries the cluster's environment
-// label on every response so codegen pipelines can record what they
-// grabbed.
-//
 // Selector grammar (shared across the /schema/* family):
 //   - ns        → all versions of ns
 //   - ns:vN     → just that version of ns (proto pools only; OpenAPI
@@ -981,9 +977,6 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			}
 			schema = built
 		}
-		if env := g.environmentLabel(); env != "" {
-			w.Header().Set("X-Gateway-Environment", env)
-		}
 		switch r.URL.Query().Get("format") {
 		case "json":
 			result := graphql.Do(graphql.Params{Schema: *schema, RequestString: introspectionQuery})
@@ -994,15 +987,6 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			_, _ = w.Write([]byte(printSchemaSDL(schema)))
 		}
 	})
-}
-
-// environmentLabel returns the cluster's environment label, or "" if
-// running standalone or no --environment was set.
-func (g *Gateway) environmentLabel() string {
-	if g.cfg.cluster == nil {
-		return ""
-	}
-	return g.cfg.cluster.Environment
 }
 
 type httpRequestCtxKey struct{}

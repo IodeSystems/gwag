@@ -72,7 +72,6 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			return nil, err
 		}
 		out := &servicesOut{}
-		out.Body.Environment = resp.GetEnvironment()
 		out.Body.Services = []serviceInfo{}
 		for _, s := range resp.GetServices() {
 			out.Body.Services = append(out.Body.Services, serviceInfo{
@@ -256,8 +255,7 @@ type serviceInfo struct {
 
 type servicesOut struct {
 	Body struct {
-		Environment string        `json:"environment,omitempty"`
-		Services    []serviceInfo `json:"services"`
+		Services []serviceInfo `json:"services"`
 	}
 }
 

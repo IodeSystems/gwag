@@ -174,9 +174,6 @@ func servicesCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "ListServices: %v\n", err)
 		return 1
 	}
-	if env := resp.GetEnvironment(); env != "" {
-		fmt.Printf("# environment: %s\n", env)
-	}
 	if len(resp.GetServices()) == 0 {
 		fmt.Println("(no services registered)")
 		return 0
@@ -230,9 +227,6 @@ func schemaFetchCmd(args []string) int {
 	if resp.StatusCode != 200 {
 		fmt.Fprintf(os.Stderr, "GET %s: %s\n", url, resp.Status)
 		return 1
-	}
-	if env := resp.Header.Get("X-Gateway-Environment"); env != "" {
-		fmt.Fprintf(os.Stderr, "# environment: %s\n", env)
 	}
 	_, _ = io.Copy(os.Stdout, resp.Body)
 	return 0

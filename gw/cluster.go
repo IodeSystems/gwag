@@ -27,11 +27,6 @@ type Cluster struct {
 	// NodeID is the NATS server's stable identifier within the cluster
 	// — used as the gateway's identity in the peers KV bucket.
 	NodeID string
-
-	// Environment is the deployment label this cluster runs under
-	// (empty string when no --environment was set). Surfaced in the
-	// schema endpoint headers and operator listings.
-	Environment string
 }
 
 // ClusterOptions configures the embedded NATS server. ClientListen is
@@ -39,6 +34,11 @@ type Cluster struct {
 // JetStream; ClusterListen is the inter-node route. Peers is the list
 // of well-known cluster routes to dial on startup; the rest of the
 // cluster is learned via NATS gossip.
+//
+// Plan §4 dropped the legacy `Environment` field along with the
+// auto-suffix on the NATS cluster name — operators who need physical
+// isolation between deployments pick distinct cluster names directly
+// (NATS already enforces non-federation across mismatched names).
 type ClusterOptions struct {
 	NodeName      string
 	ClientListen  string // e.g. ":14222"; default ":14222"
@@ -46,11 +46,11 @@ type ClusterOptions struct {
 	Peers         []string
 	DataDir       string // JetStream storage; required for persistence
 
-	// Environment is a deployment-time label (e.g. "dev", "prod"). It
-	// becomes part of the NATS cluster name so two clusters in the
-	// same network with different envs cannot federate. Empty keeps
-	// the legacy default cluster name "go-api-gateway".
-	Environment string
+	// ClusterName is the NATS cluster identifier. Empty keeps the
+	// default "go-api-gateway"; set to anything distinct (e.g.
+	// "go-api-gateway-prod") to prevent cross-cluster federation in
+	// shared networks.
+	ClusterName string
 
 	// StartTimeout caps how long we wait for the server to be ready.
 	StartTimeout time.Duration
@@ -115,9 +115,9 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cluster: Peers: %w", err)
 		}
-		clusterName := "go-api-gateway"
-		if opts.Environment != "" {
-			clusterName = clusterName + "-" + opts.Environment
+		clusterName := opts.ClusterName
+		if clusterName == "" {
+			clusterName = "go-api-gateway"
 		}
 		srvOpts.Cluster = natsd.ClusterOpts{
 			Name: clusterName,
@@ -155,11 +155,10 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 	}
 
 	return &Cluster{
-		Server:      srv,
-		Conn:        conn,
-		JS:          js,
-		NodeID:      srv.ID(),
-		Environment: opts.Environment,
+		Server: srv,
+		Conn:   conn,
+		JS:     js,
+		NodeID: srv.ID(),
 	}, nil
 }
 
