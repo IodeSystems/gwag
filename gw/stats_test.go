@@ -73,6 +73,29 @@ func TestHistPercentile_BucketBoundary(t *testing.T) {
 	}
 }
 
+// P99 surfaces from snapshot. The bucket-boundary estimator returns
+// the bucket whose cumulative count crosses target=total*p, so the
+// slow tail must exceed the percentile rank to land in the slow
+// bucket — 95 fast + 5 slow puts target=99 above the cumul-95 at the
+// fast bucket and pulls p99 up to the slow bucket's upper bound.
+func TestStatsWindow_P99Surfaces(t *testing.T) {
+	w := newStatsWindow(1*time.Second, 200*time.Second)
+	t0 := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC).Unix()
+	for i := 0; i < 95; i++ {
+		w.observe(t0+int64(i), 5*time.Millisecond, true)
+	}
+	for i := 95; i < 100; i++ {
+		w.observe(t0+int64(i), 400*time.Millisecond, true)
+	}
+	snap := w.snapshot(t0+99, 200)
+	if snap.P50 != 5*time.Millisecond {
+		t.Errorf("p50=%v, want 5ms", snap.P50)
+	}
+	if snap.P99 != 500*time.Millisecond {
+		t.Errorf("p99=%v, want 500ms (0.5s bucket upper bound)", snap.P99)
+	}
+}
+
 func TestStatsRegistry_RecordAndSnapshot(t *testing.T) {
 	r := newStatsRegistry()
 	k := statsKey{namespace: "greeter", version: "v1", method: "Hello"}

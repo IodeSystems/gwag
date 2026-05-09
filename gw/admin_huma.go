@@ -268,13 +268,14 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				continue
 			}
 			out.Body.Methods = append(out.Body.Methods, methodStatsOut{
-				Method:        r.Method,
-				Caller:        r.Caller,
-				Count:         r.Count,
-				OkCount:       r.OkCount,
-				Throughput:    r.Throughput,
-				P50Millis:     int64(r.P50 / time.Millisecond),
-				P95Millis:     int64(r.P95 / time.Millisecond),
+				Method:     r.Method,
+				Caller:     r.Caller,
+				Count:      r.Count,
+				OkCount:    r.OkCount,
+				Throughput: r.Throughput,
+				P50Millis:  int64(r.P50 / time.Millisecond),
+				P95Millis:  int64(r.P95 / time.Millisecond),
+				P99Millis:  int64(r.P99 / time.Millisecond),
 			})
 		}
 		return out, nil
@@ -301,7 +302,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		type agg struct {
 			count, okCount uint64
 			throughput     float64
-			p50, p95       time.Duration
+			p50, p95, p99  time.Duration
 		}
 		bucket := map[aggKey]*agg{}
 		for _, r := range rows {
@@ -320,6 +321,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			if r.P95 > a.p95 {
 				a.p95 = r.P95
 			}
+			if r.P99 > a.p99 {
+				a.p99 = r.P99
+			}
 		}
 		out := &servicesStatsOut{}
 		out.Body.Window = in.Window
@@ -333,6 +337,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				Throughput: a.throughput,
 				P50Millis:  int64(a.p50 / time.Millisecond),
 				P95Millis:  int64(a.p95 / time.Millisecond),
+				P99Millis:  int64(a.p99 / time.Millisecond),
 			})
 		}
 		// Stable order for UI diff-friendliness; map iteration is
@@ -392,10 +397,10 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		// Group: service → methods → callers. Total counts roll up so
 		// the operator panel can sort either level by call volume.
 		type methodAgg struct {
-			callers []callerStatsRow
+			callers        []callerStatsRow
 			count, okCount uint64
-			throughput float64
-			p50, p95 time.Duration
+			throughput     float64
+			p50, p95, p99  time.Duration
 		}
 		type serviceAgg struct {
 			reasons depReasons
@@ -437,6 +442,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				Throughput: r.Throughput,
 				P50Millis:  int64(r.P50 / time.Millisecond),
 				P95Millis:  int64(r.P95 / time.Millisecond),
+				P99Millis:  int64(r.P99 / time.Millisecond),
 			})
 			m.count += r.Count
 			m.okCount += r.OkCount
@@ -446,6 +452,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			}
 			if r.P95 > m.p95 {
 				m.p95 = r.P95
+			}
+			if r.P99 > m.p99 {
+				m.p99 = r.P99
 			}
 			a.totalCount += r.Count
 			a.totalThroughput += r.Throughput
@@ -480,6 +489,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 					Throughput: m.throughput,
 					P50Millis:  int64(m.p50 / time.Millisecond),
 					P95Millis:  int64(m.p95 / time.Millisecond),
+					P99Millis:  int64(m.p99 / time.Millisecond),
 					Callers:    m.callers,
 				})
 			}
@@ -678,6 +688,7 @@ type methodStatsOut struct {
 	Throughput float64 `json:"throughput"`
 	P50Millis  int64   `json:"p50Millis"`
 	P95Millis  int64   `json:"p95Millis"`
+	P99Millis  int64   `json:"p99Millis"`
 }
 
 type serviceStatsOut struct {
@@ -702,6 +713,7 @@ type serviceStatsRow struct {
 	Throughput float64 `json:"throughput"`
 	P50Millis  int64   `json:"p50Millis"`
 	P95Millis  int64   `json:"p95Millis"`
+	P99Millis  int64   `json:"p99Millis"`
 }
 
 type servicesStatsOut struct {
@@ -727,6 +739,7 @@ type callerStatsRow struct {
 	Throughput float64 `json:"throughput"`
 	P50Millis  int64   `json:"p50Millis"`
 	P95Millis  int64   `json:"p95Millis"`
+	P99Millis  int64   `json:"p99Millis"`
 }
 
 // deprecatedMethodRow rolls per-(method) stats with a nested caller
@@ -739,6 +752,7 @@ type deprecatedMethodRow struct {
 	Throughput float64          `json:"throughput"`
 	P50Millis  int64            `json:"p50Millis"`
 	P95Millis  int64            `json:"p95Millis"`
+	P99Millis  int64            `json:"p99Millis"`
 	Callers    []callerStatsRow `json:"callers"`
 }
 

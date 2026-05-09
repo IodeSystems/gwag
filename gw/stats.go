@@ -128,6 +128,7 @@ func (w *statsWindow) snapshot(nowUnix, spanSec int64) StatsSnapshot {
 	}
 	snap.P50 = histPercentile(hist[:], 0.50)
 	snap.P95 = histPercentile(hist[:], 0.95)
+	snap.P99 = histPercentile(hist[:], 0.99)
 	return snap
 }
 
@@ -308,6 +309,7 @@ type StatsSnapshot struct {
 	Throughput float64
 	P50        time.Duration
 	P95        time.Duration
+	P99        time.Duration
 }
 
 // Snapshot returns one row per (namespace, version, method) that has
