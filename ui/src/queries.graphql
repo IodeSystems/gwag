@@ -9,17 +9,22 @@
 # object whose fields are the actual operations. Subscriptions stay
 # flat (graphql-go forbids nested objects under Subscription).
 
-query Dashboard {
+query Dashboard($window: String!) {
   admin {
-    listPeers {
-      peers {
-        nodeId
-      }
-    }
-    listServices {
+    servicesHistory(window: $window) {
+      window
       services {
         namespace
         version
+        buckets {
+          startUnixSec
+          durationSec
+          count
+          okCount
+          p50Millis
+          p95Millis
+          p99Millis
+        }
       }
     }
   }
@@ -50,6 +55,7 @@ query Services {
         throughput
         p50Millis
         p95Millis
+        p99Millis
       }
     }
   }
@@ -67,6 +73,7 @@ query ServiceStats($namespace: String!, $version: String!) {
         throughput
         p50Millis
         p95Millis
+        p99Millis
       }
     }
   }
@@ -90,6 +97,7 @@ query DeprecatedStats {
           throughput
           p50Millis
           p95Millis
+          p99Millis
           callers {
             caller
             count
@@ -97,6 +105,7 @@ query DeprecatedStats {
             throughput
             p50Millis
             p95Millis
+            p99Millis
           }
         }
       }

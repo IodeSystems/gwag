@@ -72,6 +72,7 @@ export type AdminQueryNamespace = {
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
   stable: AdminStableQueryNamespace;
   v1: AdminV1QueryNamespace;
@@ -86,6 +87,11 @@ export type AdminQueryNamespaceDeprecatedStatsArgs = {
 export type AdminQueryNamespaceServiceStatsArgs = {
   namespace: Scalars['String']['input'];
   version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminQueryNamespaceServicesHistoryArgs = {
   window: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -146,6 +152,7 @@ export type AdminStableQueryNamespace = {
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
 };
 
@@ -158,6 +165,11 @@ export type AdminStableQueryNamespaceDeprecatedStatsArgs = {
 export type AdminStableQueryNamespaceServiceStatsArgs = {
   namespace: Scalars['String']['input'];
   version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminStableQueryNamespaceServicesHistoryArgs = {
   window: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -218,6 +230,7 @@ export type AdminV1QueryNamespace = {
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
+  servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
 };
 
@@ -230,6 +243,11 @@ export type AdminV1QueryNamespaceDeprecatedStatsArgs = {
 export type AdminV1QueryNamespaceServiceStatsArgs = {
   namespace: Scalars['String']['input'];
   version: Scalars['String']['input'];
+  window: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type AdminV1QueryNamespaceServicesHistoryArgs = {
   window: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -255,6 +273,7 @@ export type Admin_CallerStatsRow = {
   okCount: Scalars['Long']['output'];
   p50Millis: Scalars['Long']['output'];
   p95Millis: Scalars['Long']['output'];
+  p99Millis: Scalars['Long']['output'];
   throughput: Scalars['Float']['output'];
 };
 
@@ -286,6 +305,7 @@ export type Admin_DeprecatedMethodRow = {
   okCount: Scalars['Long']['output'];
   p50Millis: Scalars['Long']['output'];
   p95Millis: Scalars['Long']['output'];
+  p99Millis: Scalars['Long']['output'];
   throughput: Scalars['Float']['output'];
 };
 
@@ -321,6 +341,17 @@ export type Admin_ForgetOutBody = {
   __typename?: 'admin_ForgetOutBody';
   newReplicas: Scalars['Int']['output'];
   removed: Scalars['Boolean']['output'];
+};
+
+export type Admin_HistoryBucketOut = {
+  __typename?: 'admin_HistoryBucketOut';
+  count: Scalars['Long']['output'];
+  durationSec: Scalars['Long']['output'];
+  okCount: Scalars['Long']['output'];
+  p50Millis: Scalars['Long']['output'];
+  p95Millis: Scalars['Long']['output'];
+  p99Millis: Scalars['Long']['output'];
+  startUnixSec: Scalars['Long']['output'];
 };
 
 export type Admin_InjectorInfo = {
@@ -361,6 +392,7 @@ export type Admin_MethodStatsOut = {
   okCount: Scalars['Long']['output'];
   p50Millis: Scalars['Long']['output'];
   p95Millis: Scalars['Long']['output'];
+  p99Millis: Scalars['Long']['output'];
   throughput: Scalars['Float']['output'];
 };
 
@@ -393,6 +425,13 @@ export type Admin_RetractStableOutBody = {
   priorVN: Scalars['Int']['output'];
 };
 
+export type Admin_ServiceHistoryRow = {
+  __typename?: 'admin_ServiceHistoryRow';
+  buckets: Array<Maybe<Admin_HistoryBucketOut>>;
+  namespace: Scalars['String']['output'];
+  version: Scalars['String']['output'];
+};
+
 export type Admin_ServiceInfo = {
   __typename?: 'admin_ServiceInfo';
   hashHex: Scalars['String']['output'];
@@ -415,8 +454,15 @@ export type Admin_ServiceStatsRow = {
   okCount: Scalars['Long']['output'];
   p50Millis: Scalars['Long']['output'];
   p95Millis: Scalars['Long']['output'];
+  p99Millis: Scalars['Long']['output'];
   throughput: Scalars['Float']['output'];
   version: Scalars['String']['output'];
+};
+
+export type Admin_ServicesHistoryOutBody = {
+  __typename?: 'admin_ServicesHistoryOutBody';
+  services: Array<Maybe<Admin_ServiceHistoryRow>>;
+  window: Scalars['String']['output'];
 };
 
 export type Admin_ServicesOutBody = {
@@ -457,15 +503,17 @@ export type Admin_UndeprecateOutBody = {
   priorReason: Scalars['String']['output'];
 };
 
-export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
+export type DashboardQueryVariables = Exact<{
+  window: string;
+}>;
 
 
-export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: string } | null> } | null, listServices: { services: Array<{ namespace: string, version: string } | null> } | null } };
+export type DashboardQuery = { admin: { servicesHistory: { window: string, services: Array<{ namespace: string, version: string, buckets: Array<{ startUnixSec: unknown, durationSec: unknown, count: unknown, okCount: unknown, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null> } | null } };
 
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number, manualDeprecationReason: string | null } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null, servicesStats: { window: string, services: Array<{ namespace: string, version: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number, manualDeprecationReason: string | null } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null, servicesStats: { window: string, services: Array<{ namespace: string, version: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null } };
 
 export type ServiceStatsQueryVariables = Exact<{
   namespace: string;
@@ -473,12 +521,12 @@ export type ServiceStatsQueryVariables = Exact<{
 }>;
 
 
-export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null } };
+export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null } };
 
 export type DeprecatedStatsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DeprecatedStatsQuery = { admin: { deprecatedStats: { window: string, services: Array<{ namespace: string, version: string, manualReason: string | null, autoReason: string | null, totalCount: unknown, totalThroughput: number, methods: Array<{ method: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, callers: Array<{ caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown } | null> } | null> } | null> } | null } };
+export type DeprecatedStatsQuery = { admin: { deprecatedStats: { window: string, services: Array<{ namespace: string, version: string, manualReason: string | null, autoReason: string | null, totalCount: unknown, totalThroughput: number, methods: Array<{ method: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown, callers: Array<{ caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null> } | null> } | null } };
 
 export type DeprecateMutationVariables = Exact<{
   namespace: string;
@@ -524,17 +572,22 @@ export type ForgetPeerMutation = { admin: { forgetPeer: { removed: boolean, newR
 
 
 export const DashboardDocument = gql`
-    query Dashboard {
+    query Dashboard($window: String!) {
   admin {
-    listPeers {
-      peers {
-        nodeId
-      }
-    }
-    listServices {
+    servicesHistory(window: $window) {
+      window
       services {
         namespace
         version
+        buckets {
+          startUnixSec
+          durationSec
+          count
+          okCount
+          p50Millis
+          p95Millis
+          p99Millis
+        }
       }
     }
   }
@@ -566,6 +619,7 @@ export const ServicesDocument = gql`
         throughput
         p50Millis
         p95Millis
+        p99Millis
       }
     }
   }
@@ -584,6 +638,7 @@ export const ServiceStatsDocument = gql`
         throughput
         p50Millis
         p95Millis
+        p99Millis
       }
     }
   }
@@ -608,6 +663,7 @@ export const DeprecatedStatsDocument = gql`
           throughput
           p50Millis
           p95Millis
+          p99Millis
           callers {
             caller
             count
@@ -615,6 +671,7 @@ export const DeprecatedStatsDocument = gql`
             throughput
             p50Millis
             p95Millis
+            p99Millis
           }
         }
       }
@@ -713,7 +770,7 @@ const defaultWrapper: SdkFunctionWrapper = (action, _operationName, _operationTy
 
 export function getSdk(client: GraphQLClient, withWrapper: SdkFunctionWrapper = defaultWrapper) {
   return {
-    Dashboard(variables?: DashboardQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<DashboardQuery> {
+    Dashboard(variables: DashboardQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<DashboardQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<DashboardQuery>({ document: DashboardDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Dashboard', 'query', variables);
     },
     Services(variables?: ServicesQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ServicesQuery> {
