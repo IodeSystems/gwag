@@ -286,7 +286,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Method:      http.MethodGet,
 		Path:        "/admin/services/stats",
 		Summary:     "Aggregate per-(namespace, version) rolling stats across every registered service. The Services list pulls one row per (ns, ver) without N round-trips. Plan §5.",
-	}, func(_ context.Context, in *servicesStatsIn) (*servicesStatsOut, error) {
+	}, func(ctx context.Context, in *servicesStatsIn) (*servicesStatsOut, error) {
 		window, err := parseStatsWindow(in.Window)
 		if err != nil {
 			return nil, err
@@ -325,6 +325,18 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				a.p99 = r.P99
 			}
 		}
+		// Union with the registry of-truth: every registered
+		// (ns, ver) appears in the response, even if zero traffic
+		// has hit it yet. Otherwise a freshly-registered service
+		// is invisible on the dashboard until its first dispatch.
+		if svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{}); err == nil {
+			for _, s := range svcResp.GetServices() {
+				k := aggKey{s.GetNamespace(), s.GetVersion()}
+				if _, ok := bucket[k]; !ok {
+					bucket[k] = &agg{}
+				}
+			}
+		}
 		out := &servicesStatsOut{}
 		out.Body.Window = in.Window
 		out.Body.Services = []serviceStatsRow{}
@@ -351,7 +363,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Method:      http.MethodGet,
 		Path:        "/admin/services/history",
 		Summary:     "Per-bucket history per (namespace, version) for the chosen window. The public status page renders one dot per bucket — color = error ratio. Bucket widths track the underlying ring (1s / 1m / 10m for 1m / 1h / 24h). Plan §2.",
-	}, func(_ context.Context, in *servicesHistoryIn) (*servicesHistoryOut, error) {
+	}, func(ctx context.Context, in *servicesHistoryIn) (*servicesHistoryOut, error) {
 		window, err := parseStatsWindow(in.Window)
 		if err != nil {
 			return nil, err
@@ -360,7 +372,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out := &servicesHistoryOut{}
 		out.Body.Window = in.Window
 		out.Body.Services = []serviceHistoryRow{}
+		seen := make(map[serviceKey]bool, len(rows))
 		for _, r := range rows {
+			seen[serviceKey{namespace: r.Namespace, version: r.Version}] = true
 			row := serviceHistoryRow{
 				Namespace: r.Namespace,
 				Version:   r.Version,
@@ -378,6 +392,23 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				})
 			}
 			out.Body.Services = append(out.Body.Services, row)
+		}
+		// Union with the registry of-truth. Services with no stats
+		// yet still appear, with an empty Buckets slice — the UI
+		// renders a row with a "no traffic" dot strip rather than
+		// dropping the service entirely.
+		if svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{}); err == nil {
+			for _, s := range svcResp.GetServices() {
+				k := serviceKey{namespace: s.GetNamespace(), version: s.GetVersion()}
+				if seen[k] {
+					continue
+				}
+				out.Body.Services = append(out.Body.Services, serviceHistoryRow{
+					Namespace: s.GetNamespace(),
+					Version:   s.GetVersion(),
+					Buckets:   []historyBucketOut{},
+				})
+			}
 		}
 		return out, nil
 	})

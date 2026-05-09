@@ -248,6 +248,99 @@ func TestAdminHuma_ServicesHistory_Window1m(t *testing.T) {
 	}
 }
 
+// Registered services with no traffic still appear on the status
+// page — both servicesHistory (with empty Buckets) and
+// servicesStats (with zero counts). Without this the dashboard
+// would silently hide a freshly-registered service until its first
+// dispatch.
+func TestAdminHuma_ServicesHistory_IncludesUntrafficked(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(be.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("untrafficked")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/history?window=1m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Services []struct {
+			Namespace string        `json:"namespace"`
+			Version   string        `json:"version"`
+			Buckets   []interface{} `json:"buckets"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range out.Services {
+		if s.Namespace == "untrafficked" && s.Version == "v1" {
+			found = true
+			if len(s.Buckets) != 0 {
+				t.Errorf("expected empty Buckets for untrafficked service, got %d", len(s.Buckets))
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("registered service untrafficked/v1 missing from history; got %+v", out.Services)
+	}
+}
+
+// Mirror coverage for servicesStats: untrafficked services appear
+// with zero counts so the Services list shows them too.
+func TestAdminHuma_ServicesStats_IncludesUntrafficked(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(be.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("idle")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodGet, "/admin/services/stats?window=1m", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Services []struct {
+			Namespace string `json:"namespace"`
+			Version   string `json:"version"`
+			Count     uint64 `json:"count"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range out.Services {
+		if s.Namespace == "idle" && s.Version == "v1" {
+			found = true
+			if s.Count != 0 {
+				t.Errorf("expected zero Count for idle service, got %d", s.Count)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("registered service idle/v1 missing from stats; got %+v", out.Services)
+	}
+}
+
 func TestAdminHuma_ServicesHistory_RejectsBadWindow(t *testing.T) {
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
 	t.Cleanup(gw.Close)
