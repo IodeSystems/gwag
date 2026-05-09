@@ -776,3 +776,45 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 		t.Errorf("forwarded query still has prefixed type-conditions: %s", *last)
 	}
 }
+
+// TestGraphQLIngest_HTTPIngressRouteSynthesized verifies the cross-
+// kind ingress completeness pass: a stitched-graphql backend gets
+// HTTP routes synthesized via ir.RenderOpenAPI(svc), and those
+// routes reach the registered dispatcher. The dispatcher's no-AST
+// 500 is the current canonical-args dispatch gap (parked as a
+// follow-up); the routing half is what this test asserts — the
+// previous behavior was a plain 404 / "no route".
+func TestGraphQLIngest_HTTPIngressRouteSynthesized(t *testing.T) {
+	rf := newRemoteFixture(t)
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.IngressHandler())
+	t.Cleanup(srv.Close)
+
+	// IR→OpenAPI synthesis paths a graphql-origin service at
+	// /<ns>.<ver>.Service/<op> (svc.ServiceName falls back to
+	// "Service" for graphql-ingest), method GET for OpQuery. Hit
+	// the synthesized path; the route MUST exist (404 → fail).
+	resp, err := http.Get(srv.URL + "/pets.v1.Service/users")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatalf("synthesized REST route missing: 404; body=%s", body)
+	}
+	// Today the canonical-args dispatch path on graphQLDispatcher
+	// returns CodeInternal "no AST for <field>" — selection-
+	// preserving forwarding requires the caller's AST and HTTP
+	// ingress doesn't carry one. Asserting on the body keeps the
+	// test honest: when the dispatcher gap closes, this expectation
+	// flips to a 200 with the canonical response.
+	if !strings.Contains(string(body), "no AST for users") {
+		t.Fatalf("expected dispatcher to reject with 'no AST for users' (canonical-args dispatch is a known gap); got status=%d body=%s",
+			resp.StatusCode, body)
+	}
+}

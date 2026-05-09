@@ -160,49 +160,80 @@ func (g *Gateway) rebuildIngressLocked() {
 		if slot.kind != slotKindOpenAPI {
 			continue
 		}
-		src := slot.openapi
 		if g.isInternal(k.namespace) {
 			continue
 		}
-		paths := src.doc.Paths
-		if paths == nil {
+		g.addOpenAPIDocRoutes(t, slot.openapi.doc, k)
+	}
+
+	// GraphQL: synthesize REST routes for stitched-graphql services
+	// via the same IR→OpenAPI projection used for /api/schema/openapi.
+	// Honors the IR-as-equalizer promise (any registered service is
+	// reachable as REST), at the cost of routing through the
+	// canonical-args dispatcher rather than the proto-style fast path
+	// — fine for cross-kind which won't be hot.
+	for k, slot := range g.slots {
+		if slot.kind != slotKindGraphQL {
 			continue
 		}
-		for path, item := range paths.Map() {
-			if item == nil {
+		if g.isInternal(k.namespace) {
+			continue
+		}
+		for _, svc := range slot.ir {
+			doc, err := ir.RenderOpenAPI(svc)
+			if err != nil || doc == nil {
 				continue
 			}
-			for _, mop := range openAPIOpsForPath(item) {
-				// SchemaID is keyed on the same name IngestOpenAPI
-				// uses: OperationID when set, otherwise "<METHOD><path>".
-				opName := mop.op.OperationID
-				if opName == "" {
-					opName = mop.method + path
-				}
-				sid := ir.MakeSchemaID(k.namespace, k.version, opName)
-				d := g.dispatchers.Get(sid)
-				if d == nil {
-					continue
-				}
-				route := &ingressRoute{
-					method:     strings.ToUpper(mop.method),
-					path:       path,
-					schemaID:   sid,
-					dispatcher: d,
-					shape:      ingressShapeOpenAPI,
-				}
-				route.segs = parseRouteTemplate(path)
-				route.queryParamNames, route.hasBody = openAPIArgPlan(mop.op)
-				if hasParamSeg(route.segs) {
-					t.templated[route.method] = append(t.templated[route.method], route)
-				} else {
-					t.exact[route.method+" "+path] = route
-				}
-			}
+			g.addOpenAPIDocRoutes(t, doc, k)
 		}
 	}
 
 	g.ingressRoutes.Store(t)
+}
+
+// addOpenAPIDocRoutes emits one ingressRoute per (method, path) in
+// doc whose dispatcher is registered under MakeSchemaID(key, opName).
+// Shared by the native-OpenAPI ingress pass and the cross-kind
+// synthesis pass for stitched-graphql services.
+func (g *Gateway) addOpenAPIDocRoutes(t *ingressTable, doc *openapi3.T, key poolKey) {
+	if doc == nil || doc.Paths == nil {
+		return
+	}
+	for path, item := range doc.Paths.Map() {
+		if item == nil {
+			continue
+		}
+		for _, mop := range openAPIOpsForPath(item) {
+			// SchemaID is keyed on the same name IngestOpenAPI
+			// uses: OperationID when set, otherwise "<METHOD><path>".
+			// RenderOpenAPI sets OperationID=op.Name (post-flatten),
+			// matching what PopulateSchemaIDs stamped, so the lookup
+			// works for both native-OpenAPI and cross-kind synthesis.
+			opName := mop.op.OperationID
+			if opName == "" {
+				opName = mop.method + path
+			}
+			sid := ir.MakeSchemaID(key.namespace, key.version, opName)
+			d := g.dispatchers.Get(sid)
+			if d == nil {
+				continue
+			}
+			route := &ingressRoute{
+				method:     strings.ToUpper(mop.method),
+				path:       path,
+				schemaID:   sid,
+				dispatcher: d,
+				shape:      ingressShapeOpenAPI,
+			}
+			route.segs = parseRouteTemplate(path)
+			route.queryParamNames, route.hasBody = openAPIArgPlan(mop.op)
+			if hasParamSeg(route.segs) {
+				t.templated[route.method] = append(t.templated[route.method], route)
+			} else {
+				t.exact[route.method+" "+path] = route
+			}
+		}
+	}
 }
 
 // openAPIMethodOp pairs a normalized HTTP method with the OpenAPI
