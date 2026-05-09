@@ -241,6 +241,7 @@ export type Admin_ServiceInfo = {
 export type Admin_ServicesOutBody = {
   __typename?: 'admin_ServicesOutBody';
   services: Array<Maybe<Admin_ServiceInfo>>;
+  stableVN: Array<Maybe<Admin_StableVnEntry>>;
 };
 
 export type Admin_SignInBodyInput = {
@@ -258,6 +259,12 @@ export type Admin_SignOutBody = {
   timestampUnix: Maybe<Scalars['Long']['output']>;
 };
 
+export type Admin_StableVnEntry = {
+  __typename?: 'admin_StableVNEntry';
+  namespace: Scalars['String']['output'];
+  vN: Scalars['Int']['output'];
+};
+
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -266,7 +273,15 @@ export type DashboardQuery = { admin: { listPeers: { peers: Array<{ nodeId: stri
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null } };
+
+export type RetractStableMutationVariables = Exact<{
+  namespace: string;
+  targetVN: number;
+}>;
+
+
+export type RetractStableMutation = { admin: { retractStable: { priorVN: number, newVN: number } | null } };
 
 export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -313,6 +328,20 @@ export const ServicesDocument = gql`
         hashHex
         replicaCount
       }
+      stableVN {
+        namespace
+        vN
+      }
+    }
+  }
+}
+    `;
+export const RetractStableDocument = gql`
+    mutation RetractStable($namespace: String!, $targetVN: Int!) {
+  admin {
+    retractStable(namespace: $namespace, body: {targetVN: $targetVN}) {
+      priorVN
+      newVN
     }
   }
 }
@@ -385,6 +414,9 @@ export function getSdk(client: GraphQLClient, withWrapper: SdkFunctionWrapper = 
     },
     Services(variables?: ServicesQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<ServicesQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<ServicesQuery>({ document: ServicesDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Services', 'query', variables);
+    },
+    RetractStable(variables: RetractStableMutationVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<RetractStableMutation> {
+      return withWrapper((wrappedRequestHeaders) => client.request<RetractStableMutation>({ document: RetractStableDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'RetractStable', 'mutation', variables);
     },
     Peers(variables?: PeersQueryVariables, requestHeaders?: GraphQLClientRequestHeaders, signal?: RequestInit['signal']): Promise<PeersQuery> {
       return withWrapper((wrappedRequestHeaders) => client.request<PeersQuery>({ document: PeersDocument, variables, requestHeaders: { ...requestHeaders, ...wrappedRequestHeaders }, signal }), 'Peers', 'query', variables);

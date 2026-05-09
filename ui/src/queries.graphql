@@ -34,6 +34,19 @@ query Services {
         hashHex
         replicaCount
       }
+      stableVN {
+        namespace
+        vN
+      }
+    }
+  }
+}
+
+mutation RetractStable($namespace: String!, $targetVN: Int!) {
+  admin {
+    retractStable(namespace: $namespace, body: { targetVN: $targetVN }) {
+      priorVN
+      newVN
     }
   }
 }

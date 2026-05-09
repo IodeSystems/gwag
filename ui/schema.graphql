@@ -38,7 +38,7 @@ type AdminStableQueryNamespace {
 type AdminV1MutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
-  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
+  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
 }
 
@@ -145,6 +145,7 @@ type admin_ServiceInfo {
 
 type admin_ServicesOutBody {
   services: [admin_ServiceInfo]!
+  stableVN: [admin_StableVNEntry]!
 }
 
 input admin_SignInBodyInput {
@@ -159,4 +160,9 @@ type admin_SignOutBody {
   kid: String
   reason: String
   timestampUnix: Long
+}
+
+type admin_StableVNEntry {
+  namespace: String!
+  vN: Int!
 }
