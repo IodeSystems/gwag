@@ -54,6 +54,28 @@ func TestProtoIngest_RenderOpenAPI(t *testing.T) {
 			t.Errorf("components/schemas missing %q", want)
 		}
 	}
+
+	// Proto unary args must surface as a JSON requestBody (not
+	// parameters[in=query]) so codegen clients send the body the
+	// gateway's HTTP ingress actually decodes — IngressHandler's
+	// ingressShapeProtoPost path reads canonical args from the body
+	// verbatim. Hello takes one arg "name"; expect it inside the
+	// body schema's properties, with no query parameters.
+	if pi.Post.RequestBody == nil || pi.Post.RequestBody.Value == nil {
+		t.Fatalf("Hello: missing requestBody — proto unary args must render as body")
+	}
+	mt := pi.Post.RequestBody.Value.Content["application/json"]
+	if mt == nil || mt.Schema == nil || mt.Schema.Value == nil {
+		t.Fatalf("Hello: requestBody has no application/json schema")
+	}
+	if _, ok := mt.Schema.Value.Properties["name"]; !ok {
+		t.Errorf("Hello: requestBody schema missing 'name' property; got %v", mt.Schema.Value.Properties)
+	}
+	for _, p := range pi.Post.Parameters {
+		if p != nil && p.Value != nil && p.Value.In == "query" {
+			t.Errorf("Hello: unexpected query parameter %q (proto unary should put args in body)", p.Value.Name)
+		}
+	}
 }
 
 // TestOpenAPIIngest_RenderProto is the inverse: an OpenAPI spec

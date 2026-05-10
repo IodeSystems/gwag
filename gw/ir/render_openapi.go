@@ -207,6 +207,33 @@ func renderOpenAPIEnum(t *Type) *openapi3.SchemaRef {
 	}
 }
 
+// renderOpenAPIArgFieldSchema is the *Arg counterpart of
+// renderOpenAPIFieldSchema. Used by the proto-unary requestBody
+// synthesis path where args collapse into one body schema.
+func renderOpenAPIArgFieldSchema(a *Arg) *openapi3.SchemaRef {
+	if a.Repeated {
+		inner := renderOpenAPIRefForType(a.Type)
+		return &openapi3.SchemaRef{
+			Value: &openapi3.Schema{
+				Type:  &openapi3.Types{"array"},
+				Items: inner,
+			},
+		}
+	}
+	if a.Type.IsMap() {
+		val := renderOpenAPIRefForType(a.Type.Map.ValueType)
+		return &openapi3.SchemaRef{
+			Value: &openapi3.Schema{
+				Type: &openapi3.Types{"object"},
+				AdditionalProperties: openapi3.AdditionalProperties{
+					Schema: val,
+				},
+			},
+		}
+	}
+	return renderOpenAPIRefForType(a.Type)
+}
+
 func renderOpenAPIFieldSchema(f *Field) *openapi3.SchemaRef {
 	if f.Repeated {
 		inner := renderOpenAPIRefForType(f.Type)
@@ -282,44 +309,81 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 		Tags:        op.Tags,
 		Responses:   openapi3.NewResponses(),
 	}
-	for _, a := range op.Args {
-		switch a.OpenAPILocation {
-		case "body", "":
-			// Default to body when location unset and the type is
-			// non-primitive; query for primitives.
-			if a.Type.IsNamed() || a.OpenAPILocation == "body" {
-				out.RequestBody = &openapi3.RequestBodyRef{
-					Value: &openapi3.RequestBody{
-						Required:    a.Required,
-						Description: a.Description,
-						Content: openapi3.Content{
-							"application/json": &openapi3.MediaType{
-								Schema: renderOpenAPIRefForType(a.Type),
+
+	// Proto-origin unary RPCs land at ingressShapeProtoPost in the
+	// HTTP ingress (see http_ingress.go), which reads canonical args
+	// from the JSON body verbatim — top-level keys are the args.
+	// Mirror that on the OpenAPI export so codegen clients / bench
+	// adapters send the same shape the gateway actually decodes:
+	// collapse every arg into one requestBody schema instead of
+	// emitting them as parameters[in=query]. Streaming proto methods
+	// (server-streaming → SSE GET) keep the per-arg query shape — the
+	// SSE ingress reads them out of r.URL.Query.
+	if op.OriginKind == KindProto && op.Kind != OpSubscription && len(op.Args) > 0 {
+		props := openapi3.Schemas{}
+		var required []string
+		for _, a := range op.Args {
+			props[a.Name] = renderOpenAPIArgFieldSchema(a)
+			if a.Required {
+				required = append(required, a.Name)
+			}
+		}
+		out.RequestBody = &openapi3.RequestBodyRef{
+			Value: &openapi3.RequestBody{
+				Required: len(required) > 0,
+				Content: openapi3.Content{
+					"application/json": &openapi3.MediaType{
+						Schema: &openapi3.SchemaRef{
+							Value: &openapi3.Schema{
+								Type:       &openapi3.Types{"object"},
+								Properties: props,
+								Required:   required,
 							},
 						},
 					},
+				},
+			},
+		}
+	} else {
+		for _, a := range op.Args {
+			switch a.OpenAPILocation {
+			case "body", "":
+				// Default to body when location unset and the type is
+				// non-primitive; query for primitives.
+				if a.Type.IsNamed() || a.OpenAPILocation == "body" {
+					out.RequestBody = &openapi3.RequestBodyRef{
+						Value: &openapi3.RequestBody{
+							Required:    a.Required,
+							Description: a.Description,
+							Content: openapi3.Content{
+								"application/json": &openapi3.MediaType{
+									Schema: renderOpenAPIRefForType(a.Type),
+								},
+							},
+						},
+					}
+					continue
 				}
-				continue
+				out.Parameters = append(out.Parameters, &openapi3.ParameterRef{
+					Value: &openapi3.Parameter{
+						Name:        a.Name,
+						In:          "query",
+						Required:    a.Required,
+						Description: a.Description,
+						Schema:      renderOpenAPIRefForType(a.Type),
+					},
+				})
+			default:
+				out.Parameters = append(out.Parameters, &openapi3.ParameterRef{
+					Value: &openapi3.Parameter{
+						Name:        a.Name,
+						In:          a.OpenAPILocation,
+						Required:    a.Required,
+						Description: a.Description,
+						Schema:      renderOpenAPIRefForType(a.Type),
+					},
+				})
 			}
-			out.Parameters = append(out.Parameters, &openapi3.ParameterRef{
-				Value: &openapi3.Parameter{
-					Name:        a.Name,
-					In:          "query",
-					Required:    a.Required,
-					Description: a.Description,
-					Schema:      renderOpenAPIRefForType(a.Type),
-				},
-			})
-		default:
-			out.Parameters = append(out.Parameters, &openapi3.ParameterRef{
-				Value: &openapi3.Parameter{
-					Name:        a.Name,
-					In:          a.OpenAPILocation,
-					Required:    a.Required,
-					Description: a.Description,
-					Schema:      renderOpenAPIRefForType(a.Type),
-				},
-			})
 		}
 	}
 	if op.Output != nil {

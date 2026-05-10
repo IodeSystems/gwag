@@ -110,10 +110,11 @@ Shared flags across all three: `--rps`, `--duration`, `--concurrency`,
 - `traffic graphql --query '{...}'` overrides the default greeter query.
 - `traffic grpc/openapi --args '{...}'` provides the request payload;
   resolved against the gateway-rendered FDS (`/api/schema/proto`) or
-  spec (`/api/schema/openapi`). For body-shaped openapi ops the args
-  are sent as both query and body so it works regardless of how the
-  spec declares input (the proto-→-OpenAPI synthesis currently
-  declares unary args as query; see `docs/plan.md`).
+  spec (`/api/schema/openapi`). The openapi adapter honours the spec
+  verbatim: declared path/query params are extracted from `--args`,
+  remaining args land in the JSON body when the op declares a
+  requestBody (proto-unary unary args now synthesise as a body schema,
+  matching `IngressHandler`'s ingressShapeProtoPost decode).
 
 Summary blocks: per-target row with RPS / P50 / P95 / P99 / OK /
 ERRS / CODES, plus example response bodies per status code (so a
@@ -160,11 +161,12 @@ bench/
 - Single host only. Multi-host benchmarking (real network latency,
   separate containers) is a future follow-up — none of this requires
   k8s, but the orchestrator scripts assume `localhost`.
-- Only `greeter` (gRPC-registered) backends are wired up. The three
-  traffic adapters can all hit greeter via different ingress formats
-  (graphql / grpc / openapi) thanks to the IR translation, so format
-  comparisons work today. Adding an OpenAPI- or downstream-GraphQL-
-  registered demo backend is noted in `docs/plan.md` as a follow-up
-  for cross-kind ingress completeness.
+- Only `greeter` (gRPC-registered) backends are wired up by the
+  scale scripts. The three traffic adapters can all hit greeter via
+  different ingress formats (graphql / grpc / openapi) thanks to the
+  IR translation, so format comparisons work today. An OpenAPI- or
+  downstream-GraphQL-registered demo backend would round out per-source
+  perf comparisons but isn't needed for the (ingress × source) matrix
+  to pass — that's covered by `gw/cross_format_ingress_test.go`.
 - Removing the only gateway tears down the JetStream registry. For
   failover testing add at least one extra gateway first.

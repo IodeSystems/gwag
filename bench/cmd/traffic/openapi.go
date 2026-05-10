@@ -213,43 +213,39 @@ func makeOpenAPIFire(timeout time.Duration, concurrency int, httpBase, ingressPr
 		resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p+"}", url.PathEscape(fmt.Sprint(v)))
 	}
 
-	// Send non-path args BOTH as query and as body for body-shaped
-	// methods. The synthesized OpenAPI for proto unary mis-declares
-	// args as query (filed as bug); IngressHandler dispatches proto
-	// unary by reading the body. Sending both means the request is
-	// correct regardless of which way the handler reads it. A native
-	// OpenAPI service that declares only query params just gets an
-	// extra unread body, which IngressHandler ignores when the route
-	// shape is openapi.
+	// Honour the spec verbatim: declared query params come from
+	// argMap; if the op declares a JSON requestBody, every remaining
+	// non-path arg lands in the body. The synthesised OpenAPI now
+	// emits proto-unary args as a body schema (matching IngressHandler's
+	// ingressShapeProtoPost decode), so no double-send fallback.
 	bodyShaped := plan.method == "POST" || plan.method == "PUT" || plan.method == "PATCH"
-	nonPathArgs := map[string]any{}
-	for k, v := range argMap {
-		if !pathConsumed[k] {
-			nonPathArgs[k] = v
-		}
-	}
-
 	q := url.Values{}
 	for _, qp := range plan.queryParams {
 		if v, ok := argMap[qp]; ok {
 			q.Set(qp, fmt.Sprint(v))
 		}
 	}
-	if bodyShaped {
-		for k, v := range nonPathArgs {
-			if !q.Has(k) {
-				q.Set(k, fmt.Sprint(v))
-			}
-		}
-	}
 
 	var bodyBytes []byte
-	sendBody := bodyShaped && len(nonPathArgs) > 0
-	if sendBody {
-		var err error
-		bodyBytes, err = json.Marshal(nonPathArgs)
-		if err != nil {
-			return nil, fmt.Errorf("marshal body: %w", err)
+	sendBody := false
+	if bodyShaped && plan.hasBody {
+		bodyArgs := map[string]any{}
+		for k, v := range argMap {
+			if pathConsumed[k] {
+				continue
+			}
+			if q.Has(k) {
+				continue
+			}
+			bodyArgs[k] = v
+		}
+		if len(bodyArgs) > 0 {
+			var err error
+			bodyBytes, err = json.Marshal(bodyArgs)
+			if err != nil {
+				return nil, fmt.Errorf("marshal body: %w", err)
+			}
+			sendBody = true
 		}
 	}
 
