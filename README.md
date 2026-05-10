@@ -38,24 +38,29 @@ service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    
 
 **Setup:** one Go binary (`gwag`) or a library import — no separate
 control plane to deploy. Cluster is opt-in (one extra flag adds a
-NATS peer); single-node mode is the default. Reflection-based
-dispatch is the default forever and works for any reasonable input;
-codegen and plugin paths layer on as opt-in upgrades when you need
-the perf, never gates on getting started.
+NATS peer); single-node is the default. The default dispatch path
+is reflection-based and accepts any registered service without a
+build step; codegen and plugin paths layer on top when you want
+extra throughput.
 
-**Per-request overhead** (1 k rps × 15 s, loopback, gateway adds
-on top of a direct dial in the matching wire format):
+**Per-request overhead** (1 k rps × 15 s, loopback; gateway adds
+on top of a direct dial in the matching wire format, lib default
+`gwag up`):
 
 | Ingress | Source | Δp50 | Δp95 |
 |---|---|---|---|
-| gRPC | proto upstream | +282 µs | +319 µs |
-| HTTP/JSON | OpenAPI upstream | +212 µs | +239 µs |
-| GraphQL | GraphQL upstream | +343 µs | +482 µs |
+| gRPC | proto upstream | +283 µs | +336 µs |
+| HTTP/JSON | OpenAPI upstream | +208 µs | +245 µs |
+| GraphQL | GraphQL upstream | +344 µs | +505 µs |
 
-Reproduce: `bin/bench-overhead`, or see [§Gateway overhead](#gateway-overhead)
-below for the full recipe + caveats. Cross-kind ingress (e.g. GraphQL
-→ proto upstream) has no direct equivalent — that path only exists
-because the gateway makes it possible.
+Per-request middleware adds on top — one `InjectHeader` rule
+firing on every dispatch costs ~15–20 µs at p50. Reproduce with
+`bin/bench-overhead` (single pass) or `bin/bench-overhead --with-raw`
+(side-by-side `gwag up` vs example gateway with one demo middleware
+rule); see [§Gateway overhead](#gateway-overhead) for the table and
+recipe. Cross-kind ingress (e.g. GraphQL → proto upstream) has no
+direct equivalent — that path only exists because the gateway makes
+it possible.
 
 ## Try it in 60 seconds
 
@@ -119,10 +124,11 @@ discovery, service meshes, or other API gateways](#why-this-vs-service-discovery
 | Setup | one binary | gateway + N federated subgraphs | DB + Hasura | mesh + control plane |
 
 vs. **Apollo Federation:** stitching covers most teams; entity-merging
-across services that share entity identity is overkill until you need
-it (and we don't ship it). vs. **Hasura:** gwag wraps services, not
-databases — owners stay owners. vs. **Kong / Envoy:** those route
-bytes; gwag understands the schema and produces typed clients.
+across services that share entity identity is a Federation feature
+gwag doesn't replicate (use Federation if you need it). vs. **Hasura:**
+gwag wraps services, not databases — owners stay owners. vs. **Kong /
+Envoy:** those route bytes; gwag understands the schema and produces
+typed clients.
 
 ---
 
@@ -471,12 +477,10 @@ client opens the WebSocket with hmac/ts as subscription args →
 gateway verifies HMAC and accepts.
 ```
 
-This inverts the earlier "authorizer delegate" framing where the
-gateway tried to call back out to a registered service at sign
-time. That model forced us to guess what context the authorizer
-would need (user ID? IP? scope? custom claims?) and bake it into
-a delegate proto. With the signer-as-API model, the caller already
-has full request context — composition over prediction.
+The caller in this flow already has the full request context (the
+user's session, the resource being subscribed to, your authz
+policy), so authorization stays where the context lives. The
+gateway doesn't need to learn your authz model.
 
 **Protecting the signer.** Remote (gRPC peer) calls to
 `SignSubscriptionToken` require an `authorization: Bearer <hex>`
@@ -485,7 +489,7 @@ metadata header. The accepted bearers are:
 - `--signer-secret <hex>` (or `WithSignerSecret(...)`) — sign-specific
   bearer; rotate independently of the admin token. Lower blast radius
   than handing out the admin/boot token.
-- The boot/admin token — always-works fallback.
+- The boot/admin token — unconditional fallback.
 
 In-process callers (the huma `/admin/sign` handler, library embedders
 calling `cp.SignSubscriptionToken` directly) bypass the gate — the
@@ -568,7 +572,7 @@ every protected request:
 | `NOT_CONFIGURED`        | Fall through to boot token                 |
 | Transport error / panic | Fall through to boot token                 |
 
-The boot token is the always-works emergency hatch. A delegate that
+The boot token is an unconditional fallback. A delegate that
 crashes, mis-deploys, or DOS's cannot lock operators out — only an
 explicit `DENIED` short-circuits.
 
@@ -695,59 +699,48 @@ gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 > First question every adopter asks: *what does this cost vs. going
 > direct?*
 
-Per-request overhead at p50, measured against three format-native
-upstreams on a single host (loopback; bench numbers, not production):
+Two numbers matter for capacity planning:
 
-| Ingress | Source | Gateway p50 | Direct p50 | Gateway adds (p50 / p95) |
-|---|---|---|---|---|
-| gRPC    | proto upstream  (`hello-proto`)    | 520 µs | 238 µs | **+282 µs / +319 µs** |
-| HTTP/JSON | OpenAPI upstream (`hello-openapi`) | 370 µs | 158 µs | **+212 µs / +239 µs** |
-| GraphQL | GraphQL upstream (`hello-graphql`) | 693 µs | 349 µs | **+343 µs / +482 µs** |
-| Cross-kind (e.g. GraphQL → proto upstream) | n/a — gateway-only path | — | n/a | n/a — no direct equivalent |
+- **Raw** is the lib default — `gwag up`, no application middleware.
+  This is what every dispatch costs before you add anything.
+- **Extras** is the same gateway with one `InjectHeader("X-Source-IP")`
+  rule firing on every outbound dispatch — the example gateway's
+  worked-example dressing. It's the cost of one trivial middleware
+  rule; richer rules add more.
+
+Per-request overhead at 1 k rps × 15 s, loopback:
+
+| Ingress | Source | Direct p50 / p95 | Raw p50 / p95 | Raw Δ p50 / p95 | Extras Δ p50 / p95 | Dressing (extras − raw) p50 / p95 |
+|---|---|---|---|---|---|---|
+| gRPC    | proto upstream  (`hello-proto`)    | 235 / 283 µs | 518 / 618 µs | **+283 / +336 µs** | +297 / +362 µs | +15 / +31 µs |
+| HTTP/JSON | OpenAPI upstream (`hello-openapi`) | 161 / 199 µs | 369 / 444 µs | **+208 / +245 µs** | +224 / +267 µs | +19 / +27 µs |
+| GraphQL | GraphQL upstream (`hello-graphql`) | 353 / 463 µs | 697 / 967 µs | **+344 / +505 µs** | +350 / +508 µs | +8 / +5 µs |
+| Cross-kind (e.g. GraphQL → proto upstream) | gateway-only path | — | — | n/a | n/a | n/a |
 
 Read this as: the gateway's IR translation layer adds ~200–350 µs at
-p50 on this host. The "direct" pass dials the upstream in its native
-wire format (gRPC client for proto; raw HTTP/JSON for OpenAPI; raw
-GraphQL POST for GraphQL); the "gateway" pass routes through the
-matching gateway ingress. Cross-kind ingress (e.g. GraphQL ingress
-hitting an OpenAPI source) has no direct equivalent and is intentionally
-N/A — the cell exists only because the gateway makes it possible.
+p50 on this host before any middleware runs. Each active middleware
+rule on the hot path adds ~15–20 µs at p50 — `InjectHeader` here, but
+also auth, logging, rate-limit, anything else you wire up. The
+"direct" pass dials the upstream in its native wire format; the
+"gateway" passes route through the matching gateway ingress.
+Cross-kind ingress (e.g. GraphQL ingress hitting an OpenAPI source)
+has no direct equivalent and renders N/A — that cell exists only
+because the gateway makes it possible.
 
 **Reproduce locally:**
 
 ```bash
-bin/bench up                                    # n1 + greeter; pulls in prom + grafana
-go run ./examples/multi/cmd/hello-proto    --addr :50055 &
-go run ./examples/multi/cmd/hello-openapi  --addr :50053 &
-go run ./examples/multi/cmd/hello-graphql  --addr :50054 &
-
-bin/bench traffic grpc \
-  --target http://localhost:18080 --grpc-target localhost:50090 \
-  --service hello_proto --method Hello --args '{"name":"world"}' \
-  --direct localhost:50055 \
-  --rps 1000 --duration 15s --server-metrics=false
-
-bin/bench traffic openapi \
-  --target http://localhost:18080 \
-  --service hello_openapi --operation Hello --args '{"name":"world"}' \
-  --direct http://localhost:50053 \
-  --rps 1000 --duration 15s --server-metrics=false
-
-bin/bench traffic graphql \
-  --target http://localhost:18080/api/graphql \
-  --query '{ hello_graphql { hello(name:"world") { greeting } } }' \
-  --direct http://localhost:50054/graphql \
-  --direct-query '{ hello(name:"world") { greeting } }' \
-  --rps 1000 --duration 15s --server-metrics=false
+bin/bench-overhead --with-raw   # raw + extras passes; labeled compare
+bin/bench-overhead              # whatever stack is up; single shape
 ```
 
-Each run prints a side-by-side `gateway` vs `direct` table with mean /
-p50 / p95 / p99 / Δ. Saturation drops, codes, and example bodies are in
-the per-pass blocks above the compare. Numbers above were captured at
-1k rps × 15 s on a quiet workstation; raise `--rps` and `--duration` for
-a steadier signal. There is also a regen recipe at `bin/bench-overhead`
-that runs all three back-to-back and writes the table fragment for
-this README section.
+`bin/bench up` boots a single-gateway stack (n1 + greeter +
+Prometheus + Grafana); `bin/bench up --raw` boots the same with
+`gwag up` instead of the example gateway. Each `bin/bench traffic`
+run prints a `gateway` vs `direct` table with mean / p50 / p95 / p99 / Δ;
+saturation drops, codes, and example bodies are in the per-pass
+blocks above the compare. Raise `--rps` and `--duration` past the
+1 k × 15 s default for a steadier signal.
 
 ## Promotion path
 
@@ -867,11 +860,11 @@ service per request.
 
 ## Design notes
 
-- **Reflection is the default forever.** `.proto` and OpenAPI specs
+- **Reflection-based default path.** `.proto` and OpenAPI specs
   parse at boot via `bufbuild/protocompile` / `kin-openapi`; gRPC
-  calls go out via `dynamicpb`; HTTP calls assemble via the spec.
-  No codegen step required for the simplest path. Codegen and plugin
-  paths are *opt-in upgrades*, never gates on getting started.
+  calls go out via `dynamicpb`; HTTP calls assemble from the spec.
+  Any registered service works without a build step. Codegen and
+  plugin paths layer on as opt-in upgrades for extra throughput.
 - **Path-based identity.** Namespaces default to filename stems;
   collisions across registered files are an error, not silent
   overwrite.
