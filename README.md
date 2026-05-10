@@ -1,74 +1,82 @@
 # gwag
 
-A high throughput, high availability, company-wide api aggregator and transformation library for organizations with lots 
-of small services who want typed clients in multiple request and service provider formats (supports: `graphql`, `proto`, `openapi`).
+**Register every service once, in the protocol it already speaks.
+Clients get typed access in any of three.**
 
-Register every service once — in whichever protocol it already speaks  — and the gateway publishes a single, 
-consolidated, typed surface that *clients* and *other services* both consume:
-
-- **Browser / mobile / TS clients** consume one unified (or any compositionally filtered) **GraphQL** endpoint.
-- **Backend services in any language** consume **proto**, **OpenAPI**, or **GraphQL** generated clients pointed at the 
-  gateway, regardless of the published protocol.
-
-Same schema, two transports. The gateway routes, transforms,
-handles backpressure, meters, rate limits, and provides a single high availability gateway with service teams keep owning
-their own services; registering, updating, deprecating, and removing versions of their service in a responsible manner. 
-
-## Who it's for
-
-You have N small backend services and M client teams. Each service
-has its own auth, its own logging, its own deprecation policy, and
-its own idea of how to surface itself to the world. Pain points
-this is built for:
-
-- Frontend teams want one schema, not N. A new TS hire shouldn't
-  need to learn five service URLs and three auth schemes.
-- Backend teams calling each other want **typed** clients, not
-  hand-rolled HTTP. Whatever their language ecosystem prefers —
-  proto for Go/Java/Rust/Python, OpenAPI for TS/C#/anything else.
-- Platform teams want auth and logging applied centrally as
-  middleware, not re-implemented in every service.
-- SREs want overload protection, health checks, and graceful drain
-  without each service inventing its own answer.
-- Schema owners want to **deprecate and retire** old versions
-  without hurting active callers.
-
-## What you get
-
-| | |
-|---|---|
-| **Single GraphQL surface** | One `/api/graphql` for clients. Query / mutation / subscription. |
-| **Multi-protocol ingest** | Services register over `.proto`, OpenAPI 3.x JSON/YAML, or downstream GraphQL stitching. |
-| **Multi-protocol egress** | Same registry re-exposed as proto FDS (`/api/schema/proto`), OpenAPI (`/api/schema/openapi`), and GraphQL SDL (`/api/schema/graphql`) — codegen typed clients for any language. |
-| **Multi-protocol *ingress*** | Clients can hit the gateway over GraphQL **or** proto-style HTTP/JSON **or** native gRPC. Same dispatcher, same middleware, same backpressure. |
-| **Tier-based versioning** | Three tiers per namespace: `unstable` (mutable trunk, always-overwrites), `stable` (alias to the most-recent cut), `vN` (pinned historical cuts, auto-`@deprecated` as newer cuts arrive). Per-gateway `--allow-tier` policy gates which tiers can register. Schema diff in CI catches breaking changes. |
-| **Auth & logging as middleware** | One declaration applies everywhere — see `HideAndInject` for the canonical "hide auth fields, fill them from context" pattern. |
-| **Per-pool backpressure** | Slow service X can't gate dispatches to service Y. Per-replica caps too. |
-| **HA cluster** | Embedded NATS + JetStream KV registry. Any node dispatches to any service registered with any peer. |
-| **Subscriptions over NATS** | `rpc Foo(F) returns (stream E)` becomes a flat GraphQL subscription field. Services publish to NATS subjects; gateway fans out to WebSockets. |
-| **Health, drain, metrics** | `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus surface. |
-
-## The shape end-to-end
+`.proto`, OpenAPI 3.x, downstream GraphQL → one consolidated GraphQL
+surface for browser/mobile, **plus** typed proto/OpenAPI/GraphQL
+clients (codegen-friendly) for service-to-service. Same schema, same
+auth middleware, same backpressure, same metrics across all three.
 
 ```
-                     ┌──────────────────────────┐
-TS / mobile clients ─┤                          │
-                     │                          │
-Java / Python / Go ──┤      go-api-gateway      ├── auth-svc       (.proto)
-service-to-service   │                          ├── billing-svc    (OpenAPI)
-                     │   one schema, many       ├── inventory-svc  (.proto)
-                     │   protocols              ├── legacy-svc     (downstream GraphQL)
-                     │                          ├── ...
-                     └──────────────────────────┘
+TS / mobile ─┐                              ┌── auth-svc      (.proto)
+             ├──▶  /api/graphql      ──┐    ├── billing-svc   (OpenAPI)
+service A ──▶│  /api/schema/{*} ◀── codegen ├── inventory-svc (.proto)
+service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    (GraphQL stitch)
+             └──┬─ gwag (1 binary) ─┬─┘     ├── …
+                │ tiered versioning │       └── any new service: register at runtime
+                │ HA via NATS + JS  │
+                │ subscriptions out │
+                └───────────────────┘
 ```
 
-Services register at runtime via the control-plane gRPC (or boot-time
-via `AddProto` / `AddOpenAPI` / `AddGraphQL`). The gateway hashes the
-schema into a JetStream KV bucket; every peer's reconciler picks it
-up and starts dispatching. Schema rebuild is automatic and atomic —
-clients see the new fields the moment registration completes.
+## What you get for it
 
-## Quick start
+- **One GraphQL surface for clients** — no juggling N service URLs and M auth schemes; deprecations propagate through to client codegen.
+- **Typed clients in all three formats for service-to-service** — proto FDS / OpenAPI / GraphQL SDL all re-emitted, simultaneously, from the same registry.
+- **Live-reload schema** — services self-register over the gRPC control plane; new fields land without a gateway redeploy.
+- **Tier-based versioning** — `unstable` / `stable` / `vN`; older `vN` auto-`@deprecated`; CI gate on schema diff.
+- **HA out of the box** — embedded NATS + JetStream KV; any node dispatches to any service registered with any peer.
+- **Subscriptions for free** — server-streaming gRPC becomes a flat GraphQL subscription field; one upstream publish fans out to N WebSocket clients via NATS.
+- **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y.
+- **Auth / logging as middleware** — one declaration applies across every protocol. `HideAndInject` for the "fill auth from context, hide from external schema" pattern.
+- **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus.
+
+## Cost
+
+**Setup:** one Go binary (`gwag`) or a library import — no separate
+control plane to deploy. Cluster is opt-in (one extra flag adds a
+NATS peer); single-node mode is the default. Reflection-based
+dispatch is the default forever and works for any reasonable input;
+codegen and plugin paths layer on as opt-in upgrades when you need
+the perf, never gates on getting started.
+
+**Per-request overhead** (1 k rps × 15 s, loopback, gateway adds
+on top of a direct dial in the matching wire format):
+
+| Ingress | Source | Δp50 | Δp95 |
+|---|---|---|---|
+| gRPC | proto upstream | +282 µs | +319 µs |
+| HTTP/JSON | OpenAPI upstream | +212 µs | +239 µs |
+| GraphQL | GraphQL upstream | +343 µs | +482 µs |
+
+Reproduce: `bin/bench-overhead`, or see [§Gateway overhead](#gateway-overhead)
+below for the full recipe + caveats. Cross-kind ingress (e.g. GraphQL
+→ proto upstream) has no direct equivalent — that path only exists
+because the gateway makes it possible.
+
+## Try it in 60 seconds
+
+```bash
+git clone https://github.com/iodesystems/go-api-gateway && cd go-api-gateway
+cd examples/multi && ./run.sh        # gateway + greeter + library
+```
+
+In another terminal:
+
+```bash
+curl -s -X POST http://localhost:8080/api/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"{ greeter { hello(name:\"world\") { greeting } } }"}'
+# → {"data":{"greeter":{"hello":{"greeting":"Hello, world!"}}}}
+```
+
+`Ctrl-C` in the first terminal cleans everything up.
+
+For the full bench / Prometheus / Grafana stack: `bin/bench up`. For
+the operator CLI: `gwag --help`.
+
+Library equivalent of the above:
 
 ```go
 gw := gateway.New()
@@ -80,31 +88,41 @@ gw.AddOpenAPI("./billing-openapi.json",
 http.ListenAndServe(":8080", gw.Handler())
 ```
 
-GraphQL surface for clients:
-
-```graphql
-query {
-  auth    { whoami { ... } }
-  user    { profile(id: "...") { ... } }
-  billing { invoice(id: "...") { ... } }
-}
-```
-
-Proto surface for service-to-service callers (compiled into your
-language's grpc client):
+Codegen the typed S2S clients for any registered service:
 
 ```bash
-$ curl https://gw.internal/api/schema/proto?service=billing > billing.fds
-$ buf generate --template buf.gen.yaml billing.fds   # or protoc, etc.
+curl https://gw.internal/api/schema/proto?service=billing > billing.fds
+buf generate billing.fds                                  # proto stack
+
+curl https://gw.internal/api/schema/openapi?service=billing > billing.json
+openapi-generator-cli generate -i billing.json -g typescript-axios -o ./gen
 ```
 
-OpenAPI surface for the same backend, for TS/C#/anything that prefers
-it:
+## Why this vs. the alternatives
 
-```bash
-$ curl https://gw.internal/api/schema/openapi?service=billing > billing.json
-$ openapi-generator-cli generate -i billing.json -g typescript-axios -o ./gen
-```
+The short version (deeper comparison in [§Why this vs. service
+discovery, service meshes, or other API gateways](#why-this-vs-service-discovery-service-meshes-or-other-api-gateways)):
+
+| | gwag | Apollo Federation | Hasura | Kong / Envoy |
+|---|---|---|---|---|
+| Single schema across services | ✓ | ✓ (GraphQL only) | ✓ (DB-centric) | ✗ (route-level only) |
+| Ingest gRPC `.proto` natively | ✓ | ✗ | ✗ | partial |
+| Ingest OpenAPI 3.x natively | ✓ | ✗ | ✗ | partial |
+| Stitch downstream GraphQL | ✓ | ✓ (federation) | ✗ | ✗ |
+| Re-emit proto / OpenAPI for typed S2S clients | ✓ | ✗ | ✗ | ✗ |
+| Subscriptions out of the box | ✓ (NATS) | partial | ✓ (DB triggers) | ✗ |
+| Runtime schema reload | ✓ (control plane) | restart | ✓ (DDL) | restart / config push |
+| Tiered versioning + deprecation | ✓ (`unstable`/`stable`/`vN`) | manual | manual | manual |
+| HA cluster | ✓ (embedded NATS / JetStream) | ✓ | ✓ | ✓ |
+| Setup | one binary | gateway + N federated subgraphs | DB + Hasura | mesh + control plane |
+
+vs. **Apollo Federation:** stitching covers most teams; entity-merging
+across services that share entity identity is overkill until you need
+it (and we don't ship it). vs. **Hasura:** gwag wraps services, not
+databases — owners stay owners. vs. **Kong / Envoy:** those route
+bytes; gwag understands the schema and produces typed clients.
+
+---
 
 ## Service lifecycle
 
