@@ -4,7 +4,7 @@ schema {
 }
 
 type AdminMutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
@@ -20,7 +20,7 @@ type AdminQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
-  serviceStats(window: String, namespace: String!, version: String!): admin_ServiceStatsOutBody
+  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
   stable: AdminStableQueryNamespace!
@@ -31,7 +31,7 @@ type AdminStableMutationNamespace {
   deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
-  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -48,7 +48,7 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
-  deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody

@@ -147,6 +147,29 @@ type Gateway struct {
 	// on every assembleLocked so dormant→active and active→dormant
 	// transitions log exactly once. Caller holds g.mu.
 	injectPathStates map[string]InjectorState
+
+	// rejectedJoins counts and timestamps registerSlotLocked
+	// rejections per slot key, so /admin/services can surface "this
+	// slot rejected N joins with caps X (currently running Y)" before
+	// an operator has to profile a stale-config bug. See plan Tier 3
+	// "Loud surface for slot-policy mismatches on `vN` joins". Caller
+	// holds g.mu.
+	rejectedJoins map[poolKey]*rejectedJoinSummary
+}
+
+// rejectedJoinSummary captures the most recent rejection plus a
+// running count for one slot. The latest reason / caps are sufficient
+// for triage — pre-fork reproduction showed the rejection is usually
+// uniform within a stale-config window (every replica binary sends
+// the same wrong caps).
+type rejectedJoinSummary struct {
+	Count                            uint32
+	LastReason                       string
+	LastUnixMs                       int64
+	LastMaxConcurrency               int
+	LastMaxConcurrencyPerInstance    int
+	CurrentMaxConcurrency            int
+	CurrentMaxConcurrencyPerInstance int
 }
 
 type Option func(*config)

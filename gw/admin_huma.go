@@ -72,16 +72,32 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Snapshot rejected-join counters under g.mu — orthogonal to
+		// the proto wire shape so we can surface them without proto
+		// regen. Lookups by (namespace, version).
+		rej := cp.gw.rejectedJoinsSnapshot()
 		out := &servicesOut{}
 		out.Body.Services = []serviceInfo{}
 		for _, s := range resp.GetServices() {
-			out.Body.Services = append(out.Body.Services, serviceInfo{
+			info := serviceInfo{
 				Namespace:               s.GetNamespace(),
 				Version:                 s.GetVersion(),
 				HashHex:                 s.GetHashHex(),
 				ReplicaCount:            s.GetReplicaCount(),
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
-			})
+			}
+			if r := rej[poolKey{namespace: s.GetNamespace(), version: s.GetVersion()}]; r != nil {
+				info.RejectedJoins = &rejectedJoinInfo{
+					Count:                            r.Count,
+					LastReason:                       r.LastReason,
+					LastUnixMs:                       r.LastUnixMs,
+					LastMaxConcurrency:               r.LastMaxConcurrency,
+					LastMaxConcurrencyPerInstance:    r.LastMaxConcurrencyPerInstance,
+					CurrentMaxConcurrency:            r.CurrentMaxConcurrency,
+					CurrentMaxConcurrencyPerInstance: r.CurrentMaxConcurrencyPerInstance,
+				}
+			}
+			out.Body.Services = append(out.Body.Services, info)
 		}
 		out.Body.StableVN = []stableVNEntry{}
 		for ns, vN := range resp.GetStableVn() {
@@ -634,6 +650,25 @@ type serviceInfo struct {
 	// deprecation. Auto-deprecation (older `vN`) is computed by the
 	// UI from `version` plus the namespace's latest registered `vN`.
 	ManualDeprecationReason string `json:"manualDeprecationReason,omitempty"`
+	// RejectedJoins surfaces the running `registerSlotLocked`
+	// rejection counter for this slot's (namespace, version) — set
+	// when a registration arrives whose caps / hash / kind don't
+	// match the existing vN occupant. Helps operators spot stale
+	// JetStream KV state vs. binary-version drift without profiling.
+	RejectedJoins *rejectedJoinInfo `json:"rejectedJoins,omitempty"`
+}
+
+// rejectedJoinInfo is the admin-side projection of
+// rejectedJoinSummary (defined on the Gateway). Hides the internal
+// struct from the huma surface and gives the JSON shape stable.
+type rejectedJoinInfo struct {
+	Count                            uint32 `json:"count"`
+	LastReason                       string `json:"lastReason"`
+	LastUnixMs                       int64  `json:"lastUnixMs"`
+	LastMaxConcurrency               int    `json:"lastMaxConcurrency"`
+	LastMaxConcurrencyPerInstance    int    `json:"lastMaxConcurrencyPerInstance"`
+	CurrentMaxConcurrency            int    `json:"currentMaxConcurrency"`
+	CurrentMaxConcurrencyPerInstance int    `json:"currentMaxConcurrencyPerInstance"`
 }
 
 // stableVNEntry surfaces the per-namespace stable alias target. Plan §4

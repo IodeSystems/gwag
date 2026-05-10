@@ -94,6 +94,73 @@ func TestRegisterSlot_VN_DiffCapsRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "different concurrency caps") {
 		t.Errorf("error %q missing 'different concurrency caps'", err.Error())
 	}
+	// Plan Tier 3 fix (2): the rejection should land on the per-slot
+	// rejectedJoins counter so /admin/services can surface stale-config
+	// drift before someone profiles.
+	sum := g.rejectedJoins[key("greeter", "v1")]
+	if sum == nil {
+		t.Fatalf("rejectedJoins not recorded for greeter/v1")
+	}
+	if sum.Count != 1 {
+		t.Errorf("Count=%d want 1", sum.Count)
+	}
+	if !strings.Contains(sum.LastReason, "different concurrency caps") {
+		t.Errorf("LastReason=%q missing caps mismatch", sum.LastReason)
+	}
+	if sum.LastMaxConcurrency != 128 || sum.LastMaxConcurrencyPerInstance != 16 {
+		t.Errorf("Last caps=(%d,%d) want (128,16)", sum.LastMaxConcurrency, sum.LastMaxConcurrencyPerInstance)
+	}
+	if sum.CurrentMaxConcurrency != 64 || sum.CurrentMaxConcurrencyPerInstance != 16 {
+		t.Errorf("Current caps=(%d,%d) want (64,16)", sum.CurrentMaxConcurrency, sum.CurrentMaxConcurrencyPerInstance)
+	}
+
+	// Subsequent rejection bumps the counter.
+	_, _ = g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 256, 32)
+	sum = g.rejectedJoins[key("greeter", "v1")]
+	if sum.Count != 2 {
+		t.Errorf("Count after second rejection=%d want 2", sum.Count)
+	}
+}
+
+// TestRegisterSlot_RejectedJoinsClearedOnSlotRelease pins fix (1)'s
+// behavior: when the slot's last replica heartbeats out (modeled
+// here as releaseSlotLocked), both the slot AND its rejectedJoins
+// summary clear, so a fresh registration with new caps installs
+// without operator intervention and admin no longer surfaces a
+// stale rejection.
+func TestRegisterSlot_RejectedJoinsClearedOnSlotRelease(t *testing.T) {
+	g := newSlotGateway(t)
+	hash := [32]byte{11}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16); err == nil {
+		t.Fatalf("expected reject")
+	}
+	if g.rejectedJoins[key("greeter", "v1")] == nil {
+		t.Fatal("rejectedJoins missing after rejection")
+	}
+
+	// Simulate the natural drop path: removeReplicaByIDLocked-style
+	// cleanup ends in releaseSlotLocked when the pool empties.
+	g.releaseSlotLocked(key("greeter", "v1"))
+	if _, ok := g.slots[key("greeter", "v1")]; ok {
+		t.Fatal("slot still present after release")
+	}
+	if g.rejectedJoins[key("greeter", "v1")] != nil {
+		t.Fatal("rejectedJoins not cleared with slot")
+	}
+
+	// Fresh registration with a different cap profile — should
+	// succeed now that the slot is gone.
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16); err != nil {
+		t.Fatalf("re-register after release: %v", err)
+	}
+	if g.rejectedJoins[key("greeter", "v1")] != nil {
+		t.Fatal("clean re-register left a rejectedJoins entry")
+	}
 }
 
 func TestRegisterSlot_VN_CrossKindRejected(t *testing.T) {

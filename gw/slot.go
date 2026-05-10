@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
@@ -127,17 +128,20 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 		return true, nil
 	}
 	if key.version != "unstable" {
+		var rej error
 		switch {
 		case !sameKind:
-			return false, fmt.Errorf("%s/%s already registered as %s; cannot re-register as %s",
+			rej = fmt.Errorf("%s/%s already registered as %s; cannot re-register as %s",
 				key.namespace, key.version, s.kind, kind)
 		case !sameHash:
-			return false, fmt.Errorf("%s/%s already registered with different schema hash; vN is locked once registered (cut v(N+1) for a new schema, or use unstable for the mutable slot)",
+			rej = fmt.Errorf("%s/%s already registered with different schema hash; vN is locked once registered (cut v(N+1) for a new schema, or use unstable for the mutable slot)",
 				key.namespace, key.version)
 		default:
-			return false, fmt.Errorf("%s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
+			rej = fmt.Errorf("%s/%s already registered with different concurrency caps (have max=%d/inst=%d, got max=%d/inst=%d)",
 				key.namespace, key.version, s.maxConcurrency, s.maxConcurrencyPerInstance, maxConcurrency, maxConcurrencyPerInstance)
 		}
+		g.recordRejectedJoinLocked(key, s, rej.Error(), maxConcurrency, maxConcurrencyPerInstance)
+		return false, rej
 	}
 	// unstable swap: evict the prior occupant — including its kind-
 	// specific storage if the kind changed — and install a fresh slot
@@ -174,8 +178,56 @@ func (g *Gateway) evictSlotLocked(s *slot) {
 // `removeReplicasByOwnerLocked`, and the OpenAPI / GraphQL analogues)
 // when a pool/source empties on the natural deregister path. Caller
 // holds g.mu.
+//
+// Also clears any rejected-join counter for the key — the slot is
+// gone, so a fresh registration with new caps will succeed; the
+// stale-config triage signal isn't relevant anymore.
 func (g *Gateway) releaseSlotLocked(key poolKey) {
 	delete(g.slots, key)
+	delete(g.rejectedJoins, key)
+}
+
+// rejectedJoinsSnapshot returns a copy of the per-slot rejection
+// summaries safe to read outside g.mu (the values are pointers, but
+// the per-slot struct is copied so a concurrent
+// recordRejectedJoinLocked won't tear the read).
+func (g *Gateway) rejectedJoinsSnapshot() map[poolKey]*rejectedJoinSummary {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.rejectedJoins) == 0 {
+		return nil
+	}
+	out := make(map[poolKey]*rejectedJoinSummary, len(g.rejectedJoins))
+	for k, v := range g.rejectedJoins {
+		copy := *v
+		out[k] = &copy
+	}
+	return out
+}
+
+// recordRejectedJoinLocked records a vN registerSlotLocked rejection
+// against the key's running summary so /admin/services can surface
+// "rejected N joins with caps X, currently running Y" without an
+// operator having to profile to find the stale-config issue. Caller
+// holds g.mu.
+func (g *Gateway) recordRejectedJoinLocked(key poolKey, occupant *slot, reason string, attemptedMax, attemptedPerInst int) {
+	if g.rejectedJoins == nil {
+		g.rejectedJoins = map[poolKey]*rejectedJoinSummary{}
+	}
+	sum := g.rejectedJoins[key]
+	if sum == nil {
+		sum = &rejectedJoinSummary{}
+		g.rejectedJoins[key] = sum
+	}
+	sum.Count++
+	sum.LastReason = reason
+	sum.LastUnixMs = time.Now().UnixMilli()
+	sum.LastMaxConcurrency = attemptedMax
+	sum.LastMaxConcurrencyPerInstance = attemptedPerInst
+	if occupant != nil {
+		sum.CurrentMaxConcurrency = occupant.maxConcurrency
+		sum.CurrentMaxConcurrencyPerInstance = occupant.maxConcurrencyPerInstance
+	}
 }
 
 // protoSlot returns the proto pool stored on the slot at `key`, or
