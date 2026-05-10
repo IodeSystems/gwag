@@ -312,3 +312,94 @@ func collectPathArgInGroup(grp *ir.OperationGroup, svc *ir.Service, opName, arg 
 		collectPathArgInGroup(sub, svc, opName, arg, out)
 	}
 }
+
+// injectPathTransition is one InjectPath state change observed by
+// evalInjectPathStatesLocked. Returned to callers (Use,
+// assembleLocked) so logging stays separable from state tracking;
+// tests inspect transitions without capturing stdout.
+type injectPathTransition struct {
+	Path     string
+	Previous InjectorState // zero value when Initial=true
+	Current  InjectorState
+	Initial  bool // true on the first evaluation for Path
+}
+
+// evalInjectPathStatesLocked diff-checks every InjectPath rule in
+// g.transforms against the live raw IR and returns the transitions
+// to emit. The first evaluation surfaces a transition when a rule
+// registers dormant (no schema landing matches); subsequent
+// evaluations emit on dormant→active and active→dormant. Hooked
+// from Use(...) (registration-time pass) and from assembleLocked
+// (every schema rebuild).
+//
+// Skipped silently when collectIRRawLocked errors — the inventory
+// endpoint surfaces the same data on demand, and a transient
+// snapshot failure shouldn't block schema assembly. Caller holds
+// g.mu.
+func (g *Gateway) evalInjectPathStatesLocked() []injectPathTransition {
+	svcs, err := g.collectIRRawLocked()
+	if err != nil {
+		return nil
+	}
+	if g.injectPathStates == nil {
+		g.injectPathStates = map[string]InjectorState{}
+	}
+	var transitions []injectPathTransition
+	seen := map[string]bool{}
+	for _, tx := range g.transforms {
+		for _, rec := range tx.Inventory {
+			if rec.Kind != InjectorKindPath || rec.Path == "" {
+				continue
+			}
+			if seen[rec.Path] {
+				continue
+			}
+			seen[rec.Path] = true
+
+			current := InjectorStateDormant
+			if len(landingsForPath(svcs, rec.Path)) > 0 {
+				current = InjectorStateActive
+			}
+			previous, known := g.injectPathStates[rec.Path]
+			switch {
+			case !known:
+				if current == InjectorStateDormant {
+					transitions = append(transitions, injectPathTransition{
+						Path: rec.Path, Current: current, Initial: true,
+					})
+				}
+			case previous != current:
+				transitions = append(transitions, injectPathTransition{
+					Path: rec.Path, Previous: previous, Current: current,
+				})
+			}
+			g.injectPathStates[rec.Path] = current
+		}
+	}
+	return transitions
+}
+
+// logInjectPathTransitions emits one log line per transition.
+// Routed through the embedded NATS warn channel when a cluster is
+// configured (mirrors warnSubscribeDelegateDeprecated); fmt.Println
+// otherwise. Caller need not hold g.mu.
+func (g *Gateway) logInjectPathTransitions(transitions []injectPathTransition) {
+	for _, t := range transitions {
+		var msg string
+		switch {
+		case t.Initial && t.Current == InjectorStateDormant:
+			msg = fmt.Sprintf("gateway: InjectPath(%q) registered dormant — no schema landing matches; rule activates if a future schema rebuild brings the path into existence.", t.Path)
+		case t.Current == InjectorStateActive:
+			msg = fmt.Sprintf("gateway: InjectPath(%q) activated — schema rebuild brought the path into existence.", t.Path)
+		case t.Current == InjectorStateDormant:
+			msg = fmt.Sprintf("gateway: InjectPath(%q) deactivated — schema rebuild removed the path; rule no-ops until it returns.", t.Path)
+		default:
+			continue
+		}
+		if g.cfg.cluster != nil {
+			g.cfg.cluster.Server.Warnf("%s", msg)
+		} else {
+			fmt.Println(msg)
+		}
+	}
+}

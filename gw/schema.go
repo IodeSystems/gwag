@@ -39,6 +39,12 @@ func (g *Gateway) assembleLocked() error {
 	}
 	g.rebuildIngressLocked()
 	g.rebuildGRPCIngressLocked()
+	// Re-check InjectPath landings against the rebuilt IR so any
+	// dormant→active or active→dormant transition surfaces exactly
+	// once. Same evaluator runs on Use(...) for the registration-time
+	// warning.
+	transitions := g.evalInjectPathStatesLocked()
+	g.logInjectPathTransitions(transitions)
 	return nil
 }
 

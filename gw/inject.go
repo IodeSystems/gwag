@@ -294,10 +294,12 @@ func Nullable(nullable bool) InjectOption { return nullableOption(nullable) }
 // applies to every format; runtime injection runs for proto
 // dispatchers only.
 //
-// Path miss is silent today — at every schema rebuild, paths that
-// resolve fire; paths that don't are dormant. The dormant warn-log +
-// resolver-return-type validation are deferred to the injector
-// inventory work.
+// Dormant rules log once at registration and again on activation /
+// deactivation transitions (`evalInjectPathStatesLocked`, hooked from
+// `Use(...)` and `assembleLocked`); the inventory endpoint surfaces
+// the live state alongside Hide/Nullable/RegisteredAt. Resolver
+// return-type validation is still deferred — runtime errors today
+// surface via Reject when `argsToMessage` fails.
 func InjectPath(path string, resolve func(ctx context.Context, current any) (any, error), opts ...InjectOption) Transform {
 	cfg := injectConfig{hide: true}
 	for _, o := range opts {

@@ -139,6 +139,14 @@ type Gateway struct {
 	// delegate path under _events_auth/v1 is being collapsed in favor of
 	// the signer-as-API model — see plan §2.
 	warnedEventsAuth sync.Map
+
+	// injectPathStates is the per-rule activation tracker for
+	// InjectPath transforms. Keyed by path string ("ns.op.arg"); value
+	// is the last known InjectorState observed by
+	// evalInjectPathStatesLocked. Populated on Use(...) and refreshed
+	// on every assembleLocked so dormant→active and active→dormant
+	// transitions log exactly once. Caller holds g.mu.
+	injectPathStates map[string]InjectorState
 }
 
 type Option func(*config)
@@ -1048,6 +1056,12 @@ func (g *Gateway) Use(transforms ...Transform) {
 	// what changes is that slot.ir already reflects the new injectors
 	// when the next rebuild reads it.
 	g.rebakeAllSlotsLocked()
+	// Evaluate InjectPath landings against the live IR so newly
+	// registered rules surface a one-time dormant warning and any
+	// state transitions emit exactly once. Same evaluator runs at
+	// schema rebuild (assembleLocked).
+	transitions := g.evalInjectPathStatesLocked()
+	g.logInjectPathTransitions(transitions)
 }
 
 // Handler returns the http.Handler that serves the GraphQL schema.

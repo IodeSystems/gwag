@@ -188,3 +188,99 @@ func TestInjectorInventory_Empty(t *testing.T) {
 		t.Errorf("entries=%+v; want empty when no Use() calls", entries)
 	}
 }
+
+// TestEvalInjectPathStates_RegisterDormant covers the registration
+// pass: an InjectPath whose path doesn't resolve in the live IR
+// surfaces an Initial+Dormant transition exactly once. A subsequent
+// re-eval (no schema change) emits no further transitions.
+func TestEvalInjectPathStates_RegisterDormant(t *testing.T) {
+	g := inventoryTestGateway(t)
+	g.Use(InjectPath("user.NoSuchOp.foo", func(_ context.Context, _ any) (any, error) {
+		return nil, nil
+	}))
+
+	g.mu.Lock()
+	state := g.injectPathStates["user.NoSuchOp.foo"]
+	transitions := g.evalInjectPathStatesLocked()
+	g.mu.Unlock()
+
+	if state != InjectorStateDormant {
+		t.Fatalf("post-Use state=%q want dormant", state)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("re-eval surfaced unexpected transitions: %+v", transitions)
+	}
+}
+
+// TestEvalInjectPathStates_DormantToActive covers the activation
+// transition: an InjectPath registered before its target schema
+// shows up flips dormant→active when a slot brings the path into
+// existence on the next eval.
+func TestEvalInjectPathStates_DormantToActive(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	t.Cleanup(g.Close)
+	g.Use(InjectPath("user.GetMe.auth", func(_ context.Context, _ any) (any, error) {
+		return nil, nil
+	}))
+
+	g.mu.Lock()
+	pre := g.injectPathStates["user.GetMe.auth"]
+	g.mu.Unlock()
+	if pre != InjectorStateDormant {
+		t.Fatalf("pre-register state=%q want dormant (no slots yet)", pre)
+	}
+
+	if err := g.AddProtoDescriptor(userv1.File_user_proto, To("127.0.0.1:1"), As("user")); err != nil {
+		t.Fatalf("AddProtoDescriptor: %v", err)
+	}
+
+	g.mu.Lock()
+	transitions := g.evalInjectPathStatesLocked()
+	post := g.injectPathStates["user.GetMe.auth"]
+	g.mu.Unlock()
+
+	if post != InjectorStateActive {
+		t.Fatalf("post-register state=%q want active", post)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("transitions=%+v want exactly 1 dormant→active", transitions)
+	}
+	tr := transitions[0]
+	if tr.Path != "user.GetMe.auth" || tr.Previous != InjectorStateDormant || tr.Current != InjectorStateActive || tr.Initial {
+		t.Fatalf("transition=%+v want {path:user.GetMe.auth dormant→active}", tr)
+	}
+
+	// Re-eval is silent — already-active rule shouldn't re-fire.
+	g.mu.Lock()
+	tr2 := g.evalInjectPathStatesLocked()
+	g.mu.Unlock()
+	if len(tr2) != 0 {
+		t.Errorf("idempotent re-eval surfaced transitions: %+v", tr2)
+	}
+}
+
+// TestEvalInjectPathStates_RegisterActiveSilent confirms the
+// initial-eval shape only emits when the rule is dormant: registering
+// an InjectPath against an already-present schema is a no-op as far
+// as the lifecycle log is concerned.
+func TestEvalInjectPathStates_RegisterActiveSilent(t *testing.T) {
+	g := inventoryTestGateway(t)
+
+	// Use() runs evalInjectPathStatesLocked under g.mu. Capture the
+	// final state map directly — Initial+Active produces no transition.
+	g.Use(InjectPath("user.GetMe.auth", func(_ context.Context, _ any) (any, error) {
+		return nil, nil
+	}))
+
+	g.mu.Lock()
+	state := g.injectPathStates["user.GetMe.auth"]
+	transitions := g.evalInjectPathStatesLocked()
+	g.mu.Unlock()
+
+	if state != InjectorStateActive {
+		t.Fatalf("state=%q want active", state)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("re-eval transitions=%+v want none", transitions)
+	}
+}
