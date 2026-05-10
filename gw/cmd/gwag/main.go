@@ -9,6 +9,9 @@
 //	     --proto path/to/bar.proto=billing@bar-svc:50051 \
 //	     --addr :8080
 //
+//	# Run a gateway that also accepts runtime registrations:
+//	gwag --control-plane :50090 --addr :8080
+//
 //	# Talk to a running gateway:
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
@@ -25,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -114,14 +118,16 @@ func runGateway() {
 	var protos protoFlag
 	flag.Var(&protos, "proto", "PATH=[NS@]ADDR (repeatable)")
 	addr := flag.String("addr", ":8080", "HTTP listen address")
+	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] --proto PATH=[NS@]ADDR ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if len(protos) == 0 {
+	if len(protos) == 0 && *cpAddr == "" {
+		fmt.Fprintln(os.Stderr, "gwag: nothing to serve — pass --proto for static registration, --control-plane for runtime registration, or both")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -143,8 +149,27 @@ func runGateway() {
 		log.Printf("registered %s → %s", p.path, p.addr)
 	}
 
+	if *cpAddr != "" {
+		cpLis, err := net.Listen("tcp", *cpAddr)
+		if err != nil {
+			log.Fatalf("listen control plane: %v", err)
+		}
+		srv := grpc.NewServer(grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
+		cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
+		go func() {
+			log.Printf("control plane listening on %s", *cpAddr)
+			if err := srv.Serve(cpLis); err != nil {
+				log.Fatalf("control plane serve: %v", err)
+			}
+		}()
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", gw.MetricsHandler())
+	mux.Handle("/health", gw.HealthHandler())
+	mux.Handle("/", gw.Handler())
 	log.Printf("listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, gw.Handler()); err != nil {
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
 	}
 }

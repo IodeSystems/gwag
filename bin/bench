@@ -15,8 +15,12 @@
 #
 # Cluster (gateway processes — n1, n2, ...):
 #   bench gw                  list live gateways
-#   bench gw add [--name N]   spawn another gateway, joining the
-#                              existing NATS cluster via --nats-peer
+#   bench gw add [--name N] [--raw]
+#                              spawn another gateway, joining the
+#                              existing NATS cluster via --nats-peer.
+#                              --raw uses the bare gwag binary
+#                              (no NATS/UI/admin/middleware) so the
+#                              bench measures lib-default overhead.
 #   bench gw remove NAME      kill + clean up
 #
 # Services (anything registered against the gateway):
@@ -76,7 +80,7 @@ cmd_up() {
         # cached .run/bin/gateway that embeds the OLD ui/dist/. Drop
         # the cache so up.sh re-runs `go build` and the freshly-
         # generated SPA bundle gets baked in.
-        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register"
+        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register"
     fi
     "$BENCH_DIR/up.sh"
 }
@@ -114,10 +118,11 @@ cmd_restart() {
 # refresh picks up the new scrape target.
 gw_add() {
     ensure_dirs
-    local name=""
+    local name="" raw=0
     while (($#)); do
         case $1 in
             --name) name=$2; shift 2 ;;
+            --raw) raw=1; shift ;;
             -h|--help) usage 0 ;;
             *) echo "unknown arg: $1" >&2; usage ;;
         esac
@@ -136,10 +141,46 @@ gw_add() {
     local nats_cluster=$((NATS_CLUSTER_BASE + idx - 1))
     local data="$NATS_DIR/$name"
     mkdir -p "$data"
+
+    if [[ $raw == 1 ]]; then
+        # Raw mode: bare gwag binary — no NATS embed, no UI, no admin
+        # middleware, no InjectPath/InjectHeader. The point is to give
+        # the bench a baseline that reflects what a non-library
+        # adopter sees, without the example gateway's worked-example
+        # dressing. GraphQL mounts at / (no /api prefix).
+        if [[ ! -x $BIN_DIR/gwag ]]; then
+            (cd "$REPO_DIR" && go build -o "$BIN_DIR/gwag" ./gw/cmd/gwag)
+        fi
+        cat > "$GW_DIR/$name.env" <<EOF
+NAME=$name
+KIND=raw
+HTTP_PORT=$http
+CP_PORT=$cp
+NATS_LISTEN=
+NATS_CLUSTER=
+DATA=$data
+PID=0
+EOF
+        echo "==> launching gateway $name (raw; http=:$http control-plane=:$cp)"
+        "$BIN_DIR/gwag" \
+            --addr ":$http" --control-plane ":$cp" \
+            > "$LOG_DIR/$name.log" 2>&1 &
+        local pid=$!
+        for _ in $(seq 1 50); do
+            nc -z 127.0.0.1 "$cp" 2>/dev/null && break
+            sleep 0.2
+        done
+        sed -i "s/^PID=.*/PID=$pid/" "$GW_DIR/$name.env"
+        write_targets
+        echo "    gateway $name (raw) up at http://localhost:$http/graphql"
+        return 0
+    fi
+
     local peers; peers=$(nats_peer_args)
 
     cat > "$GW_DIR/$name.env" <<EOF
 NAME=$name
+KIND=multi
 HTTP_PORT=$http
 CP_PORT=$cp
 NATS_LISTEN=$nats_listen
@@ -424,8 +465,13 @@ print_table() {
                     endpoint="localhost:$PORT → $GATEWAY"
                 fi
             else
-                kind="gateway"
-                endpoint="http://localhost:$HTTP_PORT/api/graphql"
+                if [[ ${KIND:-} == raw ]]; then
+                    kind="gateway/raw"
+                    endpoint="http://localhost:$HTTP_PORT/graphql"
+                else
+                    kind="gateway"
+                    endpoint="http://localhost:$HTTP_PORT/api/graphql"
+                fi
             fi
             local marker="·"
             proc_alive "$PID" && marker="✓"
