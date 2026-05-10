@@ -4,12 +4,15 @@
 //
 // Usage:
 //
-//	# Run a gateway:
+//	# Zero-config local gateway: NATS + admin + UI + auto-login.
+//	gwag up
+//
+//	# Static configuration from .proto files (no NATS, no admin):
 //	gwag --proto path/to/foo.proto=foo-svc:50051 \
 //	     --proto path/to/bar.proto=billing@bar-svc:50051 \
 //	     --addr :8080
 //
-//	# Run a gateway that also accepts runtime registrations:
+//	# Static + runtime registration (no NATS):
 //	gwag --control-plane :50090 --addr :8080
 //
 //	# Talk to a running gateway:
@@ -110,6 +113,8 @@ func (p *protoFlag) Set(v string) error {
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "up":
+			os.Exit(upCmd(os.Args[2:]))
 		case "login":
 			os.Exit(loginCmd(os.Args[2:]))
 		case "logout":
