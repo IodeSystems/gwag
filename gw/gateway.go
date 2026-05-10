@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -184,6 +185,7 @@ type config struct {
 	signerSecret []byte
 	openAPIHTTP  *http.Client
 	pprof        bool
+	requestLog   io.Writer
 
 	// docCache* control the plan cache exposed via gw.Handler(). 0 →
 	// defaults; docCacheDisabled bypasses the cache entirely;
@@ -535,6 +537,23 @@ func WithOpenAPIClient(c *http.Client) Option {
 // detect the disabled state without consulting a separate flag.
 func WithPprof() Option {
 	return func(cfg *config) { cfg.pprof = true }
+}
+
+// WithRequestLog directs one JSON line per request to `w`, useful
+// for low-load eyeballing in local dev. Each line is the same
+// shape across all three ingress paths (graphql / http / grpc):
+//
+//	{"ts":"...","ingress":"...","path":"...","total_us":...,"self_us":...,"dispatch_count":N}
+//
+// Not auto-enabled — at production-scale rps the log is MB/s. Pair
+// with `os.Stderr` or a bounded io.Writer (rotating file, ring
+// buffer) to keep volume under control. Lines are written
+// asynchronously after the response finishes; write failures are
+// swallowed (the log is non-critical).
+//
+// Pass `nil` to disable (matches the default state).
+func WithRequestLog(w io.Writer) Option {
+	return func(cfg *config) { cfg.requestLog = w }
 }
 
 // WithDocCacheSize sets the maximum number of distinct query strings
@@ -1126,7 +1145,9 @@ func (g *Gateway) Handler() http.Handler {
 			g.serveGraphQLJSON(ctx, schema, w, r)
 		}
 		total := time.Since(start)
-		g.cfg.metrics.RecordRequest("graphql", total, total-time.Duration(accum.Load()))
+		dispatchSum := time.Duration(accum.Sum.Load())
+		g.cfg.metrics.RecordRequest("graphql", total, total-dispatchSum)
+		g.logRequestLine("graphql", r.URL.Path, total, dispatchSum, int(accum.Count.Load()))
 	})
 }
 

@@ -18,8 +18,11 @@ func TestDispatchAccumulator_AddSums(t *testing.T) {
 	addDispatchTime(ctx, 5*time.Millisecond)
 	addDispatchTime(ctx, 7*time.Millisecond)
 	addDispatchTime(ctx, 0)
-	if got, want := time.Duration(accum.Load()), 12*time.Millisecond; got != want {
-		t.Fatalf("accumulator total = %v, want %v", got, want)
+	if got, want := time.Duration(accum.Sum.Load()), 12*time.Millisecond; got != want {
+		t.Fatalf("accumulator Sum = %v, want %v", got, want)
+	}
+	if got, want := accum.Count.Load(), int64(3); got != want {
+		t.Fatalf("accumulator Count = %d, want %d", got, want)
 	}
 }
 
@@ -49,7 +52,7 @@ func TestProtoDispatcher_PopulatesAccumulator(t *testing.T) {
 	if _, err := d.Dispatch(ctx, map[string]any{"name": "selftime"}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
-	got := time.Duration(accum.Load())
+	got := time.Duration(accum.Sum.Load())
 	if got <= 0 {
 		t.Fatalf("accumulator did not advance after dispatch: %v", got)
 	}

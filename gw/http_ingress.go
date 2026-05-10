@@ -382,7 +382,9 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	defer func() {
 		total := time.Since(start)
-		g.cfg.metrics.RecordRequest("http", total, total-time.Duration(accum.Load()))
+		dispatchSum := time.Duration(accum.Sum.Load())
+		g.cfg.metrics.RecordRequest("http", total, total-dispatchSum)
+		g.logRequestLine("http", r.URL.Path, total, dispatchSum, int(accum.Count.Load()))
 	}()
 
 	out, err := route.dispatcher.Dispatch(ctx, args)

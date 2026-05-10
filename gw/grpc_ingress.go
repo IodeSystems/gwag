@@ -364,7 +364,9 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 	start := time.Now()
 	defer func() {
 		total := time.Since(start)
-		g.cfg.metrics.RecordRequest("grpc", total, total-time.Duration(accum.Load()))
+		dispatchSum := time.Duration(accum.Sum.Load())
+		g.cfg.metrics.RecordRequest("grpc", total, total-dispatchSum)
+		g.logRequestLine("grpc", method, total, dispatchSum, int(accum.Count.Load()))
 	}()
 
 	release, err := acquireBackpressureSlot(ctx, route.bp)
