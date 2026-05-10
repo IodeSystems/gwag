@@ -45,6 +45,8 @@ func runGRPC(args []string) error {
 	fs.Var(&targetsRaw, "target", "gateway HTTP base URL (used for FDS + metrics; repeat or comma-separate)")
 	var grpcTargetsRaw runner.StringFlag
 	fs.Var(&grpcTargetsRaw, "grpc-target", "gateway gRPC ingress host:port; one per --target in the same order, or single if shared")
+	var directTargetsRaw runner.StringFlag
+	fs.Var(&directTargetsRaw, "direct", "upstream service host:port to dial directly (bypassing the gateway). When set, runs a second pass after the gateway pass and prints a side-by-side compare. Repeat or comma-separate for multiple direct targets.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -97,13 +99,57 @@ func runGRPC(args []string) error {
 		})
 	}
 
-	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d gRPC target(s); method=%s\n", *rps, duration.String(), len(targets), fullPath)
-	return runner.Run(runner.Options{
+	directTargets := runner.SplitCSV(directTargetsRaw)
+	var directTargetsBuilt []runner.Target
+	for _, dt := range directTargets {
+		conn, err := grpc.NewClient(dt, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("grpc dial direct %s: %w", dt, err)
+		}
+		fire := makeGRPCFire(*timeout, conn, fullPath, requestProto, outputDesc)
+		directTargetsBuilt = append(directTargetsBuilt, runner.Target{
+			Label: fmt.Sprintf("direct %s%s", dt, fullPath),
+			// MetricsURL intentionally empty: direct dials bypass the gateway,
+			// so /api/metrics has nothing to say about them.
+			Fire: fire,
+		})
+	}
+
+	opts := runner.Options{
 		RPS:           *rps,
 		Duration:      *duration,
 		Concurrency:   *concurrency,
 		ServerMetrics: *serverSide,
-	}, targets)
+	}
+
+	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d gRPC target(s); method=%s\n", *rps, duration.String(), len(targets), fullPath)
+	gwRes, err := runner.Run(opts, ternaryStr(len(directTargetsBuilt) > 0, "gateway", ""), targets)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(opts, gwRes)
+
+	if len(directTargetsBuilt) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "\nrunning direct pass: %d req/s for %s against %d direct target(s); bypassing gateway\n", *rps, duration.String(), len(directTargetsBuilt))
+	directOpts := opts
+	directOpts.ServerMetrics = false // gateway not in path
+	dRes, err := runner.Run(directOpts, "direct", directTargetsBuilt)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(directOpts, dRes)
+	runner.PrintCompare(gwRes, dRes)
+	return nil
+}
+
+// ternaryStr is a tiny shim so the call-site stays one expression.
+func ternaryStr(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
 }
 
 func makeGRPCFire(timeout time.Duration, conn *grpc.ClientConn, fullPath string, request proto.Message, outputDesc protoreflect.MessageDescriptor) func(context.Context, *runner.Stats) {

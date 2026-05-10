@@ -26,8 +26,11 @@ func runGraphQL(args []string) error {
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request HTTP timeout")
 	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
 	query := fs.String("query", `{ greeter { hello(name: "world") { greeting } } }`, "GraphQL query string")
+	directQuery := fs.String("direct-query", "", "GraphQL query string for the --direct pass. Defaults to --query — but the upstream's schema is usually unprefixed, so override (e.g. '{ hello(name:\"world\") { greeting } }') when the gateway adds a namespace.")
 	var targetsRaw runner.StringFlag
 	fs.Var(&targetsRaw, "target", "GraphQL endpoint URL (repeat or comma-separate for multiple)")
+	var directTargetsRaw runner.StringFlag
+	fs.Var(&directTargetsRaw, "direct", "upstream GraphQL endpoint URL (e.g. http://localhost:50054/graphql) to dial directly, bypassing the gateway. When set, runs a second pass and prints a side-by-side compare. Repeat or comma-separate for multiple direct targets.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,13 +55,51 @@ func runGraphQL(args []string) error {
 		})
 	}
 
-	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d target(s)\n", *rps, duration.String(), len(targetURLs))
-	return runner.Run(runner.Options{
+	directURLs := runner.SplitCSV(directTargetsRaw)
+	directBody := body
+	if len(directURLs) > 0 && *directQuery != "" {
+		directBody, err = json.Marshal(map[string]any{"query": *directQuery})
+		if err != nil {
+			return fmt.Errorf("marshal direct-query: %w", err)
+		}
+	}
+	directTargets := make([]runner.Target, 0, len(directURLs))
+	for _, u := range directURLs {
+		fire := makeGraphQLFire(*timeout, *concurrency, u, directBody)
+		directTargets = append(directTargets, runner.Target{
+			Label: "direct " + u,
+			// MetricsURL empty: gateway not in path on this pass.
+			Fire: fire,
+		})
+	}
+
+	opts := runner.Options{
 		RPS:           *rps,
 		Duration:      *duration,
 		Concurrency:   *concurrency,
 		ServerMetrics: *serverSide,
-	}, targets)
+	}
+
+	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d target(s)\n", *rps, duration.String(), len(targetURLs))
+	gwRes, err := runner.Run(opts, ternaryStr(len(directTargets) > 0, "gateway", ""), targets)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(opts, gwRes)
+
+	if len(directTargets) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "\nrunning direct pass: %d req/s for %s against %d direct target(s); bypassing gateway\n", *rps, duration.String(), len(directTargets))
+	directOpts := opts
+	directOpts.ServerMetrics = false
+	dRes, err := runner.Run(directOpts, "direct", directTargets)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(directOpts, dRes)
+	runner.PrintCompare(gwRes, dRes)
+	return nil
 }
 
 func makeGraphQLFire(timeout time.Duration, concurrency int, target string, body []byte) func(context.Context, *runner.Stats) {

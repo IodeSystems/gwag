@@ -36,6 +36,8 @@ func runOpenAPI(args []string) error {
 	ingressPrefix := fs.String("ingress-prefix", "/api/ingress", "URL prefix where IngressHandler is mounted on the gateway")
 	var targetsRaw runner.StringFlag
 	fs.Var(&targetsRaw, "target", "gateway HTTP base URL (repeat or comma-separate)")
+	var directTargetsRaw runner.StringFlag
+	fs.Var(&directTargetsRaw, "direct", "upstream HTTP base URL (e.g. http://localhost:9000) to dial directly, bypassing the gateway. The path resolved from --service+--operation is appended verbatim with no ingress prefix. When set, runs a second pass and prints a side-by-side compare.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,13 +79,50 @@ func runOpenAPI(args []string) error {
 		})
 	}
 
-	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d openapi target(s); %s %s\n", *rps, duration.String(), len(targets), plan.method, plan.path)
-	return runner.Run(runner.Options{
+	directTargets := runner.SplitCSV(directTargetsRaw)
+	var directTargetsBuilt []runner.Target
+	for _, dt := range directTargets {
+		// Direct dial: the upstream's own HTTP server. No ingress prefix —
+		// the path comes from the OpenAPI spec verbatim.
+		fire, err := makeOpenAPIFire(*timeout, *concurrency, dt, "", plan, argMap)
+		if err != nil {
+			return err
+		}
+		fullURL := strings.TrimRight(dt, "/") + plan.path
+		directTargetsBuilt = append(directTargetsBuilt, runner.Target{
+			Label: fmt.Sprintf("direct %s %s", plan.method, fullURL),
+			// MetricsURL empty: the gateway is not in the path on this pass.
+			Fire: fire,
+		})
+	}
+
+	opts := runner.Options{
 		RPS:           *rps,
 		Duration:      *duration,
 		Concurrency:   *concurrency,
 		ServerMetrics: *serverSide,
-	}, targets)
+	}
+
+	fmt.Fprintf(os.Stdout, "running %d req/s for %s against %d openapi target(s); %s %s\n", *rps, duration.String(), len(targets), plan.method, plan.path)
+	gwRes, err := runner.Run(opts, ternaryStr(len(directTargetsBuilt) > 0, "gateway", ""), targets)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(opts, gwRes)
+
+	if len(directTargetsBuilt) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "\nrunning direct pass: %d req/s for %s against %d direct target(s); bypassing gateway\n", *rps, duration.String(), len(directTargetsBuilt))
+	directOpts := opts
+	directOpts.ServerMetrics = false
+	dRes, err := runner.Run(directOpts, "direct", directTargetsBuilt)
+	if err != nil {
+		return err
+	}
+	runner.PrintPass(directOpts, dRes)
+	runner.PrintCompare(gwRes, dRes)
+	return nil
 }
 
 // opPlan describes how to construct a request from --args for a

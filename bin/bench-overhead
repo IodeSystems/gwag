@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# bench-overhead: regenerate the README "Gateway overhead" numbers.
+#
+# Boots the bench stack if it isn't already up, spawns hello-proto +
+# hello-openapi + hello-graphql alongside, runs `bench traffic` once
+# per format with --direct, and prints a markdown table fragment to
+# stdout. The table is shaped to match the README §Gateway overhead
+# section so the maintainer can copy-paste after eyeballing the
+# numbers.
+#
+# Defaults: 15s × 1000 rps; override via --duration / --rps env or args.
+#
+# Usage:
+#   bin/bench-overhead                       # default 15s × 1000 rps
+#   RPS=5000 DURATION=30s bin/bench-overhead # heavier, longer run
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BENCH_BIN="$REPO_DIR/bin/bench"
+
+RPS=${RPS:-1000}
+DURATION=${DURATION:-15s}
+HELLO_PROTO_ADDR=${HELLO_PROTO_ADDR:-:50055}
+HELLO_OPENAPI_ADDR=${HELLO_OPENAPI_ADDR:-:50053}
+HELLO_GRAPHQL_ADDR=${HELLO_GRAPHQL_ADDR:-:50054}
+GATEWAY_HTTP=${GATEWAY_HTTP:-http://localhost:18080}
+GATEWAY_GRPC=${GATEWAY_GRPC:-localhost:50090}
+GATEWAY_CP=${GATEWAY_CP:-localhost:50090}
+
+# Bring up the gateway + a (any) backend if nothing is listening; users
+# who already ran `bin/bench up` get the existing stack.
+if ! curl -s -m 1 "$GATEWAY_HTTP/api/health" >/dev/null 2>&1; then
+    echo "==> bench gateway not reachable; running bin/bench up"
+    "$BENCH_BIN" up
+fi
+
+# Build hello-* binaries straight into a tmp dir so we don't fight the
+# bench's bin layout.
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"; jobs -p | xargs -r kill 2>/dev/null || true' EXIT
+
+echo "==> building hello-proto / hello-openapi / hello-graphql"
+(cd "$REPO_DIR" && go build -o "$TMP/hello-proto"   ./examples/multi/cmd/hello-proto)
+(cd "$REPO_DIR" && go build -o "$TMP/hello-openapi" ./examples/multi/cmd/hello-openapi)
+(cd "$REPO_DIR" && go build -o "$TMP/hello-graphql" ./examples/multi/cmd/hello-graphql)
+
+echo "==> launching format-native upstreams"
+"$TMP/hello-proto"   --addr "$HELLO_PROTO_ADDR"   --advertise "localhost$HELLO_PROTO_ADDR"   --gateway "$GATEWAY_CP" >"$TMP/hello-proto.log" 2>&1 &
+"$TMP/hello-openapi" --addr "$HELLO_OPENAPI_ADDR" --advertise "http://localhost$HELLO_OPENAPI_ADDR" --gateway "$GATEWAY_CP" >"$TMP/hello-openapi.log" 2>&1 &
+"$TMP/hello-graphql" --addr "$HELLO_GRAPHQL_ADDR" --advertise "http://localhost$HELLO_GRAPHQL_ADDR/graphql" --gateway "$GATEWAY_CP" >"$TMP/hello-graphql.log" 2>&1 &
+sleep 3
+
+# Make sure the bench traffic binary is current — `bin/bench traffic`
+# wraps build_binaries_if_missing, but we want a fresh build that
+# matches whatever's on disk right now.
+echo "==> rebuilding traffic"
+(cd "$REPO_DIR" && go build -o "$REPO_DIR/bench/.run/bin/traffic" ./bench/cmd/traffic)
+TRAFFIC="$REPO_DIR/bench/.run/bin/traffic"
+
+run_pass() {
+    local label=$1
+    shift
+    echo
+    echo "##### $label"
+    "$TRAFFIC" "$@"
+}
+
+run_pass "gRPC vs direct (hello-proto)" grpc \
+    --target "$GATEWAY_HTTP" --grpc-target "$GATEWAY_GRPC" \
+    --service hello_proto --method Hello --args '{"name":"world"}' \
+    --direct "localhost$HELLO_PROTO_ADDR" \
+    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+
+run_pass "OpenAPI vs direct (hello-openapi)" openapi \
+    --target "$GATEWAY_HTTP" \
+    --service hello_openapi --operation Hello --args '{"name":"world"}' \
+    --direct "http://localhost$HELLO_OPENAPI_ADDR" \
+    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+
+run_pass "GraphQL vs direct (hello-graphql)" graphql \
+    --target "$GATEWAY_HTTP/api/graphql" \
+    --query '{ hello_graphql { hello(name:"world") { greeting } } }' \
+    --direct "http://localhost$HELLO_GRAPHQL_ADDR/graphql" \
+    --direct-query '{ hello(name:"world") { greeting } }' \
+    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+
+cat <<EOF
+
+bench-overhead done.
+
+Copy the matching numbers from each pass's "gateway vs direct" block
+into README.md §Gateway overhead. The table shape is:
+
+  | Ingress | Source | Gateway p50 | Direct p50 | Gateway adds (p50 / p95) |
+  | gRPC    | proto upstream    | <p50> | <p50> | +<Δp50> / +<Δp95> |
+  | HTTP/JSON | OpenAPI upstream | <p50> | <p50> | +<Δp50> / +<Δp95> |
+  | GraphQL | GraphQL upstream  | <p50> | <p50> | +<Δp50> / +<Δp95> |
+
+Tear down with: bin/bench down
+EOF

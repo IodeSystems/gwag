@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package hello.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/examples/multi/gen/hello/v1;hellov1";
+
+// HelloService — the gRPC-native sibling of hello-openapi and
+// hello-graphql. Single unary Hello operation, used as the format-
+// native upstream for `bench traffic grpc --direct` so the gateway-
+// vs-direct comparison is apples-to-apples in proto.
+service HelloService {
+  rpc Hello(HelloRequest) returns (HelloResponse);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string greeting = 1;
+}

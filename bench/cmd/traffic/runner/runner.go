@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -132,18 +133,31 @@ type Target struct {
 	Fire       func(ctx context.Context, s *Stats)
 }
 
+// PassResult is the captured outcome of one runner pass: per-target
+// stats, wall-clock duration, and the optional gateway-metrics
+// snapshots. Callers print it via PrintPass; --direct adapters
+// capture two and pass them to PrintCompare.
+type PassResult struct {
+	Label    string // "gateway", "direct", etc.; used in compare output
+	Targets  []Target
+	Stats    []*Stats
+	Elapsed  time.Duration
+	PreSnap  map[string]*metricFamily
+	PostSnap map[string]*metricFamily
+}
+
 // Run blocks for opts.Duration (or until SIGINT/SIGTERM), drives each
-// target at opts.RPS with opts.Concurrency in-flight, then prints
-// client-side and (if enabled) server-side summary tables.
-func Run(opts Options, targets []Target) error {
+// target at opts.RPS with opts.Concurrency in-flight, and returns a
+// PassResult. The caller prints via PrintPass / PrintCompare.
+func Run(opts Options, label string, targets []Target) (PassResult, error) {
 	if len(targets) == 0 {
-		return errors.New("at least one target is required")
+		return PassResult{}, errors.New("at least one target is required")
 	}
 	if opts.RPS <= 0 {
-		return errors.New("--rps must be > 0")
+		return PassResult{}, errors.New("--rps must be > 0")
 	}
 	if opts.Concurrency < 0 {
-		return errors.New("--concurrency must be ≥ 0 (0 = auto)")
+		return PassResult{}, errors.New("--concurrency must be ≥ 0 (0 = auto)")
 	}
 	if opts.Concurrency == 0 {
 		opts.Concurrency = autoConcurrency(opts.RPS)
@@ -201,10 +215,26 @@ func Run(opts Options, targets []Target) error {
 		postSnap = collectMetrics(targets)
 	}
 
-	printClientSummary(targets, stats, elapsed)
-	if opts.ServerMetrics {
-		printServerSummary(preSnap, postSnap, elapsed)
+	return PassResult{
+		Label:    label,
+		Targets:  targets,
+		Stats:    stats,
+		Elapsed:  elapsed,
+		PreSnap:  preSnap,
+		PostSnap: postSnap,
+	}, nil
+}
+
+// PrintPass renders the client-side, server-side (when ServerMetrics
+// is on), and concurrency-advisor blocks for one PassResult.
+func PrintPass(opts Options, r PassResult) {
+	if r.Label != "" {
+		fmt.Println()
+		fmt.Printf("### pass: %s\n", r.Label)
 	}
-	printConcurrencyAdvisor(targets, stats, opts)
-	return nil
+	printClientSummary(r.Targets, r.Stats, r.Elapsed)
+	if opts.ServerMetrics {
+		printServerSummary(r.PreSnap, r.PostSnap, r.Elapsed)
+	}
+	printConcurrencyAdvisor(r.Targets, r.Stats, opts)
 }

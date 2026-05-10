@@ -1,0 +1,133 @@
+// hello-openapi: an HTTP/JSON service that exposes a single Hello
+// operation, self-registers with the gateway via the OpenAPI control
+// plane, and exists primarily so bench traffic openapi --direct has
+// a format-native upstream to compare against.
+//
+// Mirrors hello-proto + hello-graphql so the bench can characterise
+// each ingress against an upstream that natively speaks the matching
+// format. Production OpenAPI services go through gateway.AddOpenAPI /
+// AddOpenAPIBytes the same way; this binary is just a tiny stand-in.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	"github.com/iodesystems/go-api-gateway/gw/controlclient"
+)
+
+const helloSpec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "hello-openapi", "version": "1.0.0"},
+  "paths": {
+    "/Hello": {
+      "post": {
+        "operationId": "Hello",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {"greeting": {"type": "string"}},
+                  "required": ["greeting"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+type helloReq struct {
+	Name string `json:"name"`
+}
+
+type helloResp struct {
+	Greeting string `json:"greeting"`
+}
+
+func main() {
+	addr := flag.String("addr", ":50053", "HTTP listen address")
+	gatewayAddr := flag.String("gateway", "localhost:50090", "Gateway control plane address")
+	advertise := flag.String("advertise", "", "HTTP base URL to advertise to the gateway (e.g. http://localhost:50053). Defaults to http://<addr>.")
+	namespace := flag.String("namespace", "hello_openapi", "Namespace to register under")
+	version := flag.String("version", "v1", "Service version (unstable / vN)")
+	flag.Parse()
+
+	if *advertise == "" {
+		host := *addr
+		if strings.HasPrefix(host, ":") {
+			host = "localhost" + host
+		}
+		*advertise = "http://" + host
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Hello", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var in helloReq
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(helloResp{Greeting: "Hello, " + in.Name + "!"})
+	})
+
+	srv := &http.Server{Addr: *addr, Handler: mux}
+	go func() {
+		log.Printf("hello-openapi HTTP listening on %s", *addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("serve: %v", err)
+		}
+	}()
+
+	reg, err := controlclient.SelfRegister(context.Background(), controlclient.Options{
+		GatewayAddr: *gatewayAddr,
+		ServiceAddr: *advertise,
+		InstanceID:  fmt.Sprintf("hello-openapi@%s", *addr),
+		Services: []controlclient.Service{{
+			Namespace:   *namespace,
+			Version:     *version,
+			OpenAPISpec: []byte(helloSpec),
+		}},
+	})
+	if err != nil {
+		log.Fatalf("self-register: %v", err)
+	}
+	log.Printf("hello-openapi registered with %s as %s:%s (advertise %s)", *gatewayAddr, *namespace, *version, *advertise)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+	log.Printf("hello-openapi shutting down")
+	_ = reg.Close(context.Background())
+	_ = srv.Shutdown(context.Background())
+}

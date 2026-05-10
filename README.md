@@ -668,6 +668,65 @@ gw := gateway.New(gateway.WithoutMetrics())            // disable
 gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 ```
 
+## Gateway overhead
+
+> First question every adopter asks: *what does this cost vs. going
+> direct?*
+
+Per-request overhead at p50, measured against three format-native
+upstreams on a single host (loopback; bench numbers, not production):
+
+| Ingress | Source | Gateway p50 | Direct p50 | Gateway adds (p50 / p95) |
+|---|---|---|---|---|
+| gRPC    | proto upstream  (`hello-proto`)    | 520 µs | 238 µs | **+282 µs / +319 µs** |
+| HTTP/JSON | OpenAPI upstream (`hello-openapi`) | 370 µs | 158 µs | **+212 µs / +239 µs** |
+| GraphQL | GraphQL upstream (`hello-graphql`) | 693 µs | 349 µs | **+343 µs / +482 µs** |
+| Cross-kind (e.g. GraphQL → proto upstream) | n/a — gateway-only path | — | n/a | n/a — no direct equivalent |
+
+Read this as: the gateway's IR translation layer adds ~200–350 µs at
+p50 on this host. The "direct" pass dials the upstream in its native
+wire format (gRPC client for proto; raw HTTP/JSON for OpenAPI; raw
+GraphQL POST for GraphQL); the "gateway" pass routes through the
+matching gateway ingress. Cross-kind ingress (e.g. GraphQL ingress
+hitting an OpenAPI source) has no direct equivalent and is intentionally
+N/A — the cell exists only because the gateway makes it possible.
+
+**Reproduce locally:**
+
+```bash
+bin/bench up                                    # n1 + greeter; pulls in prom + grafana
+go run ./examples/multi/cmd/hello-proto    --addr :50055 &
+go run ./examples/multi/cmd/hello-openapi  --addr :50053 &
+go run ./examples/multi/cmd/hello-graphql  --addr :50054 &
+
+bin/bench traffic grpc \
+  --target http://localhost:18080 --grpc-target localhost:50090 \
+  --service hello_proto --method Hello --args '{"name":"world"}' \
+  --direct localhost:50055 \
+  --rps 1000 --duration 15s --server-metrics=false
+
+bin/bench traffic openapi \
+  --target http://localhost:18080 \
+  --service hello_openapi --operation Hello --args '{"name":"world"}' \
+  --direct http://localhost:50053 \
+  --rps 1000 --duration 15s --server-metrics=false
+
+bin/bench traffic graphql \
+  --target http://localhost:18080/api/graphql \
+  --query '{ hello_graphql { hello(name:"world") { greeting } } }' \
+  --direct http://localhost:50054/graphql \
+  --direct-query '{ hello(name:"world") { greeting } }' \
+  --rps 1000 --duration 15s --server-metrics=false
+```
+
+Each run prints a side-by-side `gateway` vs `direct` table with mean /
+p50 / p95 / p99 / Δ. Saturation drops, codes, and example bodies are in
+the per-pass blocks above the compare. Numbers above were captured at
+1k rps × 15 s on a quiet workstation; raise `--rps` and `--duration` for
+a steadier signal. There is also a regen recipe at `bin/bench-overhead`
+that runs all three back-to-back and writes the table fragment for
+this README section.
+
 ## Promotion path
 
 Promotion runs along the **version axis**: `unstable` → `stable` →

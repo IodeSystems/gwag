@@ -101,6 +101,83 @@ func printClientSummary(targets []Target, stats []*Stats, elapsed time.Duration)
 	}
 }
 
+// PrintCompare emits a single-row-per-pass table summarising the
+// passes that just ran (`gateway` vs `direct`, typically) with a
+// final delta row showing absolute + percentage change. Latencies
+// are pooled across all targets within a pass so multi-gateway runs
+// collapse to a single comparable row.
+func PrintCompare(passes ...PassResult) {
+	if len(passes) < 2 {
+		return
+	}
+	type aggRow struct {
+		label                string
+		count                uint64
+		errs                 uint64
+		elapsed              time.Duration
+		p50, p95, p99, pmean time.Duration
+	}
+	rows := make([]aggRow, 0, len(passes))
+	for _, p := range passes {
+		var ls []time.Duration
+		var count, errs uint64
+		for _, s := range p.Stats {
+			s.mu.Lock()
+			ls = append(ls, s.latencies...)
+			errs += s.totalErrs()
+			s.mu.Unlock()
+			count += atomic.LoadUint64(&s.count)
+		}
+		row := aggRow{label: p.Label, count: count, errs: errs, elapsed: p.Elapsed}
+		if len(ls) > 0 {
+			sort.Slice(ls, func(i, j int) bool { return ls[i] < ls[j] })
+			row.p50 = pct(ls, 0.5)
+			row.p95 = pct(ls, 0.95)
+			row.p99 = pct(ls, 0.99)
+			var sum time.Duration
+			for _, l := range ls {
+				sum += l
+			}
+			row.pmean = sum / time.Duration(len(ls))
+		}
+		rows = append(rows, row)
+	}
+	fmt.Println()
+	fmt.Println("=== gateway vs direct ===")
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  PASS\tRPS\tMEAN\tP50\tP95\tP99\tOK\tERRS")
+	for _, r := range rows {
+		rps := 0.0
+		if r.elapsed > 0 {
+			rps = float64(r.count+r.errs) / r.elapsed.Seconds()
+		}
+		fmt.Fprintf(tw, "  %s\t%.1f\t%s\t%s\t%s\t%s\t%d\t%d\n",
+			r.label, rps, fmtSeconds(r.pmean), fmtSeconds(r.p50),
+			fmtSeconds(r.p95), fmtSeconds(r.p99), r.count, r.errs)
+	}
+	if len(rows) >= 2 {
+		base := rows[len(rows)-1] // direct (last)
+		gw := rows[0]              // gateway (first)
+		fmt.Fprintf(tw, "  Δ (gateway − direct)\t-\t%s (%s)\t%s (%s)\t%s (%s)\t%s (%s)\t-\t-\n",
+			fmtSeconds(gw.pmean-base.pmean), pctDelta(gw.pmean, base.pmean),
+			fmtSeconds(gw.p50-base.p50), pctDelta(gw.p50, base.p50),
+			fmtSeconds(gw.p95-base.p95), pctDelta(gw.p95, base.p95),
+			fmtSeconds(gw.p99-base.p99), pctDelta(gw.p99, base.p99),
+		)
+	}
+	tw.Flush()
+}
+
+// pctDelta renders the relative change of `a` vs `base` as a signed
+// percentage; "-" when base is zero or unset.
+func pctDelta(a, base time.Duration) string {
+	if base <= 0 {
+		return "-"
+	}
+	frac := (float64(a) - float64(base)) / float64(base) * 100
+	return fmt.Sprintf("%+.1f%%", frac)
+}
+
 // printConcurrencyAdvisor warns when the configured --concurrency ×
 // observed-p50 < target RPS — Little's law says the bench client
 // itself is then the throughput cap, not the gateway. Suggests a
