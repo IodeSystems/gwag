@@ -8,15 +8,34 @@
 # section so the maintainer can copy-paste after eyeballing the
 # numbers.
 #
+# --with-raw runs two passes back-to-back: first against `bench up
+# --raw` (bare `gwag up`, no worked-example InjectPath/InjectHeader
+# middleware), then against the default multi stack (example gateway
+# with the demo dressing). Emits a labeled comparison table at the
+# end so the dressing cost is visible per ingress.
+#
 # Defaults: 15s × 1000 rps; override via --duration / --rps env or args.
 #
 # Usage:
 #   bin/bench-overhead                       # default 15s × 1000 rps
+#   bin/bench-overhead --with-raw            # raw vs example-extras passes
 #   RPS=5000 DURATION=30s bin/bench-overhead # heavier, longer run
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BENCH_BIN="$REPO_DIR/bin/bench"
+
+WITH_RAW=0
+for a in "$@"; do
+    case $a in
+        --with-raw) WITH_RAW=1 ;;
+        -h|--help)
+            sed -n '2,/^set -euo pipefail/p' "$0" | grep '^# ' | sed 's/^# //'
+            exit 0
+            ;;
+        *) echo "unknown arg: $a" >&2; exit 1 ;;
+    esac
+done
 
 RPS=${RPS:-1000}
 DURATION=${DURATION:-15s}
@@ -27,74 +46,268 @@ GATEWAY_HTTP=${GATEWAY_HTTP:-http://localhost:18080}
 GATEWAY_GRPC=${GATEWAY_GRPC:-localhost:50090}
 GATEWAY_CP=${GATEWAY_CP:-localhost:50090}
 
-# Bring up the gateway + a (any) backend if nothing is listening; users
-# who already ran `bin/bench up` get the existing stack.
-if ! curl -s -m 1 "$GATEWAY_HTTP/api/health" >/dev/null 2>&1; then
-    echo "==> bench gateway not reachable; running bin/bench up"
-    "$BENCH_BIN" up
-fi
-
-# Build hello-* binaries straight into a tmp dir so we don't fight the
-# bench's bin layout.
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; jobs -p | xargs -r kill 2>/dev/null || true' EXIT
+HELLO_PIDS=()
+trap 'rm -rf "$TMP"; for p in "${HELLO_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done' EXIT
 
 echo "==> building hello-proto / hello-openapi / hello-graphql"
 (cd "$REPO_DIR" && go build -o "$TMP/hello-proto"   ./examples/multi/cmd/hello-proto)
 (cd "$REPO_DIR" && go build -o "$TMP/hello-openapi" ./examples/multi/cmd/hello-openapi)
 (cd "$REPO_DIR" && go build -o "$TMP/hello-graphql" ./examples/multi/cmd/hello-graphql)
 
-echo "==> launching format-native upstreams"
-"$TMP/hello-proto"   --addr "$HELLO_PROTO_ADDR"   --advertise "localhost$HELLO_PROTO_ADDR"   --gateway "$GATEWAY_CP" >"$TMP/hello-proto.log" 2>&1 &
-"$TMP/hello-openapi" --addr "$HELLO_OPENAPI_ADDR" --advertise "http://localhost$HELLO_OPENAPI_ADDR" --gateway "$GATEWAY_CP" >"$TMP/hello-openapi.log" 2>&1 &
-"$TMP/hello-graphql" --addr "$HELLO_GRAPHQL_ADDR" --advertise "http://localhost$HELLO_GRAPHQL_ADDR/graphql" --gateway "$GATEWAY_CP" >"$TMP/hello-graphql.log" 2>&1 &
-sleep 3
-
-# Make sure the bench traffic binary is current — `bin/bench traffic`
-# wraps build_binaries_if_missing, but we want a fresh build that
-# matches whatever's on disk right now.
-echo "==> rebuilding traffic"
-(cd "$REPO_DIR" && go build -o "$REPO_DIR/bench/.run/bin/traffic" ./bench/cmd/traffic)
-TRAFFIC="$REPO_DIR/bench/.run/bin/traffic"
-
-run_pass() {
-    local label=$1
-    shift
-    echo
-    echo "##### $label"
-    "$TRAFFIC" "$@"
+# Build the traffic binary into the bench's expected slot so bench
+# subcommands stay consistent. `bin/bench traffic` wraps
+# build_binaries_if_missing, but we want a fresh build that matches
+# whatever's on disk right now.
+build_traffic() {
+    echo "==> rebuilding traffic"
+    (cd "$REPO_DIR" && go build -o "$REPO_DIR/bench/.run/bin/traffic" ./bench/cmd/traffic)
 }
 
-run_pass "gRPC vs direct (hello-proto)" grpc \
-    --target "$GATEWAY_HTTP" --grpc-target "$GATEWAY_GRPC" \
-    --service hello_proto --method Hello --args '{"name":"world"}' \
-    --direct "localhost$HELLO_PROTO_ADDR" \
-    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+wait_for_gateway() {
+    for _ in $(seq 1 60); do
+        curl -s -m 1 "$GATEWAY_HTTP/api/health" >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    echo "gateway $GATEWAY_HTTP/api/health never became reachable" >&2
+    return 1
+}
 
-run_pass "OpenAPI vs direct (hello-openapi)" openapi \
-    --target "$GATEWAY_HTTP" \
-    --service hello_openapi --operation Hello --args '{"name":"world"}' \
-    --direct "http://localhost$HELLO_OPENAPI_ADDR" \
-    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+start_hello() {
+    local tag=$1
+    echo "==> launching format-native upstreams (${tag})"
+    "$TMP/hello-proto"   --addr "$HELLO_PROTO_ADDR"   --advertise "localhost$HELLO_PROTO_ADDR"   --gateway "$GATEWAY_CP" >"$TMP/${tag}.hello-proto.log"   2>&1 &
+    HELLO_PIDS+=("$!")
+    "$TMP/hello-openapi" --addr "$HELLO_OPENAPI_ADDR" --advertise "http://localhost$HELLO_OPENAPI_ADDR" --gateway "$GATEWAY_CP" >"$TMP/${tag}.hello-openapi.log" 2>&1 &
+    HELLO_PIDS+=("$!")
+    "$TMP/hello-graphql" --addr "$HELLO_GRAPHQL_ADDR" --advertise "http://localhost$HELLO_GRAPHQL_ADDR/graphql" --gateway "$GATEWAY_CP" >"$TMP/${tag}.hello-graphql.log" 2>&1 &
+    HELLO_PIDS+=("$!")
+    sleep 3
+}
 
-run_pass "GraphQL vs direct (hello-graphql)" graphql \
-    --target "$GATEWAY_HTTP/api/graphql" \
-    --query '{ hello_graphql { hello(name:"world") { greeting } } }' \
-    --direct "http://localhost$HELLO_GRAPHQL_ADDR/graphql" \
-    --direct-query '{ hello(name:"world") { greeting } }' \
-    --rps "$RPS" --duration "$DURATION" --server-metrics=false
+stop_hello() {
+    if (( ${#HELLO_PIDS[@]} )); then
+        kill "${HELLO_PIDS[@]}" 2>/dev/null || true
+        HELLO_PIDS=()
+        # Give the gateway a beat to evict the deregistered slots so
+        # the next pass's registration lands on a clean schema.
+        sleep 1
+    fi
+}
+
+run_format_passes() {
+    local tag=$1   # "current" / "raw" / "extras"
+    local TRAFFIC="$REPO_DIR/bench/.run/bin/traffic"
+
+    echo
+    echo "##### gRPC vs direct (hello-proto, ${tag})"
+    "$TRAFFIC" grpc \
+        --target "$GATEWAY_HTTP" --grpc-target "$GATEWAY_GRPC" \
+        --service hello_proto --method Hello --args '{"name":"world"}' \
+        --direct "localhost$HELLO_PROTO_ADDR" \
+        --rps "$RPS" --duration "$DURATION" --server-metrics=false \
+        | tee "$TMP/${tag}.grpc.out"
+
+    echo
+    echo "##### OpenAPI vs direct (hello-openapi, ${tag})"
+    "$TRAFFIC" openapi \
+        --target "$GATEWAY_HTTP" \
+        --service hello_openapi --operation Hello --args '{"name":"world"}' \
+        --direct "http://localhost$HELLO_OPENAPI_ADDR" \
+        --rps "$RPS" --duration "$DURATION" --server-metrics=false \
+        | tee "$TMP/${tag}.openapi.out"
+
+    echo
+    echo "##### GraphQL vs direct (hello-graphql, ${tag})"
+    "$TRAFFIC" graphql \
+        --target "$GATEWAY_HTTP/api/graphql" \
+        --query '{ hello_graphql { hello(name:"world") { greeting } } }' \
+        --direct "http://localhost$HELLO_GRAPHQL_ADDR/graphql" \
+        --direct-query '{ hello(name:"world") { greeting } }' \
+        --rps "$RPS" --duration "$DURATION" --server-metrics=false \
+        | tee "$TMP/${tag}.graphql.out"
+}
+
+# parse_pass <file> <row> — extracts P50 P95 P99 from a `gateway vs
+# direct` compare row in `traffic` output. Echoes "p50 p95 p99" on
+# success; nothing if the row is missing.
+#
+# The block looks like:
+#   === gateway vs direct ===
+#     PASS                  RPS    MEAN    P50    P95    P99    OK   ERRS
+#     gateway               1000.5 ...    520µs  ...
+#     direct                1000.5 ...    238µs  ...
+#     Δ (gateway − direct)  -      ...    +282µs ...
+parse_pass() {
+    local file=$1 row=$2
+    awk -v want="$row" '
+        /^=== gateway vs direct ===$/ { in_block = 1; next }
+        in_block && $1 == "PASS"      { next }
+        in_block && $1 == want        { print $4 " " $5 " " $6; exit }
+        in_block && /^  Δ/            { exit }
+    ' "$file"
+}
+
+# print_overhead_table <tag> — single-pass markdown table fragment
+# matching the README §Gateway overhead shape.
+print_overhead_table() {
+    local tag=$1
+    local g_proto d_proto g_openapi d_openapi g_graphql d_graphql
+    g_proto=$(parse_pass   "$TMP/${tag}.grpc.out"    gateway)
+    d_proto=$(parse_pass   "$TMP/${tag}.grpc.out"    direct)
+    g_openapi=$(parse_pass "$TMP/${tag}.openapi.out" gateway)
+    d_openapi=$(parse_pass "$TMP/${tag}.openapi.out" direct)
+    g_graphql=$(parse_pass "$TMP/${tag}.graphql.out" gateway)
+    d_graphql=$(parse_pass "$TMP/${tag}.graphql.out" direct)
+    echo
+    echo "===== README §Gateway overhead — ${tag} ====="
+    echo
+    echo "| Ingress   | Source                      | Gateway p50 | Direct p50 | Gateway p95 | Direct p95 |"
+    echo "|-----------|-----------------------------|-------------|------------|-------------|------------|"
+    printf "| gRPC      | proto upstream  (hello-proto)   | %-11s | %-10s | %-11s | %-10s |\n" \
+        "$(awk '{print $1}' <<<"$g_proto")"   "$(awk '{print $1}' <<<"$d_proto")" \
+        "$(awk '{print $2}' <<<"$g_proto")"   "$(awk '{print $2}' <<<"$d_proto")"
+    printf "| HTTP/JSON | OpenAPI upstream (hello-openapi)| %-11s | %-10s | %-11s | %-10s |\n" \
+        "$(awk '{print $1}' <<<"$g_openapi")" "$(awk '{print $1}' <<<"$d_openapi")" \
+        "$(awk '{print $2}' <<<"$g_openapi")" "$(awk '{print $2}' <<<"$d_openapi")"
+    printf "| GraphQL   | GraphQL upstream (hello-graphql)| %-11s | %-10s | %-11s | %-10s |\n" \
+        "$(awk '{print $1}' <<<"$g_graphql")" "$(awk '{print $1}' <<<"$d_graphql")" \
+        "$(awk '{print $2}' <<<"$g_graphql")" "$(awk '{print $2}' <<<"$d_graphql")"
+}
+
+# print_comparison_table — labeled raw vs extras vs direct comparison.
+# Direct numbers are taken from the extras pass (they're the same
+# upstream both passes; either is fine).
+print_comparison_table() {
+    local raw_proto extras_proto direct_proto
+    local raw_openapi extras_openapi direct_openapi
+    local raw_graphql extras_graphql direct_graphql
+    raw_proto=$(parse_pass     "$TMP/raw.grpc.out"      gateway)
+    extras_proto=$(parse_pass  "$TMP/extras.grpc.out"   gateway)
+    direct_proto=$(parse_pass  "$TMP/extras.grpc.out"   direct)
+    raw_openapi=$(parse_pass    "$TMP/raw.openapi.out"    gateway)
+    extras_openapi=$(parse_pass "$TMP/extras.openapi.out" gateway)
+    direct_openapi=$(parse_pass "$TMP/extras.openapi.out" direct)
+    raw_graphql=$(parse_pass    "$TMP/raw.graphql.out"    gateway)
+    extras_graphql=$(parse_pass "$TMP/extras.graphql.out" gateway)
+    direct_graphql=$(parse_pass "$TMP/extras.graphql.out" direct)
+    echo
+    echo "===== README §Gateway overhead — raw vs example-extras ====="
+    echo
+    echo "Two gateways, same upstreams. \"Raw\" = bare \`gwag up\` (lib"
+    echo "default, no demo middleware). \"Extras\" = example gateway"
+    echo "(InjectPath \"greeter.Hello.name\" + InjectHeader \"X-Source-IP\")."
+    echo "InjectPath is dormant for hello-* (path-targeted to greeter);"
+    echo "the dressing cost here measures InjectHeader on the hot path."
+    echo
+    echo "| Ingress   | Source                          | Direct p50 / p95 | Raw p50 / p95 | Extras p50 / p95 | Dressing (extras − raw) p50 / p95 |"
+    echo "|-----------|---------------------------------|------------------|---------------|------------------|-----------------------------------|"
+    cmp_row "gRPC"      "proto upstream  (hello-proto)"   "$direct_proto"   "$raw_proto"   "$extras_proto"
+    cmp_row "HTTP/JSON" "OpenAPI upstream (hello-openapi)" "$direct_openapi" "$raw_openapi" "$extras_openapi"
+    cmp_row "GraphQL"   "GraphQL upstream (hello-graphql)" "$direct_graphql" "$raw_graphql" "$extras_graphql"
+}
+
+# cmp_row prints one row of the comparison table. p50/p95 fields are
+# space-separated; we don't compute the dressing-delta numerically
+# here (latency strings carry units and would need parsing) — instead
+# emit raw and extras side-by-side and let the operator eyeball or
+# compute. Suffices for a copy-paste regen recipe.
+cmp_row() {
+    local ingress=$1 source=$2 direct=$3 raw=$4 extras=$5
+    local d_p50 d_p95 r_p50 r_p95 e_p50 e_p95
+    d_p50=$(awk '{print $1}' <<<"$direct"); d_p95=$(awk '{print $2}' <<<"$direct")
+    r_p50=$(awk '{print $1}' <<<"$raw");    r_p95=$(awk '{print $2}' <<<"$raw")
+    e_p50=$(awk '{print $1}' <<<"$extras"); e_p95=$(awk '{print $2}' <<<"$extras")
+    printf "| %-9s | %-31s | %-7s / %-7s | %-7s / %-7s | %-7s / %-7s | %-7s / %-7s |\n" \
+        "$ingress" "$source" \
+        "$d_p50" "$d_p95" \
+        "$r_p50" "$r_p95" \
+        "$e_p50" "$e_p95" \
+        "$(delta_us "$e_p50" "$r_p50")" "$(delta_us "$e_p95" "$r_p95")"
+}
+
+# delta_us <a> <b> — print "a − b" in µs as "+Nµs" or "-Nµs". Parses
+# strings like "520µs" / "1.2ms" / "238µs" via awk + a tiny unit
+# table. Returns "?" on parse failure.
+delta_us() {
+    local a=$1 b=$2
+    awk -v a="$a" -v b="$b" '
+        function tous(v,    n) {
+            if (v ~ /µs$/)        { sub(/µs$/, "", v); return v + 0 }
+            else if (v ~ /ms$/)   { sub(/ms$/, "", v); return (v + 0) * 1000 }
+            else if (v ~ /s$/)    { sub(/s$/, "", v);  return (v + 0) * 1000000 }
+            else if (v ~ /ns$/)   { sub(/ns$/, "", v); return (v + 0) / 1000 }
+            else                  { return "?" }
+        }
+        BEGIN {
+            ua = tous(a); ub = tous(b)
+            if (ua == "?" || ub == "?") { print "?"; exit }
+            d = ua - ub
+            sign = (d >= 0) ? "+" : ""
+            printf("%s%dµs\n", sign, d)
+        }
+    '
+}
+
+if [[ $WITH_RAW == 1 ]]; then
+    echo "==> --with-raw: forcing two restart cycles (raw, extras)"
+
+    echo "==> bench restart --raw"
+    "$BENCH_BIN" restart --raw >/dev/null
+    wait_for_gateway
+    build_traffic
+    start_hello raw
+    run_format_passes raw
+    stop_hello
+
+    echo
+    echo "==> bench restart  (multi / example-extras)"
+    "$BENCH_BIN" restart >/dev/null
+    wait_for_gateway
+    start_hello extras
+    run_format_passes extras
+    stop_hello
+
+    print_overhead_table raw
+    print_overhead_table extras
+    print_comparison_table
+
+    cat <<EOF
+
+bench-overhead --with-raw done.
+
+The "raw" rows reflect what a non-library adopter sees (\`gwag up\`,
+no demo middleware). The "extras" rows include the example gateway's
+worked-example InjectHeader on every dispatch + InjectPath on greeter
+(dormant for hello-*). Adopters reading README §Gateway overhead see
+the raw numbers; the dressing column shows what the example gateway
+adds on top.
+
+Tear down with: bin/bench down
+EOF
+    exit 0
+fi
+
+# Default single-pass flow — bring up whatever stack is available
+# (multi by default if nothing is up) and run the three measurements.
+if ! curl -s -m 1 "$GATEWAY_HTTP/api/health" >/dev/null 2>&1; then
+    echo "==> bench gateway not reachable; running bin/bench up"
+    "$BENCH_BIN" up
+fi
+
+build_traffic
+start_hello current
+run_format_passes current
+stop_hello
+print_overhead_table current
 
 cat <<EOF
 
 bench-overhead done.
 
 Copy the matching numbers from each pass's "gateway vs direct" block
-into README.md §Gateway overhead. The table shape is:
+into README.md §Gateway overhead. The table shape is shown above.
 
-  | Ingress | Source | Gateway p50 | Direct p50 | Gateway adds (p50 / p95) |
-  | gRPC    | proto upstream    | <p50> | <p50> | +<Δp50> / +<Δp95> |
-  | HTTP/JSON | OpenAPI upstream | <p50> | <p50> | +<Δp50> / +<Δp95> |
-  | GraphQL | GraphQL upstream  | <p50> | <p50> | +<Δp50> / +<Δp95> |
-
+For raw vs example-extras side-by-side, run: bin/bench-overhead --with-raw
 Tear down with: bin/bench down
 EOF
