@@ -778,14 +778,22 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 }
 
 // TestGraphQLIngest_HTTPIngressRouteSynthesized verifies the cross-
-// kind ingress completeness pass: a stitched-graphql backend gets
-// HTTP routes synthesized via ir.RenderOpenAPI(svc), and those
-// routes reach the registered dispatcher. The dispatcher's no-AST
-// 500 is the current canonical-args dispatch gap (parked as a
-// follow-up); the routing half is what this test asserts — the
-// previous behavior was a plain 404 / "no route".
+// kind ingress completeness pass end-to-end: a stitched-graphql
+// backend gets HTTP routes synthesized via ir.RenderOpenAPI(svc), the
+// canonical-args dispatcher synthesizes a default selection set from
+// op.Output through introspection, and the response decodes back as
+// JSON. Selection set is `{ __typename id name role }` (every leaf
+// scalar/enum field on User), which the upstream sees verbatim.
 func TestGraphQLIngest_HTTPIngressRouteSynthesized(t *testing.T) {
 	rf := newRemoteFixture(t)
+	rf.queryHandler = func(query string, vars map[string]any) any {
+		return map[string]any{
+			"users": []map[string]any{
+				{"id": "1", "name": "alice", "role": "ADMIN"},
+				{"id": "2", "name": "bob", "role": "MEMBER"},
+			},
+		}
+	}
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
 	t.Cleanup(gw.Close)
 	if err := gw.AddGraphQL(rf.server.URL, As("pets")); err != nil {
@@ -796,25 +804,29 @@ func TestGraphQLIngest_HTTPIngressRouteSynthesized(t *testing.T) {
 
 	// IR→OpenAPI synthesis paths a graphql-origin service at
 	// /<ns>.<ver>.Service/<op> (svc.ServiceName falls back to
-	// "Service" for graphql-ingest), method GET for OpQuery. Hit
-	// the synthesized path; the route MUST exist (404 → fail).
+	// "Service" for graphql-ingest), method GET for OpQuery.
 	resp, err := http.Get(srv.URL + "/pets.v1.Service/users")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusNotFound {
-		t.Fatalf("synthesized REST route missing: 404; body=%s", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 	}
-	// Today the canonical-args dispatch path on graphQLDispatcher
-	// returns CodeInternal "no AST for <field>" — selection-
-	// preserving forwarding requires the caller's AST and HTTP
-	// ingress doesn't carry one. Asserting on the body keeps the
-	// test honest: when the dispatcher gap closes, this expectation
-	// flips to a 200 with the canonical response.
-	if !strings.Contains(string(body), "no AST for users") {
-		t.Fatalf("expected dispatcher to reject with 'no AST for users' (canonical-args dispatch is a known gap); got status=%d body=%s",
-			resp.StatusCode, body)
+	if !strings.Contains(string(body), "alice") || !strings.Contains(string(body), "MEMBER") {
+		t.Fatalf("response missing expected fields: %s", body)
+	}
+	// Confirm the upstream saw a synthesized canonical query, not
+	// the introspection short-circuit. The selection should include
+	// every leaf scalar/enum on User plus __typename.
+	last := rf.lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received a non-introspection query")
+	}
+	for _, want := range []string{"users", "__typename", "id", "name", "role"} {
+		if !strings.Contains(*last, want) {
+			t.Errorf("synthesized query missing %q: %s", want, *last)
+		}
 	}
 }

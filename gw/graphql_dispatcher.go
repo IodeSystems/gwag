@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/graphql-go/graphql"
@@ -17,8 +18,9 @@ import (
 // forwarding can't reconstruct an equivalent upstream query from
 // canonical args alone — it needs the user's selection-set so
 // nested subselections forward verbatim. The other ingest paths
-// (HTTP/JSON, gRPC) won't have this; the dispatcher returns INTERNAL
-// when the key is missing, mirroring the pre-cutover guard.
+// (HTTP/JSON, gRPC) won't have this; the dispatcher falls back to a
+// pre-printed canonicalQuery synthesized at construction time, when
+// available.
 type graphQLForwardInfoKey struct{}
 
 func withGraphQLForwardInfo(ctx context.Context, info *graphql.ResolveInfo) context.Context {
@@ -36,11 +38,12 @@ func graphQLForwardInfoFrom(ctx context.Context) *graphql.ResolveInfo {
 // pickReplica, dispatchGraphQL, response decode) lives here;
 // BackpressureMiddleware wraps the outside.
 //
-// args is unused today — selection-preserving forwarding needs the
-// AST, which arrives via withGraphQLForwardInfo. The signature
-// stays canonical so an HTTP/JSON ingress can still target a
-// graphql-mirror source once the forwarding strategy can synthesize
-// a query from canonical args (out of scope for the cutover).
+// canonicalQuery + canonicalArgNames are populated at construction
+// for top-level (non-grouped, non-subscription) ops. They drive the
+// canonical-args dispatch path used when no graphQLForwardInfo is in
+// context (HTTP/JSON or gRPC ingress, where there is no caller AST).
+// Grouped ops are skipped because the upstream's namespace-shaped
+// nesting can't be re-synthesized from a leaf op alone.
 type graphQLDispatcher struct {
 	mirror          *graphQLMirror
 	remoteFieldName string
@@ -49,28 +52,35 @@ type graphQLDispatcher struct {
 	ns              string
 	ver             string
 	label           string // "<opLabel> <remoteFieldName>"
+
+	canonicalQuery    string
+	canonicalArgNames []string
 }
 
-func newGraphQLDispatcher(m *graphQLMirror, remoteFieldName, opLabel string, metrics Metrics) *graphQLDispatcher {
-	return &graphQLDispatcher{
+func newGraphQLDispatcher(m *graphQLMirror, op *ir.Operation, opLabel string, metrics Metrics, isGrouped bool) *graphQLDispatcher {
+	d := &graphQLDispatcher{
 		mirror:          m,
-		remoteFieldName: remoteFieldName,
+		remoteFieldName: op.Name,
 		opLabel:         opLabel,
 		metrics:         metrics,
 		ns:              m.src.namespace,
 		ver:             m.src.version,
-		label:           opLabel + " " + remoteFieldName,
+		label:           opLabel + " " + op.Name,
 	}
+	if !isGrouped && op.Kind != ir.OpSubscription {
+		d.canonicalQuery, d.canonicalArgNames = buildGraphQLCanonicalQuery(m, op, opLabel)
+	}
+	return d
 }
 
-func (d *graphQLDispatcher) Dispatch(ctx context.Context, _ map[string]any) (any, error) {
+func (d *graphQLDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	if d.opLabel == "subscription" {
 		return d.dispatchSubscribe(ctx)
 	}
-	return d.dispatchUnary(ctx)
+	return d.dispatchUnary(ctx, args)
 }
 
-func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
+func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]any) (any, error) {
 	start := time.Now()
 	record := func(err error) error {
 		elapsed := time.Since(start)
@@ -80,30 +90,49 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
 	}
 
 	info := graphQLForwardInfoFrom(ctx)
-	if info == nil || len(info.FieldASTs) == 0 {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName)))
-	}
-	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
-	opType := ast.OperationTypeQuery
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		if op.Operation == ast.OperationTypeMutation {
-			opType = ast.OperationTypeMutation
+	var printed string
+	var vars map[string]any
+	if info != nil && len(info.FieldASTs) > 0 {
+		rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
+		opType := ast.OperationTypeQuery
+		var varDefs []*ast.VariableDefinition
+		if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+			if op.Operation == ast.OperationTypeMutation {
+				opType = ast.OperationTypeMutation
+			}
+			varDefs = op.VariableDefinitions
 		}
-		varDefs = op.VariableDefinitions
-	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           opType,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{rewritten},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	printed, ok := raw.(string)
-	if !ok {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+			Operation:           opType,
+			VariableDefinitions: varDefs,
+			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+				Selections: []ast.Selection{rewritten},
+			}),
+		})
+		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+		raw := printer.Print(doc)
+		got, ok := raw.(string)
+		if !ok {
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+		}
+		printed = got
+		vars = info.VariableValues
+	} else if d.canonicalQuery != "" {
+		// HTTP/JSON or gRPC ingress: no AST, fall back to the
+		// construction-time synthesized query. Variables are read out
+		// of the canonical args map by IR Arg name (Op.Args index by
+		// name = upstream variable name).
+		printed = d.canonicalQuery
+		if len(d.canonicalArgNames) > 0 && len(args) > 0 {
+			vars = make(map[string]any, len(d.canonicalArgNames))
+			for _, name := range d.canonicalArgNames {
+				if v, ok := args[name]; ok {
+					vars[name] = v
+				}
+			}
+		}
+	} else {
+		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName)))
 	}
 
 	src := d.mirror.src
@@ -113,7 +142,7 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
 	}
 	r.inflight.Add(1)
 	defer r.inflight.Add(-1)
-	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, vars, src.forwardHeaders)
 	if err != nil {
 		return nil, record(err)
 	}
@@ -132,6 +161,173 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context) (any, error) {
 	}
 	record(nil)
 	return data[d.remoteFieldName], nil
+}
+
+// buildGraphQLCanonicalQuery synthesizes a printable graphql operation
+// for canonical-args dispatch. Returns ("", nil) when synthesis can't
+// produce something the upstream will accept (output type missing
+// from introspection); the dispatcher falls back to the "no AST"
+// error in that case so the gap is visible rather than silently
+// returning nulls.
+//
+// Variable names match IR Arg names (canonical-args dispatch keys
+// the args map the same way). Selection set: scalar/enum fields on
+// the unwrapped output object plus __typename; fields with required
+// arguments are skipped (we have nothing to bind them to). Union /
+// interface output types degrade to __typename only.
+func buildGraphQLCanonicalQuery(m *graphQLMirror, op *ir.Operation, opLabel string) (string, []string) {
+	intro := m.src.introspection
+	selection := buildCanonicalSelectionSet(intro, op.Output)
+	// Object/Interface/Union output with no selectable fields means
+	// we can't synthesize a valid query — graphql requires a
+	// non-empty selection set on composite return types.
+	if selection == "" && op.Output != nil && op.Output.IsNamed() {
+		if t := intro.Types[op.Output.Named]; t != nil {
+			switch t.Kind {
+			case "OBJECT", "INTERFACE", "UNION":
+				return "", nil
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString(opLabel)
+	argNames := make([]string, 0, len(op.Args))
+	if len(op.Args) > 0 {
+		b.WriteString("(")
+		for i, a := range op.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("$")
+			b.WriteString(a.Name)
+			b.WriteString(": ")
+			b.WriteString(graphQLArgTypeString(a))
+			argNames = append(argNames, a.Name)
+		}
+		b.WriteString(")")
+	}
+	b.WriteString(" { ")
+	b.WriteString(op.Name)
+	if len(op.Args) > 0 {
+		b.WriteString("(")
+		for i, a := range op.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(a.Name)
+			b.WriteString(": $")
+			b.WriteString(a.Name)
+		}
+		b.WriteString(")")
+	}
+	if selection != "" {
+		b.WriteString(" ")
+		b.WriteString(selection)
+	}
+	b.WriteString(" }")
+	return b.String(), argNames
+}
+
+func graphQLArgTypeString(a *ir.Arg) string {
+	inner := graphQLTypeNameForRef(a.Type)
+	if a.Repeated {
+		item := inner
+		if a.ItemRequired {
+			item += "!"
+		}
+		listed := "[" + item + "]"
+		if a.Required {
+			listed += "!"
+		}
+		return listed
+	}
+	if a.Required {
+		return inner + "!"
+	}
+	return inner
+}
+
+func graphQLTypeNameForRef(r ir.TypeRef) string {
+	if r.IsNamed() {
+		return r.Named
+	}
+	switch r.Builtin {
+	case ir.ScalarBool:
+		return "Boolean"
+	case ir.ScalarInt32, ir.ScalarUInt32, ir.ScalarInt64, ir.ScalarUInt64:
+		return "Int"
+	case ir.ScalarFloat, ir.ScalarDouble:
+		return "Float"
+	case ir.ScalarID:
+		return "ID"
+	case ir.ScalarTimestamp, ir.ScalarBytes, ir.ScalarString, ir.ScalarUnknown:
+		return "String"
+	}
+	return "String"
+}
+
+// buildCanonicalSelectionSet returns "{ field1 field2 __typename }"
+// for object/interface output types, "{ __typename }" for unions, and
+// "" for scalars/enums (no selection set required) or missing types.
+// Fields with required arguments are skipped — canonical-args dispatch
+// has nothing to bind them to.
+func buildCanonicalSelectionSet(intro *introspectionSchema, out *ir.TypeRef) string {
+	if out == nil || intro == nil {
+		return ""
+	}
+	if out.IsBuiltin() || !out.IsNamed() {
+		return ""
+	}
+	t := intro.Types[out.Named]
+	if t == nil {
+		return ""
+	}
+	switch t.Kind {
+	case "SCALAR", "ENUM":
+		return ""
+	case "OBJECT", "INTERFACE":
+		fields := []string{"__typename"}
+		for _, f := range t.Fields {
+			if !introspectionFieldHasOnlyOptionalArgs(f) {
+				continue
+			}
+			if isLeafIntrospectionType(f.Type) {
+				fields = append(fields, f.Name)
+			}
+		}
+		return "{ " + strings.Join(fields, " ") + " }"
+	case "UNION":
+		return "{ __typename }"
+	}
+	return ""
+}
+
+// introspectionFieldHasOnlyOptionalArgs reports whether every arg on
+// the field is nullable. A canonical-args selection set can't supply
+// arguments for nested fields (we only have args for the top op), so
+// fields with NON_NULL args have to be skipped.
+func introspectionFieldHasOnlyOptionalArgs(f *introspectionField) bool {
+	for _, a := range f.Args {
+		if a.Type != nil && a.Type.Kind == "NON_NULL" {
+			return false
+		}
+	}
+	return true
+}
+
+func isLeafIntrospectionType(r *introspectionTypeRef) bool {
+	cur := r
+	for cur != nil {
+		switch cur.Kind {
+		case "NON_NULL", "LIST":
+			cur = cur.OfType
+		case "SCALAR", "ENUM":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // dispatchSubscribe opens a multiplexed subscription against the

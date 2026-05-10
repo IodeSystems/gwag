@@ -62,7 +62,7 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		}
 		mirror := newGraphQLMirror(src)
 		mirror.isLatest = src.versionN == latestByNS[svc.Namespace]
-		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp)
+		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false)
 		for _, grp := range svc.Groups {
 			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp)
 		}
@@ -70,10 +70,10 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 	return nil
 }
 
-func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions) {
+func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool) {
 	for _, op := range ops {
 		opLabel := graphQLOpLabel(op.Kind)
-		core := newGraphQLDispatcher(mirror, op.Name, opLabel, metrics)
+		core := newGraphQLDispatcher(mirror, op, opLabel, metrics, isGrouped)
 		// Subscriptions skip BackpressureMiddleware: src.sem is the
 		// per-source unary slot count, not a stream lifetime gauge,
 		// and the pre-cutover subscribingResolver bypassed it for the
@@ -88,7 +88,12 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 }
 
 func registerGraphQLGroupOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions) {
-	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp)
+	// Grouped ops live under a namespace-shaped upstream object; the
+	// canonical-args path can't synthesize the nested call shape from
+	// a leaf op alone, so isGrouped=true short-circuits canonicalQuery
+	// and the dispatcher returns the existing "no AST" error when an
+	// HTTP/gRPC ingress reaches one.
+	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp, true)
 	for _, sub := range grp.Groups {
 		registerGraphQLGroupOps(registry, mirror, src, sub, metrics, bp)
 	}
