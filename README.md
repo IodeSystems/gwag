@@ -1,5 +1,7 @@
 # gwag
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 **Register every service once, in the protocol it already speaks.
 Clients get typed access in any of three.**
 
