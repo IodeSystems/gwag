@@ -119,8 +119,9 @@ pick_gateway() {
 # nats_peer_args — print "--nats-peer 127.0.0.1:14248 [...]" for
 # every live gateway's cluster port. Used when a NEW gateway joins;
 # existing gateways auto-discover the new one once routes exchange.
-# Raw-mode gateways (KIND=raw, the gwag binary) don't embed NATS
-# and have no cluster port, so they're skipped.
+# Both KIND=multi and KIND=raw embed NATS (raw uses `gwag up`); only
+# entries with no NATS_CLUSTER set (e.g. cluster-disabled) are
+# skipped.
 nats_peer_args() {
     local args=""
     for f in "$GW_DIR"/*.env; do

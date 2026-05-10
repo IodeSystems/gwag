@@ -2,25 +2,31 @@
 # bench — single entry point for the local benchmark + demo stack.
 #
 # Lifecycle:
-#   bench up [--build]        boot the stack (gateway n1 + greeter g1
+#   bench up [--build] [--raw]
+#                              boot the stack (gateway n1 + greeter g1
 #                              + prom + grafana). --build runs
 #                              bin/build first so a stale UI / Go
 #                              binary doesn't creep into the run.
-#   bench restart [--build]   stop processes, leave .run/{bin,nats}
-#                              cached, start fresh. --build forces a
-#                              full rebuild via bin/build.
+#                              --raw uses the bare gwag binary (no
+#                              InjectPath/InjectHeader middleware) so
+#                              the bench measures lib-default overhead.
+#                              Stack kind is persisted; subsequent
+#                              `bench gw add` inherits it.
+#   bench restart [--build] [--raw]
+#                              stop processes, leave .run/{bin,nats}
+#                              cached, start fresh. --raw flips the
+#                              persisted stack kind on this restart.
 #   bench down [--no-purge]   kill + `docker compose down`. Wipes
 #                              .run/ by default; --no-purge keeps
 #                              cached binaries + nats data + logs.
 #
 # Cluster (gateway processes — n1, n2, ...):
 #   bench gw                  list live gateways
-#   bench gw add [--name N] [--raw]
-#                              spawn another gateway, joining the
+#   bench gw add [--name N]   spawn another gateway, joining the
 #                              existing NATS cluster via --nats-peer.
-#                              --raw uses the bare gwag binary
-#                              (no NATS/UI/admin/middleware) so the
-#                              bench measures lib-default overhead.
+#                              Inherits stack kind (multi vs raw)
+#                              from `bench up`'s --raw decision; flip
+#                              with `bench restart --raw`.
 #   bench gw remove NAME      kill + clean up
 #
 # Services (anything registered against the gateway):
@@ -65,10 +71,11 @@ usage() {
 # -----------------------------------------------------------------
 
 cmd_up() {
-    local build=0
+    local build=0 raw=0
     for a; do
         case $a in
             --build) build=1 ;;
+            --raw) raw=1 ;;
             -h|--help) usage 0 ;;
             *) echo "unknown arg: $a" >&2; usage ;;
         esac
@@ -81,6 +88,15 @@ cmd_up() {
         # the cache so up.sh re-runs `go build` and the freshly-
         # generated SPA bundle gets baked in.
         rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register"
+    fi
+    # Persist the stack kind so subsequent `bench gw add` invocations
+    # spawn the matching binary without per-call --raw flags. up.sh
+    # reads this to decide which gateway to launch first.
+    ensure_dirs
+    if [[ $raw == 1 ]]; then
+        echo "raw" > "$RUN_DIR/.stack-kind"
+    else
+        echo "multi" > "$RUN_DIR/.stack-kind"
     fi
     "$BENCH_DIR/up.sh"
 }
@@ -118,15 +134,21 @@ cmd_restart() {
 # refresh picks up the new scrape target.
 gw_add() {
     ensure_dirs
-    local name="" raw=0
+    local name=""
     while (($#)); do
         case $1 in
             --name) name=$2; shift 2 ;;
-            --raw) raw=1; shift ;;
             -h|--help) usage 0 ;;
             *) echo "unknown arg: $1" >&2; usage ;;
         esac
     done
+    # Stack kind is set by `bench up [--raw]` and persisted to
+    # .run/.stack-kind. Default to "multi" when missing (e.g.
+    # caller skipped `bench up` and invoked gw add directly).
+    local raw=0
+    if [[ -r $RUN_DIR/.stack-kind && $(<"$RUN_DIR/.stack-kind") == raw ]]; then
+        raw=1
+    fi
     local idx; idx=$(next_index "$GW_DIR" "n")
     if [[ -z $name ]]; then
         name="n$idx"
@@ -143,27 +165,37 @@ gw_add() {
     mkdir -p "$data"
 
     if [[ $raw == 1 ]]; then
-        # Raw mode: bare gwag binary — no NATS embed, no UI, no admin
-        # middleware, no InjectPath/InjectHeader. The point is to give
-        # the bench a baseline that reflects what a non-library
-        # adopter sees, without the example gateway's worked-example
-        # dressing. GraphQL mounts at / (no /api prefix).
+        # Raw mode: `gwag up` — same gateway library as the example
+        # gateway (NATS + admin + UI), minus the worked-example
+        # InjectPath/InjectHeader middleware that the example gateway
+        # bolts onto greeter.Hello. The point is a realistic
+        # ops-gateway baseline so bench numbers reflect what a
+        # non-library adopter sees, not what the example's hot-path
+        # middleware costs. --no-context-write skips .gw write
+        # because bench manages its own state.
         if [[ ! -x $BIN_DIR/gwag ]]; then
             (cd "$REPO_DIR" && go build -o "$BIN_DIR/gwag" ./gw/cmd/gwag)
         fi
+        local peers; peers=$(nats_peer_args)
         cat > "$GW_DIR/$name.env" <<EOF
 NAME=$name
 KIND=raw
 HTTP_PORT=$http
 CP_PORT=$cp
-NATS_LISTEN=
-NATS_CLUSTER=
+NATS_LISTEN=$nats_listen
+NATS_CLUSTER=$nats_cluster
 DATA=$data
 PID=0
 EOF
-        echo "==> launching gateway $name (raw; http=:$http control-plane=:$cp)"
-        "$BIN_DIR/gwag" \
+        echo "==> launching gateway $name (raw/up; http=:$http control-plane=:$cp nats=:$nats_listen)"
+        # shellcheck disable=SC2086
+        "$BIN_DIR/gwag" up \
             --addr ":$http" --control-plane ":$cp" \
+            --nats-listen ":$nats_listen" --nats-cluster ":$nats_cluster" \
+            --node-name "$name" \
+            --data-dir "$data" \
+            --no-context-write \
+            $peers \
             > "$LOG_DIR/$name.log" 2>&1 &
         local pid=$!
         for _ in $(seq 1 50); do
@@ -172,7 +204,7 @@ EOF
         done
         sed -i "s/^PID=.*/PID=$pid/" "$GW_DIR/$name.env"
         write_targets
-        echo "    gateway $name (raw) up at http://localhost:$http/graphql"
+        echo "    gateway $name (raw/up) up at http://localhost:$http/api/graphql"
         return 0
     fi
 
@@ -467,11 +499,10 @@ print_table() {
             else
                 if [[ ${KIND:-} == raw ]]; then
                     kind="gateway/raw"
-                    endpoint="http://localhost:$HTTP_PORT/graphql"
                 else
                     kind="gateway"
-                    endpoint="http://localhost:$HTTP_PORT/api/graphql"
                 fi
+                endpoint="http://localhost:$HTTP_PORT/api/graphql"
             fi
             local marker="·"
             proc_alive "$PID" && marker="✓"
