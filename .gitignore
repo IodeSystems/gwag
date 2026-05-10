@@ -11,3 +11,7 @@
 # context runtime state (JetStream, admin-token persistence). Never
 # commit it.
 .gw/
+
+# Maintainer working documents; not adopter-facing material.
+/docs/plan.md
+/docs/todo.md

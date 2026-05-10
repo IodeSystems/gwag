@@ -272,10 +272,9 @@ logs to find the laggards.
 A planned **call-site usage tracking** workstream adds an inbound
 caller dimension (request-tagged `User-Agent` or service-account
 identity, propagated to the metric label set), with a UI panel
-listing recent callers per deprecated operation. See
-[`docs/plan.md`](./docs/plan.md). Until it ships, deprecation is
-"announce, wait, retire" — same as without the gateway, except the
-schema-side warnings are at least automatic.
+listing recent callers per deprecated operation. Until it ships,
+deprecation is "announce, wait, retire" — same as without the
+gateway, except the schema-side warnings are at least automatic.
 
 ## Examples
 
@@ -975,7 +974,7 @@ points worth re-stating in the comparison frame above:
 - Rolling deploy / hot reload of the gateway itself. Run blue/green
   like any other binary, or scale by adding peers.
 - Caller-side usage tracking on deprecated operations. (Roadmap —
-  see *Service lifecycle* / `docs/plan.md`.)
+  see [§Service lifecycle](#service-lifecycle).)
 - Apollo Federation. Stitching covers the common case; federation's
   entity-merging is overkill for most teams.
 - AsyncAPI export. GraphQL SDL with Subscription types covers TS

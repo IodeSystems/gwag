@@ -19,8 +19,8 @@
 //     is invisible. ~50µs / ~170 allocs per request to make the
 //     namespace shape consistent across formats.
 //
-// Drive these down with the allocation work in plan.md (arg unmarshal,
-// response-shape map building, dynamicpb churn). A graphql-mirror
+// Drive these down with allocation work on arg unmarshal, response-
+// shape map building, and dynamicpb churn. A graphql-mirror
 // benchmark is omitted because the forwarder needs a full ResolveInfo
 // (selection-set, variables) — not stubbable without dragging in
 // graphql-go's parser.

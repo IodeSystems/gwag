@@ -16,11 +16,11 @@ pub/sub with HMAC channel auth.
 
 ## Read first
 
-- **`docs/plan.md`** — authoritative roadmap, decisions log, and
-  recently-shipped tail. Read it at session start. If a choice
-  contradicts what's there, surface it before changing code.
 - **`README.md`** — user-facing overview of the library API.
 - **This file** — how the codebase is laid out and what's load-bearing.
+- **`docs/plan.md`** if it exists locally — maintainer working doc
+  (gitignored). Read at session start; surface conflicts before
+  changing code.
 
 ## Architecture in five lines
 
@@ -65,7 +65,7 @@ ui/                  React + MUI + TanStack Router admin UI; consumes
 bench/               Local benchmark + demo stack (compose, scripts,
                      cmd/traffic). bin/bench dispatches everything.
 examples/            Example services that register against the gateway
-docs/                plan.md (roadmap + decisions log) + design notes
+docs/                design notes (perf-testing.md, codegen-spike.md)
 bin/                 Top-level shell scripts (build, bench)
 .bin/                Pinned tooling (protoc-gen-go-grpc etc.)
 ```
@@ -266,6 +266,7 @@ is in play.
 
 ## When in doubt
 
-Read `docs/plan.md`. The decisions log explains *why* things are the
-way they are. If a request seems to contradict that, name the decision
-and ask before reshaping it.
+Read the README first; design rationale lives there for adopter-facing
+choices. For maintainer context, `docs/plan.md` (gitignored, may or
+may not be present locally) carries the working roadmap + decisions
+log.

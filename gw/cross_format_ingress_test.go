@@ -27,12 +27,6 @@ import (
 // the source's native format. Sources: proto (greeter), openapi
 // (test), graphql (pets). Ingresses: GraphQL (gw.Handler), HTTP
 // (gw.IngressHandler), gRPC (gw.GRPCUnknownHandler).
-//
-// The two gRPC×{openapi,graphql} cells are intentionally skipped —
-// they're the open todo "gRPC ingress: second pass for slotKindOpenAPI
-// + slotKindGraphQL" in docs/plan.md §2 (Cross-kind ingress
-// completeness). Skipping with a referenced reason makes them
-// visible-but-not-failing so the matrix doubles as a forcing function.
 func TestCrossFormatIngressMatrix(t *testing.T) {
 	f := newCrossFormatFixture(t)
 

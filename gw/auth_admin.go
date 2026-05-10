@@ -22,10 +22,9 @@ const adminTokenFilename = "admin-token"
 // this at boot so they (and the UI) can present it as
 // `Authorization: Bearer <hex>` to /admin/* and admin_* mutations.
 //
-// The token is the always-works emergency hatch — independent of any
-// future pluggable admin authorizer. It does NOT authenticate services
-// calling each other through the gateway; that's a separate concern
-// (see docs/plan.md, "Outbound auth pass-through").
+// The token is the unconditional fallback — independent of any
+// pluggable admin authorizer. It does NOT authenticate services
+// calling each other through the gateway; that's a separate concern.
 func (g *Gateway) AdminToken() []byte { return g.cfg.adminToken }
 
 // AdminTokenHex is AdminToken hex-encoded — the form a client presents
@@ -40,12 +39,11 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 //     OK accepts; DENIED rejects without falling through. Any other
 //     code (UNAVAILABLE, NOT_CONFIGURED, UNSPECIFIED, transport err)
 //     falls through to step 2.
-//  2. Boot-token Bearer check (the always-works emergency hatch).
+//  2. Boot-token Bearer check (the unconditional fallback).
 //
-// The split mirrors the documented surface in docs/plan.md: GraphQL
-// reads of admin_* fields (which dispatch GET to /admin/*) stay public
-// for the UI; mutations require auth end-to-end. Future destructive
-// reads will need explicit opt-in once they exist.
+// GraphQL reads of admin_* fields (which dispatch GET to /admin/*)
+// stay public for the UI; mutations require auth end-to-end. Future
+// destructive reads will need explicit opt-in once they exist.
 //
 // Authenticated requests carry IsAdminAuth(ctx) == true on the way
 // through.
