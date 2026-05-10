@@ -3,6 +3,8 @@ package gateway
 import (
 	"sort"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
+
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
@@ -52,6 +54,18 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		return sorted[i].Version < sorted[j].Version
 	})
 
+	// Cross-format runtime middleware: render synth input descriptors
+	// once (across every graphql-origin svc) when any Runtime middleware
+	// is registered, so each dispatcher can wrap with the chain. Skip
+	// when the chain is empty — the boundary roundtrip would only add
+	// per-request alloc.
+	var inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor
+	var chain Middleware
+	if g.hasRuntimeMiddleware() {
+		inputDescs = g.buildOpInputDescriptorsLocked(svcs)
+		chain = g.runtimeChain()
+	}
+
 	for _, svc := range sorted {
 		if svc.OriginKind != ir.KindGraphQL {
 			continue
@@ -62,15 +76,15 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		}
 		mirror := newGraphQLMirror(src)
 		mirror.isLatest = src.versionN == latestByNS[svc.Namespace]
-		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false)
+		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false, chain, inputDescs, svc.Namespace, svc.Version)
 		for _, grp := range svc.Groups {
-			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp)
+			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp, chain, inputDescs, svc.Namespace, svc.Version)
 		}
 	}
 	return nil
 }
 
-func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool) {
+func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string) {
 	for _, op := range ops {
 		opLabel := graphQLOpLabel(op.Kind)
 		core := newGraphQLDispatcher(mirror, op, opLabel, metrics, isGrouped)
@@ -83,19 +97,24 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 		if op.Kind != ir.OpSubscription {
 			dispatcher = BackpressureMiddleware(graphQLBackpressureConfig(src, core.label, metrics, bp))(core)
 		}
+		if chain != nil && op.Kind != ir.OpSubscription {
+			if md, ok := inputDescs[op.SchemaID]; ok {
+				dispatcher = wrapCanonicalDispatcherWithChain(dispatcher, chain, md, namespace, version, op.Name)
+			}
+		}
 		registry.Set(op.SchemaID, dispatcher)
 	}
 }
 
-func registerGraphQLGroupOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions) {
+func registerGraphQLGroupOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string) {
 	// Grouped ops live under a namespace-shaped upstream object; the
 	// canonical-args path can't synthesize the nested call shape from
 	// a leaf op alone, so isGrouped=true short-circuits canonicalQuery
 	// and the dispatcher returns the existing "no AST" error when an
 	// HTTP/gRPC ingress reaches one.
-	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp, true)
+	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp, true, chain, inputDescs, namespace, version)
 	for _, sub := range grp.Groups {
-		registerGraphQLGroupOps(registry, mirror, src, sub, metrics, bp)
+		registerGraphQLGroupOps(registry, mirror, src, sub, metrics, bp, chain, inputDescs, namespace, version)
 	}
 }
 

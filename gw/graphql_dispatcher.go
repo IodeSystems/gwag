@@ -32,6 +32,22 @@ func graphQLForwardInfoFrom(ctx context.Context) *graphql.ResolveInfo {
 	return v
 }
 
+// withoutGraphQLForwardInfo overrides any existing forward-info on
+// `ctx` with an empty *graphql.ResolveInfo so dispatchUnary's gate
+// (`info != nil && len(info.FieldASTs) > 0`) falls through to the
+// canonicalQuery / canonical-args dispatch path. Used by the
+// cross-format runtime middleware wrapper: when a Runtime middleware
+// is registered, the chain modifies the canonical args map and the
+// inner dispatcher must read those modifications via vars rather
+// than blind-forwarding the caller's AST (which would carry the
+// pre-mutation literal). Side effect: per-request selection-set
+// granularity is lost — the synthesized query uses scalar leaves
+// only. Operators registering Runtime middleware accept this
+// trade-off in exchange for the runtime hook firing.
+func withoutGraphQLForwardInfo(ctx context.Context) context.Context {
+	return context.WithValue(ctx, graphQLForwardInfoKey{}, &graphql.ResolveInfo{})
+}
+
 // graphQLDispatcher implements ir.Dispatcher for one downstream
 // GraphQL source + one mirrored field. Everything inside the
 // pre-cutover forwardingResolver closure (AST rewrite, doc print,

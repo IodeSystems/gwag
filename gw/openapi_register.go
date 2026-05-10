@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
@@ -26,6 +27,19 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
 	headers := g.headerInjectorSnapshot()
+
+	// Cross-format runtime middleware: when any Transform.Runtime is
+	// registered, pre-render synth input descriptors so each
+	// dispatcher can wrap with `wrapCanonicalDispatcherWithChain`. No
+	// runtime middlewares = identity chain = no wrap (saves the per-
+	// request argsToMessage / messageToMap roundtrip).
+	var inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor
+	var chain Middleware
+	if g.hasRuntimeMiddleware() {
+		inputDescs = g.buildOpInputDescriptorsLocked(svcs)
+		chain = g.runtimeChain()
+	}
+
 	for _, svc := range svcs {
 		if svc.OriginKind != ir.KindOpenAPI {
 			continue
@@ -40,7 +54,12 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 				return fmt.Errorf("openapi: ingest dropped op origin for %s/%s/%s", svc.Namespace, svc.Version, op.Name)
 			}
 			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp)
-			dispatcher := BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
+			var dispatcher ir.Dispatcher = BackpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
+			if chain != nil {
+				if md, ok := inputDescs[op.SchemaID]; ok {
+					dispatcher = wrapCanonicalDispatcherWithChain(dispatcher, chain, md, svc.Namespace, svc.Version, op.Name)
+				}
+			}
 			g.dispatchers.Set(op.SchemaID, dispatcher)
 		}
 	}
