@@ -1,4 +1,4 @@
-# go-api-gateway
+# gwag
 
 A Go library + binary that fronts three kinds of upstream services
 under a single typed GraphQL surface:
@@ -125,7 +125,7 @@ gw/
     adminauth/v1/          AdminAuthorizer delegate proto
     adminevents/v1/        AdminEvents (service-change stream) proto
   controlclient/           Service-side: SelfRegister + heartbeat goroutine
-  cmd/go-api-gateway/      Binary: gateway runner + peer/services/schema/sign
+  cmd/gwag/      Binary: gateway runner + peer/services/schema/sign
                            subcommands + diff.go (SDL diff)
 
   # Tests live next to their code (~70 cases; ~22s wall clock for the
@@ -214,15 +214,15 @@ cd examples/multi && ./run.sh
 cd examples/multi && ./run-cluster.sh
 
 # the binary
-go-api-gateway --proto path/to/foo.proto=foo-svc:50051 --addr :8080
+gwag --proto path/to/foo.proto=foo-svc:50051 --addr :8080
 
 # operator subcommands
-go-api-gateway peer list     --gateway gw:50090
-go-api-gateway peer forget   --gateway gw:50090 NODE_ID
-go-api-gateway services list --gateway gw:50090
-go-api-gateway schema fetch  --endpoint https://gw/schema
-go-api-gateway schema diff   --from URL --to URL --strict
-go-api-gateway sign          --gateway gw:50090 --channel events.X --ttl 60
+gwag peer list     --gateway gw:50090
+gwag peer forget   --gateway gw:50090 NODE_ID
+gwag services list --gateway gw:50090
+gwag schema fetch  --endpoint https://gw/schema
+gwag schema diff   --from URL --to URL --strict
+gwag sign          --gateway gw:50090 --channel events.X --ttl 60
 ```
 
 ## HTTP surface
@@ -259,7 +259,7 @@ The `/api/*` split is an example wiring choice, not a library
 constraint. `gateway.UIHandler(fs.FS)` and the per-handler primitives
 (`gw.Handler()`, `gw.SchemaHandler()`, `gw.AdminMiddleware(...)`)
 let operators arrange the routes however they like. The
-`gw/cmd/go-api-gateway` CLI mounts GraphQL at `/` directly when no UI
+`gw/cmd/gwag` CLI mounts GraphQL at `/` directly when no UI
 is in play.
 
 ## When in doubt

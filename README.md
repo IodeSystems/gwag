@@ -1,4 +1,4 @@
-# go-api-gateway
+# gwag
 
 A high throughput, high availability, company-wide api aggregator and transformation library for organizations with lots 
 of small services who want typed clients in multiple request and service provider formats (supports: `graphql`, `proto`, `openapi`).
@@ -180,13 +180,13 @@ register against it:
 
 ```bash
 # trunk-friendly gateway: anything goes
-$ go-api-gateway --allow-tier unstable,stable,vN
+$ gwag --allow-tier unstable,stable,vN
 
 # release-track gateway: no unstable
-$ go-api-gateway --allow-tier stable,vN
+$ gwag --allow-tier stable,vN
 
 # locked-down gateway: pinned cuts only (or stable+vN if you want evergreen)
-$ go-api-gateway --allow-tier vN
+$ gwag --allow-tier vN
 ```
 
 A service that tries to register a disallowed tier is rejected at
@@ -206,7 +206,7 @@ Two paths:
 CI gate with `schema diff --strict`:
 
 ```bash
-$ go-api-gateway schema diff \
+$ gwag schema diff \
     --from https://gw.internal/schema \
     --to   ./candidate.graphql --strict
 ```
@@ -304,8 +304,8 @@ A runnable 3-gateway demo is in
 ## CLI
 
 ```
-$ go install github.com/iodesystems/go-api-gateway/cmd/go-api-gateway@latest
-$ go-api-gateway \
+$ go install github.com/iodesystems/go-api-gateway/cmd/gwag@latest
+$ gwag \
     --proto ./greeter.proto=greeter-svc:50051 \
     --proto ./library.proto=commerce@library-svc:50052 \
     --addr :8080
@@ -319,14 +319,14 @@ For a running cluster, the same binary exposes operator and codegen
 subcommands:
 
 ```
-$ go-api-gateway peer list   --gateway gw1.internal:50090
-$ go-api-gateway peer forget --gateway gw1.internal:50090 NODE_ID
+$ gwag peer list   --gateway gw1.internal:50090
+$ gwag peer forget --gateway gw1.internal:50090 NODE_ID
 
-$ go-api-gateway services list --gateway gw1.internal:50090
-$ go-api-gateway schema fetch  --endpoint https://gw.internal/schema > schema.graphql
-$ go-api-gateway schema diff   --from https://gw1.internal/schema \
+$ gwag services list --gateway gw1.internal:50090
+$ gwag schema fetch  --endpoint https://gw.internal/schema > schema.graphql
+$ gwag schema diff   --from https://gw1.internal/schema \
                                 --to   https://gw2.internal/schema --strict
-$ go-api-gateway sign          --gateway gw1.internal:50090 \
+$ gwag sign          --gateway gw1.internal:50090 \
                                 --channel events.UserEvents.UserCreated.42 --ttl 60
 ```
 
@@ -410,7 +410,7 @@ Verification modes (operator picks at gateway boot):
 
 **Signing is an exposed endpoint, not a delegated decision.** The
 gateway publishes `SignSubscriptionToken` (gRPC + the
-`go-api-gateway sign` CLI). A downstream service that already
+`gwag sign` CLI). A downstream service that already
 authenticates the end user — your auth service, the service that
 owns the events stream, your BFF, whatever — does its own
 permission check, then calls Sign to mint a token for the client:
@@ -454,7 +454,7 @@ defense in depth.
 Tokens are minted via gRPC or the CLI:
 
 ```
-$ go-api-gateway sign --gateway gw1.internal:50090 \
+$ gwag sign --gateway gw1.internal:50090 \
                       --channel events.UserEvents.UserCreated.42 --ttl 60
 hmac=md6l2SVJ...
 ts=1778092482
@@ -464,7 +464,7 @@ Or signed locally if you hold the secret yourself (operator tooling,
 break-glass):
 
 ```
-$ go-api-gateway sign --secret <hex> --channel events.... --ttl 60
+$ gwag sign --secret <hex> --channel events.... --ttl 60
 ```
 
 Verification outcomes are surfaced as `SubscribeAuthCode` (`OK`,

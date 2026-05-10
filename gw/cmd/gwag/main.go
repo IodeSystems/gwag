@@ -1,17 +1,17 @@
-// Command go-api-gateway runs a GraphQL gateway over a list of .proto
-// files and gRPC destinations supplied on the command line, or talks
-// to a running gateway via subcommands.
+// Command gwag runs a GraphQL gateway over a list of .proto files
+// and gRPC destinations supplied on the command line, or talks to a
+// running gateway via subcommands.
 //
 // Usage:
 //
 //	# Run a gateway:
-//	go-api-gateway --proto path/to/foo.proto=foo-svc:50051 \
-//	               --proto path/to/bar.proto=billing@bar-svc:50051 \
-//	               --addr :8080
+//	gwag --proto path/to/foo.proto=foo-svc:50051 \
+//	     --proto path/to/bar.proto=billing@bar-svc:50051 \
+//	     --addr :8080
 //
 //	# Talk to a running gateway:
-//	go-api-gateway peer list   --gateway localhost:50090
-//	go-api-gateway peer forget --gateway localhost:50090 NODE_ID
+//	gwag peer list   --gateway localhost:50090
+//	gwag peer forget --gateway localhost:50090 NODE_ID
 //
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
 // the proto's filename stem is used. Without TLS configuration, dialing
@@ -116,8 +116,8 @@ func runGateway() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: go-api-gateway [--addr :8080] --proto PATH=[NS@]ADDR ...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       go-api-gateway peer (list|forget) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] --proto PATH=[NS@]ADDR ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -151,7 +151,7 @@ func runGateway() {
 
 func servicesCmd(args []string) int {
 	if len(args) == 0 || args[0] != "list" {
-		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway services list [--gateway HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT]")
 		return 2
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])
@@ -188,7 +188,7 @@ func servicesCmd(args []string) int {
 
 func schemaCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway schema (fetch|diff) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff) ...")
 		return 2
 	}
 	switch args[0] {
@@ -197,7 +197,7 @@ func schemaCmd(args []string) int {
 	case "diff":
 		return schemaDiffCmd(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway schema (fetch|diff) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff) ...")
 		return 2
 	}
 }
@@ -239,7 +239,7 @@ func schemaDiffCmd(args []string) int {
 	to := fs.String("to", "", "New schema source (URL or file path; required)")
 	strict := fs.Bool("strict", false, "Exit non-zero if any breaking changes are reported")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway schema diff --from OLD --to NEW [--strict]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag schema diff --from OLD --to NEW [--strict]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
@@ -321,7 +321,7 @@ func signCmd(args []string) int {
 	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
 	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway sign --channel SUBJECT [--ttl 60] [--kid KID]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag sign --channel SUBJECT [--ttl 60] [--kid KID]")
 		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT --bearer HEX")
 		fmt.Fprintln(fs.Output(), "  Local:  --secret HEX")
 		fs.PrintDefaults()
@@ -407,7 +407,7 @@ func splitFlagsAndPositionals(args []string) (flags, positionals []string) {
 
 func peerCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: go-api-gateway peer (list|forget NODE_ID) [--gateway HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag peer (list|forget NODE_ID) [--gateway HOST:PORT]")
 		return 2
 	}
 	verb := args[0]
@@ -419,7 +419,7 @@ func peerCmd(args []string) int {
 	fs := flag.NewFlagSet("peer "+verb, flag.ContinueOnError)
 	gwAddr := fs.String("gateway", "localhost:50090", "Gateway control-plane address")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: go-api-gateway peer "+verb+" [--gateway HOST:PORT] [args...]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [args...]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
@@ -457,7 +457,7 @@ func peerCmd(args []string) int {
 
 	case "forget":
 		if len(rest) < 1 {
-			fmt.Fprintln(os.Stderr, "usage: go-api-gateway peer forget NODE_ID [--gateway HOST:PORT]")
+			fmt.Fprintln(os.Stderr, "usage: gwag peer forget NODE_ID [--gateway HOST:PORT]")
 			return 2
 		}
 		resp, err := client.ForgetPeer(ctx, &cpv1.ForgetPeerRequest{NodeId: rest[0]})

@@ -163,7 +163,7 @@ cert when `WithTLS` is set.
 
 ## CLI alternative
 
-For static registration without writing Go, the [`go-api-gateway`
-binary](../../cmd/go-api-gateway) takes `--proto path=addr` flags. Use
+For static registration without writing Go, the [`gwag`
+binary](../../cmd/gwag) takes `--proto path=addr` flags. Use
 that when service-discovery is out of scope and the proto + addr list
 is known at deploy time.
