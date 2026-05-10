@@ -2,6 +2,7 @@ package ir
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/protobuf/types/descriptorpb"
 )
@@ -109,14 +110,33 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 					continue
 				}
 			}
-			reqName := sanitizeProtoIdentifier(op.Name) + "Request"
-			respName := sanitizeProtoIdentifier(op.Name) + "Response"
+			reqName := uniqueSynthName(svc, sanitizeProtoIdentifier(op.Name)+"Request")
 			fp.MessageType = append(fp.MessageType, synthRequestMessage(reqName, op.Args, pkg))
-			fp.MessageType = append(fp.MessageType, synthResponseMessage(respName, op.Output, op.OutputRepeated, pkg))
+			fullReq := pkg + "." + reqName
+
+			// Output: when op.Output is a non-repeated Named ref to a
+			// type already emitted from svc.Types, point the method
+			// at that type directly — proto methods always return a
+			// message, so the wrapper synthesised by
+			// synthResponseMessage is only needed for primitives /
+			// repeated outputs / nil. Avoiding the wrapper also dodges
+			// a name collision when an OpenAPI op's inline response
+			// schema lands in svc.Types under "<Op>Response" (the
+			// natural name the wrapper would otherwise claim).
+			fullResp := ""
+			if op.Output != nil && !op.OutputRepeated && op.Output.IsNamed() {
+				if existing, ok := svc.Types[op.Output.Named]; ok && (existing.TypeKind == TypeObject || existing.TypeKind == TypeInput) {
+					fullResp = pkg + "." + sanitizeProtoIdentifier(localName(op.Output.Named))
+				}
+			}
+			if fullResp == "" {
+				respName := uniqueSynthName(svc, sanitizeProtoIdentifier(op.Name)+"Response")
+				fp.MessageType = append(fp.MessageType, synthResponseMessage(respName, op.Output, op.OutputRepeated, pkg))
+				fullResp = pkg + "." + respName
+			}
+
 			fp.Service = append(fp.Service, &descriptorpb.ServiceDescriptorProto{Name: &serviceName, Method: []*descriptorpb.MethodDescriptorProto{}})
 			lastSP := fp.Service[len(fp.Service)-1]
-			fullReq := pkg + "." + reqName
-			fullResp := pkg + "." + respName
 			streamServer := op.Kind == OpSubscription
 			streamClient := op.StreamingClient
 			lastSP.Method = append(lastSP.Method, &descriptorpb.MethodDescriptorProto{
@@ -138,7 +158,67 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 		}
 		fp.Service = []*descriptorpb.ServiceDescriptorProto{merged}
 	}
+
+	// renderProtoField defaults Named refs to TYPE_MESSAGE because
+	// it can't tell enums from messages from a TypeRef alone. Walk
+	// the file once we have the full enum-type list and downgrade
+	// MESSAGE → ENUM on any field whose TypeName resolves to a
+	// declared enum. Without this, protodesc.NewFiles rejects the
+	// FDS with "resolved X, but it is not an message".
+	enumNames := map[string]bool{}
+	for _, e := range fp.EnumType {
+		enumNames[pkg+"."+e.GetName()] = true
+	}
+	if len(enumNames) > 0 {
+		for _, m := range fp.MessageType {
+			fixupEnumFields(m, enumNames)
+		}
+	}
 	return fp, nil
+}
+
+// fixupEnumFields walks `m` (recursing into nested types) and
+// switches any TYPE_MESSAGE field whose TypeName resolves to an
+// entry in `enumNames` to TYPE_ENUM. Field numbers / labels are
+// preserved.
+func fixupEnumFields(m *descriptorpb.DescriptorProto, enumNames map[string]bool) {
+	for _, f := range m.Field {
+		if f.Type == nil || *f.Type != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE {
+			continue
+		}
+		tn := f.GetTypeName()
+		if tn == "" {
+			continue
+		}
+		if enumNames[strings.TrimPrefix(tn, ".")] {
+			et := descriptorpb.FieldDescriptorProto_TYPE_ENUM
+			f.Type = &et
+		}
+	}
+	for _, nested := range m.NestedType {
+		fixupEnumFields(nested, enumNames)
+	}
+}
+
+// uniqueSynthName returns a name that doesn't collide with anything
+// already in svc.Types. Used for the synthesised <Op>Request /
+// <Op>Response wrappers — OpenAPI inline schemas occasionally land
+// under "<Op>Response" in svc.Types (when the operationId happens
+// to be the response type's natural name), and proto descriptor
+// loaders reject duplicate message names. The "_Wrap" suffix is
+// arbitrary; what matters is that the wrapper is structurally
+// addressable but not name-identical to a user-facing type.
+func uniqueSynthName(svc *Service, base string) string {
+	if _, taken := svc.Types[base]; !taken {
+		return base
+	}
+	candidate := base + "_Wrap"
+	for i := 1; ; i++ {
+		if _, taken := svc.Types[candidate]; !taken {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s_Wrap%d", base, i)
+	}
 }
 
 // synthRequestMessage builds a DescriptorProto whose fields mirror

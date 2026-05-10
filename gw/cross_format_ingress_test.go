@@ -13,8 +13,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
 // TestCrossFormatIngressMatrix asserts the (ingress × source) matrix
@@ -111,11 +115,128 @@ func TestCrossFormatIngressMatrix(t *testing.T) {
 		}
 	})
 	t.Run("grpc_x_openapi", func(t *testing.T) {
-		t.Skip("plan §2: gRPC ingress second pass for slotKindOpenAPI not yet implemented (docs/plan.md tier 2)")
+		// Synthesised gRPC route per ir.RenderProtoFiles(svc) for an
+		// openapi-origin service. Method output is the openapi inline
+		// response type directly (not the synthRequest wrapper) since
+		// the renderer points the method at the existing svc.Types
+		// entry when op.Output is a non-repeated Named ref.
+		inputDesc, outputDesc := f.synthMethodDescriptors(t, "test", "v1", "getThing")
+		input := dynamicpb.NewMessage(inputDesc)
+		idFd := inputDesc.Fields().ByName("id")
+		if idFd == nil {
+			t.Fatalf("input descriptor missing id field")
+		}
+		input.Set(idFd, protoreflect.ValueOfString("42"))
+		output := dynamicpb.NewMessage(outputDesc)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := f.grpcConn.Invoke(ctx, "/test.v1.Service/getThing", input, output); err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+
+		gotID := output.Get(outputDesc.Fields().ByName("id")).String()
+		gotName := output.Get(outputDesc.Fields().ByName("name")).String()
+		if gotID != "abc" {
+			t.Fatalf("id=%q want abc", gotID)
+		}
+		if gotName != "thing" {
+			t.Fatalf("name=%q want thing", gotName)
+		}
 	})
 	t.Run("grpc_x_graphql", func(t *testing.T) {
-		t.Skip("plan §2: gRPC ingress second pass for slotKindGraphQL not yet implemented (docs/plan.md tier 2)")
+		// Stitched-graphql op `users` returns `[User]`. The renderer
+		// emits a `usersResponse` wrapper with `repeated value` since
+		// proto methods can't return a top-level repeated message.
+		inputDesc, outputDesc := f.synthMethodDescriptors(t, "pets", "v1", "users")
+		input := dynamicpb.NewMessage(inputDesc)
+		output := dynamicpb.NewMessage(outputDesc)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := f.grpcConn.Invoke(ctx, "/pets.v1.Service/users", input, output); err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+
+		valueFd := outputDesc.Fields().ByName("value")
+		if valueFd == nil {
+			t.Fatalf("output descriptor missing value field")
+		}
+		if !valueFd.IsList() {
+			t.Fatalf("value field is not a list")
+		}
+		list := output.Get(valueFd).List()
+		if list.Len() != 2 {
+			t.Fatalf("users len=%d want 2", list.Len())
+		}
+		userDesc := valueFd.Message()
+		idFd := userDesc.Fields().ByName("id")
+		nameFd := userDesc.Fields().ByName("name")
+		roleFd := userDesc.Fields().ByName("role")
+		first := list.Get(0).Message()
+		if got := first.Get(idFd).String(); got != "1" {
+			t.Fatalf("user[0].id=%q want 1", got)
+		}
+		if got := first.Get(nameFd).String(); got != "alice" {
+			t.Fatalf("user[0].name=%q want alice", got)
+		}
+		// role is a graphql enum; protoreflect.Value.String() on an
+		// enum field returns the number, so resolve the name via the
+		// field's enum descriptor.
+		roleNum := first.Get(roleFd).Enum()
+		roleEV := roleFd.Enum().Values().ByNumber(roleNum)
+		if roleEV == nil {
+			t.Fatalf("unknown role number %d", roleNum)
+		}
+		if got := string(roleEV.Name()); got != "ADMIN" {
+			t.Fatalf("user[0].role=%q want ADMIN", got)
+		}
 	})
+}
+
+// synthMethodDescriptors returns the synthesised input/output
+// MessageDescriptors for one method on a non-proto slot. Mirrors
+// what rebuildGRPCIngressLocked does in its cross-kind second pass
+// — render the slot's IR via ir.RenderProtoFiles, hand the
+// FileDescriptorSet to protodesc.NewFiles, then walk to the named
+// method. Used by the gRPC×{openapi,graphql} matrix cells so the
+// test can build dynamicpb input/output messages without hard-
+// coding the generated proto.
+func (f *crossFormatFixture) synthMethodDescriptors(t *testing.T, ns, ver, opName string) (input, output protoreflect.MessageDescriptor) {
+	t.Helper()
+	f.gw.mu.Lock()
+	slot := f.gw.slots[poolKey{namespace: ns, version: ver}]
+	f.gw.mu.Unlock()
+	if slot == nil {
+		t.Fatalf("no slot for %s/%s", ns, ver)
+	}
+	fds, err := ir.RenderProtoFiles(slot.ir)
+	if err != nil {
+		t.Fatalf("RenderProtoFiles: %v", err)
+	}
+	files, err := protodesc.NewFiles(fds)
+	if err != nil {
+		t.Fatalf("protodesc.NewFiles: %v", err)
+	}
+	var found protoreflect.MethodDescriptor
+	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		ss := fd.Services()
+		for i := 0; i < ss.Len(); i++ {
+			sd := ss.Get(i)
+			ms := sd.Methods()
+			for j := 0; j < ms.Len(); j++ {
+				if string(ms.Get(j).Name()) == opName {
+					found = ms.Get(j)
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if found == nil {
+		t.Fatalf("synthesised method %s not found in %s/%s", opName, ns, ver)
+	}
+	return found.Input(), found.Output()
 }
 
 // crossFormatFixture is a single Gateway that has registered one of

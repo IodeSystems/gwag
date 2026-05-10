@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
@@ -62,6 +63,13 @@ type grpcIngressTable struct {
 // support them and there's no canonical args shape to forward.
 // Internal namespaces (`_*` or AsInternal) skip just like the
 // GraphQL surface skips them.
+//
+// After the proto walk, a second pass synthesizes routes for
+// non-proto slots (slotKindOpenAPI, slotKindGraphQL) from
+// `ir.RenderProtoFiles` so a gRPC client can reach OpenAPI- or
+// GraphQL-registered ops too. Synthesized routes go through the
+// canonical-args dispatcher (slower than the proto-on-proto fast
+// path; fine for cross-kind which won't be hot).
 //
 // Caller holds g.mu.
 func (g *Gateway) rebuildGRPCIngressLocked() {
@@ -117,7 +125,164 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 			}
 		}
 	}
+
+	// Cross-kind second pass: synthesize routes for openapi /
+	// graphql slots via ir.RenderProtoFiles. The dispatcher
+	// already includes BackpressureMiddleware (see
+	// openapi_register / graphql_register) so the route's bp
+	// config is intentionally left zero — acquireBackpressureSlot
+	// short-circuits on a nil Sem.
+	for k, slot := range g.slots {
+		if slot.kind == slotKindProto {
+			continue
+		}
+		if g.isInternal(k.namespace) {
+			continue
+		}
+		g.addCanonicalArgsGRPCRoutesLocked(t, k, slot.ir)
+	}
+
 	g.grpcIngressRoutes.Store(t)
+}
+
+// addCanonicalArgsGRPCRoutesLocked synthesizes input/output
+// MessageDescriptors per non-proto service via ir.RenderProtoFiles
+// and emits routes that bridge dynamicpb ↔ canonical-args
+// dispatcher: messageToMap on the input → ir.Dispatcher.Dispatch
+// → argsToMessage onto the synthesized response message (which has
+// shape `{value: <output>}` per ir.synthResponseMessage). Streaming
+// methods are skipped — graphql subscriptions and openapi
+// long-poll-as-stream don't have a stable canonical-args bridge
+// from the gRPC side yet. Caller holds g.mu.
+func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(t *grpcIngressTable, key poolKey, services []*ir.Service) {
+	for _, svc := range services {
+		fds, err := ir.RenderProtoFiles([]*ir.Service{svc})
+		if err != nil || fds == nil || len(fds.File) == 0 {
+			continue
+		}
+		files, err := protodesc.NewFiles(fds)
+		if err != nil {
+			continue
+		}
+		for _, fp := range fds.File {
+			fd, err := files.FindFileByPath(fp.GetName())
+			if err != nil {
+				continue
+			}
+			ss := fd.Services()
+			for i := 0; i < ss.Len(); i++ {
+				sd := ss.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if md.IsStreamingClient() || md.IsStreamingServer() {
+						continue
+					}
+					sid := ir.MakeSchemaID(key.namespace, key.version, string(md.Name()))
+					disp := g.dispatchers.Get(sid)
+					if disp == nil {
+						continue
+					}
+					path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+					if _, dup := t.routes[path]; dup {
+						continue
+					}
+					t.routes[path] = &grpcIngressRoute{
+						inputDesc:  md.Input(),
+						outputDesc: md.Output(),
+						handler:    newCanonicalArgsGRPCHandler(disp, md.Output()),
+					}
+				}
+			}
+		}
+	}
+}
+
+// newCanonicalArgsGRPCHandler builds a Handler that bridges
+// dynamicpb ↔ canonical-args ir.Dispatcher: the input dynamicpb
+// converts to args via messageToMap, the dispatcher returns a
+// scalar / map / list / nil, and the result is either passed
+// through to argsToMessage (when outputDesc is the user-facing
+// response shape — non-repeated Named output) or wrapped as
+// `{value: <result>}` (when outputDesc is the synthesised wrapper
+// emitted by ir.synthResponseMessage for primitive / repeated /
+// nil-output ops).
+//
+// The wrap-or-pass-through decision is a structural property of
+// outputDesc: a wrapper always has exactly one field named "value"
+// (cf. ir.synthResponseMessage). That signal's robust against
+// user-facing types that happen to have a "value" field — they'd
+// be a Named ref into svc.Types and the renderer would point the
+// method at them directly instead of synthesising a wrapper.
+//
+// The response message comes from acquireDynamicMessage; the gRPC
+// ingress serve path releases it after stream.SendMsg returns.
+func newCanonicalArgsGRPCHandler(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor) Handler {
+	wrapInValue := isSynthResponseWrapper(outputDesc)
+	return Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+		var args map[string]any
+		if reqMsg, ok := req.(*dynamicpb.Message); ok && reqMsg != nil {
+			args = messageToMap(reqMsg)
+		} else {
+			args = map[string]any{}
+		}
+		result, err := disp.Dispatch(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		respMsg := acquireDynamicMessage(outputDesc)
+		if result == nil {
+			return respMsg, nil
+		}
+		var payload map[string]any
+		if wrapInValue {
+			payload = map[string]any{"value": coerceCanonicalListValue(result)}
+		} else if m, ok := result.(map[string]any); ok {
+			payload = m
+		} else {
+			// Non-wrapper outputDesc but the dispatcher returned
+			// something that isn't a map — refuse to lose the body.
+			// argsToMessage doesn't carry a primitive-only path.
+			releaseDynamicMessage(outputDesc, respMsg)
+			return nil, fmt.Errorf("ingress: cannot project %T into %s", result, outputDesc.FullName())
+		}
+		if err := argsToMessage(payload, respMsg); err != nil {
+			releaseDynamicMessage(outputDesc, respMsg)
+			return nil, err
+		}
+		return respMsg, nil
+	})
+}
+
+// isSynthResponseWrapper reports whether md has the structural
+// shape ir.synthResponseMessage emits: exactly one field named
+// "value". Used by the canonical-args gRPC handler to decide
+// whether to wrap a dispatcher's return value.
+func isSynthResponseWrapper(md protoreflect.MessageDescriptor) bool {
+	if md == nil || md.Fields().Len() != 1 {
+		return false
+	}
+	f := md.Fields().Get(0)
+	return string(f.Name()) == "value"
+}
+
+// coerceCanonicalListValue normalises a dispatcher's return value
+// to the JSON-decoded shape argsToMessage expects: lists must be
+// []any. Both openapi and graphql dispatchers go through
+// json.Unmarshal into `any` so the common case is already []any /
+// map[string]any / scalar — but []map[string]any (e.g. a hand-built
+// response in tests) shows up too. Unknown slice element types fall
+// through unchanged so argsToMessage's per-field type check
+// surfaces the mismatch.
+func coerceCanonicalListValue(v any) any {
+	if items, ok := v.([]map[string]any); ok {
+		out := make([]any, len(items))
+		for i, m := range items {
+			out[i] = m
+		}
+		return out
+	}
+	return v
 }
 
 // GRPCUnknownHandler returns a grpc.StreamHandler the operator wires
