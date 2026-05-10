@@ -16,6 +16,11 @@
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
 //
+//	# Persist a gateway context so subcommands don't need --gateway:
+//	gwag login --gateway localhost:50090 --token DEADBEEF...
+//	gwag peer list                                    # uses ./.gw
+//	gwag logout                                        # removes ./.gw
+//
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
 // the proto's filename stem is used. Without TLS configuration, dialing
 // is insecure — fine for inside a service mesh, not the public network.
@@ -101,6 +106,10 @@ func (p *protoFlag) Set(v string) error {
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "login":
+			os.Exit(loginCmd(os.Args[2:]))
+		case "logout":
+			os.Exit(logoutCmd(os.Args[2:]))
 		case "peer":
 			os.Exit(peerCmd(os.Args[2:]))
 		case "services":
@@ -181,13 +190,15 @@ func servicesCmd(args []string) int {
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])
 	fs := flag.NewFlagSet("services list", flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "localhost:50090", "Gateway control-plane address")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw or localhost:50090)")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	gwCtx, _ := loadContext()
+	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "localhost:50090")
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dial %s: %v\n", *gwAddr, err)
+		fmt.Fprintf(os.Stderr, "dial %s: %v\n", addr, err)
 		return 1
 	}
 	defer conn.Close()
@@ -230,12 +241,17 @@ func schemaCmd(args []string) int {
 func schemaFetchCmd(args []string) int {
 	flags, _ := splitFlagsAndPositionals(args)
 	fs := flag.NewFlagSet("schema fetch", flag.ContinueOnError)
-	endpoint := fs.String("endpoint", "http://localhost:8080/schema", "Gateway /schema endpoint URL")
+	endpoint := fs.String("endpoint", "", "Gateway /schema endpoint URL (default: from .gw + /schema or http://localhost:8080/schema)")
 	jsonOut := fs.Bool("json", false, "Fetch introspection JSON instead of SDL")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	url := *endpoint
+	gwCtx, _ := loadContext()
+	ctxEndpoint := ""
+	if gwCtx.Endpoint != "" {
+		ctxEndpoint = strings.TrimRight(gwCtx.Endpoint, "/") + "/schema"
+	}
+	url := resolveCtx(*endpoint, ctxEndpoint, "http://localhost:8080/schema")
 	if *jsonOut {
 		if strings.Contains(url, "?") {
 			url += "&format=json"
@@ -339,12 +355,12 @@ func loadSchemaSource(src string) (string, error) {
 func signCmd(args []string) int {
 	flags, _ := splitFlagsAndPositionals(args)
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "", "Gateway control-plane address (e.g. localhost:50090); empty = sign locally with --secret")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (e.g. localhost:50090); empty = sign locally with --secret. Defaults from .gw if set there.")
 	channel := fs.String("channel", "", "Resolved subject the token will sign")
 	ttl := fs.Int64("ttl", 60, "Token TTL in seconds (informational)")
 	secretHex := fs.String("secret", "", "Hex-encoded shared secret (local sign mode)")
 	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
-	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway")
+	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway. Defaults from .gw if set there.")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag sign --channel SUBJECT [--ttl 60] [--kid KID]")
 		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT --bearer HEX")
@@ -358,12 +374,15 @@ func signCmd(args []string) int {
 		fs.Usage()
 		return 2
 	}
-	if *gwAddr != "" {
-		if *bearerHex == "" {
-			fmt.Fprintln(os.Stderr, "--bearer is required with --gateway (the sign endpoint is bearer-gated)")
+	gwCtx, _ := loadContext()
+	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "")
+	bearer := resolveCtx(*bearerHex, gwCtx.Bearer, "")
+	if addr != "" {
+		if bearer == "" {
+			fmt.Fprintln(os.Stderr, "--bearer is required with --gateway (the sign endpoint is bearer-gated; pass it on the command line or set bearer in .gw via 'gwag login --token HEX')")
 			return 2
 		}
-		conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -372,7 +391,7 @@ func signCmd(args []string) int {
 		client := cpv1.NewControlPlaneClient(conn)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+*bearerHex)
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearer)
 		resp, err := client.SignSubscriptionToken(ctx, &cpv1.SignSubscriptionTokenRequest{
 			Channel:    *channel,
 			TtlSeconds: *ttl,
@@ -442,7 +461,7 @@ func peerCmd(args []string) int {
 	// otherwise drop the flag.
 	flags, positionals := splitFlagsAndPositionals(rest)
 	fs := flag.NewFlagSet("peer "+verb, flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "localhost:50090", "Gateway control-plane address")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw or localhost:50090)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [args...]")
 		fs.PrintDefaults()
@@ -451,10 +470,12 @@ func peerCmd(args []string) int {
 		return 2
 	}
 	rest = positionals
+	gwCtx, _ := loadContext()
+	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "localhost:50090")
 
-	conn, err := grpc.NewClient(*gwAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dial %s: %v\n", *gwAddr, err)
+		fmt.Fprintf(os.Stderr, "dial %s: %v\n", addr, err)
 		return 1
 	}
 	defer conn.Close()
