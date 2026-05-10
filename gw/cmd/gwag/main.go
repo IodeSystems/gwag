@@ -16,10 +16,14 @@
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
 //
-//	# Persist a gateway context so subcommands don't need --gateway:
-//	gwag login --gateway localhost:50090 --token DEADBEEF...
-//	gwag peer list                                    # uses ./.gw
-//	gwag logout                                        # removes ./.gw
+//	# Persist named gateway logins so subcommands don't need --gateway:
+//	gwag login --name local --gateway localhost:50090 --token DEADBEEF...
+//	gwag login --name staging --gateway staging.gw:50090 --token ...
+//	gwag context                # list logins; primary is marked
+//	gwag use staging            # switch primary
+//	gwag peer list              # uses primary login
+//	gwag peer list --context local
+//	gwag logout staging         # remove one login; --all wipes .gw/
 //
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
 // the proto's filename stem is used. Without TLS configuration, dialing
@@ -110,6 +114,10 @@ func main() {
 			os.Exit(loginCmd(os.Args[2:]))
 		case "logout":
 			os.Exit(logoutCmd(os.Args[2:]))
+		case "use":
+			os.Exit(useCmd(os.Args[2:]))
+		case "context":
+			os.Exit(contextCmd(os.Args[2:]))
 		case "peer":
 			os.Exit(peerCmd(os.Args[2:]))
 		case "services":
@@ -185,17 +193,18 @@ func runGateway() {
 
 func servicesCmd(args []string) int {
 	if len(args) == 0 || args[0] != "list" {
-		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT] [--context NAME]")
 		return 2
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])
 	fs := flag.NewFlagSet("services list", flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw or localhost:50090)")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw primary or localhost:50090)")
+	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	gwCtx, _ := loadContext()
-	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "localhost:50090")
+	login := resolveLogin(*ctxName)
+	addr := resolveCtx(*gwAddr, login.Gateway, "localhost:50090")
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dial %s: %v\n", addr, err)
@@ -241,15 +250,16 @@ func schemaCmd(args []string) int {
 func schemaFetchCmd(args []string) int {
 	flags, _ := splitFlagsAndPositionals(args)
 	fs := flag.NewFlagSet("schema fetch", flag.ContinueOnError)
-	endpoint := fs.String("endpoint", "", "Gateway /schema endpoint URL (default: from .gw + /schema or http://localhost:8080/schema)")
+	endpoint := fs.String("endpoint", "", "Gateway /schema endpoint URL (default: from .gw primary + /schema or http://localhost:8080/schema)")
+	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	jsonOut := fs.Bool("json", false, "Fetch introspection JSON instead of SDL")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	gwCtx, _ := loadContext()
+	login := resolveLogin(*ctxName)
 	ctxEndpoint := ""
-	if gwCtx.Endpoint != "" {
-		ctxEndpoint = strings.TrimRight(gwCtx.Endpoint, "/") + "/schema"
+	if login.Endpoint != "" {
+		ctxEndpoint = strings.TrimRight(login.Endpoint, "/") + "/schema"
 	}
 	url := resolveCtx(*endpoint, ctxEndpoint, "http://localhost:8080/schema")
 	if *jsonOut {
@@ -355,12 +365,13 @@ func loadSchemaSource(src string) (string, error) {
 func signCmd(args []string) int {
 	flags, _ := splitFlagsAndPositionals(args)
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "", "Gateway control-plane address (e.g. localhost:50090); empty = sign locally with --secret. Defaults from .gw if set there.")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (e.g. localhost:50090); empty = sign locally with --secret. Defaults from .gw primary if set there.")
+	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	channel := fs.String("channel", "", "Resolved subject the token will sign")
 	ttl := fs.Int64("ttl", 60, "Token TTL in seconds (informational)")
 	secretHex := fs.String("secret", "", "Hex-encoded shared secret (local sign mode)")
 	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
-	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway. Defaults from .gw if set there.")
+	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway. Defaults from .gw primary if set there.")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag sign --channel SUBJECT [--ttl 60] [--kid KID]")
 		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT --bearer HEX")
@@ -374,9 +385,9 @@ func signCmd(args []string) int {
 		fs.Usage()
 		return 2
 	}
-	gwCtx, _ := loadContext()
-	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "")
-	bearer := resolveCtx(*bearerHex, gwCtx.Bearer, "")
+	login := resolveLogin(*ctxName)
+	addr := resolveCtx(*gwAddr, login.Gateway, "")
+	bearer := resolveCtx(*bearerHex, login.Bearer, "")
 	if addr != "" {
 		if bearer == "" {
 			fmt.Fprintln(os.Stderr, "--bearer is required with --gateway (the sign endpoint is bearer-gated; pass it on the command line or set bearer in .gw via 'gwag login --token HEX')")
@@ -461,17 +472,18 @@ func peerCmd(args []string) int {
 	// otherwise drop the flag.
 	flags, positionals := splitFlagsAndPositionals(rest)
 	fs := flag.NewFlagSet("peer "+verb, flag.ContinueOnError)
-	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw or localhost:50090)")
+	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw primary or localhost:50090)")
+	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [args...]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [--context NAME] [args...]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
 	rest = positionals
-	gwCtx, _ := loadContext()
-	addr := resolveCtx(*gwAddr, gwCtx.Gateway, "localhost:50090")
+	login := resolveLogin(*ctxName)
+	addr := resolveCtx(*gwAddr, login.Gateway, "localhost:50090")
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {

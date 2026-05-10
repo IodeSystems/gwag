@@ -6,6 +6,8 @@
 /bin/.run/
 .claude/
 
-# `gwag login` writes a project-local context file containing the
-# admin bearer token. Never commit it.
-.gw
+# `gwag login` / `gwag up` write a project-local context directory
+# containing credentials.json (with admin bearer tokens) and per-
+# context runtime state (JetStream, admin-token persistence). Never
+# commit it.
+.gw/
