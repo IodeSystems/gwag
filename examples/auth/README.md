@@ -12,7 +12,7 @@ from the external schema.
 - `gen/` — generated Go bindings (`protoc-gen-go` +
   `protoc-gen-go-grpc`).
 - `main.go` — wires both services in-process via bufconn, configures
-  the gateway, declares `HideAndInject[*authv1.Context]`.
+  the gateway, declares `InjectType[*authv1.Context]`.
 
 ## Run it
 
@@ -47,7 +47,7 @@ $ curl -sS -H 'Content-Type: application/json' \
 External schema introspection does *not* show:
 
 - the `auth` namespace (registered with `AsInternal()`)
-- the `auth` argument on `getMe` (stripped by `HideAndInject`)
+- the `auth` argument on `getMe` (stripped by `InjectType`)
 
 ```
 $ curl -sS -H 'Content-Type: application/json' \

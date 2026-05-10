@@ -25,12 +25,12 @@ service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    
 - **One GraphQL surface for clients** — no juggling N service URLs and M auth schemes; deprecations propagate through to client codegen.
 - **Typed clients in all three formats for service-to-service** — proto FDS / OpenAPI / GraphQL SDL all re-emitted, simultaneously, from the same registry.
 - **Live-reload schema** — services self-register over the gRPC control plane; new fields land without a gateway redeploy.
-- **Tier-based versioning** — `unstable` / `stable` / `vN`; older `vN` auto-`@deprecated`; CI gate on schema diff.
-- **HA out of the box** — embedded NATS + JetStream KV; any node dispatches to any service registered with any peer.
-- **Subscriptions for free** — server-streaming gRPC becomes a flat GraphQL subscription field; one upstream publish fans out to N WebSocket clients via NATS.
-- **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y.
-- **Auth / logging as middleware** — one declaration applies across every protocol. `HideAndInject` for the "fill auth from context, hide from external schema" pattern.
-- **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus.
+- **Tier-based versioning** — `unstable` / `stable` / `vN`; older `vN` auto-`@deprecated`; CI gate on schema diff. ([§Service lifecycle](#service-lifecycle))
+- **HA out of the box** — embedded NATS + JetStream KV; any node dispatches to any service registered with any peer. ([§Cluster mode](#cluster-mode))
+- **Subscriptions for free** — server-streaming gRPC becomes a flat GraphQL subscription field; one upstream publish fans out to N WebSocket clients via NATS. ([§Subscriptions](#subscriptions-events))
+- **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y. ([§Backpressure & metrics](#backpressure--metrics))
+- **Auth / logging as middleware** — one declaration applies across every protocol. `InjectType[T]` / `InjectPath` / `InjectHeader` for the "fill from context, hide from external schema" pattern. ([§Middleware](#middleware))
+- **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus. ([§Health & graceful drain](#health--graceful-drain))
 
 ## Cost
 
@@ -182,7 +182,7 @@ The flow that makes this earn its keep:
 
 1. **Trunk publishes to `unstable`.** Every CI green re-registers the service at `unstable`. Schema rebuilds, but the slot is mutable — no `vN` churn, no deprecated noise. Backend teams *building against* a dep can opt into its `unstable` for fast iteration.
 2. **Cut a release → freeze the current `unstable` into a new `vN` and `stable` rolls forward.** The team that owns the service decides when to cut. Existing numbered cuts stay callable but `vN-1` and earlier get `@deprecated` automatically.
-3. **Caller-side lint forces dependency negotiation.** `controlclient.WithBuildTag(...)` (planned) refuses to register `unstable` when the calling binary carries a release tag. So a service that cuts a release *can't* depend on its dependencies' `unstable` — it must pin `stable` or a numbered `vN`. If a dep's `unstable` has diverged from its `stable` with breaking changes, you can't cut your release until that dep cuts theirs (or you adopt their breakage). The schema becomes a forcing function for upstream/downstream cut coordination, not just an artifact of past decisions.
+3. **Caller-side lint forces dependency negotiation.** Set `controlclient.Options.BuildTag` and the client refuses to register `unstable` from a release-tagged binary. So a service that cuts a release *can't* depend on its dependencies' `unstable` — it must pin `stable` or a numbered `vN`. If a dep's `unstable` has diverged from its `stable` with breaking changes, you can't cut your release until that dep cuts theirs (or you adopt their breakage). The schema becomes a forcing function for upstream/downstream cut coordination, not just an artifact of past decisions.
 
 Generated clients propagate `@deprecated` through their normal
 codegen channels: `protoc-gen-go` emits `// Deprecated: ...` from
@@ -219,7 +219,7 @@ gateway needs to model.
 Two paths:
 
 1. **Auto-deprecation on version fold.** Older `vN` get `@deprecated` automatically when newer cuts register; `unstable` carries a fixed deprecation reason any time it's queried. Free.
-2. **Manual deprecate / undeprecate.** Operators can flip a `deprecated` bit on any `(namespace, version)` from the admin UI or RPC, with a reason string. Useful for sunsetting a still-current `vN` ahead of cutting `vN+1`, or for un-deprecating in a rollback. (Planned — see `docs/plan.md` §8.)
+2. **Manual deprecate / undeprecate.** Operators flip a `deprecated` bit on any `(namespace, version)` from the admin UI or RPC, with a reason string. Useful for sunsetting a still-current `vN` ahead of cutting `vN+1`, or for un-deprecating in a rollback.
 
 CI gate with `schema diff --strict`:
 
@@ -274,7 +274,7 @@ schema-side warnings are at least automatic.
 - [`examples/multi`](./examples/multi) — three separate processes
   (gateway + greeter + library) wired via the control plane.
   Schema rebuilds in place as services join and leave.
-- [`examples/auth`](./examples/auth) — `HideAndInject[*authpb.Context]`
+- [`examples/auth`](./examples/auth) — `InjectType[*authv1.Context]`
   hiding auth fields globally and filling them from a registered
   internal service.
 
@@ -641,18 +641,20 @@ Defaults (override via `gateway.WithBackpressure(...)`):
 
 ```go
 DefaultBackpressure = BackpressureOptions{
-    MaxInflight: 256,             // per-pool concurrent unary dispatches
-    MaxStreams:  64,              // per-pool active subscription streams
-    MaxWaitTime: 10 * time.Second, // wait budget; exceeded → fast-reject
+    MaxInflight:     256,             // per-pool concurrent unary dispatches
+    MaxStreams:      10_000,          // per-pool active subscription streams
+    MaxStreamsTotal: 100_000,         // gateway-wide stream ceiling (file descriptors, RAM)
+    MaxWaitTime:     10 * time.Second, // wait budget; exceeded → fast-reject
 }
 ```
 
+The hybrid stream caps (per-pool + gateway-wide) keep streaming
+isolation honest while still bounding the actual scarce resource.
 A dispatch that cannot acquire its pool's slot within `MaxWaitTime`
 fails with `Reject(ResourceExhausted, "could not acquire slot in N")`
-— this is the "you can't even get a slot" backoff. The "external
-request pool" is the emergent set of all currently-waiting dispatches
-across the gateway; it has no separate flat cap (which would couple
-unrelated requests). Visibility comes from the per-pool metrics.
+— this is the "you can't even get a slot" backoff. There's no flat
+gateway-wide unary cap by design (it would couple unrelated requests);
+visibility comes from the per-pool metrics below.
 
 Every dispatch is timed by default. `gw.MetricsHandler()` exposes:
 
@@ -747,28 +749,16 @@ this README section.
 
 ## Promotion path
 
-Promotion runs along the **version axis**: `unstable` → `stable` →
-`vN`. The combination of:
+Tier flow (`unstable` → `stable` → `vN`) and the BuildTag forcing
+function are covered in [§Service lifecycle](#service-lifecycle). Two
+extra gates wire the same axis into CI:
 
-1. **Trunk publishes to `unstable`.** CI green → re-register at
-   `unstable`. Mutable, always-overwrites; no `vN` churn for
-   in-flight work.
-2. **Cut a release → freeze `unstable` into the next `vN`.**
-   `stable` auto-rolls to point at it. Older `vN` carry
-   `@deprecated` automatically.
-3. **Caller-side lint** (`controlclient.WithBuildTag(...)`) refuses
-   to register `unstable` from a binary built with a release tag —
-   so a release of A *can't* depend on its dependencies' `unstable`.
-   That's the forcing function: if `B.unstable` has diverged from
-   `B.stable`, the team cutting A can't ship without first
-   negotiating the cut with B's team. Schema becomes the contract,
-   not just the documentation.
-4. **`services list`** exposes hashes; CI diffs the hash sets across
-   gateways to confirm the bytes match for every `(ns, tier|version)`
-   you intend to promote between clusters (if you run more than one).
-5. **`/schema` + `schema diff --strict`** is the client-perspective
+1. **`services list`** exposes per-pool hashes — CI diffs hash sets
+   across clusters to confirm the bytes match for every
+   `(namespace, tier|version)` you intend to promote.
+2. **`/schema` + `schema diff --strict`** is the client-perspective
    gate — additions are fine, removals or required-arg changes fail
-   the build.
+   the build (rules in [§Deprecate](#deprecate)).
 
 Per-cluster drift is prevented by the canonical hash gate in the
 pool: a replica with a mismatched proto can't join an existing
@@ -776,14 +766,18 @@ pool: a replica with a mismatched proto can't join an existing
 
 ## Middleware
 
-Two pipelines, paired in one declaration. The shape is the same
-`next()` chain you've seen in every Go middleware library, applied
-at two layers:
+One `Transform` declaration carries up to four reshaping concerns
+that fire at different layers, in lockstep:
 
-1. **Schema** — runs once at gateway boot, rewrites the GraphQL
-   schema (hide types, hide fields, rename, restrict).
-2. **Runtime** — runs per request, transforms requests and
-   responses.
+| Field | Layer | Effect |
+|---|---|---|
+| `Schema` (`[]SchemaRewrite`) | once at boot | Rewrites the external schema (hide types, hide fields, flip nullability) |
+| `Runtime` (`Middleware`) | per request | Wraps the dispatch handler — read or mutate request and response |
+| `Headers` (`[]HeaderInjector`) | per dispatch | Stamps outbound HTTP headers / gRPC metadata |
+| `Inventory` (`[]InjectorRecord`) | registration time | Surfaces what an operator declared at `/admin/injectors` |
+
+`Runtime` is the same `next()` chain you've seen in every Go
+middleware library:
 
 ```go
 mw := func(next gateway.Handler) gateway.Handler {
@@ -795,43 +789,38 @@ mw := func(next gateway.Handler) gateway.Handler {
         return resp, nil
     }
 }
+
+gw.Use(gateway.Transform{Runtime: mw})
 ```
 
 - **Observer**: call `next`, return its result, do something on the side (log, metric, trace).
 - **Filter**: return an error without calling `next` (auth, rate limit, allow-list). Use `gateway.Reject(code, msg)` so the gateway can map to the right GraphQL error.
 - **Transform**: wrap `next` and mutate input or output.
 
-Streaming uses the same shape over `iter.Seq2[T, error]`:
-
-```go
-type StreamHandler func(ctx context.Context, in iter.Seq2[T, error]) iter.Seq2[T, error]
-```
-
-Reads as `for req, err := range in { ... yield(...) }`. Errors flow
-inline; cancellation rides `ctx`. Two interfaces (unary +
-stream) because forcing `iter.Seq2` on single-shot RPCs is annoying.
-
 Schema and Runtime often need to stay in sync — hiding `userID` from
 the external schema is meaningless without a runtime hook to fill it
-from context. The library bundles paired rules into one declaration:
+from context. The library ships three constructors that build a
+matched `Transform` so the schema/runtime invariant is enforced by
+construction:
 
-```go
-type Pair struct {
-    Schema  SchemaMiddleware
-    Runtime Middleware
-    Stream  StreamMiddleware
-}
+| Constructor | What you address | Schema half | Runtime half |
+|---|---|---|---|
+| `InjectType[T](resolve, opts...)` | every field/arg of Go type `T` | hides (default) or `Nullable(true)` | calls `resolve(ctx, current *T)` to fill the field |
+| `InjectPath("ns.method.arg", resolve, opts...)` | one specific call site (only way to address a primitive arg) | hides or rewrites at that path | resolves at request time for that path |
+| `InjectHeader(name, resolve, opts...)` | one outbound HTTP header / gRPC metadata key | n/a | adds the header on every dispatch |
 
-gw.Use(gateway.HideAndInject[*authpb.Context](authResolver))
-```
+`Hide(true)` (the default for `InjectType` / `InjectPath`) strips the
+arg from the external schema and the resolver always sees
+`current=nil`. `Hide(false)` keeps the arg visible and gives the
+resolver the caller-provided value to inspect-and-decide.
 
-`HideAndInject` returns a `Pair` whose `Schema` half strips every
-field of type `*authpb.Context` from the external schema and whose
-`Runtime` half populates those fields by calling `authResolver(ctx)`.
-One declaration; the invariant is enforced by construction.
+Single-purpose middleware (logging, rate limit) builds a `Transform`
+that fills only `Runtime`.
 
-Single-purpose middleware (logging, rate limit) just fills one half of
-`Pair` and no-ops the other.
+> **Subscriptions don't run through `Runtime`.** Server-streaming
+> RPCs are exposed as GraphQL subscription fields backed by NATS
+> pub/sub (see §Subscriptions); the per-request middleware chain is
+> for unary calls.
 
 ### The auth case end-to-end
 
@@ -851,19 +840,28 @@ gw.AddProto("./protos/auth.proto",
 // Public services.
 gw.AddProto("./protos/user.proto", gateway.To(userConn))
 
-// Pair the schema rule with the runtime resolver.
-gw.Use(gateway.HideAndInject[*authpb.Context](func(ctx context.Context) (*authpb.Context, error) {
+// One declaration: schema half hides every input field of type
+// *authv1.Context; runtime half fills them. With Hide(true) the arg
+// never reaches the wire, so `current` is always nil here.
+gw.Use(gateway.InjectType[*authv1.Context](func(ctx context.Context, _ **authv1.Context) (*authv1.Context, error) {
     token := bearerFromContext(ctx)
-    return authClient.Resolve(ctx, &authpb.ResolveRequest{Token: token})
+    if token == "" {
+        return nil, gateway.Reject(gateway.CodeUnauthenticated, "missing bearer token")
+    }
+    resp, err := authClient.Resolve(ctx, &authv1.ResolveRequest{Token: token})
+    if err != nil {
+        return nil, err
+    }
+    return resp.GetContext(), nil
 }))
 
 http.ListenAndServe(":8080", gw.Handler())
 ```
 
 External GraphQL surface contains no `auth` namespace and no
-`AuthContext` type. Internally, every RPC whose input embeds
-`AuthContext` gets it filled from one cached call to the auth service
-per request.
+`Context` type. Internally, every RPC whose input embeds
+`auth.v1.Context` gets it filled from one cached call to the auth
+service per request.
 
 ## Design notes
 
@@ -951,23 +949,18 @@ The axes that differ:
 
 ### Where this is specifically strong
 
-- **API unification across protocols.** One declaration of a
-  service in `.proto` is usable by TS clients via graphql-codegen,
-  Go/Java/Python services via proto, and C#/TS services that prefer
-  OpenAPI via openapi-generator. No re-implementation per language.
-- **Codegen targets in any language.** The consolidated registry
-  publishes as proto FDS and OpenAPI 3.x alongside SDL. Pick
-  whatever your toolchain prefers; the bytes match because they're
-  derived from the same internal IR.
-- **Enhanced, schema-aware metrics.** Per-pool, per-replica,
-  per-method dispatch latency and queue dwell, with deprecation
-  visibility built in. You can answer *"who's still calling
-  deprecated `users.v1.list`?"* — a question wire-level metrics
-  fundamentally can't.
-- **Custom transforms as a Pair.** Hide a field from the public
-  schema *and* fill it from request context, in one declaration
-  the library guarantees can't drift. Same code applies whether the
-  underlying service is proto, OpenAPI, or downstream GraphQL.
+[§What you get](#what-you-get-for-it) is the headline list. Two
+points worth re-stating in the comparison frame above:
+
+- **Schema-aware metrics.** Per-pool, per-replica, per-method
+  dispatch latency and queue dwell with deprecation labels — wire-level
+  metrics can answer *"is the auth service slow?"*, schema-level
+  metrics can answer *"who's still calling deprecated `users.v1.list`?"*
+- **One transform, every protocol.** A `Transform` (e.g. via
+  `InjectType[T]`) hides a field from the public schema *and* fills it
+  from request context in one declaration; the same code applies
+  whether the underlying service is proto, OpenAPI, or downstream
+  GraphQL.
 
 ### What it doesn't replace
 

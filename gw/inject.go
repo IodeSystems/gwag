@@ -257,9 +257,9 @@ type hideOption bool
 func (h hideOption) applyInject(c *injectConfig) { c.hide = bool(h) }
 
 // Hide controls whether the targeted args are stripped from the
-// external schema. Default true (today's HideAndInject semantics).
-// Pass Hide(false) to keep the arg on the wire and have the resolver
-// inspect-and-decide.
+// external schema. Default true: arg is gone from the schema, resolver
+// always sees current=nil, gateway fills it. Pass Hide(false) to keep
+// the arg on the wire and have the resolver inspect-and-decide.
 func Hide(hide bool) InjectOption { return hideOption(hide) }
 
 type nullableOption bool

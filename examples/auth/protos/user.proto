@@ -8,7 +8,7 @@ import "auth.proto";
 
 // UserService is a normal public service whose RPCs need authentication
 // context. The auth field is hidden from the external GraphQL schema
-// and populated at runtime by HideAndInject[*auth.v1.Context].
+// and populated at runtime by InjectType[*auth.v1.Context].
 service UserService {
   rpc GetMe(GetMeRequest) returns (GetMeResponse);
 }

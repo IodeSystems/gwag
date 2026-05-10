@@ -113,7 +113,9 @@ gw/
   graphql_mirror.go        Type mirror with namespace prefix +
                            forwarding resolver
   cluster.go               Embedded NATS server + JetStream
-  hide_inject.go           HideAndInject middleware Pair
+  inject.go                InjectType / InjectPath / InjectHeader →
+                           Transform (schema + runtime + headers)
+  inject_inventory.go      InjectPath dormant↔active state machine
   convert.go               Proto descriptor → GraphQL type builder
   loader.go                Proto file parsing
   proto/                   Generated proto bindings:

@@ -21,7 +21,7 @@ message ResolveResponse {
 }
 
 // Context is the type that gets hidden everywhere it appears as an
-// input field; HideAndInject[*Context] handles both halves.
+// input field; InjectType[*Context] handles both halves.
 message Context {
   string user_id = 1;
   string tenant_id = 2;
