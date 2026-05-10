@@ -343,19 +343,19 @@ $ gwag sign          --gateway gw1.internal:50090 \
 
 ## Subscriptions (events)
 
-Server-streaming RPCs are auto-promoted to GraphQL subscriptions.
-Each `rpc Foo(Filter) returns (stream Event)` becomes a flat field
-`<namespace>_<lowerCamel(method)>` on the `Subscription` root, with
-the request type's fields as arguments. The gateway also injects
-`hmac: String!` and `timestamp: Int!` for HMAC verification.
+**The mental model: the stringified call is multiplexed with HMAC for multi-listener / single-producer.**
 
-Transport is the standard `graphql-transport-ws` WebSocket
-subprotocol (Apollo, urql, graphql-codegen all speak it). Backing
-storage is **NATS pub/sub**, not gRPC streaming — services publish to
-NATS subjects derived from the (namespace, method, request fields);
-the gateway bridges WebSocket subscribes to NATS subscribes with
-in-process fan-out (one NATS sub shared across N WebSockets watching
-the same subject).
+Three claims hold simultaneously:
+
+1. **Channel name *is* the canonical call.** The NATS subject format is `events.<namespace>.<MethodName>.<arg0>.<arg1>...` — built deterministically from `(namespace, method, request fields in declaration order)`. Distinct subscribers for distinct args land on distinct subjects automatically; missing or empty args render as `*` (NATS wildcard). No ad-hoc topic routing, no per-event metadata fan-out logic.
+2. **HMAC binds (channel, timestamp).** A token signed for `events.UserEvents.UserCreated.42` cannot subscribe to `.7`. The signer is the policy authority — your auth/business service, the one that already has the request context — not the gateway. The gateway just verifies on subscribe.
+3. **One upstream publish, many WS clients.** The gateway shares one NATS subscription across every WebSocket watching the same subject. A producer that publishes once delivers to N listeners with one upstream cost; the per-listener cost is just the WS write. This is the single-producer / multi-listener guarantee.
+
+Transport is the standard `graphql-transport-ws` WebSocket subprotocol (Apollo, urql, graphql-codegen all speak it). Backing storage is **NATS pub/sub**, not gRPC streaming — services don't implement server-streaming RPC, they just `nats.Publish()` to the resolved subject. The server-streaming method on the proto is the *schema declaration*, not the runtime path.
+
+### Schema mapping
+
+Each `rpc Foo(Filter) returns (stream Event)` becomes a flat field `<namespace>_<lowerCamel(method)>` on the `Subscription` root, with the request fields as arguments plus injected `hmac: String!` and `timestamp: Int!`:
 
 ```proto
 service UserEvents {
@@ -373,25 +373,51 @@ type Subscription {
 }
 ```
 
-The publisher service never implements server-streaming gRPC — it
-just `nats.Publish()`es to the resolved subject:
+### Channel-name contract
+
+The NATS subject is computed from the resolved arg values in field-declaration order:
+
+| Filter args                    | Resolved subject                          |
+|--------------------------------|-------------------------------------------|
+| `{userId: "42"}`               | `events.UserEvents.UserCreated.42`        |
+| `{userId: "*"}` or `{userId: ""}` | `events.UserEvents.UserCreated.*`      |
+| `{userId: "42", region: "us"}` | `events.UserEvents.UserCreated.42.us`     |
+
+Wildcards follow standard NATS semantics: `.42` matches only that exact value; `.*` matches any single-token value at that position. Producers publish to the *concrete* subject (`...42`); subscribers can use `*` to receive across all values for that arg. The implementation is `subjectFor` in `gw/subscriptions.go`.
+
+### Worked example
+
+The `examples/multi` stack ships a working publisher — the `greeter` service has a server-streaming `Greetings` RPC and a timer-driven `nats.Publish` loop:
 
 ```go
-event, _ := proto.Marshal(&UserCreatedEvent{UserId: u.ID, Email: u.Email})
-natsConn.Publish(fmt.Sprintf("events.UserEvents.UserCreated.%s", u.ID), event)
+// examples/multi/cmd/greeter/main.go
+payload, _ := proto.Marshal(&greeterv1.Greeting{
+    Greeting: "Hello, " + name + "!",
+    ForName:  name,
+})
+nc.Publish(fmt.Sprintf("events.greeter.Greetings.%s", name), payload)
 ```
 
-Clients use any graphql-ws library:
+Run the stack and subscribe over GraphQL:
+
+```bash
+$ cd examples/multi && ./run.sh    # boots gateway + greeter + library
+                                   # (run.sh passes --insecure-subscribe)
+```
 
 ```typescript
+// Any graphql-ws client. Wildcard args match across all producer values.
 const { data } = useSubscription(gql`
-  subscription($u: ID!, $h: String!, $t: Int!) {
-    userEvents_userCreated(userId: $u, hmac: $h, timestamp: $t) {
-      userId email
+  subscription($n: String!, $h: String!, $t: Int!) {
+    greeter_greetings(name: $n, hmac: $h, timestamp: $t) {
+      greeting
+      forName
     }
   }
-`, { variables: { u, hmac, timestamp } });
+`, { variables: { n: "*", hmac: "", timestamp: 0 } });
 ```
+
+For production, replace `--insecure-subscribe` with `--subscribe-secret <hex>` and have the client fetch `hmac` / `timestamp` from `SignSubscriptionToken` — see `## HMAC channel auth` below.
 
 ### HMAC channel auth
 

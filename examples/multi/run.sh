@@ -12,7 +12,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-go run ./cmd/gateway &
+# --insecure-subscribe lets the worked Subscriptions tutorial in the
+# repo README run end-to-end with no sign step. Production deployments
+# must pair --subscribe-secret with the SignSubscriptionToken flow —
+# see README §HMAC channel auth.
+go run ./cmd/gateway --insecure-subscribe &
 pids+=($!)
 
 # Give the control plane a moment to come up before services try to register.
