@@ -27,6 +27,15 @@ type BackpressureConfig struct {
 	Version   string
 	Label     string // method label for metrics; format-specific (e.g. proto path, HTTP "GET /foo")
 	Kind      string // metric kind label; today always "unary" — streams have their own path
+
+	// Replica is the per-instance addr (or "") that owns this sem.
+	// Non-empty for per-replica acquireReplicaSlot configs (Kind
+	// usually ends with "_instance"); empty for service-level pool
+	// configs. When set, the queue-depth metric routes through
+	// SetReplicaQueueDepth instead of SetQueueDepth so operators can
+	// triage which specific replica is saturated on pools with
+	// MaxConcurrencyPerInstance configured.
+	Replica string
 }
 
 // BackpressureMiddleware returns the middleware that wraps an
@@ -40,6 +49,19 @@ type BackpressureConfig struct {
 // translating that to the GraphQL error envelope as it does today;
 // the cutover (steps 3+) replaces the inline prologues but doesn't
 // change observable behavior.
+// setQueueDepthForCfg routes the depth update to the right metric:
+// per-replica configs (Replica != "") use SetReplicaQueueDepth so
+// operators can triage which specific replica is saturated; service-
+// level configs use SetQueueDepth (one row per pool, kind="unary"
+// or "stream").
+func setQueueDepthForCfg(cfg BackpressureConfig, depth int) {
+	if cfg.Replica != "" {
+		cfg.Metrics.SetReplicaQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, cfg.Replica, depth)
+		return
+	}
+	cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, depth)
+}
+
 func BackpressureMiddleware(cfg BackpressureConfig) ir.DispatcherMiddleware {
 	return func(next ir.Dispatcher) ir.Dispatcher {
 		if cfg.Sem == nil {

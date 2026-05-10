@@ -195,6 +195,7 @@ func acquireReplicaSlot(ctx context.Context, r *replica, p *pool, label string, 
 		Version:     p.key.version,
 		Label:       label,
 		Kind:        "unary_instance",
+		Replica:     r.addr,
 	}
 	return acquireBackpressureSlot(ctx, cfg)
 }

@@ -42,6 +42,16 @@ type Metrics interface {
 	// for a dispatch slot, per pool. kind is "unary" or "stream".
 	SetQueueDepth(namespace, version, kind string, depth int)
 
+	// SetReplicaQueueDepth reflects the current count of requests
+	// waiting for a per-replica slot (pool / source with
+	// MaxConcurrencyPerInstance set). replica is the addr that owns
+	// the saturated sem; kind today is "unary_instance". One row per
+	// (namespace, version, kind, replica) so operators can see which
+	// specific replica is queueing without the per-pool
+	// SetQueueDepth gauge collapsing the signal. Implementations may
+	// no-op if they don't care about per-replica granularity.
+	SetReplicaQueueDepth(namespace, version, kind, replica string, depth int)
+
 	// SetStreamsInflight reflects the current count of active
 	// subscription streams against a pool.
 	SetStreamsInflight(namespace, version string, inflight int)
@@ -104,6 +114,7 @@ func (noopMetrics) RecordDispatch(context.Context, string, string, string, time.
 func (noopMetrics) RecordDwell(string, string, string, string, time.Duration)   {}
 func (noopMetrics) RecordBackoff(string, string, string, string, string)        {}
 func (noopMetrics) SetQueueDepth(string, string, string, int)                   {}
+func (noopMetrics) SetReplicaQueueDepth(string, string, string, string, int)    {}
 func (noopMetrics) SetStreamsInflight(string, string, int)                      {}
 func (noopMetrics) SetStreamsInflightTotal(int)                                 {}
 func (noopMetrics) RecordSubscribeAuth(string, string, string, string)          {}
@@ -122,6 +133,7 @@ type prometheusMetrics struct {
 	dwell         *prometheus.HistogramVec
 	backoff       *prometheus.CounterVec
 	depth         *prometheus.GaugeVec
+	replicaDepth  *prometheus.GaugeVec
 	streams       *prometheus.GaugeVec
 	streamsTotal  prometheus.Gauge
 	subAuth       *prometheus.CounterVec
@@ -155,6 +167,10 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_pool_queue_depth",
 		Help: "Current count of dispatches waiting for an in-flight slot.",
 	}, []string{"namespace", "version", "kind"})
+	replicaDepth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "go_api_gateway_replica_queue_depth",
+		Help: "Current count of dispatches waiting for a per-replica slot. Distinct from pool_queue_depth so MaxConcurrencyPerInstance saturation triages cleanly per replica address.",
+	}, []string{"namespace", "version", "kind", "replica"})
 	streams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "go_api_gateway_pool_streams_inflight",
 		Help: "Current count of active subscription streams in a pool.",
@@ -193,13 +209,14 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Help:    "Per-request gateway self-time: wall-clock total minus the per-request dispatch accumulator. Pair with request_duration_seconds for the upstream slice.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"ingress"})
-	reg.MustRegister(hist, dwell, backoff, depth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf)
+	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
 		dwell:        dwell,
 		backoff:      backoff,
 		depth:        depth,
+		replicaDepth: replicaDepth,
 		streams:      streams,
 		streamsTotal: streamsTotal,
 		subAuth:      subAuth,
@@ -230,6 +247,10 @@ func (m *prometheusMetrics) RecordBackoff(namespace, version, method, kind, reas
 
 func (m *prometheusMetrics) SetQueueDepth(namespace, version, kind string, depth int) {
 	m.depth.WithLabelValues(namespace, version, kind).Set(float64(depth))
+}
+
+func (m *prometheusMetrics) SetReplicaQueueDepth(namespace, version, kind, replica string, depth int) {
+	m.replicaDepth.WithLabelValues(namespace, version, kind, replica).Set(float64(depth))
 }
 
 func (m *prometheusMetrics) SetStreamsInflight(namespace, version string, inflight int) {

@@ -40,6 +40,15 @@ func (m *recMetrics) SetQueueDepth(ns, ver, kind string, depth int) {
 	m.queue = append(m.queue, ns+"/"+ver+":"+kind+":"+itoa(depth))
 }
 
+// SetReplicaQueueDepth captures the per-replica gauge updates so the
+// queued-with-Replica test can assert SetReplicaQueueDepth fired
+// instead of the per-pool SetQueueDepth.
+func (m *recMetrics) SetReplicaQueueDepth(ns, ver, kind, replica string, depth int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queue = append(m.queue, ns+"/"+ver+":"+kind+":"+replica+":"+itoa(depth))
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
@@ -212,4 +221,49 @@ func codeOf(err error) Code {
 		return rj.Code
 	}
 	return Code(-1)
+}
+
+// TestBackpressureMiddleware_ReplicaSplitsQueueDepth pins the
+// per-replica gauge label: a BackpressureConfig with Replica set
+// routes queue-depth updates through SetReplicaQueueDepth (replica
+// label captured) instead of SetQueueDepth, so two saturated
+// replicas in the same pool show up as separate rows when
+// MaxConcurrencyPerInstance is configured.
+func TestBackpressureMiddleware_ReplicaSplitsQueueDepth(t *testing.T) {
+	m := &recMetrics{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{} // hold
+	q := &atomic.Int32{}
+	wrapped := BackpressureMiddleware(BackpressureConfig{
+		Sem:         sem,
+		Queueing:    q,
+		MaxWaitTime: time.Second,
+		Metrics:     m,
+		Namespace:   "ns",
+		Version:     "v1",
+		Label:       "lbl",
+		Kind:        "unary_instance",
+		Replica:     "10.0.0.5:50051",
+	})(ir.DispatcherFunc(func(_ context.Context, _ map[string]any) (any, error) {
+		return "done", nil
+	}))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := wrapped.Dispatch(context.Background(), nil)
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	<-sem // release
+
+	if err := <-done; err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	want := []string{
+		"ns/v1:unary_instance:10.0.0.5:50051:1",
+		"ns/v1:unary_instance:10.0.0.5:50051:0",
+	}
+	if len(m.queue) != 2 || m.queue[0] != want[0] || m.queue[1] != want[1] {
+		t.Fatalf("queue depth (replica-labeled): want %v, got %v", want, m.queue)
+	}
 }

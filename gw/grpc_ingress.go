@@ -305,10 +305,10 @@ func acquireBackpressureSlot(ctx context.Context, cfg BackpressureConfig) (relea
 		cfg.Metrics.RecordDwell(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, time.Since(waitStart))
 	default:
 		depth := int(cfg.Queueing.Add(1))
-		cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, depth)
+		setQueueDepthForCfg(cfg, depth)
 		dwell, werr := waitForSlot(ctx, cfg.Sem, cfg.MaxWaitTime)
 		now := int(cfg.Queueing.Add(-1))
-		cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, now)
+		setQueueDepthForCfg(cfg, now)
 		cfg.Metrics.RecordDwell(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, dwell)
 		if werr != nil {
 			cfg.Metrics.RecordBackoff(cfg.Namespace, cfg.Version, cfg.Label, cfg.Kind, "wait_timeout")

@@ -97,6 +97,7 @@ func acquireOpenAPIReplicaSlot(ctx context.Context, r *openAPIReplica, src *open
 		Version:     src.version,
 		Label:       label,
 		Kind:        "unary_instance",
+		Replica:     r.baseURL,
 	}
 	return acquireBackpressureSlot(ctx, cfg)
 }
