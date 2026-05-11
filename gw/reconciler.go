@@ -29,7 +29,12 @@ type reconciler struct {
 }
 
 type reconcilerConn struct {
-	conn *grpc.ClientConn
+	// pool wraps N grpc.ClientConn instances to the same upstream
+	// address; round-robin spreads stream creation + transport-mutex
+	// pressure beyond what a single conn can absorb at high RPS
+	// (HTTP/2 caps streams per conn at 100 by default). Sized at
+	// dial time by cfg.grpcConnPoolSize via WithGRPCConnPoolSize.
+	pool *connPool
 	refs int
 }
 
@@ -54,7 +59,7 @@ func (r *reconciler) stop() {
 	<-r.done
 	r.mu.Lock()
 	for _, c := range r.conns {
-		_ = c.conn.Close()
+		_ = c.pool.Close()
 	}
 	r.conns = nil
 	r.mu.Unlock()
@@ -218,7 +223,7 @@ func (r *reconciler) acquireConn(addr string) (grpc.ClientConnInterface, error) 
 	defer r.mu.Unlock()
 	if c, ok := r.conns[addr]; ok {
 		c.refs++
-		return c.conn, nil
+		return c.pool, nil
 	}
 	var creds grpc.DialOption
 	if t := r.gw.cfg.tls; t != nil {
@@ -226,12 +231,16 @@ func (r *reconciler) acquireConn(addr string) (grpc.ClientConnInterface, error) 
 	} else {
 		creds = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	conn, err := grpc.NewClient(addr, creds)
+	size := r.gw.cfg.grpcConnPoolSize
+	if size <= 0 {
+		size = defaultGRPCConnPoolSize
+	}
+	pool, err := dialConnPool(addr, size, creds)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	r.conns[addr] = &reconcilerConn{conn: conn, refs: 1}
-	return conn, nil
+	r.conns[addr] = &reconcilerConn{pool: pool, refs: 1}
+	return pool, nil
 }
 
 func (r *reconciler) releaseConn(addr string) {
@@ -243,7 +252,7 @@ func (r *reconciler) releaseConn(addr string) {
 	}
 	c.refs--
 	if c.refs <= 0 {
-		_ = c.conn.Close()
+		_ = c.pool.Close()
 		delete(r.conns, addr)
 	}
 }

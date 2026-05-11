@@ -223,6 +223,14 @@ type config struct {
 	// handler and routes browser requests through the JSON path.
 	disableGraphiQL bool
 
+	// grpcConnPoolSize is the number of grpc.ClientConn instances
+	// the gateway dials per upstream replica address. 0 means
+	// defaultGRPCConnPoolSize. HTTP/2 caps concurrent streams per
+	// conn (default 100); past that, streams queue on the conn's
+	// transport mutex. A small per-replica pool spreads the
+	// per-stream lock load — see gw/grpc_conn_pool.go.
+	grpcConnPoolSize int
+
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
 	// (all three: unstable / stable / vN). See WithAllowTier.
@@ -651,6 +659,29 @@ func WithoutGraphiQL() Option {
 	return func(cfg *config) { cfg.disableGraphiQL = true }
 }
 
+// defaultGRPCConnPoolSize is the per-replica pool fan-out used
+// when WithGRPCConnPoolSize is not set. Empirically 4 conns is
+// enough to spread the per-conn transport-mutex contention seen
+// in profiles at 25k+ RPS without dialing more sockets than a
+// loopback deployment can reasonably keep healthy.
+const defaultGRPCConnPoolSize = 4
+
+// WithGRPCConnPoolSize configures the number of grpc.ClientConn
+// instances the gateway dials per upstream replica. Default is
+// defaultGRPCConnPoolSize (4); set to 1 to restore the original
+// single-conn behaviour. HTTP/2 caps streams per conn (default
+// 100) and the transport's send mutex serialises framing — under
+// high RPS this becomes a contention point that a small pool
+// dissolves. Values ≤ 0 fall back to the default.
+func WithGRPCConnPoolSize(n int) Option {
+	return func(cfg *config) {
+		if n <= 0 {
+			n = defaultGRPCConnPoolSize
+		}
+		cfg.grpcConnPoolSize = n
+	}
+}
+
 func New(opts ...Option) *Gateway {
 	cfg := &config{
 		backpressure: DefaultBackpressure,
@@ -834,7 +865,13 @@ func To(dest any) ServiceOption {
 		case grpc.ClientConnInterface:
 			c.conn = v
 		case string:
-			c.conn = &lazyConn{addr: v}
+			// Boot-time To("host:port") uses the default pool size
+			// without consulting cfg — the gateway isn't visible from
+			// inside the ServiceOption closure. Operators who care
+			// about per-conn fan-out drive registrations through the
+			// control plane (the reconciler-side path consults
+			// cfg.grpcConnPoolSize per WithGRPCConnPoolSize).
+			c.conn = newBootLazyConn(v)
 		default:
 			panic(fmt.Sprintf("gateway.To: unsupported destination type %T", dest))
 		}
@@ -1620,38 +1657,41 @@ func (c Code) String() string {
 }
 
 // ---------------------------------------------------------------------
-// lazyConn defers grpc.NewClient until first use, so To("host:port")
+// lazyConn defers gRPC dials until first use, so To("host:port")
 // doesn't error at registration if the destination isn't dialable yet.
+// Pool fan-out comes from cfg.grpcConnPoolSize (see WithGRPCConnPoolSize).
 // ---------------------------------------------------------------------
 
+// lazyConn is now a thin wrapper around lazyConnPool that fixes
+// the dial settings (insecure creds + a fan-out pool size). Kept
+// as a separate type so external imports referring to `*lazyConn`
+// (the openapi.go ForwardHeaders path checks it structurally) keep
+// compiling.
 type lazyConn struct {
-	addr string
-	once sync.Once
-	conn *grpc.ClientConn
-	err  error
+	*lazyConnPool
 }
 
-func (l *lazyConn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
-	c, err := l.dial()
-	if err != nil {
-		return err
+// newBootLazyConn is the boot-time To("host:port") path — picks
+// the default pool size because the gateway config isn't visible
+// inside the ServiceOption closure. Reconciler-side dials get the
+// operator-configurable size via WithGRPCConnPoolSize.
+func newBootLazyConn(addr string) *lazyConn {
+	return newLazyConnWithSize(addr, defaultGRPCConnPoolSize)
+}
+
+func newLazyConnWithSize(addr string, size int) *lazyConn {
+	if size <= 0 {
+		size = defaultGRPCConnPoolSize
 	}
-	return c.Invoke(ctx, method, args, reply, opts...)
-}
-
-func (l *lazyConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	c, err := l.dial()
-	if err != nil {
-		return nil, err
+	return &lazyConn{
+		lazyConnPool: &lazyConnPool{
+			addr: addr,
+			size: size,
+			dial: func(addr string, n int) (*connPool, error) {
+				return dialConnPool(addr, n,
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+				)
+			},
+		},
 	}
-	return c.NewStream(ctx, desc, method, opts...)
-}
-
-func (l *lazyConn) dial() (*grpc.ClientConn, error) {
-	l.once.Do(func() {
-		l.conn, l.err = grpc.NewClient(l.addr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-	})
-	return l.conn, l.err
 }

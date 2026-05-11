@@ -5,15 +5,15 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 # Performance
 
-> _Generated 2026-05-11T18:00:16Z from 1 scenario sweep via `bin/bench perf report`._
+> _Generated 2026-05-11T20:15:32Z from 1 scenario sweep via `bin/bench perf report`._
 
-**Headline (proto scenario, last healthy rung):** **24718 RPS** at p95 **10.15ms** with gateway self-time mean **51µs**.
+**Headline (proto scenario, last healthy rung):** **25306 RPS** at p95 **7.55ms** with gateway self-time mean **64µs**.
 
 ## Machine
 
 | Field | Value |
 |---|---|
-| Captured at | 2026-05-11T17:58:45Z |
+| Captured at | 2026-05-11T20:14:02Z |
 | CPU | AMD Ryzen 9 3900X 12-Core Processor |
 | Cores (logical) | 24 |
 | RAM | 125.7 GiB |
@@ -21,7 +21,7 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 | Kernel | 6.8.0-111-generic |
 | Arch | amd64 |
 | Go | go1.26.2 |
-| Gateway rev | c095b69 (dirty) |
+| Gateway rev | 48b7ded (dirty) |
 
 
 ## Scenario: `proto`
@@ -33,18 +33,18 @@ pure proto/gRPC backend (greeter); baseline for native-format dispatch cost.
 
 | Target RPS | Achieved | Client mean | p50 | p95 | p99 | Gateway self (mean) | Dispatch (mean) |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1000 | 987 | 496µs | 481µs | 603µs | 858µs | 41µs | 269µs |
-| 5000 | 4154 | 601µs | 561µs | 943µs | 1.23ms | 44µs | 258µs |
-| 10000 | 8187 | 559µs | 523µs | 978µs | 1.34ms | 34µs | 216µs |
-| 20000 | 19696 | 1.31ms | 1.06ms | 2.83ms | 4.27ms | 38µs | 400µs |
-| 30000 | 24719 | 3.41ms | 1.90ms | 10.15ms | 36.30ms | 51µs | 1.07ms |
-| 40000 | 25510 | 9.37ms | 4.29ms | 39.47ms | 99.07ms | 339µs | 2.79ms |
+| 1000 | 969 | 489µs | 481µs | 588µs | 791µs | 39µs | 265µs |
+| 5000 | 4052 | 588µs | 544µs | 909µs | 1.24ms | 42µs | 253µs |
+| 10000 | 8306 | 562µs | 526µs | 1.00ms | 1.38ms | 34µs | 204µs |
+| 20000 | 19333 | 1.66ms | 1.31ms | 3.65ms | 5.47ms | 43µs | 383µs |
+| 30000 | 25306 | 3.39ms | 2.58ms | 7.55ms | 19.52ms | 64µs | 789µs |
+| 40000 | 26390 | 7.51ms | 4.30ms | 25.61ms | 67.84ms | 220µs | 1.73ms |
 
-**Knee detected at 40000 RPS** (achieved_below_80pct): achieved 25510 / 40000 target (64% < 80% threshold). Recommended ceiling: **30000 RPS** on this host.
+**Knee detected at 40000 RPS** (achieved_below_80pct): achieved 26390 / 40000 target (66% < 80% threshold). Recommended ceiling: **30000 RPS** on this host.
 
 ### Interpretation
 
-**~1030 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **51µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes. The knee fired because achieved RPS fell below 80% of target — typically the bench client itself running out of fired RPS, the gateway, or an upstream cap. Drill into `bench/.run/perf/sweep-proto.reps/` with `--keep-reps` to see which.
+**~1054 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **64µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes. The knee fired because achieved RPS fell below 80% of target — typically the bench client itself running out of fired RPS, the gateway, or an upstream cap. Drill into `bench/.run/perf/sweep-proto.reps/` with `--keep-reps` to see which.
 
 
 ## How to read this
