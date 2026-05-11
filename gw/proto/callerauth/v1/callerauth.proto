@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package gateway.callerauth.v1;
+
+option go_package = "github.com/iodesystems/go-api-gateway/gw/proto/callerauth/v1;callerauthv1";
+
+// CallerAuthorizer is the optional delegate the gateway calls to
+// resolve an inbound caller token into a caller-id. Implement it in
+// your authz service and register it under namespace "_caller_auth" /
+// version v1.
+//
+// Wire flow: client presents a token (X-Caller-Token HTTP header /
+// caller-token gRPC metadata key). The gateway's WithCallerIDDelegated
+// extractor calls Authorize(token); on OK the response.caller_id is
+// the resolved identity. Token → caller_id mapping is cached locally
+// for ttl_seconds (or the option's default if zero) and refreshed via
+// singleflight so a burst of concurrent misses collapses to one RPC.
+//
+// Negative invalidation: publish a CallerRevoked event on
+// "events.caller_auth.Revoked" (NATS); listeners drop the matching
+// cache entry. The event body is a TokenRevoked message.
+//
+// Code policy mirrors AdminAuthorizer: OK accepts, DENIED rejects
+// (anonymous / 401 surface depending on enforce mode), anything else
+// (UNAVAILABLE, NOT_CONFIGURED, UNSPECIFIED, transport error) is
+// treated as "no decision today" — the caller resolves to anonymous
+// for metrics, and once WithCallerIDEnforce ships those become 401.
+service CallerAuthorizer {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+message AuthorizeRequest {
+  // Opaque token presented by the client. Empty string when the
+  // inbound request had no caller-token — the delegate decides
+  // whether to map it to a known anonymous identity.
+  string token = 1;
+
+  // Inbound remote address (best-effort; may be empty if the gateway
+  // is behind a proxy that doesn't forward it).
+  string remote_addr = 2;
+}
+
+message AuthorizeResponse {
+  CallerAuthCode code = 1;
+  // Resolved caller identity. Required when code == OK; ignored
+  // otherwise.
+  string caller_id = 2;
+  // Override the configured cache TTL for this specific token.
+  // Zero = use the configured default. Capped at the configured
+  // maximum so a misbehaving delegate can't pin a stale identity
+  // forever.
+  uint32 ttl_seconds = 3;
+  // Optional, for operator logs. Never leaked to clients.
+  string reason = 4;
+}
+
+enum CallerAuthCode {
+  CALLER_AUTH_CODE_UNSPECIFIED = 0;
+  // Delegate resolved the token; caller_id is the identity.
+  CALLER_AUTH_CODE_OK = 1;
+  // Delegate explicitly rejected the token (revoked / unknown).
+  // Surfaces as anonymous today; 401 once enforce mode ships.
+  CALLER_AUTH_CODE_DENIED = 2;
+  // Delegate is currently unavailable (degraded backend, exceeded
+  // budget, etc.). Caller resolves to anonymous; no cache write.
+  CALLER_AUTH_CODE_UNAVAILABLE = 3;
+  // Delegate is registered but unwilling to make a decision (e.g.
+  // policy not loaded). Same surface as UNAVAILABLE.
+  CALLER_AUTH_CODE_NOT_CONFIGURED = 4;
+}
+
+// TokenRevoked is the NATS event body published on
+// "events.caller_auth.Revoked" to invalidate a single token entry
+// across every gateway in the cluster.
+message TokenRevoked {
+  string token = 1;
+}

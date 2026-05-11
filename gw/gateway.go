@@ -160,6 +160,11 @@ type Gateway struct {
 	// transitions log exactly once. Caller holds g.mu.
 	injectPathStates map[string]InjectorState
 
+	// callerAuth is the per-gateway state for WithCallerIDDelegated —
+	// TTL cache + singleflight + the revoke-listener subscription. nil
+	// when the delegated extractor isn't installed. Plan §Caller-ID.
+	callerAuth *callerAuthDelegate
+
 	// rejectedJoins counts and timestamps registerSlotLocked
 	// rejections per slot key, so /admin/services can surface "this
 	// slot rejected N joins with caps X (currently running Y)" before
@@ -239,6 +244,12 @@ type config struct {
 	// reach the Prometheus dispatch histogram and the stats registry;
 	// see WithCallerIDMetricsTopK. 0 = uncapped.
 	callerIDMetricsTopK int
+
+	// callerIDDelegated holds the WithCallerIDDelegated option payload
+	// until New() can wire it up against the live *Gateway. The
+	// extractor closes over the gateway so it can resolve the
+	// _caller_auth/v1 pool at call time.
+	callerIDDelegated *CallerIDDelegatedOptions
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -653,19 +664,19 @@ func New(opts ...Option) *Gateway {
 	// callers are admitted (otherwise the admin UI and the scrape
 	// would show different __other__ rollups).
 	limiter := newCallerLimiter(cfg.callerIDMetricsTopK)
-	if pm, ok := cfg.metrics.(*prometheusMetrics); ok {
+	stats := newStatsRegistry()
+	pm, _ := cfg.metrics.(*prometheusMetrics)
+	if pm != nil {
 		pm.callerHeaders = cfg.callerHeaders
-		pm.callerExtractor = cfg.callerIDExtractor
 		pm.callerLimiter = limiter
 	}
-	stats := newStatsRegistry()
-	cfg.metrics = &statsRecordingMetrics{
-		Metrics:         cfg.metrics,
-		stats:           stats,
-		callerHeaders:   cfg.callerHeaders,
-		callerExtractor: cfg.callerIDExtractor,
-		callerLimiter:   limiter,
+	recording := &statsRecordingMetrics{
+		Metrics:       cfg.metrics,
+		stats:         stats,
+		callerHeaders: cfg.callerHeaders,
+		callerLimiter: limiter,
 	}
+	cfg.metrics = recording
 	g := &Gateway{
 		cfg:         cfg,
 		slots:       map[poolKey]*slot{},
@@ -676,6 +687,19 @@ func New(opts ...Option) *Gateway {
 		dispatchers: ir.NewDispatchRegistry(),
 		stats:       stats,
 	}
+	// WithCallerIDDelegated needs the live *Gateway to look up the
+	// _caller_auth/v1 pool at call time, so the extractor wrapper is
+	// built here (after g exists) and wins over any extractor set
+	// directly. WithCallerIDExtractor / WithCallerIDPublic /
+	// WithCallerIDHMAC remain the per-request seam.
+	if cfg.callerIDDelegated != nil {
+		g.callerAuth = newCallerAuthDelegate(g, *cfg.callerIDDelegated)
+		cfg.callerIDExtractor = g.callerAuth.resolve
+	}
+	if pm != nil {
+		pm.callerExtractor = cfg.callerIDExtractor
+	}
+	recording.callerExtractor = cfg.callerIDExtractor
 	if cfg.backpressure.MaxStreamsTotal > 0 {
 		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)
 	}

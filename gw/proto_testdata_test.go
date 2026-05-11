@@ -20,6 +20,7 @@ func testProtoBytes(tb testing.TB, name string) []byte {
 	candidates := []string{
 		filepath.Join("proto", "adminauth", "v1", name),
 		filepath.Join("proto", "adminevents", "v1", name),
+		filepath.Join("proto", "callerauth", "v1", name),
 		filepath.Join("proto", "eventsauth", "v1", name),
 		filepath.Join("proto", "controlplane", "v1", name),
 		filepath.Join("..", "examples", "multi", "protos", name),
