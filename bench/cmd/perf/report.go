@@ -217,17 +217,24 @@ First-firing predicate stops the sweep; the prior step is the recommended ceilin
 
 ### Regenerating
 
+The one-command path reads ` + "`bench/perf-scenarios.yaml`" + `, brings up
+the stack and the upstream services each scenario needs, runs every
+sweep, and renders this file:
+
 ` + "```" + `bash
-# 1. Bring up the stack and the upstream services each scenario needs.
-bin/bench up
-bin/bench service add greeter          # proto scenario needs greeter
-# bin/bench service add greeter --delay 100us   # for the upstream-latency rungs
+bin/bench perf
+` + "```" + `
 
-# 2. Run sweeps (one per scenario).
-bin/bench perf all --out-dir bench/.run/perf
+Customise the sweep (different RPS rungs, your own query, regression
+runs) by editing ` + "`bench/perf-scenarios.yaml`" + ` or passing
+` + "`--config path/to/your.yaml`" + `.
 
-# 3. Render this file.
-bin/bench perf report --in-dir bench/.run/perf --out docs/perf.md
+Subcommands for power users:
+
+` + "```" + `bash
+bin/bench perf specs                  # print host-specs header only
+bin/bench perf run --scenario proto   # one ad-hoc sweep
+bin/bench perf report --in-dir ...    # re-render without re-running
 ` + "```" + `
 `
 

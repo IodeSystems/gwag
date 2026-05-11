@@ -1,0 +1,65 @@
+# bench/perf-scenarios.yaml — default scenario definitions for `bin/bench perf`.
+#
+# `bin/bench perf` reads this file, brings up the bench stack and the
+# upstream services each scenario needs, runs the sweep, and renders
+# docs/perf.md. Override with --config path/to/your.yaml to customise
+# the sweep for regression work or non-default backends.
+#
+# YAML reference:
+#   scenarios:                # list of scenarios; each runs as its own sweep
+#     - name: <string>        # scenario label, surfaced in the report
+#       description: <string> # one-line description for the section heading
+#       services:             # upstream services the scenario needs registered
+#         - kind: greeter     # managed kind (`bench service add greeter`)
+#           delay: 100us      # optional --delay for synthetic upstream latency
+#       target: <url>         # gateway endpoint to hit (default: graphql ingress)
+#       query: <string>       # GraphQL query string the sweep fires each request
+#       sweep:
+#         steps: [...]        # target RPS rungs (in ascending order)
+#         reps: <int>         # reps per rung (rep 1 discarded as warm-up)
+#         duration: <go-dur>  # per-rep wall time, e.g. 5s
+#       upstream_latency: <go-dur>  # optional metadata stamp; should match the
+#                                   # `delay` configured on the upstream service.
+
+scenarios:
+  - name: proto
+    description: pure proto/gRPC backend (greeter); baseline native dispatch
+    services:
+      - kind: greeter
+    target: http://localhost:18080/api/graphql
+    query: |
+      { greeter { hello(name: "world") { greeting } } }
+    sweep:
+      steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000]
+      reps: 3
+      duration: 5s
+
+# Additional scenarios the bench supports — uncomment + bring the
+# matching service up (see examples/multi/cmd/hello-openapi) to enable.
+#
+#  - name: openapi
+#    description: pure OpenAPI/HTTP backend; same Hello shape via HTTP/JSON
+#    services:
+#      - kind: hello-openapi   # not bundled into `bench service add` yet —
+#                              # see followups in docs/plan.md.
+#    target: http://localhost:18080/api/graphql
+#    query: |
+#      { hello_openapi { Hello(input: { name: "world" }) { greeting } } }
+#    sweep:
+#      steps: [1000, 5000, 10000, 20000, 30000]
+#      reps: 3
+#      duration: 5s
+#
+#  - name: mixed
+#    description: 50/50 fan-out — one request dispatches to both backends
+#    services:
+#      - kind: greeter
+#      - kind: hello-openapi
+#    target: http://localhost:18080/api/graphql
+#    query: |
+#      { greeter { hello(name: "world") { greeting } }
+#        hello_openapi { Hello(input: { name: "world" }) { greeting } } }
+#    sweep:
+#      steps: [1000, 5000, 10000, 20000, 30000]
+#      reps: 3
+#      duration: 5s

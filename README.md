@@ -954,9 +954,11 @@ target rung with gateway self-time mean **~56 µs** — roughly
 **1 k RPS / core**, gateway adding ~56 µs per request. Past 30 k
 the dispatch path saturates (40 k target collapses to 26 k
 achieved, p99 climbing to ~100 ms).
-Regenerate with `bin/bench perf all && bin/bench perf report`;
-the file carries a "do not edit" banner so a stale copy is
-visible at a glance.
+Regenerate with `bin/bench perf` (single command — reads
+`bench/perf-scenarios.yaml`, brings up the stack, registers the
+upstream services each scenario needs, runs the sweeps, renders
+the file). The file carries a "do not edit" banner so a stale
+copy is visible at a glance.
 
 ## Promotion path
 

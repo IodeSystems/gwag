@@ -21,39 +21,49 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
-const usage = `usage: perf <subcommand> [flags]
+const usage = `usage: perf [flags]            (default: run every scenario in bench/perf-scenarios.yaml)
+       perf <subcommand> [flags]
 
-Subcommands:
-  specs   print the report header (host specs as markdown) and exit.
-  run     drive a perf sweep: escalating target RPS × N reps, capture
-          the per-rep --json sidecars, write a Sweep summary JSON.
-  all     run every built-in scenario (proto / openapi / mixed) back
-          to back, writing one sweep-<scenario>.json per scenario.
+With no subcommand: reads bench/perf-scenarios.yaml, brings up the
+bench stack + the upstream services each scenario needs, runs every
+sweep, and renders docs/perf.md. The idiot-proof one-command path.
+
+Subcommands (power users):
+  specs   print the host-specs report header and exit.
+  run     drive one sweep at a fixed scenario / query / target.
+  all     run every built-in preset (no YAML); writes sweep-*.json.
   report  render docs/perf.md from sweep-*.json under --in-dir.
 
 Run 'perf <subcommand> --help' for per-subcommand flags.
 `
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+	args := os.Args[1:]
+	// Default behaviour (no subcommand, or flags only): drive the
+	// whole YAML-defined workflow.
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		if err := runDefault(args); err != nil {
+			fmt.Fprintln(os.Stderr, "perf:", err)
+			os.Exit(1)
+		}
+		return
 	}
-	sub := os.Args[1]
-	args := os.Args[2:]
+	sub := args[0]
+	subArgs := args[1:]
 	var err error
 	switch sub {
 	case "specs":
-		err = runSpecs(args)
+		err = runSpecs(subArgs)
 	case "run":
-		err = runSweep(args)
+		err = runSweep(subArgs)
 	case "all":
-		err = runAll(args)
+		err = runAll(subArgs)
 	case "report":
-		err = runReport(args)
-	case "-h", "--help", "help":
+		err = runReport(subArgs)
+	case "help":
 		fmt.Print(usage)
 		return
 	default:
