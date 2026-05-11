@@ -273,6 +273,34 @@ func TestDetectKnee_BothRulesFire_AchievedWins(t *testing.T) {
 	}
 }
 
+func TestDetectKnee_LatencyAbove50(t *testing.T) {
+	// Achieved climbing fine, p99-cliff predicate not triggered
+	// (throughput still growing), but p99 has climbed past 50ms —
+	// operator-meaningful "this is broken now even though throughput
+	// looks OK" knee. KneeRPS is the prior healthy rung.
+	prev := SweepStep{TargetRPS: 50000, AchievedRPSMean: 48788, P99UsMedian: 43840}
+	cur := SweepStep{TargetRPS: 60000, AchievedRPSMean: 57103, P99UsMedian: 95440}
+	k, hit := detectKnee([]SweepStep{prev, cur})
+	if !hit {
+		t.Fatal("expected knee fire when p99 climbs past 50ms ceiling")
+	}
+	if k.Reason != KneeReasonLatencyAbove50 {
+		t.Errorf("reason = %q, want %q", k.Reason, KneeReasonLatencyAbove50)
+	}
+	if k.KneeRPS != 50000 {
+		t.Errorf("knee_rps = %d, want 50000", k.KneeRPS)
+	}
+}
+
+func TestDetectKnee_LatencyAbove50DoesNotFireUnder50ms(t *testing.T) {
+	// p99 at 49ms — under the 50ms ceiling, no fire even though
+	// latency has climbed substantially.
+	cur := SweepStep{TargetRPS: 50000, AchievedRPSMean: 48000, P99UsMedian: 49000}
+	if _, hit := detectKnee([]SweepStep{cur}); hit {
+		t.Error("p99 at 49ms should not fire the >50ms predicate")
+	}
+}
+
 func TestDetectKnee_PriorP99ZeroIgnored(t *testing.T) {
 	// histogram-coarse 0 p99 from a low-RPS first step must not trip
 	// the doubling rule — anything ×2 of 0 is still 0, and we'd

@@ -666,6 +666,28 @@ func WithoutGraphiQL() Option {
 // loopback deployment can reasonably keep healthy.
 const defaultGRPCConnPoolSize = 4
 
+// defaultOutboundIdleConnsPerHost sizes the per-host idle pool on
+// the gateway-managed http.Client for OpenAPI / downstream-GraphQL
+// dispatches. Go's stdlib default of 2 collapses keep-alive at any
+// real RPS — the bench client tripped on the same default earlier
+// and lost ~2× throughput to per-request TCP handshakes. 1024 is
+// generous enough that a single hot host never spills past idle
+// without being so wide we burn fds on a thousand quiet hosts.
+const defaultOutboundIdleConnsPerHost = 1024
+
+// newDefaultOutboundHTTPClient returns the *http.Client baked into
+// cfg.openAPIHTTP when WithOpenAPIClient is not set. Operators who
+// want different settings (proxy, mTLS, custom RoundTripper) pass
+// their own client; this is just a sane default that doesn't strand
+// keep-alive on the standard library's tiny defaults.
+func newDefaultOutboundHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = defaultOutboundIdleConnsPerHost * 4
+	tr.MaxIdleConnsPerHost = defaultOutboundIdleConnsPerHost
+	tr.IdleConnTimeout = 90 * time.Second
+	return &http.Client{Transport: tr}
+}
+
 // WithGRPCConnPoolSize configures the number of grpc.ClientConn
 // instances the gateway dials per upstream replica. Default is
 // defaultGRPCConnPoolSize (4); set to 1 to restore the original
@@ -691,6 +713,15 @@ func New(opts ...Option) *Gateway {
 	}
 	if cfg.metrics == nil {
 		cfg.metrics = newPrometheusMetrics()
+	}
+	if cfg.openAPIHTTP == nil {
+		// Default outbound HTTP client for OpenAPI / downstream-GraphQL
+		// dispatches. Go's http.DefaultClient ships
+		// MaxIdleConnsPerHost=2, which collapses to per-request
+		// connection churn at any meaningful RPS — same bug class the
+		// bench client tripped on. Pre-bake a sane default; operators
+		// who want their own client still use WithOpenAPIClient.
+		cfg.openAPIHTTP = newDefaultOutboundHTTPClient()
 	}
 	if len(cfg.adminToken) == 0 {
 		tok, err := loadOrGenerateAdminToken(cfg.adminDataDir)

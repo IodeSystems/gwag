@@ -5,15 +5,15 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 # Performance
 
-> _Generated 2026-05-11T23:09:37Z from 1 scenario sweep via `bin/bench perf report`._
+> _Generated 2026-05-11T23:17:50Z from 1 scenario sweep via `bin/bench perf report`._
 
-**Headline (proto scenario, last healthy rung):** **70993 RPS** at p95 **85.41ms** with gateway self-time mean **20.73ms**.
+**Headline (proto scenario, last healthy rung):** **48795 RPS** at p95 **14.79ms** with gateway self-time mean **138µs**.
 
 ## Machine
 
 | Field | Value |
 |---|---|
-| Captured at | 2026-05-11T23:07:20Z |
+| Captured at | 2026-05-11T23:15:49Z |
 | CPU | AMD Ryzen 9 3900X 12-Core Processor |
 | Cores (logical) | 24 |
 | RAM | 125.7 GiB |
@@ -21,7 +21,7 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 | Kernel | 6.8.0-111-generic |
 | Arch | amd64 |
 | Go | go1.26.2 |
-| Gateway rev | f022f5e (dirty) |
+| Gateway rev | 2e5594a (dirty) |
 
 
 ## Scenario: `proto`
@@ -33,21 +33,20 @@ pure proto/gRPC backend (greeter); baseline for native-format dispatch cost.
 
 | Target RPS | Achieved | Client mean | p50 | p95 | p99 | Gateway self (mean) | Dispatch (mean) |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1000 | 1000 | 535µs | 537µs | 622µs | 776µs | 42µs | 279µs |
-| 5000 | 4997 | 637µs | 611µs | 898µs | 1.27ms | 44µs | 334µs |
-| 10000 | 9995 | 746µs | 675µs | 1.38ms | 1.92ms | 37µs | 340µs |
-| 20000 | 19879 | 838µs | 723µs | 1.55ms | 2.66ms | 29µs | 336µs |
-| 30000 | 29769 | 1.26ms | 966µs | 2.71ms | 5.19ms | 32µs | 461µs |
-| 40000 | 39654 | 2.02ms | 1.40ms | 5.03ms | 11.55ms | 68µs | 741µs |
-| 50000 | 48788 | 7.23ms | 4.41ms | 26.58ms | 43.84ms | 490µs | 1.75ms |
-| 60000 | 57103 | 35.42ms | 43.53ms | 64.58ms | 95.44ms | 7.40ms | 2.80ms |
-| 75000 | 70993 | 50.21ms | 56.87ms | 85.41ms | 118.45ms | 20.73ms | 3.33ms |
+| 1000 | 999 | 526µs | 526µs | 623µs | 812µs | 41µs | 275µs |
+| 5000 | 4998 | 643µs | 618µs | 955µs | 1.28ms | 45µs | 326µs |
+| 10000 | 9994 | 757µs | 686µs | 1.39ms | 1.85ms | 41µs | 343µs |
+| 20000 | 19940 | 801µs | 711µs | 1.46ms | 2.22ms | 32µs | 314µs |
+| 30000 | 29747 | 1.14ms | 950µs | 2.23ms | 3.54ms | 36µs | 398µs |
+| 40000 | 39677 | 1.53ms | 1.07ms | 3.74ms | 6.88ms | 41µs | 561µs |
+| 50000 | 48795 | 5.14ms | 3.21ms | 14.79ms | 35.31ms | 138µs | 1.07ms |
+| 60000 | 57048 | 32.47ms | 44.87ms | 63.12ms | 103.53ms | 432µs | 1.65ms |
 
-No knee detected within the configured sweep — the gateway absorbed every rung tested without tripping the achieved-below-80%-of-target or p99-doubled predicates. Push higher with `--steps` to find the actual ceiling.
+**Knee detected at 60000 RPS** (latency_above_50ms): p99 103525µs (103.5ms) exceeds 50ms SLA ceiling. Recommended ceiling: **50000 RPS** on this host.
 
 ### Interpretation
 
-**~2958 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **20.73ms** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
+**~2033 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **138µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
 
 
 ## How to read this
@@ -63,7 +62,8 @@ Three numbers tell most of the story per scenario:
 A rung is flagged as the knee when:
 
 - **achieved_below_80pct** — actual RPS < 0.80 × target. The client / gateway / upstream couldn't keep up; throughput collapsed.
-- **p99_cliff** — step's p99 > 2 × prior step's p99 **AND** achieved RPS no longer climbed vs the prior step. Catches saturation-via-latency: the gateway is going slow rather than dropping requests. A pure latency creep with healthy throughput growth is normal queueing, not a knee, and is intentionally not flagged.
+- **p99_cliff** — step's p99 > 2 × prior step's p99 **AND** achieved RPS no longer climbed vs the prior step. Catches saturation-via-latency where the gateway goes slow rather than dropping. A pure latency creep with healthy throughput growth is normal queueing under load, not a knee, and is intentionally not flagged.
+- **latency_above_50ms** — step's p99 > 50ms. Absolute SLA ceiling — catches the case where throughput keeps climbing past the gateway's healthy zone but p99 has deteriorated past what any production deployment would tolerate.
 
 First-firing predicate stops the sweep; the prior step is the recommended ceiling. Pass `--no-knee` to `bench perf run` to walk every rung regardless (useful for the full curve).
 

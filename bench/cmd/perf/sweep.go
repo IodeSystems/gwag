@@ -62,7 +62,7 @@ type TrafficRep struct {
 	Output   json.RawMessage `json:"output"`
 }
 
-// KneeInfo records where the sweep stopped and why. Two predicates
+// KneeInfo records where the sweep stopped and why. Three predicates
 // are evaluated after each step:
 //
 //   - achieved-below-80%: AchievedRPSMean < 0.8 × TargetRPS — the
@@ -72,9 +72,14 @@ type TrafficRep struct {
 //     ≤ prior step's AchievedRPSMean — i.e. latency doubled while
 //     throughput stopped climbing. Catches the case where the
 //     gateway saturates by going slow rather than dropping requests.
-//     A pure latency climb under healthy throughput growth is
-//     normal queueing under load, not a knee, and is intentionally
-//     not flagged.
+//   - latency-above-50ms: P99UsMedian > 50,000 (50ms) — absolute
+//     latency-SLA fail. Catches the case where throughput keeps
+//     climbing past the gateway's healthy zone but p99 has
+//     deteriorated past what any operator would deploy on. Without
+//     this, sweeps that push 60–100k target see throughput climb
+//     to "achieved 95% of target at 100ms p99" and the predicates
+//     fail to flag it. 50ms is a common production-SLA ceiling;
+//     operators tuning differently override via --knee-p99-max.
 //
 // First-to-fire wins. KneeRPS is the *prior* (still healthy) step —
 // the recommended ceiling. FailedAtRPS is the first failing step.
@@ -92,8 +97,10 @@ type KneeInfo struct {
 const (
 	KneeReasonAchievedBelow80 = "achieved_below_80pct"
 	KneeReasonP99Cliff        = "p99_cliff"
+	KneeReasonLatencyAbove50  = "latency_above_50ms"
 	KneeAchievedRatio         = 0.80
 	KneeP99Multiplier         = 2.0
+	KneeP99MaxUs              = int64(50_000) // 50ms
 )
 
 // SweepSchemaVersion identifies the on-disk shape so the report
@@ -526,6 +533,20 @@ func detectKnee(steps []SweepStep) (KneeInfo, bool) {
 			Detail: fmt.Sprintf("p99 %dµs vs prior %dµs (×%.1f, >×%.1f threshold) AND achieved %.0f did not exceed prior %.0f",
 				cur.P99UsMedian, prevP99, float64(cur.P99UsMedian)/float64(prevP99), KneeP99Multiplier,
 				cur.AchievedRPSMean, prevAchieved),
+		}, true
+	}
+	// Predicate 3: absolute p99 above the SLA ceiling. Catches the
+	// "throughput keeps climbing but only at 100ms+ p99" case the
+	// first two predicates miss — the bench keeps absorbing
+	// requests, just slowly. Default 50ms reflects a common
+	// production p99 SLA.
+	if cur.P99UsMedian > KneeP99MaxUs {
+		return KneeInfo{
+			KneeRPS:     prevRPS,
+			FailedAtRPS: cur.TargetRPS,
+			Reason:      KneeReasonLatencyAbove50,
+			Detail: fmt.Sprintf("p99 %dµs (%.1fms) exceeds %dms SLA ceiling",
+				cur.P99UsMedian, float64(cur.P99UsMedian)/1000, KneeP99MaxUs/1000),
 		}, true
 	}
 	return KneeInfo{}, false
