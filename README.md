@@ -939,6 +939,22 @@ saturation drops, codes, and example bodies are in the per-pass
 blocks above the compare. Raise `--rps` and `--duration` past the
 1 k × 15 s default for a steadier signal.
 
+### Throughput sweep — [`docs/perf.md`](docs/perf.md)
+
+The per-request overhead table answers *what does each request
+cost?*. [`docs/perf.md`](docs/perf.md) answers the follow-on:
+*what RPS will my hardware sustain before it falls over?* — an
+escalating-target-RPS sweep with automatic knee detection
+(achieved < 80 % of target, or p99 doubled vs prior step),
+machine specs at the top, and an interpretation paragraph per
+scenario. Latest baseline (proto scenario on a 24-core Ryzen 9
+3900X, single gateway, single greeter replica, loopback):
+**1,873 RPS** at p95 **633 µs** with gateway self-time mean
+**70 µs** — ~**78 RPS / core** at the recommended ceiling.
+Regenerate with `bin/bench perf all && bin/bench perf report`;
+the file carries a "do not edit" banner so a stale copy is
+visible at a glance.
+
 ## Promotion path
 
 Tier flow (`unstable` → `stable` → `vN`) and the BuildTag forcing
