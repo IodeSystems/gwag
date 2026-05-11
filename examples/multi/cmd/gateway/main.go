@@ -92,6 +92,7 @@ func main() {
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
 	signerSecret := flag.String("signer-secret", "", "Hex-encoded bearer for the gRPC SignSubscriptionToken RPC; admin token also works as fallback")
 	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
+	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists its boot admin token (empty → in-memory only). Set this to a writable path so a worked example (e.g. cmd/mcp-demo) can read <dir>/admin-token without scraping logs. Implicitly set when --nats-data is.")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
 
@@ -139,12 +140,17 @@ func main() {
 	if mtls != nil {
 		gwOpts = append(gwOpts, gateway.WithTLS(mtls))
 	}
-	if *natsData != "" {
-		// Persist the admin token under the same data dir as JetStream
-		// so a restart reloads the same token (no reconfiguration of
-		// clients). Standalone gateways without a data dir get a
-		// fresh in-memory token each boot.
-		gwOpts = append(gwOpts, gateway.WithAdminDataDir(*natsData))
+	// Persist the admin token under whichever data dir the operator
+	// configured. `--admin-data-dir` wins; `--nats-data` is the
+	// historical default (one dir for everything cluster-mode needs).
+	// Standalone gateways without either get a fresh in-memory token
+	// each boot.
+	tokenDir := *adminDataDir
+	if tokenDir == "" {
+		tokenDir = *natsData
+	}
+	if tokenDir != "" {
+		gwOpts = append(gwOpts, gateway.WithAdminDataDir(tokenDir))
 	}
 	gwOpts = append(gwOpts, gateway.WithBackpressure(gateway.BackpressureOptions{
 		MaxInflight:     *maxInflight,
@@ -257,6 +263,14 @@ func main() {
 	// Bearer-gated: writes require the boot token; reads stay public so
 	// the UI's services-list/peer views work unauthenticated.
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
+	// MCP Streamable HTTP transport. Bearer-gated like admin writes —
+	// every MCP RPC is POSTed, so AdminMiddleware demands the boot
+	// token on each call. The four tools (schema_list / search /
+	// expand / query) wrap the in-process Gateway methods; the
+	// allowlist is operator-curated through /api/admin/mcp/*. See
+	// examples/multi/cmd/mcp-demo for a worked client.
+	mcpHandler := gw.MCPHandler()
+	mux.Handle("/api/mcp", gw.AdminMiddleware(mcpHandler))
 	if pmux := gw.PprofMux(); pmux != nil {
 		// Bearer-gated. pprof leaks goroutine + heap state; never serve it
 		// without auth.
