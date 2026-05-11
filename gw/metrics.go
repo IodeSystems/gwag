@@ -141,9 +141,10 @@ type prometheusMetrics struct {
 	adminAuth     *prometheus.CounterVec
 	gqlSubFanout  *prometheus.CounterVec
 	gqlSubActive  *prometheus.GaugeVec
-	reqDuration   *prometheus.HistogramVec
-	reqSelf       *prometheus.HistogramVec
-	callerHeaders []string
+	reqDuration     *prometheus.HistogramVec
+	reqSelf         *prometheus.HistogramVec
+	callerHeaders   []string
+	callerExtractor CallerIDExtractor
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -234,7 +235,7 @@ func (m *prometheusMetrics) RecordDispatch(ctx context.Context, namespace, versi
 	if err != nil {
 		code = classifyError(err)
 	}
-	m.hist.WithLabelValues(namespace, version, method, code, callerFromContext(ctx, m.callerHeaders)).Observe(d.Seconds())
+	m.hist.WithLabelValues(namespace, version, method, code, resolveCallerID(ctx, m.callerExtractor, m.callerHeaders)).Observe(d.Seconds())
 }
 
 func (m *prometheusMetrics) RecordDwell(namespace, version, method, kind string, d time.Duration) {

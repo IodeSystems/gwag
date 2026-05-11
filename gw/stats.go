@@ -184,8 +184,9 @@ func newMethodStats() *methodStats {
 // single seam.
 type statsRecordingMetrics struct {
 	Metrics
-	stats         *statsRegistry
-	callerHeaders []string
+	stats           *statsRegistry
+	callerHeaders   []string
+	callerExtractor CallerIDExtractor
 }
 
 // callerFromContext returns the first non-empty inbound header value
@@ -215,7 +216,7 @@ var nowFunc = time.Now
 func (s *statsRecordingMetrics) RecordDispatch(ctx context.Context, namespace, version, method string, d time.Duration, err error) {
 	s.Metrics.RecordDispatch(ctx, namespace, version, method, d, err)
 	if s.stats != nil {
-		caller := callerFromContext(ctx, s.callerHeaders)
+		caller := resolveCallerID(ctx, s.callerExtractor, s.callerHeaders)
 		s.stats.record(statsKey{namespace: namespace, version: version, method: method, caller: caller}, d, err == nil, nowFunc())
 	}
 }

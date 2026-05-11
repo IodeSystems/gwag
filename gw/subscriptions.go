@@ -225,6 +225,11 @@ func (g *Gateway) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	// Attach the upgrade request so the caller-id seam (and any
+	// downstream HTTPRequestFromContext consumer) can read inbound
+	// headers from the handshake the same way they do on the GraphQL
+	// HTTP path.
+	ctx = WithHTTPRequest(ctx, r)
 
 	// Register so Drain can fire all cancels.
 	connKey := uintptr(0)

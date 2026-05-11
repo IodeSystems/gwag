@@ -229,6 +229,11 @@ type config struct {
 	// (X-Caller-Service) or accept the User-Agent blast radius
 	// explicitly.
 	callerHeaders []string
+
+	// callerIDExtractor is the caller-id seam (plan §Caller-ID). When
+	// set, it overrides the legacy callerHeaders allowlist. See
+	// WithCallerIDExtractor / WithCallerIDPublic.
+	callerIDExtractor CallerIDExtractor
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -640,9 +645,15 @@ func New(opts ...Option) *Gateway {
 	life, cancel := context.WithCancel(context.Background())
 	if pm, ok := cfg.metrics.(*prometheusMetrics); ok {
 		pm.callerHeaders = cfg.callerHeaders
+		pm.callerExtractor = cfg.callerIDExtractor
 	}
 	stats := newStatsRegistry()
-	cfg.metrics = &statsRecordingMetrics{Metrics: cfg.metrics, stats: stats, callerHeaders: cfg.callerHeaders}
+	cfg.metrics = &statsRecordingMetrics{
+		Metrics:         cfg.metrics,
+		stats:           stats,
+		callerHeaders:   cfg.callerHeaders,
+		callerExtractor: cfg.callerIDExtractor,
+	}
 	g := &Gateway{
 		cfg:         cfg,
 		slots:       map[poolKey]*slot{},
