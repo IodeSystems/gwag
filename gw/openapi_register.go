@@ -60,6 +60,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 					dispatcher = wrapCanonicalDispatcherWithChain(dispatcher, chain, md, svc.Namespace, svc.Version, op.Name)
 				}
 			}
+			dispatcher = g.quotaMiddleware(svc.Namespace, svc.Version)(dispatcher)
 			g.dispatchers.Set(op.SchemaID, dispatcher)
 		}
 	}

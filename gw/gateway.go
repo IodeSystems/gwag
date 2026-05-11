@@ -165,6 +165,12 @@ type Gateway struct {
 	// when the delegated extractor isn't installed. Plan §Caller-ID.
 	callerAuth *callerAuthDelegate
 
+	// quotaAuth is the per-gateway permit pool for WithQuota — bucket
+	// map keyed by (caller_id, namespace, version) + singleflight on
+	// refill. nil when no quota gate is configured (default-allow).
+	// Plan §Caller-ID + quota ladder.
+	quotaAuth *quotaAuthDelegate
+
 	// rejectedJoins counts and timestamps registerSlotLocked
 	// rejections per slot key, so /admin/services can surface "this
 	// slot rejected N joins with caps X (currently running Y)" before
@@ -250,6 +256,10 @@ type config struct {
 	// extractor closes over the gateway so it can resolve the
 	// _caller_auth/v1 pool at call time.
 	callerIDDelegated *CallerIDDelegatedOptions
+
+	// quota holds the WithQuota option payload until New() can build
+	// the per-gateway permit pool. nil → no quota gate (default-allow).
+	quota *QuotaOptions
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -695,6 +705,9 @@ func New(opts ...Option) *Gateway {
 	if cfg.callerIDDelegated != nil {
 		g.callerAuth = newCallerAuthDelegate(g, *cfg.callerIDDelegated)
 		cfg.callerIDExtractor = g.callerAuth.resolve
+	}
+	if cfg.quota != nil {
+		g.quotaAuth = newQuotaAuthDelegate(g, *cfg.quota)
 	}
 	if pm != nil {
 		pm.callerExtractor = cfg.callerIDExtractor
@@ -1540,10 +1553,20 @@ const (
 type rejection struct {
 	Code Code
 	Msg  string
+	// RetryAfter is surfaced as the HTTP `Retry-After` header on
+	// ingress error envelopes (writeIngressDispatchError). Zero means
+	// no header — only quota-exhaustion rejections set it today.
+	RetryAfter time.Duration
 }
 
-func (r *rejection) Error() string              { return r.Msg }
-func (r *rejection) Extensions() map[string]any { return map[string]any{"code": r.Code.String()} }
+func (r *rejection) Error() string { return r.Msg }
+func (r *rejection) Extensions() map[string]any {
+	ext := map[string]any{"code": r.Code.String()}
+	if r.RetryAfter > 0 {
+		ext["retryAfterSeconds"] = int(r.RetryAfter / time.Second)
+	}
+	return ext
+}
 
 func (c Code) String() string {
 	switch c {

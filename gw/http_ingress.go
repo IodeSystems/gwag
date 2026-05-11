@@ -618,10 +618,18 @@ func writeIngressError(w http.ResponseWriter, status int, msg string) {
 // writeIngressDispatchError maps a Reject (or arbitrary error) onto an
 // HTTP status. Uses the gateway's Code enum the same way the OpenAPI
 // dispatcher's classification does — keeps ingress + egress error
-// codes symmetric.
+// codes symmetric. Surfaces RetryAfter as the standard HTTP header
+// when set on the rejection (today only WithQuota does so).
 func writeIngressDispatchError(w http.ResponseWriter, err error) {
 	var rej *rejection
 	if errors.As(err, &rej) {
+		if rej.RetryAfter > 0 {
+			secs := int(rej.RetryAfter / time.Second)
+			if secs < 1 {
+				secs = 1
+			}
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
+		}
 		writeIngressError(w, codeToHTTPStatus(rej.Code), rej.Msg)
 		return
 	}

@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package gateway.quotaauth.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/iodesystems/go-api-gateway/gw/proto/quotaauth/v1;quotaauthv1";
+
+// QuotaAuthorizer is the optional delegate the gateway calls to grant
+// blocks of permits per caller. Implement it in your quota service and
+// register it under namespace "_quota_auth" / version v1.
+//
+// Wire flow: the gateway gates dispatch on a local permit bucket keyed
+// by (caller_id, namespace, version). When a bucket is empty (or close
+// to it) the gateway calls AcquireBlock with a requested permit count;
+// the delegate replies with granted_permits + valid_until. Permits are
+// debited locally per dispatch; no per-request RPC on the hot path.
+//
+// Code policy mirrors CallerAuthorizer / AdminAuthorizer:
+//   - OK: granted_permits is the block size; valid_until bounds the
+//     staleness window so the delegate can enforce time-windowed
+//     quotas (per-second, per-minute) without per-request consult.
+//   - DENIED: caller exhausted its quota; gateway surfaces 429 + a
+//     Retry-After hint derived from valid_until (when set).
+//   - UNAVAILABLE / NOT_CONFIGURED / UNSPECIFIED / transport error:
+//     fail-open — gateway grants a small emergency block and retries
+//     on the next refill. Matches gw's default-allow posture; flipped
+//     to fail-closed once WithQuotaEnforce ships (plan §Caller-ID +
+//     quota ladder).
+service QuotaAuthorizer {
+  rpc AcquireBlock(AcquireBlockRequest) returns (AcquireBlockResponse);
+}
+
+message AcquireBlockRequest {
+  // Resolved caller identity (output of the caller-id extractor).
+  // "unknown" stands in for anonymous callers; the delegate decides
+  // whether to grant anonymous quota.
+  string caller_id = 1;
+
+  // The (namespace, version) pair the caller is dispatching against.
+  // Lets the delegate apply different quotas per service tier.
+  string namespace = 2;
+  string version = 3;
+
+  // Block size the gateway is asking for, derived from the caller's
+  // configured burstable RPS. The delegate may grant fewer.
+  uint32 requested_permits = 4;
+}
+
+message AcquireBlockResponse {
+  QuotaAuthCode code = 1;
+
+  // Number of permits granted. Required when code == OK. Zero with
+  // code == OK is treated as DENIED (defensive — a misbehaving
+  // delegate shouldn't be able to silently freeze a caller).
+  uint32 granted_permits = 2;
+
+  // Hard deadline after which the granted permits expire regardless
+  // of consumption. Empty / zero → permits don't expire on a wall
+  // clock; the gateway refills when the bucket drains. Set this to
+  // enforce per-second / per-minute caps server-side.
+  google.protobuf.Timestamp valid_until = 3;
+
+  // Suggested block size for the next AcquireBlock call. Zero → reuse
+  // requested_permits. Lets the delegate steer block size based on
+  // observed caller behaviour (steady → bigger blocks; bursty → smaller).
+  uint32 next_block_hint = 4;
+
+  // For operator logs. Never leaked to clients. Carries the rejection
+  // reason for DENIED responses (e.g. "monthly cap exceeded").
+  string reason = 5;
+}
+
+enum QuotaAuthCode {
+  QUOTA_AUTH_CODE_UNSPECIFIED = 0;
+  // Delegate granted a block.
+  QUOTA_AUTH_CODE_OK = 1;
+  // Delegate explicitly refused; caller is over quota. Surfaces as
+  // 429 + Retry-After on HTTP/GraphQL, ResourceExhausted on gRPC.
+  QUOTA_AUTH_CODE_DENIED = 2;
+  // Delegate is currently unavailable. Gateway fails open today.
+  QUOTA_AUTH_CODE_UNAVAILABLE = 3;
+  // Delegate is registered but unwilling to make a decision (e.g.
+  // policy not loaded). Same surface as UNAVAILABLE.
+  QUOTA_AUTH_CODE_NOT_CONFIGURED = 4;
+}
