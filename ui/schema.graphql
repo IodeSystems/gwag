@@ -4,13 +4,19 @@ schema {
 }
 
 type AdminMutationNamespace {
-  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
+  mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
+  mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
+  mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
-  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
+  undeprecate(version: String!, namespace: String!): admin_UndeprecateOutBody
   v1: AdminV1MutationNamespace!
 }
 
@@ -20,6 +26,8 @@ type AdminQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  mcpList: admin_McpListOutBody
+  mcpSchemaList: admin_McpSchemaListOutBody
   serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
@@ -31,6 +39,12 @@ type AdminStableMutationNamespace {
   deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
+  mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
+  mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
+  mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -42,6 +56,8 @@ type AdminStableQueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  mcpList: admin_McpListOutBody
+  mcpSchemaList: admin_McpSchemaListOutBody
   serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
@@ -51,7 +67,13 @@ type AdminV1MutationNamespace {
   deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
-  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
+  mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
+  mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
+  mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
+  mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
+  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -62,10 +84,15 @@ type AdminV1QueryNamespace {
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
+  mcpList: admin_McpListOutBody
+  mcpSchemaList: admin_McpSchemaListOutBody
   serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
 }
+
+"""Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly)."""
+scalar JSON
 
 """64-bit integer encoded as a decimal string. OpenAPI integer fields with format=int64/uint64 land here; graphql-go's built-in Int is signed 32-bit and would lose precision (or null out entirely) for values above 2^31."""
 scalar Long
@@ -183,6 +210,71 @@ type admin_InjectorsOutBody {
   injectors: [admin_InjectorInfo]!
 }
 
+type admin_MCPChannelEvent {
+  channel: String!
+  count: Long!
+  preview: JSON
+}
+
+type admin_MCPEventsBundle {
+  channels: [admin_MCPChannelEvent]!
+  level: String!
+}
+
+type admin_MCPResponseWithEvents {
+  events: admin_MCPEventsBundle!
+  response: JSON!
+}
+
+input admin_McpExcludeInBodyInput {
+  path: String!
+}
+
+input admin_McpIncludeInBodyInput {
+  path: String!
+}
+
+type admin_McpListOutBody {
+  autoInclude: Boolean!
+  exclude: [String]!
+  include: [String]!
+}
+
+input admin_McpQueryInBodyInput {
+  operationName: String
+  query: String!
+  variables: JSON
+}
+
+type admin_McpQueryOutBody {
+  result: admin_MCPResponseWithEvents!
+}
+
+input admin_McpSchemaExpandInBodyInput {
+  name: String!
+}
+
+type admin_McpSchemaExpandOutBody {
+  result: admin_SchemaExpandResult!
+}
+
+type admin_McpSchemaListOutBody {
+  entries: [admin_SchemaListEntry]!
+}
+
+input admin_McpSchemaSearchInBodyInput {
+  pathGlob: String
+  regex: String
+}
+
+type admin_McpSchemaSearchOutBody {
+  entries: [admin_SchemaSearchEntry]!
+}
+
+input admin_McpSetAutoIncludeInBodyInput {
+  autoInclude: Boolean!
+}
+
 type admin_MethodStatsOut {
   caller: String!
   count: Long!
@@ -210,6 +302,16 @@ type admin_RegisteredAtInfo {
   line: Long
 }
 
+type admin_RejectedJoinInfo {
+  count: Int!
+  currentMaxConcurrency: Long!
+  currentMaxConcurrencyPerInstance: Long!
+  lastMaxConcurrency: Long!
+  lastMaxConcurrencyPerInstance: Long!
+  lastReason: String!
+  lastUnixMs: Long!
+}
+
 input admin_RetractStableInBodyInput {
   targetVN: Int!
 }
@@ -217,6 +319,72 @@ input admin_RetractStableInBodyInput {
 type admin_RetractStableOutBody {
   newVN: Int!
   priorVN: Int!
+}
+
+type admin_SchemaExpandEnumValue {
+  deprecated: String
+  description: String
+  name: String!
+}
+
+type admin_SchemaExpandField {
+  deprecated: String
+  description: String
+  name: String!
+  required: Boolean!
+  type: String!
+}
+
+type admin_SchemaExpandOp {
+  args: [admin_SchemaSearchArg]!
+  deprecated: String
+  description: String
+  kind: String!
+  namespace: String!
+  outputType: String
+  path: String!
+  version: String!
+}
+
+type admin_SchemaExpandResult {
+  op: admin_SchemaExpandOp
+  path: String
+  type: admin_SchemaExpandType
+  types: [admin_SchemaExpandType]!
+}
+
+type admin_SchemaExpandType {
+  description: String
+  enumValues: [admin_SchemaExpandEnumValue]
+  fields: [admin_SchemaExpandField]
+  kind: String!
+  name: String!
+  variants: [String]
+}
+
+type admin_SchemaListEntry {
+  description: String
+  kind: String!
+  namespace: String!
+  path: String!
+  version: String!
+}
+
+type admin_SchemaSearchArg {
+  description: String
+  name: String!
+  required: Boolean!
+  type: String!
+}
+
+type admin_SchemaSearchEntry {
+  args: [admin_SchemaSearchArg]!
+  description: String
+  kind: String!
+  namespace: String!
+  outputType: String
+  path: String!
+  version: String!
 }
 
 type admin_ServiceHistoryRow {
@@ -229,6 +397,7 @@ type admin_ServiceInfo {
   hashHex: String!
   manualDeprecationReason: String
   namespace: String!
+  rejectedJoins: admin_RejectedJoinInfo
   replicaCount: Int!
   version: String!
 }

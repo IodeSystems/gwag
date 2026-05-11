@@ -14,6 +14,8 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean; }
   Int: { input: number; output: number; }
   Float: { input: number; output: number; }
+  /** Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly). */
+  JSON: { input: unknown; output: unknown; }
   /** 64-bit integer encoded as a decimal string. OpenAPI integer fields with format=int64/uint64 land here; graphql-go's built-in Int is signed 32-bit and would lose precision (or null out entirely) for values above 2^31. */
   Long: { input: unknown; output: unknown; }
 };
@@ -23,6 +25,12 @@ export type AdminMutationNamespace = {
   deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  mcpExclude: Maybe<Admin_McpListOutBody>;
+  mcpInclude: Maybe<Admin_McpListOutBody>;
+  mcpQuery: Maybe<Admin_McpQueryOutBody>;
+  mcpSchemaExpand: Maybe<Admin_McpSchemaExpandOutBody>;
+  mcpSchemaSearch: Maybe<Admin_McpSchemaSearchOutBody>;
+  mcpSetAutoInclude: Maybe<Admin_McpListOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
   stable: AdminStableMutationNamespace;
@@ -45,6 +53,36 @@ export type AdminMutationNamespaceDrainArgs = {
 
 export type AdminMutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminMutationNamespaceMcpExcludeArgs = {
+  body: Admin_McpExcludeInBodyInput;
+};
+
+
+export type AdminMutationNamespaceMcpIncludeArgs = {
+  body: Admin_McpIncludeInBodyInput;
+};
+
+
+export type AdminMutationNamespaceMcpQueryArgs = {
+  body: Admin_McpQueryInBodyInput;
+};
+
+
+export type AdminMutationNamespaceMcpSchemaExpandArgs = {
+  body: Admin_McpSchemaExpandInBodyInput;
+};
+
+
+export type AdminMutationNamespaceMcpSchemaSearchArgs = {
+  body: Admin_McpSchemaSearchInBodyInput;
+};
+
+
+export type AdminMutationNamespaceMcpSetAutoIncludeArgs = {
+  body: Admin_McpSetAutoIncludeInBodyInput;
 };
 
 
@@ -71,6 +109,8 @@ export type AdminQueryNamespace = {
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  mcpList: Maybe<Admin_McpListOutBody>;
+  mcpSchemaList: Maybe<Admin_McpSchemaListOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
   servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
@@ -105,6 +145,12 @@ export type AdminStableMutationNamespace = {
   deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  mcpExclude: Maybe<Admin_McpListOutBody>;
+  mcpInclude: Maybe<Admin_McpListOutBody>;
+  mcpQuery: Maybe<Admin_McpQueryOutBody>;
+  mcpSchemaExpand: Maybe<Admin_McpSchemaExpandOutBody>;
+  mcpSchemaSearch: Maybe<Admin_McpSchemaSearchOutBody>;
+  mcpSetAutoInclude: Maybe<Admin_McpListOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
   undeprecate: Maybe<Admin_UndeprecateOutBody>;
@@ -125,6 +171,36 @@ export type AdminStableMutationNamespaceDrainArgs = {
 
 export type AdminStableMutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminStableMutationNamespaceMcpExcludeArgs = {
+  body: Admin_McpExcludeInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceMcpIncludeArgs = {
+  body: Admin_McpIncludeInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceMcpQueryArgs = {
+  body: Admin_McpQueryInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceMcpSchemaExpandArgs = {
+  body: Admin_McpSchemaExpandInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceMcpSchemaSearchArgs = {
+  body: Admin_McpSchemaSearchInBodyInput;
+};
+
+
+export type AdminStableMutationNamespaceMcpSetAutoIncludeArgs = {
+  body: Admin_McpSetAutoIncludeInBodyInput;
 };
 
 
@@ -151,6 +227,8 @@ export type AdminStableQueryNamespace = {
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  mcpList: Maybe<Admin_McpListOutBody>;
+  mcpSchemaList: Maybe<Admin_McpSchemaListOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
   servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
@@ -183,6 +261,12 @@ export type AdminV1MutationNamespace = {
   deprecate: Maybe<Admin_DeprecateOutBody>;
   drain: Maybe<Admin_DrainOutBody>;
   forgetPeer: Maybe<Admin_ForgetOutBody>;
+  mcpExclude: Maybe<Admin_McpListOutBody>;
+  mcpInclude: Maybe<Admin_McpListOutBody>;
+  mcpQuery: Maybe<Admin_McpQueryOutBody>;
+  mcpSchemaExpand: Maybe<Admin_McpSchemaExpandOutBody>;
+  mcpSchemaSearch: Maybe<Admin_McpSchemaSearchOutBody>;
+  mcpSetAutoInclude: Maybe<Admin_McpListOutBody>;
   retractStable: Maybe<Admin_RetractStableOutBody>;
   signSubscriptionToken: Maybe<Admin_SignOutBody>;
   undeprecate: Maybe<Admin_UndeprecateOutBody>;
@@ -203,6 +287,36 @@ export type AdminV1MutationNamespaceDrainArgs = {
 
 export type AdminV1MutationNamespaceForgetPeerArgs = {
   nodeId: Scalars['String']['input'];
+};
+
+
+export type AdminV1MutationNamespaceMcpExcludeArgs = {
+  body: Admin_McpExcludeInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceMcpIncludeArgs = {
+  body: Admin_McpIncludeInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceMcpQueryArgs = {
+  body: Admin_McpQueryInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceMcpSchemaExpandArgs = {
+  body: Admin_McpSchemaExpandInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceMcpSchemaSearchArgs = {
+  body: Admin_McpSchemaSearchInBodyInput;
+};
+
+
+export type AdminV1MutationNamespaceMcpSetAutoIncludeArgs = {
+  body: Admin_McpSetAutoIncludeInBodyInput;
 };
 
 
@@ -229,6 +343,8 @@ export type AdminV1QueryNamespace = {
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
   listServices: Maybe<Admin_ServicesOutBody>;
+  mcpList: Maybe<Admin_McpListOutBody>;
+  mcpSchemaList: Maybe<Admin_McpSchemaListOutBody>;
   serviceStats: Maybe<Admin_ServiceStatsOutBody>;
   servicesHistory: Maybe<Admin_ServicesHistoryOutBody>;
   servicesStats: Maybe<Admin_ServicesStatsOutBody>;
@@ -384,6 +500,79 @@ export type Admin_InjectorsOutBody = {
   injectors: Array<Maybe<Admin_InjectorInfo>>;
 };
 
+export type Admin_McpChannelEvent = {
+  __typename?: 'admin_MCPChannelEvent';
+  channel: Scalars['String']['output'];
+  count: Scalars['Long']['output'];
+  preview: Maybe<Scalars['JSON']['output']>;
+};
+
+export type Admin_McpEventsBundle = {
+  __typename?: 'admin_MCPEventsBundle';
+  channels: Array<Maybe<Admin_McpChannelEvent>>;
+  level: Scalars['String']['output'];
+};
+
+export type Admin_McpResponseWithEvents = {
+  __typename?: 'admin_MCPResponseWithEvents';
+  events: Admin_McpEventsBundle;
+  response: Scalars['JSON']['output'];
+};
+
+export type Admin_McpExcludeInBodyInput = {
+  path: Scalars['String']['input'];
+};
+
+export type Admin_McpIncludeInBodyInput = {
+  path: Scalars['String']['input'];
+};
+
+export type Admin_McpListOutBody = {
+  __typename?: 'admin_McpListOutBody';
+  autoInclude: Scalars['Boolean']['output'];
+  exclude: Array<Maybe<Scalars['String']['output']>>;
+  include: Array<Maybe<Scalars['String']['output']>>;
+};
+
+export type Admin_McpQueryInBodyInput = {
+  operationName: InputMaybe<Scalars['String']['input']>;
+  query: Scalars['String']['input'];
+  variables: InputMaybe<Scalars['JSON']['input']>;
+};
+
+export type Admin_McpQueryOutBody = {
+  __typename?: 'admin_McpQueryOutBody';
+  result: Admin_McpResponseWithEvents;
+};
+
+export type Admin_McpSchemaExpandInBodyInput = {
+  name: Scalars['String']['input'];
+};
+
+export type Admin_McpSchemaExpandOutBody = {
+  __typename?: 'admin_McpSchemaExpandOutBody';
+  result: Admin_SchemaExpandResult;
+};
+
+export type Admin_McpSchemaListOutBody = {
+  __typename?: 'admin_McpSchemaListOutBody';
+  entries: Array<Maybe<Admin_SchemaListEntry>>;
+};
+
+export type Admin_McpSchemaSearchInBodyInput = {
+  pathGlob: InputMaybe<Scalars['String']['input']>;
+  regex: InputMaybe<Scalars['String']['input']>;
+};
+
+export type Admin_McpSchemaSearchOutBody = {
+  __typename?: 'admin_McpSchemaSearchOutBody';
+  entries: Array<Maybe<Admin_SchemaSearchEntry>>;
+};
+
+export type Admin_McpSetAutoIncludeInBodyInput = {
+  autoInclude: Scalars['Boolean']['input'];
+};
+
 export type Admin_MethodStatsOut = {
   __typename?: 'admin_MethodStatsOut';
   caller: Scalars['String']['output'];
@@ -415,6 +604,17 @@ export type Admin_RegisteredAtInfo = {
   line: Maybe<Scalars['Long']['output']>;
 };
 
+export type Admin_RejectedJoinInfo = {
+  __typename?: 'admin_RejectedJoinInfo';
+  count: Scalars['Int']['output'];
+  currentMaxConcurrency: Scalars['Long']['output'];
+  currentMaxConcurrencyPerInstance: Scalars['Long']['output'];
+  lastMaxConcurrency: Scalars['Long']['output'];
+  lastMaxConcurrencyPerInstance: Scalars['Long']['output'];
+  lastReason: Scalars['String']['output'];
+  lastUnixMs: Scalars['Long']['output'];
+};
+
 export type Admin_RetractStableInBodyInput = {
   targetVN: Scalars['Int']['input'];
 };
@@ -423,6 +623,80 @@ export type Admin_RetractStableOutBody = {
   __typename?: 'admin_RetractStableOutBody';
   newVN: Scalars['Int']['output'];
   priorVN: Scalars['Int']['output'];
+};
+
+export type Admin_SchemaExpandEnumValue = {
+  __typename?: 'admin_SchemaExpandEnumValue';
+  deprecated: Maybe<Scalars['String']['output']>;
+  description: Maybe<Scalars['String']['output']>;
+  name: Scalars['String']['output'];
+};
+
+export type Admin_SchemaExpandField = {
+  __typename?: 'admin_SchemaExpandField';
+  deprecated: Maybe<Scalars['String']['output']>;
+  description: Maybe<Scalars['String']['output']>;
+  name: Scalars['String']['output'];
+  required: Scalars['Boolean']['output'];
+  type: Scalars['String']['output'];
+};
+
+export type Admin_SchemaExpandOp = {
+  __typename?: 'admin_SchemaExpandOp';
+  args: Array<Maybe<Admin_SchemaSearchArg>>;
+  deprecated: Maybe<Scalars['String']['output']>;
+  description: Maybe<Scalars['String']['output']>;
+  kind: Scalars['String']['output'];
+  namespace: Scalars['String']['output'];
+  outputType: Maybe<Scalars['String']['output']>;
+  path: Scalars['String']['output'];
+  version: Scalars['String']['output'];
+};
+
+export type Admin_SchemaExpandResult = {
+  __typename?: 'admin_SchemaExpandResult';
+  op: Maybe<Admin_SchemaExpandOp>;
+  path: Maybe<Scalars['String']['output']>;
+  type: Maybe<Admin_SchemaExpandType>;
+  types: Array<Maybe<Admin_SchemaExpandType>>;
+};
+
+export type Admin_SchemaExpandType = {
+  __typename?: 'admin_SchemaExpandType';
+  description: Maybe<Scalars['String']['output']>;
+  enumValues: Maybe<Array<Maybe<Admin_SchemaExpandEnumValue>>>;
+  fields: Maybe<Array<Maybe<Admin_SchemaExpandField>>>;
+  kind: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  variants: Maybe<Array<Maybe<Scalars['String']['output']>>>;
+};
+
+export type Admin_SchemaListEntry = {
+  __typename?: 'admin_SchemaListEntry';
+  description: Maybe<Scalars['String']['output']>;
+  kind: Scalars['String']['output'];
+  namespace: Scalars['String']['output'];
+  path: Scalars['String']['output'];
+  version: Scalars['String']['output'];
+};
+
+export type Admin_SchemaSearchArg = {
+  __typename?: 'admin_SchemaSearchArg';
+  description: Maybe<Scalars['String']['output']>;
+  name: Scalars['String']['output'];
+  required: Scalars['Boolean']['output'];
+  type: Scalars['String']['output'];
+};
+
+export type Admin_SchemaSearchEntry = {
+  __typename?: 'admin_SchemaSearchEntry';
+  args: Array<Maybe<Admin_SchemaSearchArg>>;
+  description: Maybe<Scalars['String']['output']>;
+  kind: Scalars['String']['output'];
+  namespace: Scalars['String']['output'];
+  outputType: Maybe<Scalars['String']['output']>;
+  path: Scalars['String']['output'];
+  version: Scalars['String']['output'];
 };
 
 export type Admin_ServiceHistoryRow = {
@@ -437,6 +711,7 @@ export type Admin_ServiceInfo = {
   hashHex: Scalars['String']['output'];
   manualDeprecationReason: Maybe<Scalars['String']['output']>;
   namespace: Scalars['String']['output'];
+  rejectedJoins: Maybe<Admin_RejectedJoinInfo>;
   replicaCount: Scalars['Int']['output'];
   version: Scalars['String']['output'];
 };
