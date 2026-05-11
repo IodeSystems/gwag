@@ -35,8 +35,8 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
+	"github.com/iodesystems/gwag/gw/ir"
 	"google.golang.org/grpc"
 )
 

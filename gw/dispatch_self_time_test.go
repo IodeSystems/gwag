@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // withDispatchAccumulator installs a fresh accumulator that

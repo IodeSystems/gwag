@@ -26,8 +26,14 @@ const (
 // LibraryServiceClient is the client API for LibraryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// LibraryService is a second proto-source service in the multi
+// example, used to demonstrate that two namespaces register and
+// dispatch independently through the same gateway.
 type LibraryServiceClient interface {
+	// List books, optionally filtered by author.
 	ListBooks(ctx context.Context, in *ListBooksRequest, opts ...grpc.CallOption) (*ListBooksResponse, error)
+	// Look up a single book by id.
 	GetBook(ctx context.Context, in *GetBookRequest, opts ...grpc.CallOption) (*Book, error)
 }
 
@@ -62,8 +68,14 @@ func (c *libraryServiceClient) GetBook(ctx context.Context, in *GetBookRequest, 
 // LibraryServiceServer is the server API for LibraryService service.
 // All implementations must embed UnimplementedLibraryServiceServer
 // for forward compatibility.
+//
+// LibraryService is a second proto-source service in the multi
+// example, used to demonstrate that two namespaces register and
+// dispatch independently through the same gateway.
 type LibraryServiceServer interface {
+	// List books, optionally filtered by author.
 	ListBooks(context.Context, *ListBooksRequest) (*ListBooksResponse, error)
+	// Look up a single book by id.
 	GetBook(context.Context, *GetBookRequest) (*Book, error)
 	mustEmbedUnimplementedLibraryServiceServer()
 }

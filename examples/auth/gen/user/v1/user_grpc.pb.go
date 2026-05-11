@@ -28,8 +28,10 @@ const (
 //
 // UserService is a normal public service whose RPCs need authentication
 // context. The auth field is hidden from the external GraphQL schema
-// and populated at runtime by HideAndInject[*auth.v1.Context].
+// and populated at runtime by InjectType[*auth.v1.Context].
 type UserServiceClient interface {
+	// Return the authenticated principal's profile, derived from the
+	// injected auth.v1.Context.
 	GetMe(ctx context.Context, in *GetMeRequest, opts ...grpc.CallOption) (*GetMeResponse, error)
 }
 
@@ -57,8 +59,10 @@ func (c *userServiceClient) GetMe(ctx context.Context, in *GetMeRequest, opts ..
 //
 // UserService is a normal public service whose RPCs need authentication
 // context. The auth field is hidden from the external GraphQL schema
-// and populated at runtime by HideAndInject[*auth.v1.Context].
+// and populated at runtime by InjectType[*auth.v1.Context].
 type UserServiceServer interface {
+	// Return the authenticated principal's profile, derived from the
+	// injected auth.v1.Context.
 	GetMe(context.Context, *GetMeRequest) (*GetMeResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }

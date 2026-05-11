@@ -21,9 +21,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// HelloRequest is the input for the unary Hello rpc.
 type HelloRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Recipient name; echoed back in the greeting.
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -65,9 +67,11 @@ func (x *HelloRequest) GetName() string {
 	return ""
 }
 
+// HelloResponse is the unary Hello reply.
 type HelloResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Greeting      string                 `protobuf:"bytes,1,opt,name=greeting,proto3" json:"greeting,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Greeting line, e.g. "Hello, alice!".
+	Greeting      string `protobuf:"bytes,1,opt,name=greeting,proto3" json:"greeting,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -119,7 +123,7 @@ const file_hello_proto_rawDesc = "" +
 	"\rHelloResponse\x12\x1a\n" +
 	"\bgreeting\x18\x01 \x01(\tR\bgreeting2H\n" +
 	"\fHelloService\x128\n" +
-	"\x05Hello\x12\x16.hello.v1.HelloRequest\x1a\x17.hello.v1.HelloResponseBKZIgithub.com/iodesystems/go-api-gateway/examples/multi/gen/hello/v1;hellov1b\x06proto3"
+	"\x05Hello\x12\x16.hello.v1.HelloRequest\x1a\x17.hello.v1.HelloResponseBAZ?github.com/iodesystems/gwag/examples/multi/gen/hello/v1;hellov1b\x06proto3"
 
 var (
 	file_hello_proto_rawDescOnce sync.Once

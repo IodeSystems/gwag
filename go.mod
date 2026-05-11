@@ -1,4 +1,4 @@
-module github.com/iodesystems/go-api-gateway
+module github.com/iodesystems/gwag
 
 go 1.26.2
 

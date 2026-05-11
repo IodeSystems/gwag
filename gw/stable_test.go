@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/graphql-go/graphql"
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // TestRuntime_StableAliasMatchesLatest covers the common case:

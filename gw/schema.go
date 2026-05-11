@@ -8,7 +8,7 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/handler"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // assembleLocked builds the gateway's canonical (unfiltered) GraphQL

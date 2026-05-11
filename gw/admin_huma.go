@@ -11,7 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
 // AdminHumaRouter mounts the gateway's admin routes — peers,

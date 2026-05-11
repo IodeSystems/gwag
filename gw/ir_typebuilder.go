@@ -8,7 +8,7 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // IRTypeNaming controls how IR names project to graphql display names.

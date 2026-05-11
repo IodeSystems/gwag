@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/iodesystems/go-api-gateway/bench/cmd/traffic/runner"
+	"github.com/iodesystems/gwag/bench/cmd/traffic/runner"
 )
 
 // runGraphQL parses graphql-adapter flags, builds one Target per

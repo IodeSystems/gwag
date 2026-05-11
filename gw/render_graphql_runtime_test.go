@@ -7,7 +7,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // TestRuntime_ProtoFlatAndVersioned exercises the smallest fold:

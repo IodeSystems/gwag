@@ -31,6 +31,9 @@ const (
 // and the gateway treats it as internal — not part of the external
 // GraphQL surface.
 type AuthServiceClient interface {
+	// Resolve an opaque token into a Context. Called by the gateway
+	// through InjectType[*Context] before any request that needs
+	// authentication context.
 	Resolve(ctx context.Context, in *ResolveRequest, opts ...grpc.CallOption) (*ResolveResponse, error)
 }
 
@@ -61,6 +64,9 @@ func (c *authServiceClient) Resolve(ctx context.Context, in *ResolveRequest, opt
 // and the gateway treats it as internal — not part of the external
 // GraphQL surface.
 type AuthServiceServer interface {
+	// Resolve an opaque token into a Context. Called by the gateway
+	// through InjectType[*Context] before any request that needs
+	// authentication context.
 	Resolve(context.Context, *ResolveRequest) (*ResolveResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }

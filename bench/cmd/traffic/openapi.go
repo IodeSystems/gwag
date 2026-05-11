@@ -16,7 +16,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/iodesystems/go-api-gateway/bench/cmd/traffic/runner"
+	"github.com/iodesystems/gwag/bench/cmd/traffic/runner"
 )
 
 // runOpenAPI parses openapi-adapter flags, fetches the gateway-rendered

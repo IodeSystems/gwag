@@ -7,7 +7,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // TestIRTypeBuilder_BuiltinScalars verifies every ir.ScalarKind maps

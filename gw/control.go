@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
 const (

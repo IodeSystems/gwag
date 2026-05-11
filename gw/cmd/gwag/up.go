@@ -28,9 +28,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	gateway "github.com/iodesystems/go-api-gateway/gw"
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
-	gwui "github.com/iodesystems/go-api-gateway/ui"
+	gateway "github.com/iodesystems/gwag/gw"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
+	gwui "github.com/iodesystems/gwag/ui"
 )
 
 type peerList []string

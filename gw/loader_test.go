@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // TestLoadProto_PreservesComments pins that the path-based proto load

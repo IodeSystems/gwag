@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
-	aev1 "github.com/iodesystems/go-api-gateway/gw/proto/adminevents/v1"
+	aev1 "github.com/iodesystems/gwag/gw/proto/adminevents/v1"
 )
 
 //go:embed proto/adminevents/v1/adminevents.proto

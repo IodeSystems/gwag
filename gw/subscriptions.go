@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"nhooyr.io/websocket"
 
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
 const cpv1Ok = cpv1.SubscribeAuthCode_SUBSCRIBE_AUTH_CODE_OK

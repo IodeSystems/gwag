@@ -60,8 +60,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	gateway "github.com/iodesystems/go-api-gateway/gw"
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
+	gateway "github.com/iodesystems/gwag/gw"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
 const (

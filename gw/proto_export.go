@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoprint"
 	"google.golang.org/protobuf/proto"

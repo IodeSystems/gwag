@@ -66,7 +66,7 @@ it possible.
 ## Try it in 60 seconds
 
 ```bash
-git clone https://github.com/iodesystems/go-api-gateway && cd go-api-gateway
+git clone https://github.com/iodesystems/gwag && cd go-api-gateway
 cd examples/multi && ./run.sh        # gateway + greeter + library
 ```
 
@@ -150,7 +150,7 @@ missed heartbeats past TTL evict.
 import (
     _ "embed"
 
-    "github.com/iodesystems/go-api-gateway/controlclient"
+    "github.com/iodesystems/gwag/controlclient"
 )
 
 //go:embed greeter.proto
@@ -344,7 +344,7 @@ A runnable 3-gateway demo is in
 ## CLI
 
 ```
-$ go install github.com/iodesystems/go-api-gateway/cmd/gwag@latest
+$ go install github.com/iodesystems/gwag/cmd/gwag@latest
 $ gwag \
     --proto ./greeter.proto=greeter-svc:50051 \
     --proto ./library.proto=commerce@library-svc:50052 \

@@ -24,7 +24,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iodesystems/go-api-gateway/gw/controlclient"
+	"github.com/iodesystems/gwag/gw/controlclient"
 )
 
 func main() {

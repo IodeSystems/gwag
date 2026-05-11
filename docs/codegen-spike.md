@@ -51,8 +51,8 @@ package gendispatch
 import (
     "context"
 
-    "github.com/iodesystems/go-api-gateway/gw/ir"
-    "github.com/iodesystems/go-api-gateway/gw/sdk"
+    "github.com/iodesystems/gwag/gw/ir"
+    "github.com/iodesystems/gwag/gw/sdk"
 )
 
 // Dispatchers returns the static dispatchers this build knows about,

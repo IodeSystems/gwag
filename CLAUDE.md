@@ -151,8 +151,8 @@ gw/
   subscriptions_test.go       Embedded NATS + WebSocket round-trip
 ```
 
-Importers use `gateway "github.com/iodesystems/go-api-gateway/gw"`
-for the library and `github.com/iodesystems/go-api-gateway/gw/proto/...`
+Importers use `gateway "github.com/iodesystems/gwag/gw"`
+for the library and `github.com/iodesystems/gwag/gw/proto/...`
 for the generated bindings.
 
 ## Conventions

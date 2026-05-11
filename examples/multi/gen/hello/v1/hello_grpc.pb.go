@@ -31,6 +31,8 @@ const (
 // native upstream for `bench traffic grpc --direct` so the gateway-
 // vs-direct comparison is apples-to-apples in proto.
 type HelloServiceClient interface {
+	// Unary RPC; the direct-dial peer of the Hello operation in the
+	// OpenAPI and GraphQL hello-* upstreams.
 	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
 }
 
@@ -61,6 +63,8 @@ func (c *helloServiceClient) Hello(ctx context.Context, in *HelloRequest, opts .
 // native upstream for `bench traffic grpc --direct` so the gateway-
 // vs-direct comparison is apples-to-apples in proto.
 type HelloServiceServer interface {
+	// Unary RPC; the direct-dial peer of the Hello operation in the
+	// OpenAPI and GraphQL hello-* upstreams.
 	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
 	mustEmbedUnimplementedHelloServiceServer()
 }

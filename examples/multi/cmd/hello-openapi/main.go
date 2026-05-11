@@ -21,7 +21,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/iodesystems/go-api-gateway/gw/controlclient"
+	"github.com/iodesystems/gwag/gw/controlclient"
 )
 
 const helloSpec = `{

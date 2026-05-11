@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // After a schema rebuild, every dispatchable operation must be

@@ -13,7 +13,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // ingressRoute is one resolved (METHOD, path) → dispatcher entry. The

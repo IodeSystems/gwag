@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 )
 
 // grpcIngressFixture spins:

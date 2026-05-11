@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // recMetrics records the four metric calls BackpressureMiddleware

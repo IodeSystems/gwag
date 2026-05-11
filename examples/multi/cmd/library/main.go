@@ -14,8 +14,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/iodesystems/go-api-gateway/gw/controlclient"
-	libraryv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/library/v1"
+	"github.com/iodesystems/gwag/gw/controlclient"
+	libraryv1 "github.com/iodesystems/gwag/examples/multi/gen/library/v1"
 )
 
 var books = []*libraryv1.Book{

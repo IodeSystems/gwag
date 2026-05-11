@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"github.com/iodesystems/go-api-gateway/gw/ir"
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // registerProtoDispatchersLocked walks every proto pool matching

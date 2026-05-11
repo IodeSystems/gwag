@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
+	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
 // TestRetractStable_StandaloneHappyPath: register v1 + v2; retract

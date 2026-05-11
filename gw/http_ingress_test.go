@@ -15,7 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
+	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 )
 
 // httpIngressFixture mirrors newGRPCE2EFixture but mounts the gateway
