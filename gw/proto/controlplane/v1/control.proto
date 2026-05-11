@@ -95,19 +95,21 @@ message ServiceBinding {
   // to the proto file's stem if empty.
   string namespace = 1;
 
-  // Standard FileDescriptorSet bytes (what `protoc -o` emits, or what
-  // protodesc.ToFileDescriptorProto + Marshal produces). Must include
-  // every transitive import the proto needs to type-check.
-  //
-  // Mutually exclusive with `openapi_spec`: a binding registers either
-  // a proto-described gRPC service or an OpenAPI-described HTTP
-  // service. Both unset / both set is an error.
-  bytes file_descriptor_set = 2;
+  // Raw .proto entrypoint source bytes — exactly what the operator
+  // wrote on disk. The receiving gateway compiles via protocompile
+  // (SourceInfoStandard) so leading / trailing comments survive into
+  // the GraphQL SDL and MCP search corpus. Mutually exclusive with
+  // `openapi_spec` and `graphql_endpoint`. Parallels OpenAPI's
+  // ship-the-source pattern — both formats now share the same
+  // "compile on receive" shape.
+  bytes proto_source = 2;
 
-  // Optional: the specific file within file_descriptor_set whose
-  // services should be mounted. Defaults to the LAST file in the set,
-  // which is conventionally the dependent file rather than its imports.
-  string file_name = 3;
+  // Optional: transitive .proto imports keyed by their import path
+  // (e.g. "auth.proto"). Required only when `proto_source` has
+  // `import "..."` statements; well-known imports
+  // (google/protobuf/*.proto) resolve automatically. Single-file
+  // .protos leave this map empty.
+  map<string, bytes> proto_imports = 3;
 
   // Service version. Accepted values: "unstable" (the mutable
   // single-overwrite slot — each register replaces the prior one for

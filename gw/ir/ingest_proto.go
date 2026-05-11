@@ -243,15 +243,18 @@ func messageRef(md protoreflect.MessageDescriptor) *TypeRef {
 	return &r
 }
 
-// stringFromComments pulls leading comments from any descriptor
-// that exposes proto source-info (best-effort — many descriptors
-// strip source info when reflection-loaded). Returns empty string
-// when unavailable; callers treat it as no-description.
+// stringFromComments pulls leading comments off a descriptor.
+// Empty when the FileDescriptor has no source info — protoc-gen-go's
+// embedded raw descriptor strips SourceCodeInfo unconditionally, so
+// AddProtoDescriptor / SelfRegister flows always return "" here.
+// Path-based ingest via gw.loadProto opts into source info, so
+// AddProto(path) carries comments through. Whitespace cleanup
+// (leading space + trailing newline that protoc emits) lands on the
+// caller — most renderers tolerate it.
 func stringFromComments(d protoreflect.Descriptor) string {
-	src, ok := d.(protoreflect.Descriptor)
-	if !ok {
+	if d == nil {
 		return ""
 	}
-	loc := src.ParentFile().SourceLocations().ByDescriptor(src)
+	loc := d.ParentFile().SourceLocations().ByDescriptor(d)
 	return loc.LeadingComments
 }

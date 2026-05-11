@@ -63,8 +63,7 @@ func newGRPCE2EFixture(t *testing.T) *grpcE2EFixture {
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(lis.Addr().String()),
 		As("greeter"),
 	); err != nil {
@@ -214,7 +213,7 @@ func TestGRPCE2E_InjectHeader_StampsOutgoingMetadata(t *testing.T) {
 		return "verified:" + *current, nil
 	}, Hide(false)))
 
-	if err := gw.AddProtoDescriptor(greeterv1.File_greeter_proto, To(lis.Addr().String()), As("greeter")); err != nil {
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"), To(lis.Addr().String()), As("greeter")); err != nil {
 		t.Fatalf("AddProtoDescriptor: %v", err)
 	}
 	srv := httptest.NewServer(gw.Handler())

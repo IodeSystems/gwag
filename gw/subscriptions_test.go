@@ -71,8 +71,7 @@ func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	gw := New(allOpts...)
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
@@ -346,8 +345,7 @@ func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
 
 	// Trigger a register on the watched namespace → publishes a
 	// ServiceChange to events.admin_events.WatchServices.watched.
-	if err := f.gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := f.gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("watched"),
 	); err != nil {

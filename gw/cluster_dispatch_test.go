@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
@@ -138,26 +136,14 @@ func startTwoNodeCluster(t *testing.T) (a, b *clusterNode) {
 // freshly-formed cluster.
 func registerGreeterOn(t *testing.T, n *clusterNode, serviceAddr string) {
 	t.Helper()
-	fdsBytes, err := marshalFileDescriptorSet(greeterv1.File_greeter_proto)
-	if err != nil {
-		t.Fatalf("marshal FDS: %v", err)
-	}
-	// Sanity: ensure the FDS round-trips through protobuf so the wire
-	// shape matches what controlclient sends.
-	fds := &descriptorpb.FileDescriptorSet{}
-	if err := proto.Unmarshal(fdsBytes, fds); err != nil {
-		t.Fatalf("unmarshal FDS: %v", err)
-	}
-
 	req := &cpv1.RegisterRequest{
 		Addr:       serviceAddr,
 		InstanceId: "greeter-instance",
 		Services: []*cpv1.ServiceBinding{
 			{
-				Namespace:         "greeter",
-				Version:           "v1",
-				FileDescriptorSet: fdsBytes,
-				FileName:          string(greeterv1.File_greeter_proto.Path()),
+				Namespace:   "greeter",
+				Version:     "v1",
+				ProtoSource: testProtoBytes(t, "greeter.proto"),
 			},
 		},
 	}

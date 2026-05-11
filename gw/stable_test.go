@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/graphql-go/graphql"
-
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
 
@@ -293,8 +291,7 @@ func TestStableViaGatewayRegistration(t *testing.T) {
 	t.Cleanup(gw.Close)
 	_ = gw.Handler() // force initial assemble
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version("v1"),
@@ -307,8 +304,7 @@ func TestStableViaGatewayRegistration(t *testing.T) {
 	}
 	gw.mu.Unlock()
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version("v2"),
@@ -335,8 +331,7 @@ func TestStableViaGatewayRegistration(t *testing.T) {
 	}
 
 	// Unstable register MUST NOT advance stable (vN==0).
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version("unstable"),
@@ -396,8 +391,7 @@ func TestStableAliasSuppressedByAllowTier(t *testing.T) {
 	t.Cleanup(gw.Close)
 	_ = gw.Handler()
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version("v1"),

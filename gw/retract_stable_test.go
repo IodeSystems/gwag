@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 )
 
@@ -23,8 +21,7 @@ func TestRetractStable_StandaloneHappyPath(t *testing.T) {
 	_ = gw.Handler() // force initial assemble
 
 	for _, ver := range []string{"v1", "v2"} {
-		if err := gw.AddProtoDescriptor(
-			greeterv1.File_greeter_proto,
+		if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 			To(nopGRPCConn{}),
 			As("greeter"),
 			Version(ver),
@@ -86,8 +83,7 @@ func TestRetractStable_RefuseUnregisteredVN(t *testing.T) {
 	t.Cleanup(gw.Close)
 	_ = gw.Handler()
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version("v3"),
@@ -123,7 +119,7 @@ func TestRetractStable_RefuseSameOrHigher(t *testing.T) {
 	t.Cleanup(gw.Close)
 	_ = gw.Handler()
 
-	if err := gw.AddProtoDescriptor(greeterv1.File_greeter_proto, To(nopGRPCConn{}), As("greeter"), Version("v2")); err != nil {
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"), To(nopGRPCConn{}), As("greeter"), Version("v2")); err != nil {
 		t.Fatalf("v2 register: %v", err)
 	}
 
@@ -207,8 +203,7 @@ func TestClusterE2E_RetractStablePropagates(t *testing.T) {
 	// must currently be registered) clears for the v1 retract step
 	// below — register v1 + v3 directly on A.
 	for _, ver := range []string{"v1", "v3"} {
-		if err := a.gw.AddProtoDescriptor(
-			greeterv1.File_greeter_proto,
+		if err := a.gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 			To(nopGRPCConn{}),
 			As("svc"),
 			Version(ver),

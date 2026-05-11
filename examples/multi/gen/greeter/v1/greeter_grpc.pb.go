@@ -27,13 +27,21 @@ const (
 // GreeterServiceClient is the client API for GreeterService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// GreeterService demonstrates the three rpc shapes the gateway
+// supports: unary (surfaces as a GraphQL query), server-streaming
+// (surfaces as a GraphQL subscription over NATS), and client / bidi
+// streaming (filtered out with a warning at registration).
 type GreeterServiceClient interface {
+	// Unary RPC. Surfaces as Query.greeter_hello in the gateway SDL.
 	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
 	// Server-streaming → GraphQL subscription.
 	// The request fields become subscription arguments; the stream
-	// message becomes the event payload.
+	// message becomes the event payload. NATS subject pattern is
+	// events.greeter.Greetings.<name>.
 	Greetings(ctx context.Context, in *GreetingsFilter, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Greeting], error)
-	// Client-streaming and bidi are filtered with a warning.
+	// Client-streaming and bidi are filtered with a warning — the
+	// gateway can't compose them as GraphQL operations.
 	Echo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HelloRequest, HelloResponse], error)
 }
 
@@ -90,13 +98,21 @@ type GreeterService_EchoClient = grpc.BidiStreamingClient[HelloRequest, HelloRes
 // GreeterServiceServer is the server API for GreeterService service.
 // All implementations must embed UnimplementedGreeterServiceServer
 // for forward compatibility.
+//
+// GreeterService demonstrates the three rpc shapes the gateway
+// supports: unary (surfaces as a GraphQL query), server-streaming
+// (surfaces as a GraphQL subscription over NATS), and client / bidi
+// streaming (filtered out with a warning at registration).
 type GreeterServiceServer interface {
+	// Unary RPC. Surfaces as Query.greeter_hello in the gateway SDL.
 	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
 	// Server-streaming → GraphQL subscription.
 	// The request fields become subscription arguments; the stream
-	// message becomes the event payload.
+	// message becomes the event payload. NATS subject pattern is
+	// events.greeter.Greetings.<name>.
 	Greetings(*GreetingsFilter, grpc.ServerStreamingServer[Greeting]) error
-	// Client-streaming and bidi are filtered with a warning.
+	// Client-streaming and bidi are filtered with a warning — the
+	// gateway can't compose them as GraphQL operations.
 	Echo(grpc.BidiStreamingServer[HelloRequest, HelloResponse]) error
 	mustEmbedUnimplementedGreeterServiceServer()
 }

@@ -6,9 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	aav1 "github.com/iodesystems/go-api-gateway/gw/proto/adminauth/v1"
-	eav1 "github.com/iodesystems/go-api-gateway/gw/proto/eventsauth/v1"
 	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
 
@@ -44,8 +41,7 @@ func TestSchemaRebuild_PoolCreateAddsField(t *testing.T) {
 	if hasQueryField(gw, "greeter") {
 		t.Fatal("schema unexpectedly has greeter before registration")
 	}
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
@@ -58,8 +54,7 @@ func TestSchemaRebuild_PoolCreateAddsField(t *testing.T) {
 
 func TestSchemaRebuild_PoolDestroyRemovesField(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
@@ -88,8 +83,7 @@ func TestSchemaRebuild_PoolDestroyRemovesField(t *testing.T) {
 
 func TestSchemaRebuild_HashMismatchRejected(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("shared"),
 	); err != nil {
@@ -97,8 +91,7 @@ func TestSchemaRebuild_HashMismatchRejected(t *testing.T) {
 	}
 	// Different proto under the same namespace must reject — protects
 	// pools from accidental cross-service registration.
-	err := gw.AddProtoDescriptor(
-		eav1.File_gw_proto_eventsauth_v1_eventsauth_proto,
+	err := gw.AddProtoBytes("eventsauth.proto", testProtoBytes(t, "eventsauth.proto"),
 		To(nopGRPCConn{}),
 		As("shared"),
 	)
@@ -116,8 +109,7 @@ func TestSchemaRebuild_HashMismatchRejected(t *testing.T) {
 // into the existing pool (covered by SameHashJoinsPool below).
 func TestSchemaRebuild_UnstableSwapsOnDifferentHash(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("svc"),
 		Version("unstable"),
@@ -126,8 +118,7 @@ func TestSchemaRebuild_UnstableSwapsOnDifferentHash(t *testing.T) {
 	}
 	// Different proto, same (ns, ver=unstable). Must succeed (swap),
 	// not reject like vN.
-	if err := gw.AddProtoDescriptor(
-		eav1.File_gw_proto_eventsauth_v1_eventsauth_proto,
+	if err := gw.AddProtoBytes("eventsauth.proto", testProtoBytes(t, "eventsauth.proto"),
 		To(nopGRPCConn{}),
 		As("svc"),
 		Version("unstable"),
@@ -159,8 +150,7 @@ func TestSchemaRebuild_UnstableSwapsOnDifferentHash(t *testing.T) {
 // would emit conflicting fields under the same namespace.
 func TestSchemaRebuild_CrossKindCollisionRejected(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("svc"),
 	); err != nil {
@@ -181,8 +171,7 @@ func TestSchemaRebuild_CrossKindCollisionRejected(t *testing.T) {
 
 func TestSchemaRebuild_SameHashJoinsPool(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
@@ -190,8 +179,7 @@ func TestSchemaRebuild_SameHashJoinsPool(t *testing.T) {
 	}
 	// Second registration with the same descriptor must be allowed —
 	// represents two replicas serving the same proto.
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
@@ -210,15 +198,13 @@ func TestSchemaRebuild_SameHashJoinsPool(t *testing.T) {
 
 func TestSchemaRebuild_MultipleNamespaces(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
 		t.Fatalf("greeter: %v", err)
 	}
-	if err := gw.AddProtoDescriptor(
-		aav1.File_gw_proto_adminauth_v1_adminauth_proto,
+	if err := gw.AddProtoBytes("adminauth.proto", testProtoBytes(t, "adminauth.proto"),
 		To(nopGRPCConn{}),
 		As("authd"),
 	); err != nil {
@@ -237,8 +223,7 @@ func TestSchemaRebuild_UnderscoreNamespaceAutoInternal(t *testing.T) {
 	// auto-internal, even when AsInternal() isn't passed. Prevents
 	// accidental leak of _admin_auth / _events_auth / _admin_events.
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("_secret_ns"), // no AsInternal()
 	); err != nil {
@@ -261,15 +246,13 @@ func TestSchemaHandler_ServiceSelectorFiltersSDL(t *testing.T) {
 	// returns both; ?service=greeter returns only greeter; ?service=authd
 	// returns only authd. Mirrors the proto/openapi selector grammar.
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {
 		t.Fatalf("greeter: %v", err)
 	}
-	if err := gw.AddProtoDescriptor(
-		aav1.File_gw_proto_adminauth_v1_adminauth_proto,
+	if err := gw.AddProtoBytes("adminauth.proto", testProtoBytes(t, "adminauth.proto"),
 		To(nopGRPCConn{}),
 		As("authd"),
 	); err != nil {
@@ -383,8 +366,7 @@ func TestSchemaRebuild_SubscriptionMultiVersion(t *testing.T) {
 
 func TestSchemaRebuild_AsInternalHidesFromQuery(t *testing.T) {
 	gw := newSchemaTestGateway(t)
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("hidden"),
 		AsInternal(),

@@ -9,20 +9,30 @@ option go_package = "github.com/iodesystems/go-api-gateway/examples/auth/gen/aut
 // and the gateway treats it as internal — not part of the external
 // GraphQL surface.
 service AuthService {
+  // Resolve an opaque token into a Context. Called by the gateway
+  // through InjectType[*Context] before any request that needs
+  // authentication context.
   rpc Resolve(ResolveRequest) returns (ResolveResponse);
 }
 
+// ResolveRequest is the input for Resolve.
 message ResolveRequest {
+  // Opaque token from the inbound request (cookie, bearer, etc.).
   string token = 1;
 }
 
+// ResolveResponse is the Resolve reply, carrying the resolved Context.
 message ResolveResponse {
+  // Authenticated user / tenant context, or empty if the token was
+  // invalid.
   Context context = 1;
 }
 
 // Context is the type that gets hidden everywhere it appears as an
 // input field; InjectType[*Context] handles both halves.
 message Context {
+  // Stable user identifier.
   string user_id = 1;
+  // Stable tenant identifier.
   string tenant_id = 2;
 }

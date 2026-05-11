@@ -2,11 +2,14 @@
 // self-register with a go-api-gateway control plane: one Register call,
 // a background heartbeat goroutine, and graceful Deregister on Close.
 //
+//	//go:embed greeter.proto
+//	var greeterProto []byte
+//
 //	reg, err := controlclient.SelfRegister(ctx, controlclient.Options{
 //	    GatewayAddr: "gateway:50090",
 //	    ServiceAddr: "greeter:50051",
 //	    Services: []controlclient.Service{
-//	        {Namespace: "greeter", FileDescriptor: greeterv1.File_greeter_proto},
+//	        {Namespace: "greeter", ProtoSource: greeterProto},
 //	    },
 //	})
 //	if err != nil { log.Fatal(err) }
@@ -22,16 +25,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 )
@@ -50,14 +52,37 @@ type Service struct {
 	// version per ns in v1).
 	Version string
 
-	// FileDescriptor for the .proto file containing the service. The
-	// generated bindings expose this as `pb.File_<name>_proto`.
-	// Transitively-imported descriptors are walked automatically.
+	// ProtoSource is the raw bytes of the entrypoint .proto file —
+	// exactly what the operator wrote on disk. The receiving gateway
+	// compiles via protocompile (SourceInfoStandard) so leading /
+	// trailing comments survive into the GraphQL SDL and MCP search
+	// corpus. Most callers `//go:embed greeter.proto` and pass the
+	// embedded bytes here.
 	//
-	// Mutually exclusive with OpenAPISpec: a Service registers either
-	// a proto-described gRPC service OR an OpenAPI-described HTTP
-	// service.
-	FileDescriptor protoreflect.FileDescriptor
+	// Mutually exclusive with ProtoFS, OpenAPISpec, GraphQLEndpoint.
+	ProtoSource []byte
+
+	// ProtoImports passes transitive .proto imports keyed by their
+	// import path (e.g. "auth.proto"). Required only when ProtoSource
+	// has `import "..."` statements; well-known imports
+	// (google/protobuf/*) resolve automatically. Single-file .protos
+	// leave this nil.
+	ProtoImports map[string][]byte
+
+	// ProtoFS is the multi-file ergonomic shape: pass any fs.FS
+	// (embed.FS, os.DirFS(...), tar/zip wrappers, anything that
+	// satisfies the interface) and the controlclient walks it to
+	// build ProtoSource (= bytes of ProtoEntry) and ProtoImports
+	// (= every other .proto under the FS, keyed by relative path).
+	// Use this when the service has many .proto files; use
+	// ProtoSource directly for single-file services.
+	//
+	// Mutually exclusive with ProtoSource / ProtoImports.
+	ProtoFS fs.FS
+
+	// ProtoEntry is the entrypoint filename within ProtoFS (e.g.
+	// "user.proto"). Required when ProtoFS is set.
+	ProtoEntry string
 
 	// OpenAPISpec is the raw bytes of an OpenAPI 3.x document (JSON
 	// or YAML; kin-openapi parses either). When set, ServiceAddr in
@@ -66,8 +91,8 @@ type Service struct {
 	OpenAPISpec []byte
 
 	// GraphQLEndpoint is the URL of an upstream GraphQL service to
-	// ingest under this Namespace. Mutually exclusive with
-	// FileDescriptor and OpenAPISpec. The receiving gateway runs the
+	// ingest under this Namespace. Mutually exclusive with the proto
+	// source fields and OpenAPISpec. The receiving gateway runs the
 	// canonical introspection query against this endpoint at Register
 	// time and forwards dispatches back to it. ServiceAddr is ignored
 	// for GraphQL bindings — the endpoint URL carries both the
@@ -213,7 +238,24 @@ func (r *Registration) register(ctx context.Context) error {
 		TtlSeconds: uint32(r.opts.TTL / time.Second),
 	}
 	for _, s := range r.opts.Services {
-		hasProto := s.FileDescriptor != nil
+		protoSource := s.ProtoSource
+		protoImports := s.ProtoImports
+		if s.ProtoFS != nil {
+			if s.ProtoEntry == "" {
+				return fmt.Errorf("service %q: ProtoFS set without ProtoEntry", s.Namespace)
+			}
+			if len(s.ProtoSource) > 0 || len(s.ProtoImports) > 0 {
+				return fmt.Errorf("service %q: ProtoFS is mutually exclusive with ProtoSource / ProtoImports", s.Namespace)
+			}
+			src, imports, err := resolveProtoFS(s.ProtoFS, s.ProtoEntry)
+			if err != nil {
+				return fmt.Errorf("service %q: ProtoFS: %w", s.Namespace, err)
+			}
+			protoSource = src
+			protoImports = imports
+		}
+
+		hasProto := len(protoSource) > 0
 		hasOpenAPI := len(s.OpenAPISpec) > 0
 		hasGraphQL := s.GraphQLEndpoint != ""
 		set := 0
@@ -227,14 +269,15 @@ func (r *Registration) register(ctx context.Context) error {
 			set++
 		}
 		if set > 1 {
-			return fmt.Errorf("service %q: may set only one of FileDescriptor, OpenAPISpec, GraphQLEndpoint", s.Namespace)
+			return fmt.Errorf("service %q: may set only one of ProtoSource (or ProtoFS), OpenAPISpec, GraphQLEndpoint", s.Namespace)
 		}
 		if set == 0 {
-			return fmt.Errorf("service %q: must set FileDescriptor, OpenAPISpec, or GraphQLEndpoint", s.Namespace)
+			return fmt.Errorf("service %q: must set ProtoSource (or ProtoFS), OpenAPISpec, or GraphQLEndpoint", s.Namespace)
 		}
 		if hasGraphQL {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
 				Namespace:                 s.Namespace,
+				Version:                   s.Version,
 				GraphqlEndpoint:           s.GraphQLEndpoint,
 				MaxConcurrency:            s.MaxConcurrency,
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
@@ -244,21 +287,18 @@ func (r *Registration) register(ctx context.Context) error {
 		if hasOpenAPI {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
 				Namespace:                 s.Namespace,
+				Version:                   s.Version,
 				OpenapiSpec:               s.OpenAPISpec,
 				MaxConcurrency:            s.MaxConcurrency,
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 			})
 			continue
 		}
-		fdsBytes, fileName, err := descriptorSetBytes(s.FileDescriptor)
-		if err != nil {
-			return fmt.Errorf("descriptor for %s: %w", s.FileDescriptor.Path(), err)
-		}
 		req.Services = append(req.Services, &cpv1.ServiceBinding{
 			Namespace:                 s.Namespace,
 			Version:                   s.Version,
-			FileDescriptorSet:         fdsBytes,
-			FileName:                  fileName,
+			ProtoSource:               protoSource,
+			ProtoImports:              protoImports,
 			MaxConcurrency:            s.MaxConcurrency,
 			MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 		})
@@ -325,27 +365,54 @@ func (r *Registration) Close(ctx context.Context) error {
 	return r.conn.Close()
 }
 
-// descriptorSetBytes serialises a FileDescriptor and all its transitive
-// imports into a FileDescriptorSet. Returns the bytes and the name of
-// the primary file (so the gateway knows which one to mount).
-func descriptorSetBytes(fd protoreflect.FileDescriptor) ([]byte, string, error) {
-	fds := &descriptorpb.FileDescriptorSet{}
-	seen := map[string]bool{}
-	var walk func(f protoreflect.FileDescriptor)
-	walk = func(f protoreflect.FileDescriptor) {
-		if seen[string(f.Path())] {
-			return
-		}
-		seen[string(f.Path())] = true
-		for i := 0; i < f.Imports().Len(); i++ {
-			walk(f.Imports().Get(i).FileDescriptor)
-		}
-		fds.File = append(fds.File, protodesc.ToFileDescriptorProto(f))
-	}
-	walk(fd)
-	b, err := proto.Marshal(fds)
+// resolveProtoFS walks fsys, returns the bytes of `entry` as the
+// proto_source plus a map of every other .proto under the FS as
+// proto_imports (keyed by their path within fsys). Used by
+// Service.ProtoFS to flatten a multi-file .proto layout into the
+// (source, imports-map) shape the wire carries.
+//
+// Filenames in the imports map use the same path the proto's
+// `import "..."` statements use — protocompile resolves both
+// against the same string. This means imports must be referenced
+// the same way they're keyed in fsys (typically just the basename,
+// e.g. "auth.proto", since `import "auth.proto";` is the convention
+// for co-located files). Caller responsibility to align fsys layout
+// with the import paths in the entrypoint .proto.
+func resolveProtoFS(fsys fs.FS, entry string) ([]byte, map[string][]byte, error) {
+	src, err := fs.ReadFile(fsys, entry)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, fmt.Errorf("read entry %q: %w", entry, err)
 	}
-	return b, string(fd.Path()), nil
+	imports := map[string][]byte{}
+	err = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(p, ".proto") {
+			return nil
+		}
+		// Strip leading "./" if present and normalise; entry may be
+		// either basename ("greeter.proto") or path ("foo/x.proto") —
+		// match the WalkDir-emitted shape.
+		key := path.Clean(p)
+		if key == path.Clean(entry) {
+			return nil
+		}
+		body, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		imports[key] = body
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(imports) == 0 {
+		imports = nil
+	}
+	return src, imports, nil
 }

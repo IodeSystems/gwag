@@ -167,9 +167,9 @@ func newProtoBenchGateway(b *testing.B) (*Gateway, *fakeGreeterServer, func()) {
 	go func() { _ = grpcSrv.Serve(lis) }()
 
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
-	if err := gw.AddProtoDescriptor(greeterv1.File_greeter_proto, To(lis.Addr().String()), As("greeter")); err != nil {
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(b, "greeter.proto"), To(lis.Addr().String()), As("greeter")); err != nil {
 		grpcSrv.Stop()
-		b.Fatalf("AddProtoDescriptor: %v", err)
+		b.Fatalf("AddProtoBytes: %v", err)
 	}
 	// Force the initial schema build so dispatchers populate the
 	// registry — joinPoolLocked otherwise defers the first assemble

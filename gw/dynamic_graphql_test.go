@@ -151,9 +151,9 @@ func TestDynamicGraphQL_AllThreeFormsRejected(t *testing.T) {
 	_, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
 		Addr: "http://x",
 		Services: []*cpv1.ServiceBinding{{
-			Namespace:         "weird",
-			FileDescriptorSet: []byte("anything"),
-			GraphqlEndpoint:   "http://x/graphql",
+			Namespace:       "weird",
+			ProtoSource:     []byte("anything"),
+			GraphqlEndpoint: "http://x/graphql",
 		}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "may set only one of") {

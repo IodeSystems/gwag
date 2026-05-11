@@ -64,8 +64,7 @@ func requestMetricsGW(t *testing.T, rec *requestMetricsRecorder) *Gateway {
 	gw := New(WithMetrics(rec), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(lis.Addr().String()),
 		As("greeter"),
 	); err != nil {

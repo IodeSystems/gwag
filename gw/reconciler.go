@@ -150,9 +150,10 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		}
 	}
 
-	fd, err := parseFileDescriptorSet(v.FileDescriptorSet, v.FileName)
+	entry := ns + ".proto"
+	fd, err := compileProtoBytes(entry, v.ProtoSource, v.ProtoImports)
 	if err != nil {
-		g.cfg.cluster.Server.Warnf("reconciler: parse fd for %s: %v", replicaKey(ns, ver, replicaID), err)
+		g.cfg.cluster.Server.Warnf("reconciler: compile proto for %s: %v", replicaKey(ns, ver, replicaID), err)
 		return
 	}
 

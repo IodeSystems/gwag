@@ -54,6 +54,11 @@ func main() {
 	advertise := flag.String("advertise", "localhost:50052", "Address to advertise to the gateway")
 	flag.Parse()
 
+	protoSource, err := os.ReadFile("protos/library.proto")
+	if err != nil {
+		log.Fatalf("read library.proto (run from examples/multi/): %v", err)
+	}
+
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -72,7 +77,7 @@ func main() {
 		ServiceAddr: *advertise,
 		InstanceID:  "library@" + *addr,
 		Services: []controlclient.Service{
-			{Namespace: "library", FileDescriptor: libraryv1.File_library_proto},
+			{Namespace: "library", ProtoSource: protoSource},
 		},
 	})
 	if err != nil {

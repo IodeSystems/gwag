@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -699,6 +701,11 @@ type serviceConfig struct {
 	// (concurrency limited only by the service-level cap above).
 	// Negative is rejected at registration.
 	maxConcurrencyPerInstance int
+
+	// protoImports carries transitive .proto import bytes for
+	// AddProtoBytes (multi-file .protos). Keyed by import path; nil
+	// for single-file .protos.
+	protoImports map[string][]byte
 }
 
 // isInternal reports whether ns is hidden from the public GraphQL
@@ -729,13 +736,23 @@ func As(namespace string) ServiceOption {
 
 // Version pins the (namespace, version) coordinate the registration
 // joins. Accepts "vN" or "N". Empty / unset defaults to "v1". For
-// AddProto / AddProtoDescriptor this is informational — proto's own
+// AddProto / AddProtoBytes this is informational — proto's own
 // version comes from the package; for AddOpenAPI / AddOpenAPIBytes /
 // AddGraphQL it identifies the source within a namespace, mirroring
 // the proto pool model: latest-flat under the namespace + every
 // version addressable as `<ns>.<vN>` with @deprecated on older.
 func Version(v string) ServiceOption {
 	return func(c *serviceConfig) { c.version = v }
+}
+
+// ProtoImports passes transitive .proto import bytes to AddProtoBytes
+// for multi-file protos (e.g. user.proto importing auth.proto).
+// Keys are the import paths exactly as they appear in `import "..."`
+// statements; values are the raw .proto bytes. Single-file .protos
+// don't need this option. Well-known imports (google/protobuf/*)
+// resolve automatically.
+func ProtoImports(m map[string][]byte) ServiceOption {
+	return func(c *serviceConfig) { c.protoImports = m }
 }
 
 // To wires the gRPC destination for a registered proto. Accepts either
@@ -767,7 +784,7 @@ func AsInternal() ServiceOption {
 // dispatches. Replaces the default ([]string{"Authorization"}) when
 // supplied. Pass an empty list to forward nothing.
 //
-// Currently a no-op for AddProto / AddProtoDescriptor — gRPC dispatch
+// Currently a no-op for AddProto / AddProtoBytes — gRPC dispatch
 // uses ctx propagation, not HTTP headers.
 func ForwardHeaders(headers ...string) ServiceOption {
 	return func(c *serviceConfig) {
@@ -781,7 +798,7 @@ func ForwardHeaders(headers ...string) ServiceOption {
 // — a heavy backend can declare 64 in-flight while light backends
 // stay at the gateway default. 0 → fall back to the gateway default.
 //
-// Applies to AddProto / AddProtoDescriptor (per-pool sem) and
+// Applies to AddProto / AddProtoBytes (per-pool sem) and
 // AddOpenAPI / AddOpenAPIBytes (per-source sem). No-op for
 // AddGraphQL (downstream-GraphQL stitching has no per-source sem).
 func MaxConcurrency(n int) ServiceOption {
@@ -813,21 +830,105 @@ func OpenAPIClient(c *http.Client) ServiceOption {
 	return func(sc *serviceConfig) { sc.httpClient = c }
 }
 
-// AddProtoDescriptor registers a service from a compiled-in
-// FileDescriptor (e.g. greeterv1.File_greeter_proto from generated
-// bindings). Same shape as AddProto but no disk I/O — useful when
-// the gateway hosts its own gRPC service and wants to expose it
-// through the GraphQL surface (dogfooding).
+// AddProtoBytes registers a service from raw .proto entrypoint
+// bytes. Sibling of AddProto(path) and AddOpenAPIBytes — same shape:
+// callers ship raw source, the gateway compiles via protocompile
+// (SourceInfoStandard) so leading / trailing comments survive into
+// the GraphQL SDL and MCP search corpus.
 //
-// Namespace defaults to the proto's file stem; override with As().
-func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...ServiceOption) error {
+// `entry` is the virtual filename used in error messages and as the
+// import-resolution anchor; `body` is the raw .proto bytes.
+// Multi-file .protos with `import "..."` statements pass the
+// transitive import map via the ProtoImports(map) option, or use
+// AddProtoFS for the fs.FS-walk shape.
+//
+// Namespace defaults to the entry filename stem; override with As().
+//
+// Required ServiceOption: gateway.To(grpc.ClientConnInterface).
+func (g *Gateway) AddProtoBytes(entry string, body []byte, opts ...ServiceOption) error {
 	sc := &serviceConfig{}
 	for _, o := range opts {
 		o(sc)
 	}
 	if sc.conn == nil {
-		return fmt.Errorf("gateway: AddProtoDescriptor(%s): missing To(...)", fd.Path())
+		return fmt.Errorf("gateway: AddProtoBytes(%s): missing To(...)", entry)
 	}
+	fd, err := compileProtoBytes(entry, body, sc.protoImports)
+	if err != nil {
+		return fmt.Errorf("gateway: AddProtoBytes(%s): %w", entry, err)
+	}
+	if sc.namespace == "" {
+		base := entry
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		sc.namespace = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	return g.addProtoFromDescriptor(fd, sc, fmt.Sprintf("protobytes:%s", entry), fmt.Sprintf("AddProtoBytes(%s)", entry))
+}
+
+// resolveProtoFSBytes walks fsys and returns the bytes of `entry`
+// plus a map of every other .proto under the FS as imports. Mirrors
+// controlclient.resolveProtoFS — kept private to gw, since the
+// public surface is AddProtoFS.
+func resolveProtoFSBytes(fsys fs.FS, entry string) ([]byte, map[string][]byte, error) {
+	src, err := fs.ReadFile(fsys, entry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read entry %q: %w", entry, err)
+	}
+	imports := map[string][]byte{}
+	err = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(p, ".proto") {
+			return nil
+		}
+		key := path.Clean(p)
+		if key == path.Clean(entry) {
+			return nil
+		}
+		body, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		imports[key] = body
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(imports) == 0 {
+		imports = nil
+	}
+	return src, imports, nil
+}
+
+// AddProtoFS is the multi-file ergonomic shape: pass any fs.FS
+// (embed.FS, os.DirFS(...), tar/zip wrappers) and the entrypoint
+// filename within it. The gateway reads `entry` as the proto source,
+// every other .proto under fsys becomes a transitive import.
+//
+// Mirrors controlclient.Service{ProtoFS, ProtoEntry} on the
+// SelfRegister side. Same compile pipeline as AddProtoBytes.
+func (g *Gateway) AddProtoFS(fsys fs.FS, entry string, opts ...ServiceOption) error {
+	src, imports, err := resolveProtoFSBytes(fsys, entry)
+	if err != nil {
+		return fmt.Errorf("gateway: AddProtoFS(%s): %w", entry, err)
+	}
+	opts = append([]ServiceOption{ProtoImports(imports)}, opts...)
+	return g.AddProtoBytes(entry, src, opts...)
+}
+
+// addProtoFromDescriptor is the shared tail used by AddProto and
+// AddProtoBytes after compile: resolves namespace, hashes the
+// descriptor, joins the pool. Caller's `sc` carries any explicit
+// namespace override; this function fills in a default only when
+// sc.namespace is still empty.
+func (g *Gateway) addProtoFromDescriptor(fd protoreflect.FileDescriptor, sc *serviceConfig, addr, label string) error {
 	ns := sc.namespace
 	if ns == "" {
 		base := string(fd.Path())
@@ -838,13 +939,12 @@ func (g *Gateway) AddProtoDescriptor(fd protoreflect.FileDescriptor, opts ...Ser
 	}
 	hash, err := hashFromFileDescriptor(fd)
 	if err != nil {
-		return fmt.Errorf("gateway: hash %s: %w", fd.Path(), err)
+		return fmt.Errorf("gateway: hash %s: %w", label, err)
 	}
 	ver, _, err := parseVersion(sc.version)
 	if err != nil {
-		return fmt.Errorf("gateway: AddProtoDescriptor(%s): %w", fd.Path(), err)
+		return fmt.Errorf("gateway: %s: %w", label, err)
 	}
-	addr := fmt.Sprintf("descriptor:%s", fd.Path())
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {

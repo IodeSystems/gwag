@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	aev1 "github.com/iodesystems/go-api-gateway/gw/proto/adminevents/v1"
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
 
 // TestAdminEvents_PublishOnRegister verifies the gateway publishes a
@@ -52,8 +51,7 @@ func TestAdminEvents_PublishOnRegister(t *testing.T) {
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	// Trigger a register: greeter under "watched/v1".
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("watched"),
 	); err != nil {

@@ -28,18 +28,27 @@ import (
 
 func newSchema() (graphql.Schema, error) {
 	helloPayload := graphql.NewObject(graphql.ObjectConfig{
-		Name: "HelloPayload",
+		Name:        "HelloPayload",
+		Description: "Hello reply object.",
 		Fields: graphql.Fields{
-			"greeting": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+			"greeting": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Greeting line, e.g. \"Hello, alice!\".",
+			},
 		},
 	})
 	root := graphql.NewObject(graphql.ObjectConfig{
-		Name: "Query",
+		Name:        "Query",
+		Description: "Format-native GraphQL sibling of hello-proto and hello-openapi; the direct-dial baseline for `bench traffic graphql --direct`.",
 		Fields: graphql.Fields{
 			"hello": &graphql.Field{
-				Type: graphql.NewNonNull(helloPayload),
+				Type:        graphql.NewNonNull(helloPayload),
+				Description: "Greet the named recipient.",
 				Args: graphql.FieldConfigArgument{
-					"name": &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+					"name": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Recipient name; echoed back in the greeting.",
+					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
 					name, _ := p.Args["name"].(string)

@@ -145,9 +145,9 @@ func TestDynamicOpenAPI_BothSpecAndDescriptorRejected(t *testing.T) {
 	_, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
 		Addr: "http://x/",
 		Services: []*cpv1.ServiceBinding{{
-			Namespace:         "weird",
-			FileDescriptorSet: []byte("anything"),
-			OpenapiSpec:       []byte(dynamicOpenAPISpec),
+			Namespace:   "weird",
+			ProtoSource: []byte("anything"),
+			OpenapiSpec: []byte(dynamicOpenAPISpec),
 		}},
 	})
 	if err == nil {

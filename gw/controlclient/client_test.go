@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 )
 
 // BuildTag forcing function (plan §4): a release-tagged binary must
@@ -21,7 +19,7 @@ func TestSelfRegister_BuildTag_RejectsUnstable(t *testing.T) {
 		Services: []Service{{
 			Namespace:      "greeter",
 			Version:        "unstable",
-			FileDescriptor: greeterv1.File_greeter_proto,
+			ProtoSource:    []byte("syntax = \"proto3\"; package greeter.v1; message Probe { string name = 1; } service GreeterService { rpc Hello(Probe) returns (Probe); }"),
 		}},
 	})
 	if err == nil {
@@ -51,7 +49,7 @@ func TestSelfRegister_NoBuildTag_AllowsUnstable(t *testing.T) {
 		Services: []Service{{
 			Namespace:      "greeter",
 			Version:        "unstable",
-			FileDescriptor: greeterv1.File_greeter_proto,
+			ProtoSource:    []byte("syntax = \"proto3\"; package greeter.v1; message Probe { string name = 1; } service GreeterService { rpc Hello(Probe) returns (Probe); }"),
 		}},
 	})
 	if err == nil {
@@ -75,7 +73,7 @@ func TestSelfRegister_BuildTag_AllowsVN(t *testing.T) {
 		Services: []Service{{
 			Namespace:      "greeter",
 			Version:        "v3",
-			FileDescriptor: greeterv1.File_greeter_proto,
+			ProtoSource:    []byte("syntax = \"proto3\"; package greeter.v1; message Probe { string name = 1; } service GreeterService { rpc Hello(Probe) returns (Probe); }"),
 		}},
 	})
 	if err == nil {

@@ -250,28 +250,11 @@ func parseVersion(s string) (canonical string, n int, err error) {
 	return "v" + strconv.Itoa(n), n, nil
 }
 
-// hashDescriptorSet returns SHA256 of a canonicalised FileDescriptorSet.
-// b is the raw wire bytes a client sent; we unmarshal and re-marshal
-// via marshalFileDescriptorSet so the hash depends on structural
-// content, not on the client's protobuf marshalling.
-func hashDescriptorSet(b []byte) ([32]byte, error) {
-	fds := &descriptorpb.FileDescriptorSet{}
-	if err := proto.Unmarshal(b, fds); err != nil {
-		return [32]byte{}, fmt.Errorf("hash: unmarshal: %w", err)
-	}
-	sort.Slice(fds.File, func(i, j int) bool {
-		return fds.File[i].GetName() < fds.File[j].GetName()
-	})
-	canon, err := proto.MarshalOptions{Deterministic: true}.Marshal(fds)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("hash: marshal: %w", err)
-	}
-	return sha256.Sum256(canon), nil
-}
-
 // hashFromFileDescriptor builds a FileDescriptorSet from fd plus its
-// transitive imports, canonicalises it, and hashes that. Used by
-// AddProto (which loads from disk and never sees wire bytes).
+// transitive imports, canonicalises it, and hashes that. Single hash
+// site for both path-based AddProto and bytes-based AddProtoBytes —
+// the wire ships raw .proto source, the gateway compiles, and the
+// hash always derives from the resulting compiled descriptor.
 func hashFromFileDescriptor(fd protoreflect.FileDescriptor) ([32]byte, error) {
 	b, err := marshalFileDescriptorSet(fd)
 	if err != nil {

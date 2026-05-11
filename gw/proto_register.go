@@ -80,3 +80,31 @@ func injectProtoSubscriptionAuthArgs(svc *ir.Service) {
 		)
 	}
 }
+
+// protoSubscriptionAuthDoc is the canonical HMAC-channel-auth contract
+// appended to every proto subscription op's Description. Single
+// source of truth so SDL, /api/schema/graphql, and the MCP search
+// corpus all carry the same auth-contract sentence. Surfaced
+// adopter-facing — keep adopter-readable.
+const protoSubscriptionAuthDoc = "Authenticated via HMAC channel token: subscribers obtain a token " +
+	"(`gwag sign --channel <subject>` or `/api/admin/sign`) and pass it as " +
+	"`hmac` + `timestamp` (+ optional `kid` for key rotation). " +
+	"Subject pattern: `events.<namespace>.<Method>.<arg0>.<arg1>…`; " +
+	"absent args wildcard to `*`."
+
+// injectProtoSubscriptionAuthDoc appends the HMAC channel-auth
+// contract to every proto subscription op's Description. Idempotent —
+// rebakes won't double-append because bakeSlotIRLocked re-ingests
+// from the source descriptor each time, restoring the original Doc.
+func injectProtoSubscriptionAuthDoc(svc *ir.Service) {
+	for _, op := range svc.Operations {
+		if op.Kind != ir.OpSubscription {
+			continue
+		}
+		if op.Description == "" {
+			op.Description = protoSubscriptionAuthDoc
+			continue
+		}
+		op.Description = op.Description + "\n\n" + protoSubscriptionAuthDoc
+	}
+}

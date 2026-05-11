@@ -9,13 +9,19 @@ option go_package = "github.com/iodesystems/go-api-gateway/examples/multi/gen/he
 // native upstream for `bench traffic grpc --direct` so the gateway-
 // vs-direct comparison is apples-to-apples in proto.
 service HelloService {
+  // Unary RPC; the direct-dial peer of the Hello operation in the
+  // OpenAPI and GraphQL hello-* upstreams.
   rpc Hello(HelloRequest) returns (HelloResponse);
 }
 
+// HelloRequest is the input for the unary Hello rpc.
 message HelloRequest {
+  // Recipient name; echoed back in the greeting.
   string name = 1;
 }
 
+// HelloResponse is the unary Hello reply.
 message HelloResponse {
+  // Greeting line, e.g. "Hello, alice!".
   string greeting = 1;
 }

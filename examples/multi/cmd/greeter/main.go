@@ -74,6 +74,11 @@ func main() {
 	publishInterval := flag.Duration("publish-interval", 2*time.Second, "Interval between Greetings publishes; 0 disables")
 	flag.Parse()
 
+	protoSource, err := os.ReadFile("protos/greeter.proto")
+	if err != nil {
+		log.Fatalf("read greeter.proto (run from examples/multi/): %v", err)
+	}
+
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -93,9 +98,9 @@ func main() {
 		InstanceID:  "greeter@" + *addr,
 		BuildTag:    buildTag,
 		Services: []controlclient.Service{{
-			Namespace:      "greeter",
-			Version:        *version,
-			FileDescriptor: greeterv1.File_greeter_proto,
+			Namespace:   "greeter",
+			Version:     *version,
+			ProtoSource: protoSource,
 			// Per-binding caps default to 0 (unbounded). Use
 			// --max-concurrency / --max-concurrency-per-instance to
 			// demo the backpressure knobs that ship in

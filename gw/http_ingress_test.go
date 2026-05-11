@@ -42,8 +42,7 @@ func newHTTPIngressFixture(t *testing.T) *httpIngressFixture {
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(lis.Addr().String()),
 		As("greeter"),
 	); err != nil {
@@ -308,8 +307,7 @@ func newSSEIngressFixture(t *testing.T, opts ...Option) *sseIngressFixture {
 	gw := New(allOpts...)
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 	); err != nil {

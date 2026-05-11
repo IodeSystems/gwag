@@ -51,8 +51,7 @@ func TestMaxConcurrency_PerService_RejectsOnOverflow(t *testing.T) {
 	)
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(beLis.Addr().String()),
 		As("greeter"),
 		MaxConcurrency(2),
@@ -132,8 +131,7 @@ func TestMaxConcurrencyPerInstance_GatesSingleReplica(t *testing.T) {
 	)
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(beLis.Addr().String()),
 		As("greeter"),
 		MaxConcurrencyPerInstance(1),
@@ -203,10 +201,6 @@ func TestMaxConcurrency_ControlPlaneRoundTrip(t *testing.T) {
 	)
 	t.Cleanup(gw.Close)
 
-	fdsBytes, err := marshalFileDescriptorSet(greeterv1.File_greeter_proto)
-	if err != nil {
-		t.Fatalf("fds: %v", err)
-	}
 	cp := gw.ControlPlane()
 	if _, err := cp.Register(context.Background(), &cpv1.RegisterRequest{
 		Addr:       beLis.Addr().String(),
@@ -214,8 +208,7 @@ func TestMaxConcurrency_ControlPlaneRoundTrip(t *testing.T) {
 		Services: []*cpv1.ServiceBinding{{
 			Namespace:                 "greeter",
 			Version:                   "v1",
-			FileDescriptorSet:         fdsBytes,
-			FileName:                  string(greeterv1.File_greeter_proto.Path()),
+			ProtoSource:               testProtoBytes(t, "greeter.proto"),
 			MaxConcurrency:            7,
 			MaxConcurrencyPerInstance: 3,
 		}},
@@ -264,16 +257,14 @@ func TestMaxConcurrency_MismatchAcrossReplicasRejected(t *testing.T) {
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(beLis.Addr().String()),
 		As("greeter"),
 		MaxConcurrency(8),
 	); err != nil {
 		t.Fatalf("first AddProtoDescriptor: %v", err)
 	}
-	err = gw.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	err = gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(beLis.Addr().String()),
 		As("greeter"),
 		MaxConcurrency(16),

@@ -40,6 +40,11 @@ func main() {
 	version := flag.String("version", "v1", "Service version (unstable / vN)")
 	flag.Parse()
 
+	protoSource, err := os.ReadFile("protos/hello.proto")
+	if err != nil {
+		log.Fatalf("read hello.proto (run from examples/multi/): %v", err)
+	}
+
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -58,9 +63,9 @@ func main() {
 		ServiceAddr: *advertise,
 		InstanceID:  "hello-proto@" + *addr,
 		Services: []controlclient.Service{{
-			Namespace:      *namespace,
-			Version:        *version,
-			FileDescriptor: hellov1.File_hello_proto,
+			Namespace:   *namespace,
+			Version:     *version,
+			ProtoSource: protoSource,
 		}},
 	})
 	if err != nil {

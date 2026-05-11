@@ -26,18 +26,30 @@ import (
 
 const helloSpec = `{
   "openapi": "3.0.0",
-  "info": {"title": "hello-openapi", "version": "1.0.0"},
+  "info": {
+    "title": "hello-openapi",
+    "version": "1.0.0",
+    "description": "Format-native OpenAPI sibling of hello-proto and hello-graphql; the direct-dial baseline for ` + "`bench traffic openapi --direct`" + `."
+  },
   "paths": {
     "/Hello": {
       "post": {
         "operationId": "Hello",
+        "summary": "Greet the named recipient.",
+        "description": "Returns a one-line greeting derived from the request name. Mirrors HelloService.Hello on the proto upstream.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": {"name": {"type": "string"}},
+                "description": "Hello request body.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Recipient name; echoed back in the greeting."
+                  }
+                },
                 "required": ["name"]
               }
             }
@@ -45,12 +57,18 @@ const helloSpec = `{
         },
         "responses": {
           "200": {
-            "description": "ok",
+            "description": "Greeting returned successfully.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {"greeting": {"type": "string"}},
+                  "description": "Hello reply body.",
+                  "properties": {
+                    "greeting": {
+                      "type": "string",
+                      "description": "Greeting line, e.g. \"Hello, alice!\"."
+                    }
+                  },
                   "required": ["greeting"]
                 }
               }

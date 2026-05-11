@@ -10,16 +10,23 @@ import "auth.proto";
 // context. The auth field is hidden from the external GraphQL schema
 // and populated at runtime by InjectType[*auth.v1.Context].
 service UserService {
+  // Return the authenticated principal's profile, derived from the
+  // injected auth.v1.Context.
   rpc GetMe(GetMeRequest) returns (GetMeResponse);
 }
 
+// GetMeRequest is the input for GetMe.
 message GetMeRequest {
   // Hidden externally; injected by the gateway from auth.AuthService.
   auth.v1.Context auth = 1;
 }
 
+// GetMeResponse is the GetMe reply.
 message GetMeResponse {
+  // Stable user identifier.
   string id = 1;
+  // Display name.
   string name = 2;
+  // Tenant identifier (matches Context.tenant_id).
   string tenant_id = 3;
 }

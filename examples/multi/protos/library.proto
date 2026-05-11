@@ -4,16 +4,25 @@ package library.v1;
 
 option go_package = "github.com/iodesystems/go-api-gateway/examples/multi/gen/library/v1;libraryv1";
 
+// LibraryService is a second proto-source service in the multi
+// example, used to demonstrate that two namespaces register and
+// dispatch independently through the same gateway.
 service LibraryService {
+  // List books, optionally filtered by author.
   rpc ListBooks(ListBooksRequest) returns (ListBooksResponse);
+  // Look up a single book by id.
   rpc GetBook(GetBookRequest) returns (Book);
 }
 
+// ListBooksRequest is the input for ListBooks.
 message ListBooksRequest {
+  // Filter by author name. Empty string matches all authors.
   string author = 1;
 }
 
+// ListBooksResponse is the ListBooks reply.
 message ListBooksResponse {
+  // Matching books in registry order.
   repeated Book books = 1;
 }
 
@@ -21,13 +30,20 @@ message GetBook {
   string id = 1;
 }
 
+// GetBookRequest is the input for GetBook.
 message GetBookRequest {
+  // Stable book identifier issued at create time.
   string id = 1;
 }
 
+// Book is the canonical record for one book in the catalog.
 message Book {
+  // Stable identifier.
   string id = 1;
+  // Display title.
   string title = 2;
+  // Author full name.
   string author = 3;
+  // Year of original publication.
   int32 year = 4;
 }

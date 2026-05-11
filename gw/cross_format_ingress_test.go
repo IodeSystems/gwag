@@ -303,7 +303,7 @@ func newCrossFormatFixture(t *testing.T) *crossFormatFixture {
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
 	t.Cleanup(gw.Close)
 
-	if err := gw.AddProtoDescriptor(greeterv1.File_greeter_proto, To(protoLis.Addr().String()), As("greeter")); err != nil {
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"), To(protoLis.Addr().String()), As("greeter")); err != nil {
 		t.Fatalf("AddProtoDescriptor: %v", err)
 	}
 	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(openAPIBackend.URL), As("test")); err != nil {

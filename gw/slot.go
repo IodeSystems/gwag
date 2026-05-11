@@ -314,6 +314,7 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 	if s.kind == slotKindProto {
 		for _, svc := range raw {
 			injectProtoSubscriptionAuthArgs(svc)
+			injectProtoSubscriptionAuthDoc(svc)
 		}
 	}
 	for _, svc := range raw {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	greeterv1 "github.com/iodesystems/go-api-gateway/examples/multi/gen/greeter/v1"
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 )
 
@@ -23,8 +21,7 @@ func newDeprecateGateway(t *testing.T) (*Gateway, *controlPlane) {
 
 func registerGreeterVersion(t *testing.T, g *Gateway, version string) {
 	t.Helper()
-	if err := g.AddProtoDescriptor(
-		greeterv1.File_greeter_proto,
+	if err := g.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("greeter"),
 		Version(version),

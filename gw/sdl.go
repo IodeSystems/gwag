@@ -235,11 +235,34 @@ func writeFields(b *strings.Builder, fields graphql.FieldDefinitionMap) {
 }
 
 func writeArgs(b *strings.Builder, args []*graphql.Argument) {
-	b.WriteString("(")
-	for i, a := range args {
-		if i > 0 {
-			b.WriteString(", ")
+	hasDesc := false
+	for _, a := range args {
+		if a.Description() != "" {
+			hasDesc = true
+			break
 		}
+	}
+	if !hasDesc {
+		b.WriteString("(")
+		for i, a := range args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(a.Name())
+			b.WriteString(": ")
+			b.WriteString(typeRef(a.Type))
+			if a.DefaultValue != nil {
+				b.WriteString(" = ")
+				b.WriteString(formatDefault(a.DefaultValue))
+			}
+		}
+		b.WriteString(")")
+		return
+	}
+	b.WriteString("(\n")
+	for _, a := range args {
+		writeDescription(b, "    ", a.Description())
+		b.WriteString("    ")
 		b.WriteString(a.Name())
 		b.WriteString(": ")
 		b.WriteString(typeRef(a.Type))
@@ -247,8 +270,9 @@ func writeArgs(b *strings.Builder, args []*graphql.Argument) {
 			b.WriteString(" = ")
 			b.WriteString(formatDefault(a.DefaultValue))
 		}
+		b.WriteString("\n")
 	}
-	b.WriteString(")")
+	b.WriteString("  )")
 }
 
 func writeInputObject(b *strings.Builder, io *graphql.InputObject) {

@@ -14,9 +14,9 @@ import (
 
 // registryValue is the JSON payload stored in the registry KV bucket
 // under each replica key. Carries one of three possible service
-// shapes: a FileDescriptorSet (proto gRPC), an OpenAPISpec (HTTP), or
-// a GraphQLEndpoint + GraphQLIntrospection (downstream GraphQL).
-// Reconciler disambiguates via the IsOpenAPI / IsGraphQL helpers;
+// shapes: a ProtoSource (raw .proto bytes for gRPC), an OpenAPISpec
+// (HTTP), or a GraphQLEndpoint + GraphQLIntrospection (downstream
+// GraphQL). Reconciler disambiguates via IsOpenAPI / IsGraphQL;
 // when neither is set, the entry is treated as proto.
 type registryValue struct {
 	RegID       string `json:"reg_id"`
@@ -28,9 +28,11 @@ type registryValue struct {
 	OwnerNodeID string `json:"owner_node_id"`
 	Hash        []byte `json:"hash"`
 
-	// Proto path:
-	FileName          string `json:"file_name,omitempty"`
-	FileDescriptorSet []byte `json:"fd_set,omitempty"`
+	// Proto path: raw .proto entrypoint bytes plus optional transitive
+	// imports keyed by import path. Sibling of OpenAPISpec — both
+	// shapes ship raw source and the gateway compiles on receive.
+	ProtoSource  []byte            `json:"proto_source,omitempty"`
+	ProtoImports map[string][]byte `json:"proto_imports,omitempty"`
 
 	// OpenAPI path: raw spec bytes (JSON or YAML).
 	OpenAPISpec []byte `json:"openapi_spec,omitempty"`

@@ -46,8 +46,7 @@ func (f *fakeAdminAuthConn) NewStream(_ context.Context, _ *grpc.StreamDesc, _ s
 // as an internal service so subsequent middleware calls hit it.
 func withDelegate(t *testing.T, gw *Gateway, fake *fakeAdminAuthConn) {
 	t.Helper()
-	if err := gw.AddProtoDescriptor(
-		aav1.File_gw_proto_adminauth_v1_adminauth_proto,
+	if err := gw.AddProtoBytes("adminauth.proto", testProtoBytes(t, "adminauth.proto"),
 		To(fake),
 		As(adminAuthorizerNamespace),
 		AsInternal(),

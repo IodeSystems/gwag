@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +12,9 @@ import (
 
 	aev1 "github.com/iodesystems/go-api-gateway/gw/proto/adminevents/v1"
 )
+
+//go:embed proto/adminevents/v1/adminevents.proto
+var admineventsProtoSource []byte
 
 // adminEventsNamespace is the registration namespace under which the
 // AdminEvents proto is exposed. Surfaces in the SDL as
@@ -36,15 +40,16 @@ func (g *Gateway) AddAdminEvents() error {
 	if g.cfg.cluster == nil {
 		return errors.New("gateway: AddAdminEvents requires a configured cluster (NATS-backed subscriptions)")
 	}
-	return g.AddProtoDescriptor(
-		aev1.File_gw_proto_adminevents_v1_adminevents_proto,
+	return g.AddProtoBytes(
+		"adminevents.proto",
+		admineventsProtoSource,
 		To(noopAdminEventsConn{}),
 		As(adminEventsNamespace),
 	)
 }
 
 // noopAdminEventsConn satisfies grpc.ClientConnInterface so
-// AddProtoDescriptor accepts it. The gateway never dispatches the
+// AddProtoBytes accepts it. The gateway never dispatches the
 // AdminEvents methods through gRPC — the streaming method is
 // NATS-backed and the request type has no unary callers.
 type noopAdminEventsConn struct{}

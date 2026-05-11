@@ -18,11 +18,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	cpv1 "github.com/iodesystems/go-api-gateway/gw/proto/controlplane/v1"
 )
@@ -155,9 +151,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		hash      [32]byte
 
 		// Proto path
-		fileDesc protoreflect.FileDescriptor
-		fdBytes  []byte
-		fileName string
+		fileDesc     protoreflect.FileDescriptor
+		protoSource  []byte
+		protoImports map[string][]byte
 
 		// OpenAPI path
 		openAPISpec []byte
@@ -180,7 +176,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	type nsverKey struct{ ns, ver string }
 	used := map[nsverKey]bool{}
 	for _, b := range req.GetServices() {
-		hasProto := len(b.GetFileDescriptorSet()) > 0
+		hasProto := len(b.GetProtoSource()) > 0
 		hasOpenAPI := len(b.GetOpenapiSpec()) > 0
 		hasGraphQL := b.GetGraphqlEndpoint() != ""
 		setForms := 0
@@ -194,10 +190,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			setForms++
 		}
 		if setForms > 1 {
-			return nil, fmt.Errorf("controlplane: ServiceBinding may set only one of file_descriptor_set, openapi_spec, graphql_endpoint")
+			return nil, fmt.Errorf("controlplane: ServiceBinding may set only one of proto_source, openapi_spec, graphql_endpoint")
 		}
 		if setForms == 0 {
-			return nil, fmt.Errorf("controlplane: ServiceBinding must set file_descriptor_set, openapi_spec, OR graphql_endpoint")
+			return nil, fmt.Errorf("controlplane: ServiceBinding must set proto_source, openapi_spec, OR graphql_endpoint")
 		}
 
 		if hasGraphQL {
@@ -271,9 +267,15 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			continue
 		}
 
-		fd, err := parseFileDescriptorSet(b.GetFileDescriptorSet(), b.GetFileName())
+		entry := b.GetNamespace()
+		if entry == "" {
+			entry = "entry.proto"
+		} else {
+			entry = entry + ".proto"
+		}
+		fd, err := compileProtoBytes(entry, b.GetProtoSource(), b.GetProtoImports())
 		if err != nil {
-			return nil, fmt.Errorf("controlplane: descriptor: %w", err)
+			return nil, fmt.Errorf("controlplane: compile proto: %w", err)
 		}
 		ns := b.GetNamespace()
 		if ns == "" {
@@ -298,7 +300,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
 		}
 		used[k] = true
-		hash, err := hashDescriptorSet(b.GetFileDescriptorSet())
+		hash, err := hashFromFileDescriptor(fd)
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
@@ -308,8 +310,8 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			version:                   ver,
 			hash:                      hash,
 			fileDesc:                  fd,
-			fdBytes:                   b.GetFileDescriptorSet(),
-			fileName:                  b.GetFileName(),
+			protoSource:               b.GetProtoSource(),
+			protoImports:              b.GetProtoImports(),
 			maxConcurrency:            b.GetMaxConcurrency(),
 			maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
 		})
@@ -351,8 +353,8 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			case p.isOpenAPI:
 				val.OpenAPISpec = p.openAPISpec
 			default:
-				val.FileName = p.fileName
-				val.FileDescriptorSet = p.fdBytes
+				val.ProtoSource = p.protoSource
+				val.ProtoImports = p.protoImports
 			}
 			b, mErr := json.Marshal(val)
 			if mErr != nil {
@@ -944,36 +946,3 @@ func newRegID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// parseFileDescriptorSet decodes the bytes a service shipped over the
-// wire and returns the FileDescriptor for the service-bearing file.
-// If fileName is empty, the LAST file in the set is used (the
-// convention is that FileDescriptorSet emits dependencies first, the
-// dependent last).
-func parseFileDescriptorSet(b []byte, fileName string) (protoreflect.FileDescriptor, error) {
-	if len(b) == 0 {
-		return nil, fmt.Errorf("empty file_descriptor_set")
-	}
-	fds := &descriptorpb.FileDescriptorSet{}
-	if err := proto.Unmarshal(b, fds); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-	if len(fds.GetFile()) == 0 {
-		return nil, fmt.Errorf("file_descriptor_set has no files")
-	}
-	files, err := protodesc.NewFiles(fds)
-	if err != nil {
-		return nil, fmt.Errorf("protodesc.NewFiles: %w", err)
-	}
-	target := fileName
-	if target == "" {
-		target = fds.GetFile()[len(fds.GetFile())-1].GetName()
-	}
-	fd, err := files.FindFileByPath(target)
-	if err != nil {
-		return nil, fmt.Errorf("FindFileByPath %s: %w", target, err)
-	}
-	return fd, nil
-}
-
-// Compile-time assertion that protoregistry is wired (helps IDEs).
-var _ = (*protoregistry.Files)(nil)
