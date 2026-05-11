@@ -66,7 +66,7 @@ it possible.
 ## Try it in 60 seconds
 
 ```bash
-git clone https://github.com/iodesystems/gwag && cd go-api-gateway
+git clone https://github.com/iodesystems/gwag && cd gwag
 cd examples/multi && ./run.sh        # gateway + greeter + library
 ```
 
@@ -313,7 +313,7 @@ cluster, _ := gateway.StartCluster(gateway.ClusterOptions{
     ClientListen:  ":14222",
     ClusterListen: ":14248",
     Peers:         []string{"127.0.0.1:14249"},
-    DataDir:       "/var/lib/go-api-gateway/n1",
+    DataDir:       "/var/lib/gwag/n1",
 })
 defer cluster.Close()
 
@@ -1130,7 +1130,7 @@ story, but federation only ingests GraphQL — you can't drop a
 
 The axes that differ:
 
-| Concern | Kong / APIGee / etc. | Apollo Federation | go-api-gateway |
+| Concern | Kong / APIGee / etc. | Apollo Federation | gwag |
 |---|---|---|---|
 | **Ingest formats** | HTTP/REST (some gRPC plugin) | GraphQL only | `.proto`, OpenAPI 3.x, GraphQL stitching |
 | **Codegen targets** | None — operators bring their own | GraphQL SDL only | Proto FDS + OpenAPI + GraphQL SDL, simultaneously |

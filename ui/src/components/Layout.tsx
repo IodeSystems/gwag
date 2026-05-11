@@ -75,7 +75,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
         <AppBar position="fixed">
           <Toolbar>
             <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
-              go-api-gateway
+              gwag
             </Typography>
             <Button
               color="inherit"
@@ -106,7 +106,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
       <AppBar position="fixed" sx={{ zIndex: (t) => t.zIndex.drawer + 1 }}>
         <Toolbar>
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
-            go-api-gateway
+            gwag
           </Typography>
           <Tooltip title={eventsTooltip}>
             <IconButton color="inherit" onClick={openEvents} aria-label="events">

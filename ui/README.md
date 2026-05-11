@@ -1,7 +1,7 @@
-# go-api-gateway admin UI
+# gwag admin UI
 
 React + MUI + TanStack Router admin console for an instance of
-go-api-gateway. Talks to the gateway over **GraphQL only** — every
+gwag. Talks to the gateway over **GraphQL only** — every
 view (services, peers, schema, future pages) is a graphql-codegen-typed
 query against `/graphql`.
 
