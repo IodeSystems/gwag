@@ -234,6 +234,11 @@ type config struct {
 	// set, it overrides the legacy callerHeaders allowlist. See
 	// WithCallerIDExtractor / WithCallerIDPublic.
 	callerIDExtractor CallerIDExtractor
+
+	// callerIDMetricsTopK caps the distinct caller-id values that
+	// reach the Prometheus dispatch histogram and the stats registry;
+	// see WithCallerIDMetricsTopK. 0 = uncapped.
+	callerIDMetricsTopK int
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -643,9 +648,15 @@ func New(opts ...Option) *Gateway {
 		cfg.adminToken = tok
 	}
 	life, cancel := context.WithCancel(context.Background())
+	// One shared limiter across both metric sinks so the Prometheus
+	// label set and the in-process stats dimension agree on which
+	// callers are admitted (otherwise the admin UI and the scrape
+	// would show different __other__ rollups).
+	limiter := newCallerLimiter(cfg.callerIDMetricsTopK)
 	if pm, ok := cfg.metrics.(*prometheusMetrics); ok {
 		pm.callerHeaders = cfg.callerHeaders
 		pm.callerExtractor = cfg.callerIDExtractor
+		pm.callerLimiter = limiter
 	}
 	stats := newStatsRegistry()
 	cfg.metrics = &statsRecordingMetrics{
@@ -653,6 +664,7 @@ func New(opts ...Option) *Gateway {
 		stats:           stats,
 		callerHeaders:   cfg.callerHeaders,
 		callerExtractor: cfg.callerIDExtractor,
+		callerLimiter:   limiter,
 	}
 	g := &Gateway{
 		cfg:         cfg,

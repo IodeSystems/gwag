@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,6 +142,151 @@ func TestSnapshot_CallerDimension_PublicExtractor(t *testing.T) {
 	}
 	if byCaller["users"] != 1 {
 		t.Errorf("users count: got %d, want 1", byCaller["users"])
+	}
+}
+
+// WithCallerIDMetricsTopK cap — pure-unit table on the limiter, plus
+// end-to-end through Snapshot rows so the stats registry honours the
+// same admission set as the Prometheus label.
+
+func TestCallerLimiter_DisabledIsPassthrough(t *testing.T) {
+	// k <= 0 returns a nil limiter; Apply on nil receiver passes every
+	// caller through unchanged (default pre-option behaviour).
+	l := newCallerLimiter(0)
+	if l != nil {
+		t.Fatalf("k=0 should return nil limiter, got %+v", l)
+	}
+	if got := l.Apply("alice"); got != "alice" {
+		t.Errorf("nil limiter: got %q, want alice", got)
+	}
+}
+
+func TestCallerLimiter_AdmitsUnderCap(t *testing.T) {
+	l := newCallerLimiter(2)
+	if got := l.Apply("alice"); got != "alice" {
+		t.Errorf("first admit: %q", got)
+	}
+	if got := l.Apply("bob"); got != "bob" {
+		t.Errorf("second admit: %q", got)
+	}
+	// Re-seeing an admitted caller is a hit; it bumps LRU, doesn't
+	// evict anyone.
+	if got := l.Apply("alice"); got != "alice" {
+		t.Errorf("hit: %q", got)
+	}
+}
+
+func TestCallerLimiter_OverflowFoldsToOther(t *testing.T) {
+	l := newCallerLimiter(1)
+	if got := l.Apply("alice"); got != "alice" {
+		t.Fatalf("first admit: %q", got)
+	}
+	// Second caller is over cap → __other__.
+	if got := l.Apply("bob"); got != OtherCallerID {
+		t.Errorf("overflow: got %q, want %q", got, OtherCallerID)
+	}
+	// Admitted caller still passes; cap doesn't drift on hit.
+	if got := l.Apply("alice"); got != "alice" {
+		t.Errorf("admitted-still-passes: %q", got)
+	}
+	// Bob remains over the cap until alice falls off — repeated hits
+	// stay folded to __other__ rather than displacing alice.
+	if got := l.Apply("bob"); got != OtherCallerID {
+		t.Errorf("overflow-repeat: got %q, want %q", got, OtherCallerID)
+	}
+}
+
+func TestCallerLimiter_LRUEviction(t *testing.T) {
+	// Cap of 2; admit a, then b; hit on a bumps it to MRU; admit c
+	// must evict b (the LRU), not a.
+	l := newCallerLimiter(2)
+	l.Apply("a")
+	l.Apply("b")
+	l.Apply("a") // bump a to MRU
+	// c is a new caller; cap is full. We want c folded to __other__
+	// (admission is admit-on-room, not evict-on-overflow). The LRU
+	// position only matters when an *existing* admitted entry would
+	// be re-ordered.
+	if got := l.Apply("c"); got != OtherCallerID {
+		t.Errorf("c over cap: got %q, want %q", got, OtherCallerID)
+	}
+	// snapshot MRU→LRU = [a, b]. b is LRU because a was bumped.
+	snap := l.snapshot()
+	if len(snap) != 2 || snap[0] != "a" || snap[1] != "b" {
+		t.Errorf("snapshot: got %v, want [a b]", snap)
+	}
+}
+
+// End-to-end: with WithCallerIDMetricsTopK(1), only the first
+// admitted caller keeps its label; every subsequent distinct caller
+// collapses into the __other__ row on the in-process stats registry.
+func TestSnapshot_CallerLimiter_OtherRollup(t *testing.T) {
+	old := nowFunc
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = old })
+
+	g := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("t")),
+		WithCallerIDPublic(),
+		WithCallerIDMetricsTopK(1),
+	)
+	t.Cleanup(g.Close)
+
+	for _, name := range []string{"billing", "billing", "users", "payments", "users"} {
+		r, _ := newRequestWithHeader(PublicCallerIDHeader, name)
+		ctx := WithHTTPRequest(context.Background(), r)
+		g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
+	}
+
+	rows := g.Snapshot(time.Minute, now)
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows (billing + __other__), got %d: %+v", len(rows), rows)
+	}
+	byCaller := map[string]uint64{}
+	for _, r := range rows {
+		byCaller[r.Caller] = r.Count
+	}
+	if byCaller["billing"] != 2 {
+		t.Errorf("billing count: got %d, want 2", byCaller["billing"])
+	}
+	if byCaller[OtherCallerID] != 3 {
+		t.Errorf("%s count: got %d, want 3 (users×2 + payments×1)", OtherCallerID, byCaller[OtherCallerID])
+	}
+}
+
+// Prometheus scrape carries the same __other__ label the stats
+// registry uses — both sides share one limiter so operators see the
+// same overflow rollup in /metrics and in the admin UI.
+func TestPrometheusScrape_CallerLimiter_OtherLabel(t *testing.T) {
+	g := New(
+		WithoutBackpressure(),
+		WithAdminToken([]byte("t")),
+		WithCallerIDPublic(),
+		WithCallerIDMetricsTopK(1),
+	)
+	t.Cleanup(g.Close)
+
+	for _, name := range []string{"billing", "users", "payments"} {
+		r, _ := newRequestWithHeader(PublicCallerIDHeader, name)
+		ctx := WithHTTPRequest(context.Background(), r)
+		g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 3*time.Millisecond, nil)
+	}
+
+	w := httptest.NewRecorder()
+	scrape := httptest.NewRequest("GET", "/metrics", nil)
+	g.MetricsHandler().ServeHTTP(w, scrape)
+	body := w.Body.String()
+	if !strings.Contains(body, `caller="billing"`) {
+		t.Errorf("scrape missing caller=\"billing\": %s", body)
+	}
+	if !strings.Contains(body, `caller="`+OtherCallerID+`"`) {
+		t.Errorf("scrape missing caller=%q: %s", OtherCallerID, body)
+	}
+	if strings.Contains(body, `caller="users"`) || strings.Contains(body, `caller="payments"`) {
+		t.Errorf("scrape leaked over-cap callers: %s", body)
 	}
 }
 

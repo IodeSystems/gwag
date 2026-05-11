@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"container/list"
 	"context"
+	"sync"
 
 	"google.golang.org/grpc/metadata"
 )
@@ -88,4 +90,92 @@ func resolveCallerID(ctx context.Context, ex CallerIDExtractor, headers []string
 		return v
 	}
 	return callerFromContext(ctx, headers)
+}
+
+// OtherCallerID is the bucket label every caller past the
+// WithCallerIDMetricsTopK cap is folded into. Operators can scrape it
+// directly to see overflow volume; bounded label cardinality keeps
+// Prometheus from blowing up on a flood of unique callers.
+const OtherCallerID = "__other__"
+
+// WithCallerIDMetricsTopK caps the number of distinct caller-id values
+// that appear as a label on the Prometheus dispatch histogram and as a
+// dimension on the in-process stats registry. Once k distinct callers
+// are admitted, additional callers are folded into a single
+// "__other__" bucket (OtherCallerID).
+//
+// Admission is LRU-ordered: each observed caller bumps its
+// recently-used position; eviction picks the least-recently-used
+// admitted caller. A burst of one-off callers won't permanently
+// displace steady traffic from real services.
+//
+// k <= 0 disables the cap (default — every distinct caller becomes a
+// label, matching pre-v0.x behaviour).
+//
+// Plan §Caller-ID — guards against Prometheus scrape blowups when an
+// untrusted ingress / public-mode deployment sees high-cardinality
+// X-Caller-Id values.
+func WithCallerIDMetricsTopK(k int) Option {
+	return func(cfg *config) { cfg.callerIDMetricsTopK = k }
+}
+
+// callerLimiter caps the set of caller-id strings that get through to
+// the metrics surface. Returns the input string when admitted (already
+// in the set, or freshly inserted under cap); returns OtherCallerID
+// when the set is full and the input isn't admitted. LRU eviction is
+// driven by the doubly-linked list; the head is most-recently-used.
+type callerLimiter struct {
+	mu       sync.Mutex
+	k        int
+	order    *list.List
+	admitted map[string]*list.Element
+}
+
+func newCallerLimiter(k int) *callerLimiter {
+	if k <= 0 {
+		return nil
+	}
+	return &callerLimiter{
+		k:        k,
+		order:    list.New(),
+		admitted: make(map[string]*list.Element, k),
+	}
+}
+
+// Apply runs the caller string through the cap. nil receiver is the
+// pre-option default — every caller passes through unchanged. The
+// receiver locks once per call; that's measured against the existing
+// Prometheus WithLabelValues / sync.Mutex cost on the same hot path,
+// not a fresh contention point.
+func (l *callerLimiter) Apply(caller string) string {
+	if l == nil || l.k <= 0 {
+		return caller
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if el, ok := l.admitted[caller]; ok {
+		l.order.MoveToFront(el)
+		return caller
+	}
+	if len(l.admitted) >= l.k {
+		return OtherCallerID
+	}
+	el := l.order.PushFront(caller)
+	l.admitted[caller] = el
+	return caller
+}
+
+// snapshot returns the admitted callers in MRU → LRU order. Test-only;
+// production reads admission state through Apply.
+func (l *callerLimiter) snapshot() []string {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, 0, l.order.Len())
+	for e := l.order.Front(); e != nil; e = e.Next() {
+		out = append(out, e.Value.(string))
+	}
+	return out
 }

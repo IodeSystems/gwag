@@ -145,13 +145,14 @@ type prometheusMetrics struct {
 	reqSelf         *prometheus.HistogramVec
 	callerHeaders   []string
 	callerExtractor CallerIDExtractor
+	callerLimiter   *callerLimiter
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
 	reg := prometheus.NewRegistry()
 	hist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "go_api_gateway_dispatch_duration_seconds",
-		Help:    "Duration of dispatches (gRPC pools, OpenAPI sources, downstream-GraphQL sources) from the GraphQL surface to a backing replica. caller is extracted via WithCallerHeaders; defaults to \"unknown\".",
+		Help:    "Duration of dispatches (gRPC pools, OpenAPI sources, downstream-GraphQL sources) from the GraphQL surface to a backing replica. caller is extracted via WithCallerIDExtractor / WithCallerHeaders; defaults to \"unknown\". Cardinality is capped by WithCallerIDMetricsTopK — overflow folds into \"__other__\".",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"namespace", "version", "method", "code", "caller"})
 	dwell := prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -235,7 +236,8 @@ func (m *prometheusMetrics) RecordDispatch(ctx context.Context, namespace, versi
 	if err != nil {
 		code = classifyError(err)
 	}
-	m.hist.WithLabelValues(namespace, version, method, code, resolveCallerID(ctx, m.callerExtractor, m.callerHeaders)).Observe(d.Seconds())
+	caller := m.callerLimiter.Apply(resolveCallerID(ctx, m.callerExtractor, m.callerHeaders))
+	m.hist.WithLabelValues(namespace, version, method, code, caller).Observe(d.Seconds())
 }
 
 func (m *prometheusMetrics) RecordDwell(namespace, version, method, kind string, d time.Duration) {
