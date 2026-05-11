@@ -27,6 +27,9 @@ func runDefault(args []string) error {
 	reportOut := fs.String("report", "docs/perf.md", "where to write the rendered report; '-' for stdout, '' to skip")
 	skipBringup := fs.Bool("skip-bringup", false, "assume `bin/bench up` is already running; don't try to start it")
 	skipServices := fs.Bool("skip-services", false, "assume the required upstream services are already registered; don't add them")
+	noProfile := fs.Bool("no-profile", false, "skip per-scenario pprof capture at the recommended-ceiling rung (default: capture is on, requires --pprof on the gateway)")
+	profileSec := fs.Int("profile-seconds", 20, "pprof CPU window length when capturing per-scenario profiles")
+	adminTokenPath := fs.String("admin-token", "", "path to the gateway's admin-token file (default: bench/.run/nats/n1/admin-token)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: perf [flags]")
 		fmt.Fprintln(fs.Output(), "Loads scenarios YAML, brings up stack + services, runs sweeps, renders docs/perf.md.")
@@ -74,6 +77,26 @@ func runDefault(args []string) error {
 		// Reset the streaming-header flag between scenarios so the
 		// next sweep prints its own column header.
 		stepHeaderPrinted = false
+
+		if !*noProfile {
+			rps := profileRPSFor(out)
+			if rps <= 0 {
+				fmt.Fprintf(os.Stderr, "  scenario %s: skipping profile (no healthy rung)\n", sc.Name)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "  scenario %s: capturing profile at %d RPS (%ds CPU window)\n", sc.Name, rps, *profileSec)
+			tb, err := ensureTrafficBinary()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  scenario %s: profile skipped (traffic binary): %v\n", sc.Name, err)
+				continue
+			}
+			capt := captureProfileForScenario(sc, rps, *profileSec, *outDir, tb, readAdminToken(*adminTokenPath))
+			if err := attachProfileToSweep(out, capt); err != nil {
+				fmt.Fprintf(os.Stderr, "  scenario %s: profile attach failed: %v\n", sc.Name, err)
+			} else if capt.CaptureError != "" {
+				fmt.Fprintf(os.Stderr, "  scenario %s: profile capture error: %s\n", sc.Name, capt.CaptureError)
+			}
+		}
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("scenarios failed: %s", strings.Join(failed, ", "))
@@ -178,14 +201,18 @@ func ensureServicesRegistered(sc perfScenario) error {
 }
 
 // serviceKindToNamespace maps a bench-managed kind to the GraphQL
-// namespace it'll register under. Today only `greeter` is bundled;
-// hello-openapi / library land here when added to bin/bench.
+// namespace it'll register under. Bench script knows greeter +
+// hello-proto / hello-openapi / hello-graphql today.
 func serviceKindToNamespace(kind string) string {
 	switch kind {
 	case "greeter":
 		return "greeter"
+	case "hello-proto":
+		return "hello_proto"
 	case "hello-openapi":
 		return "hello_openapi"
+	case "hello-graphql":
+		return "hello_graphql"
 	case "library":
 		return "library"
 	default:

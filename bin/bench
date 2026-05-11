@@ -94,7 +94,9 @@ cmd_up() {
         # cached .run/bin/gateway that embeds the OLD ui/dist/. Drop
         # the cache so up.sh re-runs `go build` and the freshly-
         # generated SPA bundle gets baked in.
-        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register" "$RUN_DIR/bin/perf"
+        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" \
+              "$RUN_DIR/bin/hello-proto" "$RUN_DIR/bin/hello-openapi" "$RUN_DIR/bin/hello-graphql" \
+              "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register" "$RUN_DIR/bin/perf"
     fi
     # Persist the stack kind so subsequent `bench gw add` invocations
     # spawn the matching binary without per-call --raw flags. up.sh
@@ -229,12 +231,16 @@ PID=0
 EOF
 
     echo "==> launching gateway $name (http=:$http control-plane=:$cp nats=:$nats_listen)"
+    # --pprof is on for the bench gateway by default — /debug/pprof
+    # is admin-bearer gated, and the bench stack is local dev, so the
+    # leak risk is moot. `bin/bench perf profile` relies on it.
     # shellcheck disable=SC2086
     "$BIN_DIR/gateway" \
         --node-name "$name" \
         --http ":$http" --control-plane ":$cp" \
         --nats-listen ":$nats_listen" --nats-cluster ":$nats_cluster" \
         --nats-data "$data" \
+        --pprof \
         $peers \
         > "$LOG_DIR/$name.log" 2>&1 &
     local pid=$!
@@ -307,10 +313,10 @@ service_add_managed() {
             *) echo "unknown arg: $1" >&2; usage ;;
         esac
     done
-    if [[ $kind != greeter ]]; then
-        echo "unsupported KIND $kind (only 'greeter' for now)" >&2
-        return 1
-    fi
+    case $kind in
+        greeter|hello-proto|hello-openapi|hello-graphql) ;;
+        *) echo "unsupported KIND $kind (try one of: greeter, hello-proto, hello-openapi, hello-graphql)" >&2; return 1 ;;
+    esac
     local idx; idx=$(next_index "$BE_DIR" "g")
     if [[ -z $name ]]; then
         name="g$idx"
@@ -336,14 +342,49 @@ EOF
     # other managed kinds also expect their example dirs as the CWD
     # for similar local-asset reads. Launch from examples/multi/ so
     # those relative paths resolve regardless of where bin/bench was
-    # invoked from.
+    # invoked from. Each kind has its own flag-set quirks (greeter
+    # takes --max-concurrency/--delay; hello-* trio doesn't; advertise
+    # is URL-shaped for openapi/graphql and host:port for proto).
+    local launch_args=()
+    case $kind in
+        greeter)
+            launch_args=(
+                --addr ":$port"
+                --advertise "localhost:$port"
+                --gateway "localhost:$cp_port"
+                --version "$version"
+                --max-concurrency "$max_conc"
+                --max-concurrency-per-instance "$max_conc_per_inst"
+                --delay "$delay"
+            )
+            ;;
+        hello-proto)
+            launch_args=(
+                --addr ":$port"
+                --advertise "localhost:$port"
+                --gateway "localhost:$cp_port"
+                --version "$version"
+            )
+            ;;
+        hello-openapi)
+            launch_args=(
+                --addr ":$port"
+                --advertise "http://localhost:$port"
+                --gateway "localhost:$cp_port"
+                --version "$version"
+            )
+            ;;
+        hello-graphql)
+            launch_args=(
+                --addr ":$port"
+                --advertise "http://localhost:$port/graphql"
+                --gateway "localhost:$cp_port"
+                --version "$version"
+            )
+            ;;
+    esac
     (cd "$REPO_DIR/examples/multi" && \
-        "$BIN_DIR/$kind" \
-        --addr ":$port" --advertise "localhost:$port" \
-        --gateway "localhost:$cp_port" --version "$version" \
-        --max-concurrency "$max_conc" \
-        --max-concurrency-per-instance "$max_conc_per_inst" \
-        --delay "$delay" \
+        "$BIN_DIR/$kind" "${launch_args[@]}" \
         > "$LOG_DIR/$name.log" 2>&1) &
     local pid=$!
     sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"

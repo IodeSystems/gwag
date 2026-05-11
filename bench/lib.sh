@@ -30,6 +30,9 @@ build_binaries() {
     ensure_dirs
     (cd "$REPO_DIR" && go build -o "$BIN_DIR/gateway" ./examples/multi/cmd/gateway)
     (cd "$REPO_DIR" && go build -o "$BIN_DIR/greeter" ./examples/multi/cmd/greeter)
+    (cd "$REPO_DIR" && go build -o "$BIN_DIR/hello-proto" ./examples/multi/cmd/hello-proto)
+    (cd "$REPO_DIR" && go build -o "$BIN_DIR/hello-openapi" ./examples/multi/cmd/hello-openapi)
+    (cd "$REPO_DIR" && go build -o "$BIN_DIR/hello-graphql" ./examples/multi/cmd/hello-graphql)
     (cd "$REPO_DIR" && go build -o "$BIN_DIR/traffic" ./bench/cmd/traffic)
 }
 
@@ -40,7 +43,8 @@ build_binaries() {
 # rebuild path that goes through bin/build.
 build_binaries_if_missing() {
     ensure_dirs
-    if [[ -x $BIN_DIR/gateway && -x $BIN_DIR/greeter && -x $BIN_DIR/traffic ]]; then
+    if [[ -x $BIN_DIR/gateway && -x $BIN_DIR/greeter && -x $BIN_DIR/traffic \
+        && -x $BIN_DIR/hello-proto && -x $BIN_DIR/hello-openapi && -x $BIN_DIR/hello-graphql ]]; then
         return 0
     fi
     build_binaries

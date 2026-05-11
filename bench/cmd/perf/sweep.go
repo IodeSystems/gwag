@@ -35,6 +35,12 @@ type Sweep struct {
 	UpstreamLatencyUs   int64       `json:"upstream_latency_us"`
 	Steps               []SweepStep `json:"steps"`
 	Knee                *KneeInfo   `json:"knee,omitempty"`
+	// Profile is the optional CPU + allocs pprof capture taken at
+	// the recommended-ceiling RPS for this scenario. Populated by
+	// the perf driver when --profile is enabled (default on for the
+	// idiot-proof `bin/bench perf` path). Nil when capture was
+	// skipped or the pprof endpoint was unreachable.
+	Profile *ProfileCapture `json:"profile,omitempty"`
 }
 
 // SweepStep is one rung of the sweep — N reps at a single target RPS.

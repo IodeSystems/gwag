@@ -197,6 +197,32 @@ No knee detected within the configured sweep — the gateway absorbed every rung
 
 {{ interpretSweep . }}
 
+{{- if .Profile }}
+
+### Where time + allocs go ({{ .Profile.CapturedAtRPS }} RPS, {{ printf "%.0fs" .Profile.DurationSec }} CPU window)
+
+{{- if .Profile.CaptureError }}
+
+_Profile capture error: {{ .Profile.CaptureError }}_
+
+{{- else }}
+
+**Top CPU (cumulative):**
+
+` + "```" + `
+{{ .Profile.TopCPU }}
+` + "```" + `
+
+**Top allocs (cumulative alloc_space):**
+
+` + "```" + `
+{{ .Profile.TopAllocs }}
+` + "```" + `
+
+Raw pprof files: ` + "`{{ .Profile.CPUFile }}`" + ` + ` + "`{{ .Profile.AllocsFile }}`" + ` under the sweep out-dir; inspect interactively with ` + "`go tool pprof`" + `.
+{{- end }}
+{{- end }}
+
 {{ end }}
 ## How to read this
 

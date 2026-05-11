@@ -947,13 +947,21 @@ cost?*. [`docs/perf.md`](docs/perf.md) answers the follow-on:
 escalating-target-RPS sweep with automatic knee detection
 (achieved < 80 % of target, or a p99-cliff where latency doubles
 while throughput stops climbing), machine specs at the top, and
-an interpretation paragraph per scenario. Latest baseline (proto
-scenario on a 24-core Ryzen 9 3900X, single gateway, single
-greeter replica, loopback): **~49 k RPS sustained** at the 50 k
-target rung with gateway self-time mean **~138 µs** and p99
-**~35 ms**; knee fires at the next rung (60 k) when p99 crosses
-the 50 ms SLA ceiling. ~**2 k RPS / core** at the recommended
-ceiling.
+an interpretation paragraph per scenario. The bundled matrix
+covers GraphQL inbound → three backend kinds on the same
+hardware (24-core Ryzen 9 3900X, single gateway, single
+upstream replica per scenario, loopback):
+
+| Backend kind | Recommended ceiling | Achieved | p99 | Gateway self-time |
+|---|---:|---:|---:|---:|
+| proto (gRPC) | 50 k RPS | 48,672 (97 %) | 46 ms | 109 µs |
+| openapi (HTTP/JSON) | 50 k RPS | 48,002 (96 %) | 38 ms | 208 µs |
+| graphql (stitching) | 20 k RPS | 19,828 (99 %) | 11 ms | 39 µs |
+
+Proto and OpenAPI both saturate around 50 k RPS; GraphQL
+stitching tops out at ~20 k because each request adds an
+inbound→upstream GraphQL parse + result-merge. Knee fires
+when p99 crosses 50 ms (production-SLA ceiling).
 Regenerate with `bin/bench perf` (single command — reads
 `bench/perf-scenarios.yaml`, brings up the stack, registers the
 upstream services each scenario needs, runs the sweeps, renders
