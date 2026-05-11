@@ -117,114 +117,30 @@ func printServerSummary(pre, post map[string]*metricFamily, elapsed time.Duratio
 		fmt.Println("  no metric snapshots — gateway /api/metrics not reachable.")
 		return
 	}
-	type backendKey struct{ namespace, version, method string }
-	type backendAgg struct {
-		count   uint64
-		buckets map[float64]uint64
-		sum     float64
-		codes   []codeAgg
-	}
-	agg := map[backendKey]*backendAgg{}
-	totalByCode := map[string]uint64{}
-
-	postFam := post["go_api_gateway_dispatch_duration_seconds"]
-	if postFam == nil {
+	if post["go_api_gateway_dispatch_duration_seconds"] == nil {
 		fmt.Println("  go_api_gateway_dispatch_duration_seconds not present in snapshot.")
 		return
 	}
-	preFam := pre["go_api_gateway_dispatch_duration_seconds"]
-
-	preIndex := map[string]*dto.Metric{}
-	if preFam != nil {
-		for _, m := range preFam.Metric {
-			preIndex[labelKey(m)] = m
-		}
-	}
-
-	for _, m := range postFam.Metric {
-		var ns, ver, method, code string
-		for _, l := range m.GetLabel() {
-			switch l.GetName() {
-			case "namespace":
-				ns = l.GetValue()
-			case "version":
-				ver = l.GetValue()
-			case "method":
-				method = l.GetValue()
-			case "code":
-				code = l.GetValue()
-			}
-		}
-		key := backendKey{ns, ver, method}
-		k := labelKey(m)
-		var prev *dto.Metric
-		if p, ok := preIndex[k]; ok {
-			prev = p
-		}
-		hist := m.GetHistogram()
-		if hist == nil {
-			continue
-		}
-		dCount := hist.GetSampleCount()
-		dSum := hist.GetSampleSum()
-		if prev != nil && prev.GetHistogram() != nil {
-			dCount -= prev.GetHistogram().GetSampleCount()
-			dSum -= prev.GetHistogram().GetSampleSum()
-		}
-		if dCount == 0 {
-			continue
-		}
-		a, ok := agg[key]
-		if !ok {
-			a = &backendAgg{buckets: map[float64]uint64{}}
-			agg[key] = a
-		}
-		a.count += dCount
-		a.sum += dSum
-		a.codes = append(a.codes, codeAgg{code: code, count: dCount})
-		totalByCode[code] += dCount
-		preBuckets := map[float64]uint64{}
-		if prev != nil && prev.GetHistogram() != nil {
-			for _, b := range prev.GetHistogram().GetBucket() {
-				preBuckets[b.GetUpperBound()] = b.GetCumulativeCount()
-			}
-		}
-		for _, b := range hist.GetBucket() {
-			ub := b.GetUpperBound()
-			delta := b.GetCumulativeCount() - preBuckets[ub]
-			a.buckets[ub] += delta
-		}
-	}
-
-	keys := make([]backendKey, 0, len(agg))
-	for k := range agg {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].namespace != keys[j].namespace {
-			return keys[i].namespace < keys[j].namespace
-		}
-		if keys[i].version != keys[j].version {
-			return keys[i].version < keys[j].version
-		}
-		return keys[i].method < keys[j].method
-	})
-	if len(keys) == 0 {
+	rows := AggregateDispatches(pre, post)
+	if len(rows) == 0 {
 		fmt.Println("  no dispatches observed during this run.")
 		return
 	}
+	totalByCode := map[string]uint64{}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "  NAMESPACE\tVERSION\tMETHOD\tRPS\tP50\tP95\tP99\tCOUNT\tCODES")
-	for _, k := range keys {
-		a := agg[k]
-		rps := float64(a.count) / elapsed.Seconds()
-		p50 := histogramQuantile(0.5, a.buckets, a.count)
-		p95 := histogramQuantile(0.95, a.buckets, a.count)
-		p99 := histogramQuantile(0.99, a.buckets, a.count)
+	for _, a := range rows {
+		rps := float64(a.Count) / elapsed.Seconds()
+		p50 := histogramQuantile(0.5, a.Buckets, a.Count)
+		p95 := histogramQuantile(0.95, a.Buckets, a.Count)
+		p99 := histogramQuantile(0.99, a.Buckets, a.Count)
+		for _, c := range a.Codes {
+			totalByCode[c.Code] += c.Count
+		}
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%d\t%s\n",
-			k.namespace, k.version, k.method, rps,
+			a.Namespace, a.Version, a.Method, rps,
 			fmtSeconds(p50), fmtSeconds(p95), fmtSeconds(p99),
-			a.count, formatCodeAggs(a.codes))
+			a.Count, formatCodeAggs(toCodeAggs(a.Codes)))
 	}
 	tw.Flush()
 
@@ -250,110 +166,41 @@ func printServerSummary(pre, post map[string]*metricFamily, elapsed time.Duratio
 	}
 }
 
+func toCodeAggs(src []CodeCount) []codeAgg {
+	out := make([]codeAgg, len(src))
+	for i, c := range src {
+		out[i] = codeAgg{code: c.Code, count: c.Count}
+	}
+	return out
+}
+
 // printIngressTimeRows renders per-ingress total + self-time (mean +
 // p95) from request_duration_seconds and request_self_seconds. Self
 // is the gateway's own slice (total minus the per-request dispatch
 // accumulator); pair lets operators compare "what we spent" vs "what
 // upstream spent" without writing PromQL.
 func printIngressTimeRows(pre, post map[string]*metricFamily) {
-	type ingressAgg struct {
-		totalCount, selfCount uint64
-		totalSum, selfSum     float64
-		totalBuckets          map[float64]uint64
-		selfBuckets           map[float64]uint64
-	}
-	agg := map[string]*ingressAgg{}
-	add := func(famName string, isSelf bool) {
-		postFam := post[famName]
-		if postFam == nil {
-			return
-		}
-		preFam := pre[famName]
-		preIndex := map[string]*dto.Metric{}
-		if preFam != nil {
-			for _, m := range preFam.Metric {
-				preIndex[labelKey(m)] = m
-			}
-		}
-		for _, m := range postFam.Metric {
-			var ingress string
-			for _, l := range m.GetLabel() {
-				if l.GetName() == "ingress" {
-					ingress = l.GetValue()
-					break
-				}
-			}
-			hist := m.GetHistogram()
-			if hist == nil {
-				continue
-			}
-			prev := preIndex[labelKey(m)]
-			dCount := hist.GetSampleCount()
-			dSum := hist.GetSampleSum()
-			if prev != nil && prev.GetHistogram() != nil {
-				dCount -= prev.GetHistogram().GetSampleCount()
-				dSum -= prev.GetHistogram().GetSampleSum()
-			}
-			if dCount == 0 {
-				continue
-			}
-			a, ok := agg[ingress]
-			if !ok {
-				a = &ingressAgg{
-					totalBuckets: map[float64]uint64{},
-					selfBuckets:  map[float64]uint64{},
-				}
-				agg[ingress] = a
-			}
-			preBuckets := map[float64]uint64{}
-			if prev != nil && prev.GetHistogram() != nil {
-				for _, b := range prev.GetHistogram().GetBucket() {
-					preBuckets[b.GetUpperBound()] = b.GetCumulativeCount()
-				}
-			}
-			if isSelf {
-				a.selfCount += dCount
-				a.selfSum += dSum
-				for _, b := range hist.GetBucket() {
-					a.selfBuckets[b.GetUpperBound()] += b.GetCumulativeCount() - preBuckets[b.GetUpperBound()]
-				}
-			} else {
-				a.totalCount += dCount
-				a.totalSum += dSum
-				for _, b := range hist.GetBucket() {
-					a.totalBuckets[b.GetUpperBound()] += b.GetCumulativeCount() - preBuckets[b.GetUpperBound()]
-				}
-			}
-		}
-	}
-	add("go_api_gateway_request_duration_seconds", false)
-	add("go_api_gateway_request_self_seconds", true)
-	if len(agg) == 0 {
+	rows := AggregateIngress(pre, post)
+	if len(rows) == 0 {
 		return
 	}
-	keys := make([]string, 0, len(agg))
-	for k := range agg {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 	fmt.Println("  per-ingress request time:")
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "    INGRESS\tTOTAL_MEAN\tTOTAL_P95\tSELF_MEAN\tSELF_P95\tCOUNT")
-	for _, k := range keys {
-		a := agg[k]
-		var totMean, totP95, selfMean, selfP95 time.Duration
-		if a.totalCount > 0 {
-			totMean = time.Duration(a.totalSum / float64(a.totalCount) * float64(time.Second))
-			totP95 = histogramQuantile(0.95, a.totalBuckets, a.totalCount)
+	for _, a := range rows {
+		totMean := MeanDuration(a.TotalSumSec, a.TotalCount)
+		selfMean := MeanDuration(a.SelfSumSec, a.SelfCount)
+		var totP95, selfP95 time.Duration
+		if a.TotalCount > 0 {
+			totP95 = histogramQuantile(0.95, a.TotalBuckets, a.TotalCount)
 		}
-		if a.selfCount > 0 {
-			selfMean = time.Duration(a.selfSum / float64(a.selfCount) * float64(time.Second))
-			selfP95 = histogramQuantile(0.95, a.selfBuckets, a.selfCount)
+		if a.SelfCount > 0 {
+			selfP95 = histogramQuantile(0.95, a.SelfBuckets, a.SelfCount)
 		}
 		fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\t%s\t%d\n",
-			k, fmtSeconds(totMean), fmtSeconds(totP95),
+			a.Ingress, fmtSeconds(totMean), fmtSeconds(totP95),
 			fmtSeconds(selfMean), fmtSeconds(selfP95),
-			a.totalCount)
+			a.TotalCount)
 	}
 	tw.Flush()
 }

@@ -142,8 +142,13 @@ type PassResult struct {
 	Targets  []Target
 	Stats    []*Stats
 	Elapsed  time.Duration
-	PreSnap  map[string]*metricFamily
-	PostSnap map[string]*metricFamily
+	// EffectiveConcurrency is the in-flight cap actually applied —
+	// equal to opts.Concurrency on the way in, or autoConcurrency(rps)
+	// when the caller passed 0. Reported so the JSON sidecar carries
+	// the value the run used rather than the symbolic 0.
+	EffectiveConcurrency int
+	PreSnap              map[string]*metricFamily
+	PostSnap             map[string]*metricFamily
 }
 
 // Run blocks for opts.Duration (or until SIGINT/SIGTERM), drives each
@@ -216,12 +221,13 @@ func Run(opts Options, label string, targets []Target) (PassResult, error) {
 	}
 
 	return PassResult{
-		Label:    label,
-		Targets:  targets,
-		Stats:    stats,
-		Elapsed:  elapsed,
-		PreSnap:  preSnap,
-		PostSnap: postSnap,
+		Label:                label,
+		Targets:              targets,
+		Stats:                stats,
+		Elapsed:              elapsed,
+		EffectiveConcurrency: opts.Concurrency,
+		PreSnap:              preSnap,
+		PostSnap:             postSnap,
 	}, nil
 }
 

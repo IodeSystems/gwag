@@ -21,7 +21,30 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/iodesystems/gwag/bench/cmd/traffic/runner"
 )
+
+// writeJSONIfRequested writes runner.WriteJSON to the path (or stdout
+// when path is "-"). No-op when path is empty. Wraps the file
+// handling so each adapter (graphql/grpc/openapi) is one line.
+func writeJSONIfRequested(path string, opts runner.Options, res runner.PassResult) error {
+	if path == "" {
+		return nil
+	}
+	if path == "-" {
+		return runner.WriteJSON(os.Stdout, opts, res)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("--json: %w", err)
+	}
+	defer f.Close()
+	if err := runner.WriteJSON(f, opts, res); err != nil {
+		return fmt.Errorf("--json encode: %w", err)
+	}
+	return nil
+}
 
 const usage = `usage: traffic <graphql|grpc|openapi> [flags]
 

@@ -38,6 +38,7 @@ func runGRPC(args []string) error {
 	concurrency := fs.Int("concurrency", 0, "max concurrent in-flight per target (extras are dropped); 0 = auto = max(64, rps/20)")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request gRPC timeout")
 	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
+	jsonOut := fs.String("json", "", "write the gateway-pass summary to PATH as JSON; '-' for stdout")
 	service := fs.String("service", "", "registered namespace (e.g. greeter or greeter:v1); required")
 	method := fs.String("method", "", "RPC method name within the service; required")
 	argsJSON := fs.String("args", "{}", "JSON object decoded into the request message")
@@ -128,6 +129,9 @@ func runGRPC(args []string) error {
 		return err
 	}
 	runner.PrintPass(opts, gwRes)
+	if err := writeJSONIfRequested(*jsonOut, opts, gwRes); err != nil {
+		return err
+	}
 
 	if len(directTargetsBuilt) == 0 {
 		return nil

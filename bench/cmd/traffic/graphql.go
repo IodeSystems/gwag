@@ -25,6 +25,7 @@ func runGraphQL(args []string) error {
 	concurrency := fs.Int("concurrency", 0, "max concurrent in-flight per target (extras are dropped); 0 = auto = max(64, rps/20)")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request HTTP timeout")
 	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
+	jsonOut := fs.String("json", "", "write the gateway-pass summary (target_rps, achieved RPS, p50/p95/p99, gateway dispatch + ingress) to PATH as JSON. Direct-pass results are not exported. PATH '-' writes to stdout.")
 	query := fs.String("query", `{ greeter { hello(name: "world") { greeting } } }`, "GraphQL query string")
 	directQuery := fs.String("direct-query", "", "GraphQL query string for the --direct pass. Defaults to --query — but the upstream's schema is usually unprefixed, so override (e.g. '{ hello(name:\"world\") { greeting } }') when the gateway adds a namespace.")
 	var targetsRaw runner.StringFlag
@@ -86,6 +87,9 @@ func runGraphQL(args []string) error {
 		return err
 	}
 	runner.PrintPass(opts, gwRes)
+	if err := writeJSONIfRequested(*jsonOut, opts, gwRes); err != nil {
+		return err
+	}
 
 	if len(directTargets) == 0 {
 		return nil
