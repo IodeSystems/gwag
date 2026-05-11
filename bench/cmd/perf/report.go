@@ -210,8 +210,8 @@ Three numbers tell most of the story per scenario:
 
 A rung is flagged as the knee when:
 
-- **achieved_below_80pct** — actual RPS < 0.80 × target. The client / gateway / upstream couldn't keep up.
-- **p99_doubled** — step's p99 > 2 × prior step's p99. Latency cliff before throughput cliff.
+- **achieved_below_80pct** — actual RPS < 0.80 × target. The client / gateway / upstream couldn't keep up; throughput collapsed.
+- **p99_cliff** — step's p99 > 2 × prior step's p99 **AND** achieved RPS no longer climbed vs the prior step. Catches saturation-via-latency: the gateway is going slow rather than dropping requests. A pure latency creep with healthy throughput growth is normal queueing, not a knee, and is intentionally not flagged.
 
 First-firing predicate stops the sweep; the prior step is the recommended ceiling. Pass ` + "`--no-knee`" + ` to ` + "`bench perf run`" + ` to walk every rung regardless (useful for the full curve).
 
@@ -294,8 +294,8 @@ func interpretSweep(sw Sweep) string {
 		switch sw.Knee.Reason {
 		case KneeReasonAchievedBelow80:
 			parts = append(parts, fmt.Sprintf("The knee fired because achieved RPS fell below 80%% of target — typically the bench client itself running out of fired RPS, the gateway, or an upstream cap. Drill into `bench/.run/perf/sweep-%s.reps/` with `--keep-reps` to see which.", sw.Scenario))
-		case KneeReasonP99Doubled:
-			parts = append(parts, "The knee fired because p99 doubled — a latency cliff before the throughput cliff. Look for backpressure (per-pool queue depth, per-replica inflight) on the upstream.")
+		case KneeReasonP99Cliff:
+			parts = append(parts, "The knee fired because p99 latency doubled while throughput stopped climbing — the gateway saturated by going slow rather than dropping requests. Look for backpressure (per-pool queue depth, per-replica inflight) on the upstream or contention in the dispatch path.")
 		}
 	}
 	if len(parts) == 0 {

@@ -28,6 +28,7 @@ func runOpenAPI(args []string) error {
 	rps := fs.Int("rps", 100, "requests per second per target")
 	duration := fs.Duration("duration", 30*time.Second, "test duration")
 	concurrency := fs.Int("concurrency", 0, "max concurrent in-flight per target (extras are dropped); 0 = auto = max(64, rps/20)")
+	shards := fs.Int("shards", 0, "driver goroutines per target; 0 = auto = ceil(rps/1500)")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request HTTP timeout")
 	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
 	jsonOut := fs.String("json", "", "write the gateway-pass summary to PATH as JSON; '-' for stdout")
@@ -101,6 +102,7 @@ func runOpenAPI(args []string) error {
 		RPS:           *rps,
 		Duration:      *duration,
 		Concurrency:   *concurrency,
+		Shards:        *shards,
 		ServerMetrics: *serverSide,
 	}
 

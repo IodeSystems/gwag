@@ -227,19 +227,33 @@ func TestDetectKnee_AchievedBelow80AfterHealthy(t *testing.T) {
 	}
 }
 
-func TestDetectKnee_P99Doubled(t *testing.T) {
-	// Achieved stays > 80%, but p99 jumps from 500 to 1500 (×3 > ×2).
+func TestDetectKnee_P99CliffRequiresThroughputStall(t *testing.T) {
+	// Achieved stays > 80% AND achieved still climbs — p99 doubles but
+	// throughput is healthy, so the rule must NOT fire (this is the
+	// natural queueing creep that fired the old too-eager rule).
 	prev := SweepStep{TargetRPS: 1000, AchievedRPSMean: 980, P99UsMedian: 500}
 	cur := SweepStep{TargetRPS: 5000, AchievedRPSMean: 4900, P99UsMedian: 1500}
+	if _, hit := detectKnee([]SweepStep{prev, cur}); hit {
+		t.Error("p99 doubled but throughput is climbing — must not fire")
+	}
+}
+
+func TestDetectKnee_P99CliffFiresWhenThroughputStalls(t *testing.T) {
+	// p99 doubles AND achieved RPS stops growing → real saturation
+	// via latency. Target picked so achieved stays > 80% (otherwise
+	// the achieved-below-80 rule fires first; that ordering is
+	// asserted in TestDetectKnee_BothRulesFire_AchievedWins).
+	prev := SweepStep{TargetRPS: 25000, AchievedRPSMean: 24500, P99UsMedian: 30000}
+	cur := SweepStep{TargetRPS: 27000, AchievedRPSMean: 24500, P99UsMedian: 100000}
 	k, hit := detectKnee([]SweepStep{prev, cur})
 	if !hit {
-		t.Fatal("expected knee fire on p99 doubled")
+		t.Fatal("expected knee fire when p99 doubled + throughput plateau")
 	}
-	if k.Reason != KneeReasonP99Doubled {
-		t.Errorf("reason = %q, want %q", k.Reason, KneeReasonP99Doubled)
+	if k.Reason != KneeReasonP99Cliff {
+		t.Errorf("reason = %q, want %q", k.Reason, KneeReasonP99Cliff)
 	}
-	if k.KneeRPS != 1000 {
-		t.Errorf("knee_rps = %d", k.KneeRPS)
+	if k.KneeRPS != 25000 {
+		t.Errorf("knee_rps = %d, want 25000", k.KneeRPS)
 	}
 }
 

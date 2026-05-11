@@ -26,6 +26,7 @@ type JSONOutput struct {
 	Label       string        `json:"label,omitempty"`
 	TargetRPS   int           `json:"target_rps"`
 	Concurrency int           `json:"concurrency"`
+	Shards      int           `json:"shards"`
 	Duration    float64       `json:"duration_seconds"`
 	Targets     []TargetStats `json:"targets"`
 	Gateway     *GatewayStats `json:"gateway,omitempty"`
@@ -92,11 +93,16 @@ func BuildJSONOutput(opts Options, res PassResult) JSONOutput {
 	if concurrency == 0 {
 		concurrency = opts.Concurrency
 	}
+	shards := res.EffectiveShards
+	if shards == 0 {
+		shards = opts.Shards
+	}
 	out := JSONOutput{
 		Schema:      JSONSchemaVersion,
 		Label:       res.Label,
 		TargetRPS:   opts.RPS,
 		Concurrency: concurrency,
+		Shards:      shards,
 		Duration:    res.Elapsed.Seconds(),
 	}
 	for i, t := range res.Targets {

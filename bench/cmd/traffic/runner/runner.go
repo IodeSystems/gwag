@@ -115,10 +115,19 @@ func (s *Stats) totalErrs() uint64 {
 // Concurrency = 0 means "auto" — runner picks max(64, RPS/20). Pin a
 // higher floor explicitly when running at multi-ms p50 or fan-out
 // dispatch where 5% of RPS isn't enough headroom.
+//
+// Shards = 0 means "auto" — runner picks ceil(RPS/1500) so each
+// driver goroutine ticks well below the empirical single-goroutine
+// ceiling (~3.2k Hz on Linux). Without sharding, a single ticker +
+// goroutine-spawn loop caps at ~3k RPS regardless of how much
+// headroom the gateway has — every measurement above ~3k turned
+// into client-bound numbers. Pin Shards explicitly to fix the
+// number for repro / CI runs.
 type Options struct {
 	RPS           int
 	Duration      time.Duration
 	Concurrency   int
+	Shards        int
 	ServerMetrics bool
 }
 
@@ -147,8 +156,14 @@ type PassResult struct {
 	// when the caller passed 0. Reported so the JSON sidecar carries
 	// the value the run used rather than the symbolic 0.
 	EffectiveConcurrency int
-	PreSnap              map[string]*metricFamily
-	PostSnap             map[string]*metricFamily
+	// EffectiveShards is the driver-goroutine count Run actually used
+	// (auto-resolved when opts.Shards was 0). Reported so the JSON
+	// sidecar + report writer can show the value rather than the
+	// symbolic 0; useful when chasing client-bound vs gateway-bound
+	// regressions.
+	EffectiveShards int
+	PreSnap         map[string]*metricFamily
+	PostSnap        map[string]*metricFamily
 }
 
 // Run blocks for opts.Duration (or until SIGINT/SIGTERM), drives each
@@ -183,34 +198,49 @@ func Run(opts Options, label string, targets []Target) (PassResult, error) {
 	tctx, tcancel := context.WithTimeout(ctx, opts.Duration)
 	defer tcancel()
 
+	shardCount := opts.Shards
+	if shardCount <= 0 {
+		shardCount = autoShardCount(opts.RPS)
+	}
+
 	runStart := time.Now()
 	wg := sync.WaitGroup{}
 	for ti, target := range targets {
 		ti := ti
 		fire := target.Fire
 		sem := make(chan struct{}, opts.Concurrency)
-		ticker := time.NewTicker(time.Second / time.Duration(opts.RPS))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer ticker.Stop()
-			for {
-				select {
-				case <-tctx.Done():
-					return
-				case <-ticker.C:
+		// Period for each shard: at total RPS R split across N shards,
+		// each shard fires every N/R seconds → period * N = 1s / R.
+		// Using time.Duration math (ns) avoids the rounding cliff a
+		// naive `time.Second/R/N` would hit at high RPS.
+		period := time.Duration(int64(time.Second) * int64(shardCount) / int64(opts.RPS))
+		if period < time.Microsecond {
+			period = time.Microsecond
+		}
+		for s := 0; s < shardCount; s++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ticker := time.NewTicker(period)
+				defer ticker.Stop()
+				for {
 					select {
-					case sem <- struct{}{}:
-						go func() {
-							defer func() { <-sem }()
-							fire(tctx, stats[ti])
-						}()
-					default:
-						stats[ti].RecordErr(ErrDrop, "concurrency saturated; --concurrency too low or server too slow")
+					case <-tctx.Done():
+						return
+					case <-ticker.C:
+						select {
+						case sem <- struct{}{}:
+							go func() {
+								defer func() { <-sem }()
+								fire(tctx, stats[ti])
+							}()
+						default:
+							stats[ti].RecordErr(ErrDrop, "concurrency saturated; --concurrency too low or server too slow")
+						}
 					}
 				}
-			}
-		}()
+			}()
+		}
 	}
 	wg.Wait()
 	elapsed := time.Since(runStart)
@@ -226,6 +256,7 @@ func Run(opts Options, label string, targets []Target) (PassResult, error) {
 		Stats:                stats,
 		Elapsed:              elapsed,
 		EffectiveConcurrency: opts.Concurrency,
+		EffectiveShards:      shardCount,
 		PreSnap:              preSnap,
 		PostSnap:             postSnap,
 	}, nil

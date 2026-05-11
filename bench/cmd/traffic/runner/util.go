@@ -98,6 +98,21 @@ func autoConcurrency(rps int) int {
 	return 64
 }
 
+// autoShardCount is the runner's default when an adapter passes
+// Shards=0: ceil(rps/1500). A single Go time.Ticker + goroutine-
+// spawn loop empirically caps at ~3.2k Hz on Linux (scheduler +
+// runtime-timer granularity, not CPU), so anything above ~3k RPS
+// has to be sharded across N driver goroutines or every reported
+// "achieved RPS" is bench-client-bound, not target-bound. 1500 RPS
+// per shard leaves 2× headroom under that empirical cap.
+func autoShardCount(rps int) int {
+	if rps <= 1500 {
+		return 1
+	}
+	n := (rps + 1499) / 1500 // ceil(rps/1500)
+	return n
+}
+
 // MetricsURLFromGateway derives /api/metrics from any gateway URL
 // (HTTP base, /api/graphql, /api/ingress/foo, etc.). Adapters call
 // this when constructing Targets so the runner can snapshot

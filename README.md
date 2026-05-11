@@ -945,12 +945,14 @@ The per-request overhead table answers *what does each request
 cost?*. [`docs/perf.md`](docs/perf.md) answers the follow-on:
 *what RPS will my hardware sustain before it falls over?* — an
 escalating-target-RPS sweep with automatic knee detection
-(achieved < 80 % of target, or p99 doubled vs prior step),
-machine specs at the top, and an interpretation paragraph per
-scenario. Latest baseline (proto scenario on a 24-core Ryzen 9
-3900X, single gateway, single greeter replica, loopback):
-**1,873 RPS** at p95 **633 µs** with gateway self-time mean
-**70 µs** — ~**78 RPS / core** at the recommended ceiling.
+(achieved < 80 % of target, or a p99-cliff where latency doubles
+while throughput stops climbing), machine specs at the top, and
+an interpretation paragraph per scenario. Latest baseline (proto
+scenario on a 24-core Ryzen 9 3900X, single gateway, single
+greeter replica, loopback): **~26 k RPS sustained** at the 30 k
+target rung with gateway self-time mean **~87 µs** — roughly
+**1.1 k RPS / core**. Past 30 k the dispatch path saturates
+(40 k target collapses to 26 k achieved, p99 climbing to ~90 ms).
 Regenerate with `bin/bench perf all && bin/bench perf report`;
 the file carries a "do not edit" banner so a stale copy is
 visible at a glance.

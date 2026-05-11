@@ -65,8 +65,16 @@ type TrafficRep struct {
 // KneeInfo records where the sweep stopped and why. Two predicates
 // are evaluated after each step:
 //
-//   - achieved-below-80%: AchievedRPSMean < 0.8 × TargetRPS
-//   - p99-doubled:        P99UsMedian > 2 × prior step's P99UsMedian
+//   - achieved-below-80%: AchievedRPSMean < 0.8 × TargetRPS — the
+//     load offered ran past what the bench client + gateway +
+//     upstream could absorb; throughput collapsed.
+//   - p99-cliff: P99UsMedian > 2× prior step *AND* AchievedRPSMean
+//     ≤ prior step's AchievedRPSMean — i.e. latency doubled while
+//     throughput stopped climbing. Catches the case where the
+//     gateway saturates by going slow rather than dropping requests.
+//     A pure latency climb under healthy throughput growth is
+//     normal queueing under load, not a knee, and is intentionally
+//     not flagged.
 //
 // First-to-fire wins. KneeRPS is the *prior* (still healthy) step —
 // the recommended ceiling. FailedAtRPS is the first failing step.
@@ -83,7 +91,7 @@ type KneeInfo struct {
 // can match without literal duplication.
 const (
 	KneeReasonAchievedBelow80 = "achieved_below_80pct"
-	KneeReasonP99Doubled      = "p99_doubled"
+	KneeReasonP99Cliff        = "p99_cliff"
 	KneeAchievedRatio         = 0.80
 	KneeP99Multiplier         = 2.0
 )
@@ -480,10 +488,12 @@ func detectKnee(steps []SweepStep) (KneeInfo, bool) {
 	cur := steps[len(steps)-1]
 	prevRPS := 0
 	var prevP99 int64
+	var prevAchieved float64
 	if len(steps) >= 2 {
 		prev := steps[len(steps)-2]
 		prevRPS = prev.TargetRPS
 		prevP99 = prev.P99UsMedian
+		prevAchieved = prev.AchievedRPSMean
 	}
 	// Predicate 1: achieved-below-80% (target ratio).
 	if cur.AchievedRPSMean < KneeAchievedRatio*float64(cur.TargetRPS) {
@@ -499,16 +509,23 @@ func detectKnee(steps []SweepStep) (KneeInfo, bool) {
 				cur.AchievedRPSMean, cur.TargetRPS, ratio*100, KneeAchievedRatio*100),
 		}, true
 	}
-	// Predicate 2: p99 doubled vs prior step. Only meaningful when a
-	// prior step exists *and* its p99 was non-zero (histogram-coarse
-	// 0 latency at very low RPS could otherwise trip this trivially).
-	if prevP99 > 0 && float64(cur.P99UsMedian) > KneeP99Multiplier*float64(prevP99) {
+	// Predicate 2: p99 cliff — p99 doubled *and* achieved RPS no
+	// longer climbs vs the prior step. Both conditions matter:
+	// latency naturally climbs as load nears capacity (queueing),
+	// so latency-doubled-alone fires too eagerly on healthy ramps
+	// (e.g. 1k → 5k where p99 doubles but throughput tracks target
+	// perfectly). Saturation-via-latency only matters when
+	// throughput also stops scaling.
+	if prevP99 > 0 && prevAchieved > 0 &&
+		float64(cur.P99UsMedian) > KneeP99Multiplier*float64(prevP99) &&
+		cur.AchievedRPSMean <= prevAchieved {
 		return KneeInfo{
 			KneeRPS:     prevRPS,
 			FailedAtRPS: cur.TargetRPS,
-			Reason:      KneeReasonP99Doubled,
-			Detail: fmt.Sprintf("p99 %dµs vs prior %dµs (×%.1f, >×%.1f threshold)",
-				cur.P99UsMedian, prevP99, float64(cur.P99UsMedian)/float64(prevP99), KneeP99Multiplier),
+			Reason:      KneeReasonP99Cliff,
+			Detail: fmt.Sprintf("p99 %dµs vs prior %dµs (×%.1f, >×%.1f threshold) AND achieved %.0f did not exceed prior %.0f",
+				cur.P99UsMedian, prevP99, float64(cur.P99UsMedian)/float64(prevP99), KneeP99Multiplier,
+				cur.AchievedRPSMean, prevAchieved),
 		}, true
 	}
 	return KneeInfo{}, false
