@@ -55,13 +55,31 @@ type TrafficRep struct {
 	Output   json.RawMessage `json:"output"`
 }
 
-// KneeInfo is filled in by knee detection (task 3); empty in this
-// commit. The field stays on the struct so downstream consumers
-// (report writer) don't need an additive schema bump later.
+// KneeInfo records where the sweep stopped and why. Two predicates
+// are evaluated after each step:
+//
+//   - achieved-below-80%: AchievedRPSMean < 0.8 × TargetRPS
+//   - p99-doubled:        P99UsMedian > 2 × prior step's P99UsMedian
+//
+// First-to-fire wins. KneeRPS is the *prior* (still healthy) step —
+// the recommended ceiling. FailedAtRPS is the first failing step.
+// Reason is a stable enum so the report writer can branch on it
+// without parsing prose; Detail is the human-readable numbers.
 type KneeInfo struct {
-	TargetRPS int    `json:"target_rps"`
-	Reason    string `json:"reason"`
+	KneeRPS     int    `json:"knee_rps"`
+	FailedAtRPS int    `json:"failed_at_rps"`
+	Reason      string `json:"reason"`
+	Detail      string `json:"detail"`
 }
+
+// Knee predicate identifiers — exposed so tests + the report writer
+// can match without literal duplication.
+const (
+	KneeReasonAchievedBelow80 = "achieved_below_80pct"
+	KneeReasonP99Doubled      = "p99_doubled"
+	KneeAchievedRatio         = 0.80
+	KneeP99Multiplier         = 2.0
+)
 
 // SweepSchemaVersion identifies the on-disk shape so the report
 // writer can refuse a snapshot it doesn't understand.
@@ -81,6 +99,7 @@ func runSweep(args []string) error {
 	noWarmup := fs.Bool("no-warmup", false, "treat every rep as data (default discards rep 1)")
 	outPath := fs.String("out", "bench/.run/perf/sweep.json", "where to write the Sweep JSON; '-' for stdout")
 	keepReps := fs.Bool("keep-reps", false, "preserve per-rep traffic --json sidecars under <out>.reps/; default cleans them after aggregation")
+	noKnee := fs.Bool("no-knee", false, "run every step to completion even when knee predicates fire (default stops at first knee)")
 	query := fs.String("query", `{ greeter { hello(name: "world") { greeting } } }`, "GraphQL query string for this sweep")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: perf run [flags]")
@@ -146,6 +165,14 @@ func runSweep(args []string) error {
 		// Stream-print the step's aggregate row as it finishes so a
 		// long sweep gives the operator feedback without buffering.
 		printStepRow(os.Stdout, step)
+		if !*noKnee {
+			if knee, hit := detectKnee(sw.Steps); hit {
+				sw.Knee = &knee
+				fmt.Fprintf(os.Stderr, "knee detected at rps=%d (%s); stopping sweep. Pass --no-knee to run remaining steps.\n",
+					knee.FailedAtRPS, knee.Reason)
+				break
+			}
+		}
 	}
 
 	sw.FinishedAt = time.Now().UTC().Format(time.RFC3339)
@@ -414,6 +441,54 @@ func printStepRow(w *os.File, step SweepStep) {
 		usToStr(step.SelfMeanUsMedian),
 		usToStr(step.DispatchMeanUsMedian),
 	)
+}
+
+// detectKnee evaluates the two stop predicates against the latest
+// step and returns (kneeInfo, true) when one fires. Called after
+// each step lands; first-firing predicate wins.
+//
+// KneeRPS is the *prior* step's TargetRPS — the highest rung that
+// still passed both rules. When the very first step fails, KneeRPS
+// is 0 to signal "every rung tested was beyond the knee".
+func detectKnee(steps []SweepStep) (KneeInfo, bool) {
+	if len(steps) == 0 {
+		return KneeInfo{}, false
+	}
+	cur := steps[len(steps)-1]
+	prevRPS := 0
+	var prevP99 int64
+	if len(steps) >= 2 {
+		prev := steps[len(steps)-2]
+		prevRPS = prev.TargetRPS
+		prevP99 = prev.P99UsMedian
+	}
+	// Predicate 1: achieved-below-80% (target ratio).
+	if cur.AchievedRPSMean < KneeAchievedRatio*float64(cur.TargetRPS) {
+		ratio := 0.0
+		if cur.TargetRPS > 0 {
+			ratio = cur.AchievedRPSMean / float64(cur.TargetRPS)
+		}
+		return KneeInfo{
+			KneeRPS:     prevRPS,
+			FailedAtRPS: cur.TargetRPS,
+			Reason:      KneeReasonAchievedBelow80,
+			Detail: fmt.Sprintf("achieved %.0f / %d target (%.0f%% < %.0f%% threshold)",
+				cur.AchievedRPSMean, cur.TargetRPS, ratio*100, KneeAchievedRatio*100),
+		}, true
+	}
+	// Predicate 2: p99 doubled vs prior step. Only meaningful when a
+	// prior step exists *and* its p99 was non-zero (histogram-coarse
+	// 0 latency at very low RPS could otherwise trip this trivially).
+	if prevP99 > 0 && float64(cur.P99UsMedian) > KneeP99Multiplier*float64(prevP99) {
+		return KneeInfo{
+			KneeRPS:     prevRPS,
+			FailedAtRPS: cur.TargetRPS,
+			Reason:      KneeReasonP99Doubled,
+			Detail: fmt.Sprintf("p99 %dµs vs prior %dµs (×%.1f, >×%.1f threshold)",
+				cur.P99UsMedian, prevP99, float64(cur.P99UsMedian)/float64(prevP99), KneeP99Multiplier),
+		}, true
+	}
+	return KneeInfo{}, false
 }
 
 func usToStr(us int64) string {

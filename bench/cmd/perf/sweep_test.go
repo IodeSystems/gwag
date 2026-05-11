@@ -127,6 +127,97 @@ func TestParseTrafficOutput_NoGatewayBlock(t *testing.T) {
 	}
 }
 
+func TestDetectKnee_EmptyOrSingleHealthy(t *testing.T) {
+	if _, hit := detectKnee(nil); hit {
+		t.Error("empty steps: should not fire")
+	}
+	// Single healthy step — achieved at target, no prior. No fire.
+	healthy := SweepStep{TargetRPS: 1000, AchievedRPSMean: 990, P99UsMedian: 1000}
+	if _, hit := detectKnee([]SweepStep{healthy}); hit {
+		t.Error("healthy single step should not fire")
+	}
+}
+
+func TestDetectKnee_AchievedBelow80OnFirstStep(t *testing.T) {
+	// First step achieves only 60% of target → fires with KneeRPS=0
+	// because there's no prior healthy rung.
+	step := SweepStep{TargetRPS: 1000, AchievedRPSMean: 600, P99UsMedian: 1000}
+	k, hit := detectKnee([]SweepStep{step})
+	if !hit {
+		t.Fatal("expected knee fire on first under-achieving step")
+	}
+	if k.Reason != KneeReasonAchievedBelow80 {
+		t.Errorf("reason = %q, want %q", k.Reason, KneeReasonAchievedBelow80)
+	}
+	if k.FailedAtRPS != 1000 {
+		t.Errorf("failed_at = %d, want 1000", k.FailedAtRPS)
+	}
+	if k.KneeRPS != 0 {
+		t.Errorf("knee_rps = %d, want 0 (no prior healthy rung)", k.KneeRPS)
+	}
+}
+
+func TestDetectKnee_AchievedBelow80AfterHealthy(t *testing.T) {
+	prev := SweepStep{TargetRPS: 1000, AchievedRPSMean: 980, P99UsMedian: 800}
+	cur := SweepStep{TargetRPS: 5000, AchievedRPSMean: 3600, P99UsMedian: 1500} // 72% < 80%
+	k, hit := detectKnee([]SweepStep{prev, cur})
+	if !hit {
+		t.Fatal("expected knee fire when achieved < 80%")
+	}
+	if k.KneeRPS != 1000 {
+		t.Errorf("knee_rps = %d, want 1000 (prior healthy rung)", k.KneeRPS)
+	}
+	if k.FailedAtRPS != 5000 {
+		t.Errorf("failed_at = %d, want 5000", k.FailedAtRPS)
+	}
+	if k.Reason != KneeReasonAchievedBelow80 {
+		t.Errorf("reason = %q", k.Reason)
+	}
+}
+
+func TestDetectKnee_P99Doubled(t *testing.T) {
+	// Achieved stays > 80%, but p99 jumps from 500 to 1500 (×3 > ×2).
+	prev := SweepStep{TargetRPS: 1000, AchievedRPSMean: 980, P99UsMedian: 500}
+	cur := SweepStep{TargetRPS: 5000, AchievedRPSMean: 4900, P99UsMedian: 1500}
+	k, hit := detectKnee([]SweepStep{prev, cur})
+	if !hit {
+		t.Fatal("expected knee fire on p99 doubled")
+	}
+	if k.Reason != KneeReasonP99Doubled {
+		t.Errorf("reason = %q, want %q", k.Reason, KneeReasonP99Doubled)
+	}
+	if k.KneeRPS != 1000 {
+		t.Errorf("knee_rps = %d", k.KneeRPS)
+	}
+}
+
+func TestDetectKnee_BothRulesFire_AchievedWins(t *testing.T) {
+	// Both predicates fire; the achieved-below-80 rule checks first
+	// (it's the more reliable signal — bench client can saturate
+	// before the gateway notices). Test pins the precedence so a
+	// future refactor doesn't quietly swap order.
+	prev := SweepStep{TargetRPS: 1000, AchievedRPSMean: 980, P99UsMedian: 500}
+	cur := SweepStep{TargetRPS: 5000, AchievedRPSMean: 3000, P99UsMedian: 1500}
+	k, hit := detectKnee([]SweepStep{prev, cur})
+	if !hit {
+		t.Fatal("expected knee fire")
+	}
+	if k.Reason != KneeReasonAchievedBelow80 {
+		t.Errorf("reason = %q, want %q (achieved-below-80 should win precedence)", k.Reason, KneeReasonAchievedBelow80)
+	}
+}
+
+func TestDetectKnee_PriorP99ZeroIgnored(t *testing.T) {
+	// histogram-coarse 0 p99 from a low-RPS first step must not trip
+	// the doubling rule — anything ×2 of 0 is still 0, and we'd
+	// otherwise flag every legitimate rung past the first as "knee".
+	prev := SweepStep{TargetRPS: 100, AchievedRPSMean: 99, P99UsMedian: 0}
+	cur := SweepStep{TargetRPS: 1000, AchievedRPSMean: 990, P99UsMedian: 800}
+	if _, hit := detectKnee([]SweepStep{prev, cur}); hit {
+		t.Error("zero prior-p99 should not trip the doubling rule")
+	}
+}
+
 func TestParseTrafficOutput_DispatchWeighting(t *testing.T) {
 	// Two dispatches with different counts — weighted mean should
 	// favour the larger row.
