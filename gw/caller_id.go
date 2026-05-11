@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/iodesystems/go-api-gateway/gw/ir"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -90,6 +91,72 @@ func resolveCallerID(ctx context.Context, ex CallerIDExtractor, headers []string
 		return v
 	}
 	return callerFromContext(ctx, headers)
+}
+
+// WithCallerIDEnforce flips the gateway from default-allow to
+// reject-anonymous: every dispatch must resolve a non-empty caller-id
+// or it short-circuits with CodeUnauthenticated (HTTP 401 / gRPC 16).
+// Without this option the gateway records anonymous / failed-
+// extraction as caller="unknown" and lets the request through — the
+// day-1 posture that keeps adopters from bricking their own traffic
+// while wiring the extractor.
+//
+// Resolution sources are the same as resolveCallerID: a configured
+// CallerIDExtractor wins, otherwise the legacy WithCallerHeaders
+// allowlist. With neither configured, every dispatch is rejected as
+// unauthenticated — the operator opted into enforce without wiring a
+// caller source, which is almost always a misconfiguration we want
+// loud rather than silent.
+//
+// Subscription dispatchers are not wrapped (matching the existing
+// quotaMiddleware skip); the HMAC channel-auth gate on subscribe is
+// the per-subscription auth seam.
+//
+// Plan §Caller-ID + quota ladder.
+func WithCallerIDEnforce() Option {
+	return func(cfg *config) { cfg.callerIDEnforce = true }
+}
+
+// enforceCallerID returns the rejection error a dispatch should
+// short-circuit on when WithCallerIDEnforce is in play. nil means the
+// request carries a usable caller-id. The error is always a
+// *rejection with CodeUnauthenticated so the ingress error mapper
+// renders 401 / Unauthenticated.
+func enforceCallerID(ctx context.Context, ex CallerIDExtractor, headers []string) error {
+	if ex != nil {
+		v, err := ex(ctx)
+		if err != nil {
+			return Reject(CodeUnauthenticated, "caller-id required: "+err.Error())
+		}
+		if v == "" {
+			return Reject(CodeUnauthenticated, "caller-id required: anonymous caller")
+		}
+		return nil
+	}
+	v := callerFromContext(ctx, headers)
+	if v == "" || v == "unknown" {
+		return Reject(CodeUnauthenticated, "caller-id required: no extractor or matching header")
+	}
+	return nil
+}
+
+// callerIDEnforceMiddleware returns a DispatcherMiddleware that
+// short-circuits with CodeUnauthenticated when no caller-id resolves.
+// Identity middleware when WithCallerIDEnforce is not set.
+func (g *Gateway) callerIDEnforceMiddleware() ir.DispatcherMiddleware {
+	if !g.cfg.callerIDEnforce {
+		return func(next ir.Dispatcher) ir.Dispatcher { return next }
+	}
+	ex := g.cfg.callerIDExtractor
+	headers := g.cfg.callerHeaders
+	return func(next ir.Dispatcher) ir.Dispatcher {
+		return ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
+			if err := enforceCallerID(ctx, ex, headers); err != nil {
+				return nil, err
+			}
+			return next.Dispatch(ctx, args)
+		})
+	}
 }
 
 // OtherCallerID is the bucket label every caller past the

@@ -260,6 +260,17 @@ type config struct {
 	// quota holds the WithQuota option payload until New() can build
 	// the per-gateway permit pool. nil → no quota gate (default-allow).
 	quota *QuotaOptions
+
+	// callerIDEnforce makes dispatches without a resolvable caller-id
+	// reject with CodeUnauthenticated. Default false (anonymous
+	// allowed). See WithCallerIDEnforce.
+	callerIDEnforce bool
+
+	// quotaEnforce flips WithQuota from fail-open to fail-closed: the
+	// delegate being UNAVAILABLE / NOT_CONFIGURED / transport-broken
+	// rejects with CodeResourceExhausted instead of granting an
+	// emergency permit block. Default false. See WithQuotaEnforce.
+	quotaEnforce bool
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -708,6 +719,7 @@ func New(opts ...Option) *Gateway {
 	}
 	if cfg.quota != nil {
 		g.quotaAuth = newQuotaAuthDelegate(g, *cfg.quota)
+		g.quotaAuth.enforce = cfg.quotaEnforce
 	}
 	if pm != nil {
 		pm.callerExtractor = cfg.callerIDExtractor

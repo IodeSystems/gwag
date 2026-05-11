@@ -306,6 +306,166 @@ func (f dispatcherFunc) Dispatch(ctx context.Context, args map[string]any) (any,
 	return f(ctx, args)
 }
 
+// Plan §Caller-ID + quota ladder — pins the WithQuotaEnforce switch.
+// Default WithQuota fails open on delegate UNAVAILABLE / transport
+// error / no delegate registered. Adding WithQuotaEnforce flips those
+// to fail-closed with CodeResourceExhausted.
+
+// newQuotaEnforceTestGateway mirrors newQuotaTestGateway but flips on
+// WithQuotaEnforce.
+func newQuotaEnforceTestGateway(t *testing.T, opts QuotaOptions, handler func(*qav1.AcquireBlockRequest) (*qav1.AcquireBlockResponse, error)) (*Gateway, *atomic.Int32) {
+	t.Helper()
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithQuota(opts), WithQuotaEnforce())
+	t.Cleanup(gw.Close)
+	if gw.quotaAuth == nil {
+		t.Fatalf("quotaAuth nil with WithQuota set")
+	}
+	if !gw.quotaAuth.enforce {
+		t.Fatalf("enforce flag not propagated from cfg.quotaEnforce")
+	}
+	var calls atomic.Int32
+	gw.quotaAuth.callDelegateFn = func(_ context.Context, caller, ns, ver string) (*qav1.AcquireBlockResponse, error) {
+		calls.Add(1)
+		return handler(&qav1.AcquireBlockRequest{
+			CallerId:         caller,
+			Namespace:        ns,
+			Version:          ver,
+			RequestedPermits: gw.quotaAuth.blockSize(),
+		})
+	}
+	return gw, &calls
+}
+
+func TestQuotaEnforce_UNAVAILABLE_RejectsWithRetryAfter(t *testing.T) {
+	gw, _ := newQuotaEnforceTestGateway(t,
+		QuotaOptions{BlockSize: 5, EmergencyPermits: 2, EmergencyTTL: 11 * time.Second},
+		func(_ *qav1.AcquireBlockRequest) (*qav1.AcquireBlockResponse, error) {
+			return &qav1.AcquireBlockResponse{
+				Code:   qav1.QuotaAuthCode_QUOTA_AUTH_CODE_UNAVAILABLE,
+				Reason: "shard outage",
+			}, nil
+		},
+	)
+	err := gw.quotaAuth.check(context.Background(), "alice", "billing", "v1")
+	if err == nil {
+		t.Fatalf("expected rejection on UNAVAILABLE under enforce")
+	}
+	var rej *rejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("err type = %T, want *rejection", err)
+	}
+	if rej.Code != CodeResourceExhausted {
+		t.Errorf("code = %v, want CodeResourceExhausted", rej.Code)
+	}
+	if rej.RetryAfter < 5*time.Second || rej.RetryAfter > 15*time.Second {
+		t.Errorf("RetryAfter = %v, want ~emergencyTTL", rej.RetryAfter)
+	}
+	if !strings.Contains(rej.Msg, "shard outage") {
+		t.Errorf("msg = %q, want the delegate-supplied reason", rej.Msg)
+	}
+}
+
+func TestQuotaEnforce_TransportError_RejectsResourceExhausted(t *testing.T) {
+	gw, _ := newQuotaEnforceTestGateway(t,
+		QuotaOptions{BlockSize: 5, EmergencyPermits: 1, EmergencyTTL: 11 * time.Second},
+		func(_ *qav1.AcquireBlockRequest) (*qav1.AcquireBlockResponse, error) {
+			return nil, errors.New("dial: connection refused")
+		},
+	)
+	err := gw.quotaAuth.check(context.Background(), "alice", "billing", "v1")
+	if err == nil {
+		t.Fatalf("expected rejection on transport error under enforce")
+	}
+	var rej *rejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("err type = %T, want *rejection", err)
+	}
+	if rej.Code != CodeResourceExhausted {
+		t.Errorf("code = %v, want CodeResourceExhausted", rej.Code)
+	}
+	if rej.RetryAfter <= 0 {
+		t.Errorf("RetryAfter = %v, want non-zero so client backs off", rej.RetryAfter)
+	}
+}
+
+// Sanity-check that enforce doesn't break the OK path.
+func TestQuotaEnforce_OK_StillGrants(t *testing.T) {
+	gw, _ := newQuotaEnforceTestGateway(t,
+		QuotaOptions{BlockSize: 2},
+		func(_ *qav1.AcquireBlockRequest) (*qav1.AcquireBlockResponse, error) {
+			return &qav1.AcquireBlockResponse{
+				Code:           qav1.QuotaAuthCode_QUOTA_AUTH_CODE_OK,
+				GrantedPermits: 2,
+			}, nil
+		},
+	)
+	for i := 0; i < 2; i++ {
+		if err := gw.quotaAuth.check(context.Background(), "alice", "billing", "v1"); err != nil {
+			t.Fatalf("OK dispatch %d: %v", i, err)
+		}
+	}
+}
+
+// End-to-end: WithQuotaEnforce + UNAVAILABLE → 429-shaped GraphQL
+// error envelope with retryAfterSeconds extension. Same surface
+// adopters see as on explicit DENIED (TestQuota_E2E_DeniedSurfaces…),
+// just driven by the enforce path.
+func TestQuotaEnforce_E2E_UnavailableSurfaces429Extension(t *testing.T) {
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(be.Close)
+
+	gw := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithCallerIDPublic(),
+		WithQuota(QuotaOptions{BlockSize: 1, EmergencyTTL: 8 * time.Second}),
+		WithQuotaEnforce(),
+	)
+	t.Cleanup(gw.Close)
+	gw.quotaAuth.callDelegateFn = func(_ context.Context, _, _, _ string) (*qav1.AcquireBlockResponse, error) {
+		return &qav1.AcquireBlockResponse{
+			Code: qav1.QuotaAuthCode_QUOTA_AUTH_CODE_UNAVAILABLE,
+		}, nil
+	}
+
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql",
+		strings.NewReader(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(PublicCallerIDHeader, "alice")
+	rr := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(rr, req)
+
+	var body struct {
+		Errors []struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Code              string `json:"code"`
+				RetryAfterSeconds int    `json:"retryAfterSeconds"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (body=%s)", err, rr.Body.String())
+	}
+	if len(body.Errors) == 0 {
+		t.Fatalf("expected errors[] in response, got %s", rr.Body.String())
+	}
+	ext := body.Errors[0].Extensions
+	if ext.Code != "RESOURCE_EXHAUSTED" {
+		t.Errorf("error code=%q, want RESOURCE_EXHAUSTED (body=%s)", ext.Code, rr.Body.String())
+	}
+	if ext.RetryAfterSeconds < 5 || ext.RetryAfterSeconds > 12 {
+		t.Errorf("retryAfterSeconds=%d, want ~emergencyTTL (~8)", ext.RetryAfterSeconds)
+	}
+}
+
 // TestQuota_E2E_DeniedSurfaces429WithRetryAfter pins the ingress
 // path: WithQuota wired → DENIED rejection → writeIngressDispatchError
 // emits 429 + Retry-After header. Goes through gw.Handler() to

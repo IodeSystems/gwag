@@ -71,6 +71,22 @@ func WithQuota(opts QuotaOptions) Option {
 	return func(cfg *config) { cfg.quota = &opts }
 }
 
+// WithQuotaEnforce flips the WithQuota gate from fail-open to
+// fail-closed: a delegate that's UNAVAILABLE / NOT_CONFIGURED /
+// unreachable (transport error) / unregistered now surfaces as
+// CodeResourceExhausted (HTTP 429 + Retry-After) instead of granting
+// an EmergencyPermits-sized block. Use this when the quota delegate
+// must be load-bearing — e.g. a paid-tier deployment where bypass-
+// on-outage would let traffic through unmetered.
+//
+// Default (no option): fail-open. WithQuotaEnforce alone is a no-op;
+// it must be combined with WithQuota.
+//
+// Plan §Caller-ID + quota ladder.
+func WithQuotaEnforce() Option {
+	return func(cfg *config) { cfg.quotaEnforce = true }
+}
+
 // quotaAuthDelegate is the per-gateway state for the permit gate:
 // bucket map + singleflight + lifecycle bookkeeping. One instance is
 // built in New() when WithQuota is set; the middleware closes over
@@ -78,6 +94,13 @@ func WithQuota(opts QuotaOptions) Option {
 type quotaAuthDelegate struct {
 	gw   *Gateway
 	opts QuotaOptions
+
+	// enforce flips the fail-open paths (UNAVAILABLE / NOT_CONFIGURED
+	// / UNSPECIFIED / transport error / no delegate registered) to
+	// fail-closed: caller sees CodeResourceExhausted instead of the
+	// emergency block. Set by WithQuotaEnforce; read in refill (and
+	// the no-delegate short-circuit in check).
+	enforce bool
 
 	mu      sync.Mutex
 	buckets map[string]*quotaBucket
@@ -229,8 +252,13 @@ func (d *quotaAuthDelegate) refill(ctx context.Context, b *quotaBucket, caller, 
 	resp, err := d.callDelegate(ctx, caller, ns, ver)
 	now := time.Now()
 	if err != nil || resp == nil {
-		// Fail-open: grant emergency block. The next request after
-		// emergencyTTL forces another refill attempt.
+		// Delegate unreachable / not registered. Fail-open grants an
+		// emergency block; WithQuotaEnforce flips to fail-closed so
+		// production deployments can refuse traffic when the quota
+		// service is the policy authority.
+		if d.enforce {
+			return quotaRefillResult{granted: false, retryAfter: d.emergencyTTL(), reason: "quota delegate unavailable"}
+		}
 		b.install(int32(d.emergencyPermits()), now.Add(d.emergencyTTL()))
 		return quotaRefillResult{granted: true}
 	}
@@ -253,7 +281,16 @@ func (d *quotaAuthDelegate) refill(ctx context.Context, b *quotaBucket, caller, 
 		retry := d.retryAfterFromResp(resp, now)
 		return quotaRefillResult{granted: false, retryAfter: retry, reason: resp.GetReason()}
 	default:
-		// UNAVAILABLE / NOT_CONFIGURED / UNSPECIFIED — fail-open.
+		// UNAVAILABLE / NOT_CONFIGURED / UNSPECIFIED. Fail-open grants
+		// emergency permits; WithQuotaEnforce surfaces the
+		// delegate-side outage as a RESOURCE_EXHAUSTED rejection.
+		if d.enforce {
+			reason := resp.GetReason()
+			if reason == "" {
+				reason = "quota delegate " + resp.GetCode().String()
+			}
+			return quotaRefillResult{granted: false, retryAfter: d.emergencyTTL(), reason: reason}
+		}
 		b.install(int32(d.emergencyPermits()), now.Add(d.emergencyTTL()))
 		return quotaRefillResult{granted: true}
 	}
