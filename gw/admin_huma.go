@@ -600,6 +600,70 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "mcpList",
+		Method:      http.MethodGet,
+		Path:        "/admin/mcp",
+		Summary:     "Read the MCP surface allowlist (auto_include flag + include / exclude path lists). Plan §2 MCP integration.",
+	}, func(_ context.Context, _ *struct{}) (*mcpListOut, error) {
+		return mcpListOutFrom(g.MCPConfigSnapshot()), nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpInclude",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/include",
+		Summary:     "Add a path or glob to the MCP include list. Default-deny mode (auto_include=false) exposes exactly the include entries; in auto_include=true mode the include list is unused. Idempotent — already-present entries are a no-op.",
+	}, func(ctx context.Context, in *mcpIncludeIn) (*mcpListOut, error) {
+		if in.Body.Path == "" {
+			return nil, huma.Error400BadRequest("path must not be empty")
+		}
+		cfg, err := g.mutateMCPConfig(ctx, func(cfg *MCPConfig) {
+			if !containsString(cfg.Include, in.Body.Path) {
+				cfg.Include = append(cfg.Include, in.Body.Path)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mcpListOutFrom(cfg), nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpExclude",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/exclude",
+		Summary:     "Add a path or glob to the MCP exclude list. Only consulted in auto_include=true mode (subtractive surface). Idempotent.",
+	}, func(ctx context.Context, in *mcpExcludeIn) (*mcpListOut, error) {
+		if in.Body.Path == "" {
+			return nil, huma.Error400BadRequest("path must not be empty")
+		}
+		cfg, err := g.mutateMCPConfig(ctx, func(cfg *MCPConfig) {
+			if !containsString(cfg.Exclude, in.Body.Path) {
+				cfg.Exclude = append(cfg.Exclude, in.Body.Path)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mcpListOutFrom(cfg), nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpSetAutoInclude",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/auto-include",
+		Summary:     "Toggle auto_include. false (default) = surface is exactly the include list (default-deny); true = surface is every public leaf minus the exclude list. Internal `_*` namespaces are filtered first either way.",
+	}, func(ctx context.Context, in *mcpSetAutoIncludeIn) (*mcpListOut, error) {
+		cfg, err := g.mutateMCPConfig(ctx, func(cfg *MCPConfig) {
+			cfg.AutoInclude = in.Body.AutoInclude
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mcpListOutFrom(cfg), nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
 		Path:        "/admin/drain",
@@ -935,6 +999,57 @@ func parseStatsWindow(s string) (time.Duration, error) {
 		return 24 * time.Hour, nil
 	}
 	return 0, fmt.Errorf("unknown window %q (want 1m, 1h, or 24h)", s)
+}
+
+type mcpListOut struct {
+	Body struct {
+		AutoInclude bool     `json:"autoInclude"`
+		Include     []string `json:"include"`
+		Exclude     []string `json:"exclude"`
+	}
+}
+
+type mcpIncludeIn struct {
+	Body struct {
+		Path string `json:"path"`
+	}
+}
+
+type mcpExcludeIn struct {
+	Body struct {
+		Path string `json:"path"`
+	}
+}
+
+type mcpSetAutoIncludeIn struct {
+	Body struct {
+		AutoInclude bool `json:"autoInclude"`
+	}
+}
+
+func mcpListOutFrom(cfg MCPConfig) *mcpListOut {
+	out := &mcpListOut{}
+	out.Body.AutoInclude = cfg.AutoInclude
+	if cfg.Include == nil {
+		out.Body.Include = []string{}
+	} else {
+		out.Body.Include = cfg.Include
+	}
+	if cfg.Exclude == nil {
+		out.Body.Exclude = []string{}
+	} else {
+		out.Body.Exclude = cfg.Exclude
+	}
+	return out
+}
+
+func containsString(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 type drainIn struct {

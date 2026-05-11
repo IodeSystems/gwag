@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -132,6 +133,78 @@ func (g *Gateway) SetMCPConfig(ctx context.Context, cfg MCPConfig) error {
 	g.mcpConfig = &mcpConfigState{cfg: cloneMCPConfig(cfg)}
 	g.mu.Unlock()
 	return nil
+}
+
+// mutateMCPConfig applies `mut` to the current MCPConfig and persists
+// the result. Standalone mode: the mutation runs under g.mu — no
+// concurrent admins. Cluster mode: a CAS loop reads (Get), applies mut,
+// and Creates / Updates with the prior revision; concurrent admin
+// edits on different gateways converge via retry. Returns the
+// post-mutation config so callers don't have to round-trip through
+// the watch loop to confirm the change.
+func (g *Gateway) mutateMCPConfig(ctx context.Context, mut func(*MCPConfig)) (MCPConfig, error) {
+	if t := g.peers; t != nil && t.mcpConfig != nil {
+		return clusterMutateMCPConfig(ctx, t.mcpConfig, mut)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	cur := g.mcpConfigSnapshotLocked()
+	mut(&cur)
+	g.mcpConfig = &mcpConfigState{cfg: cloneMCPConfig(cur)}
+	return cloneMCPConfig(cur), nil
+}
+
+func clusterMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func(*MCPConfig)) (MCPConfig, error) {
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		next, err := tryMutateMCPConfig(cctx, kv, mut)
+		cancel()
+		if err == nil {
+			return next, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return MCPConfig{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("mcp_config: CAS retry budget exhausted")
+	}
+	return MCPConfig{}, fmt.Errorf("mcp_config: %w", lastErr)
+}
+
+func tryMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func(*MCPConfig)) (MCPConfig, error) {
+	entry, err := kv.Get(ctx, mcpConfigKey)
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return MCPConfig{}, err
+	}
+	var cur MCPConfig
+	var rev uint64
+	if entry != nil {
+		if uerr := json.Unmarshal(entry.Value(), &cur); uerr != nil {
+			// Malformed payload — overwrite below.
+			cur = MCPConfig{}
+		}
+		rev = entry.Revision()
+	}
+	mut(&cur)
+	payload, err := json.Marshal(cur)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	if rev == 0 {
+		if _, err := kv.Create(ctx, mcpConfigKey, payload); err != nil {
+			return MCPConfig{}, err
+		}
+	} else {
+		if _, err := kv.Update(ctx, mcpConfigKey, payload, rev); err != nil {
+			return MCPConfig{}, err
+		}
+	}
+	return cur, nil
 }
 
 func cloneMCPConfig(cfg MCPConfig) MCPConfig {

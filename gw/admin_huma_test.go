@@ -715,6 +715,138 @@ func TestAdminHuma_DeprecatedStats_NoTrafficSafeToRetire(t *testing.T) {
 	}
 }
 
+// TestAdminHuma_MCP_RoundTrip exercises the four admin_mcp_* routes
+// (list / include / exclude / setAutoInclude) end-to-end against the
+// in-process MCPConfig state. Pins: list reflects the result of every
+// write; include / exclude are idempotent (re-adding doesn't double
+// up); the GET form has no Body wrapping (huma flattens that into the
+// JSON; the writes return the new MCPConfig directly).
+func TestAdminHuma_MCP_RoundTrip(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+
+	type listShape struct {
+		AutoInclude bool     `json:"autoInclude"`
+		Include     []string `json:"include"`
+		Exclude     []string `json:"exclude"`
+	}
+	getList := func(t *testing.T) listShape {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/admin/mcp", nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("list status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		var out listShape
+		if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		return out
+	}
+	post := func(t *testing.T, path, body string) listShape {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer tok")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST %s status=%d body=%s", path, rr.Code, rr.Body.String())
+		}
+		var out listShape
+		if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+			t.Fatalf("decode POST %s: %v", path, err)
+		}
+		return out
+	}
+
+	// Fresh: empty config; include/exclude are [] (never null).
+	if got := getList(t); got.AutoInclude || len(got.Include) != 0 || len(got.Exclude) != 0 {
+		t.Fatalf("fresh list=%+v, want empty", got)
+	}
+
+	// include adds + is idempotent.
+	got := post(t, "/admin/mcp/include", `{"path":"admin.peers.*"}`)
+	if len(got.Include) != 1 || got.Include[0] != "admin.peers.*" {
+		t.Errorf("after include 1: %+v", got)
+	}
+	post(t, "/admin/mcp/include", `{"path":"users.list"}`)
+	got = post(t, "/admin/mcp/include", `{"path":"admin.peers.*"}`) // dup
+	if len(got.Include) != 2 {
+		t.Errorf("after dup include: %+v, want 2 entries", got)
+	}
+
+	// exclude adds independently.
+	got = post(t, "/admin/mcp/exclude", `{"path":"users.delete"}`)
+	if len(got.Exclude) != 1 || got.Exclude[0] != "users.delete" {
+		t.Errorf("after exclude: %+v", got)
+	}
+
+	// setAutoInclude toggles.
+	got = post(t, "/admin/mcp/auto-include", `{"autoInclude":true}`)
+	if !got.AutoInclude {
+		t.Errorf("setAutoInclude(true): %+v", got)
+	}
+
+	// Final list reflects every write.
+	final := getList(t)
+	if !final.AutoInclude || len(final.Include) != 2 || len(final.Exclude) != 1 {
+		t.Errorf("final list=%+v", final)
+	}
+
+	// Sanity: gateway in-process state matches.
+	snap := gw.MCPConfigSnapshot()
+	if !snap.AutoInclude || len(snap.Include) != 2 || len(snap.Exclude) != 1 {
+		t.Errorf("gateway snapshot=%+v drifted from admin list=%+v", snap, final)
+	}
+}
+
+func TestAdminHuma_MCP_WritesRequireBearer(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+
+	// No Authorization header → 401, state unchanged.
+	for _, c := range []struct {
+		path string
+		body string
+	}{
+		{"/admin/mcp/include", `{"path":"x"}`},
+		{"/admin/mcp/exclude", `{"path":"x"}`},
+		{"/admin/mcp/auto-include", `{"autoInclude":true}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("POST %s without bearer: status=%d, want 401", c.path, rr.Code)
+		}
+	}
+	if snap := gw.MCPConfigSnapshot(); snap.AutoInclude || len(snap.Include) != 0 || len(snap.Exclude) != 0 {
+		t.Errorf("state drifted after rejected writes: %+v", snap)
+	}
+}
+
+func TestAdminHuma_MCP_RejectsEmptyPath(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+
+	for _, p := range []string{"/admin/mcp/include", "/admin/mcp/exclude"} {
+		req := httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{"path":""}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer tok")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("POST %s empty path: status=%d, want 400", p, rr.Code)
+		}
+	}
+}
+
 // TestAdminHuma_DeprecatedStats_RejectsBadWindow keeps the boundary
 // check on this endpoint in lockstep with serviceStats / servicesStats.
 func TestAdminHuma_DeprecatedStats_RejectsBadWindow(t *testing.T) {
