@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -345,6 +346,49 @@ query Second { __typename }
 	}
 	if res.Response == nil {
 		t.Fatal("Response must be populated")
+	}
+}
+
+// TestMCPSchemaList_ProtoOpNamesLowerCamel pins that proto-ingested
+// services surface their ops with the same lowerCamel field names the
+// GraphQL renderer emits, not the PascalCase IR op.Name. Without this
+// the agent's `schema_list → query` chain would build queries against
+// a field that doesn't exist in the schema.
+func TestMCPSchemaList_ProtoOpNamesLowerCamel(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+	gw := New(WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(gw.Close)
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
+		To(lis.Addr().String()),
+		As("greeter"),
+	); err != nil {
+		t.Fatalf("AddProtoBytes: %v", err)
+	}
+	if err := gw.SetMCPConfig(context.Background(), MCPConfig{AutoInclude: true}); err != nil {
+		t.Fatalf("SetMCPConfig: %v", err)
+	}
+	rows := gw.MCPSchemaList()
+	found := map[string]SchemaOpKind{}
+	for _, r := range rows {
+		if r.Namespace == "greeter" {
+			found[r.Path] = r.Kind
+		}
+	}
+	if _, ok := found["greeter.hello"]; !ok {
+		t.Errorf("expected path greeter.hello in: %+v", found)
+	}
+	if _, ok := found["greeter.Hello"]; ok {
+		t.Errorf("PascalCase IR name leaked into MCP surface: %+v", found)
+	}
+	// Same path threads through expand and the allowlist matcher.
+	if res, err := gw.MCPSchemaExpand("greeter.hello"); err != nil {
+		t.Errorf("expand greeter.hello: %v", err)
+	} else if res.Op == nil || res.Op.Path != "greeter.hello" {
+		t.Errorf("expand op=%+v", res.Op)
 	}
 }
 

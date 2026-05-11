@@ -216,6 +216,13 @@ func (g *Gateway) mcpAllowsLocked(p string) bool {
 // passing the dot-segmented path and the op pointer. Recurses through
 // Groups; the prefix carries the group chain. Skips internal namespaces
 // (Service.Internal == true) so transforms.HideInternal stays honored.
+//
+// Op names are projected through the same per-kind rename
+// (lowerCamel for proto, identity otherwise) RenderGraphQLRuntime
+// applies, so MCP paths match the GraphQL field names an agent will
+// hand to the `query` tool. The proto IR keeps wire-native PascalCase
+// op names (matching SchemaID / dispatcher registration); the rename
+// runs only at the agent-facing edge.
 func walkServiceOps(s *ir.Service, prefix string, yield func(path string, op *ir.Operation)) {
 	if s.Internal {
 		return
@@ -224,22 +231,33 @@ func walkServiceOps(s *ir.Service, prefix string, yield func(path string, op *ir
 	if base == "" {
 		base = s.Namespace
 	}
+	rename := mcpOpName(s.OriginKind)
 	for _, op := range s.Operations {
-		yield(base+"."+op.Name, op)
+		yield(base+"."+rename(op.Name), op)
 	}
 	for _, grp := range s.Groups {
-		walkGroupOps(grp, base, yield)
+		walkGroupOps(grp, base, rename, yield)
 	}
 }
 
-func walkGroupOps(g *ir.OperationGroup, prefix string, yield func(string, *ir.Operation)) {
+func walkGroupOps(g *ir.OperationGroup, prefix string, rename func(string) string, yield func(string, *ir.Operation)) {
 	base := prefix + "." + g.Name
 	for _, op := range g.Operations {
-		yield(base+"."+op.Name, op)
+		yield(base+"."+rename(op.Name), op)
 	}
 	for _, sub := range g.Groups {
-		walkGroupOps(sub, base, yield)
+		walkGroupOps(sub, base, rename, yield)
 	}
+}
+
+// mcpOpName mirrors opNameForRuntime: proto IR carries PascalCase
+// method names but renders as lowerCamel GraphQL fields; OpenAPI and
+// downstream-GraphQL ingest already use the GraphQL convention.
+func mcpOpName(kind ir.Kind) func(string) string {
+	if kind == ir.KindProto {
+		return lowerCamel
+	}
+	return identityName
 }
 
 // opMatchesRegex applies `re` to op name, every arg name, and the
