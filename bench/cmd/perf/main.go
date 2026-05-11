@@ -27,6 +27,8 @@ const usage = `usage: perf <subcommand> [flags]
 
 Subcommands:
   specs   print the report header (host specs as markdown) and exit.
+  run     drive a perf sweep: escalating target RPS × N reps, capture
+          the per-rep --json sidecars, write a Sweep summary JSON.
 
 Run 'perf <subcommand> --help' for per-subcommand flags.
 `
@@ -38,17 +40,22 @@ func main() {
 	}
 	sub := os.Args[1]
 	args := os.Args[2:]
+	var err error
 	switch sub {
 	case "specs":
-		if err := runSpecs(args); err != nil {
-			fmt.Fprintln(os.Stderr, "perf specs:", err)
-			os.Exit(1)
-		}
+		err = runSpecs(args)
+	case "run":
+		err = runSweep(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
+		return
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", sub)
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "perf "+sub+":", err)
+		os.Exit(1)
 	}
 }
