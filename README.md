@@ -31,6 +31,7 @@ service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    
 - **HA out of the box** — embedded NATS + JetStream KV; any node dispatches to any service registered with any peer. ([§Cluster mode](#cluster-mode))
 - **Subscriptions for free** — server-streaming gRPC becomes a flat GraphQL subscription field; one upstream publish fans out to N WebSocket clients via NATS. ([§Subscriptions](#subscriptions-events))
 - **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y. ([§Backpressure & metrics](#backpressure--metrics))
+- **Per-caller identity + quotas** — one extractor seam (Public / HMAC / Delegated / mTLS-via-proxy) feeds per-caller metrics; opt into block-permit quotas via a `QuotaAuthorizer` delegate. ([§Caller identity & quota](#caller-identity--quota))
 - **Auth / logging as middleware** — one declaration applies across every protocol. `InjectType[T]` / `InjectPath` / `InjectHeader` for the "fill from context, hide from external schema" pattern. ([§Middleware](#middleware))
 - **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus. ([§Health & graceful drain](#health--graceful-drain))
 
@@ -262,12 +263,12 @@ The rules:
   optional arg / field added, deprecation flipped on, new types /
   enums / fields.
 
-The conservative "any removal is breaking" policy is one Tier-2
-upgrade away — the planned **caller-side usage tracking** workstream
-turns "is anyone passing this optional arg?" into a queryable
-question. Until then, the relaxation matches the asymmetric reality
-that *adding* fields is always safe but *removing* fields is mostly
-safe for the optional ones.
+The conservative "any removal is breaking" policy will relax once
+caller-side usage tracking can answer "is anyone passing this
+optional arg?" directly (see [§Roadmap](#roadmap)). Until then, the
+relaxation matches the asymmetric reality that *adding* fields is
+always safe but *removing* fields is mostly safe for the optional
+ones.
 
 ### Retire
 
@@ -276,17 +277,19 @@ rebuilds; the field disappears.
 
 ### What this *doesn't* (yet) tell you
 
-You can't currently ask the gateway *who's still calling a deprecated
-operation*. The metrics carry `namespace, version, method, code` —
-not caller identity. Operators today have to read upstream service
-logs to find the laggards.
+The `dispatch_duration_seconds` Prometheus histogram already carries
+a `caller` label (extracted via `WithCallerIDExtractor` /
+`WithCallerIDPublic` / `WithCallerIDHMAC` / `WithCallerIDDelegated` —
+forgeable-by-design "public" mode, HMAC for production, delegated
+when you want richer attrs alongside), so "who's calling this
+method?" is queryable today.
 
-A planned **call-site usage tracking** workstream adds an inbound
-caller dimension (request-tagged `User-Agent` or service-account
-identity, propagated to the metric label set), with a UI panel
-listing recent callers per deprecated operation. Until it ships,
-deprecation is "announce, wait, retire" — same as without the
-gateway, except the schema-side warnings are at least automatic.
+What's still missing is the *deprecated-operation* UI panel — a
+per-(namespace, method) view of which callers are still hitting an
+`@deprecated` op so you know who to nudge before retiring it. Until
+that lands, deprecation is "announce, wait, retire," with the
+schema-side warnings emitted automatically and Prometheus answering
+"who's still on it?" via the caller label.
 
 ## Examples
 
@@ -705,6 +708,189 @@ gw := gateway.New(gateway.WithoutMetrics())            // disable
 gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 ```
 
+## Caller identity & quota
+
+Operator progression on metrics is predictable: global RPS → per-service
+RPS → per-caller RPS → quota per caller. The first two rungs ship by
+default (Prometheus labels on `namespace` / `version`); the next two
+opt in via one extractor seam plus one delegate.
+
+### One seam, four flavors
+
+`CallerIDExtractor func(ctx) (string, error)` resolves the caller-id
+on every dispatch. The library ships four implementations; pick one at
+boot:
+
+| Flavor | Option | Hot path | Forgeable | Use case |
+|---|---|---|---|---|
+| Public | `WithCallerIDPublic()` | header read | yes | dev; behind an authenticated reverse proxy |
+| HMAC | `WithCallerIDHMAC(o)` | HMAC-SHA256 verify | no (without secret) | production default for untrusted ingress |
+| Delegated | `WithCallerIDDelegated(o)` | TTL-cached delegate RPC | issuer-controlled | token → caller-id with side attrs |
+| mTLS via proxy | proxy injects `X-Caller-Id` | n/a at gateway | no (proxy verifies cert) | operator-side; gateway runs Public |
+
+`caller_id` and the credential material (kid, token) are separate
+axes — rotate the credential without invalidating dashboards built on
+`caller_id`. Same pattern subscriptions use.
+
+### Public mode
+
+```go
+gw := gateway.New(gateway.WithCallerIDPublic())
+```
+
+Reads `X-Caller-Id` (HTTP / WebSocket upgrade) or `caller-id` (gRPC
+metadata). Forgeable by design — appropriate for development, for an
+mTLS-terminating reverse proxy that injects the header after cert
+verification, or for any trusted-network deployment.
+
+### HMAC mode
+
+Production answer for untrusted ingress. The caller signs
+`(caller_id, timestamp, kid)` with a shared secret; the gateway
+verifies on every dispatch:
+
+```go
+gw := gateway.New(gateway.WithCallerIDHMAC(gateway.CallerIDHMACOptions{
+    Secrets: map[string][]byte{
+        "k1": secretV1,
+        "k2": secretV2,  // rotate by adding the new entry, switching signers, then dropping the old
+    },
+    SkewWindow: 5 * time.Minute,
+}))
+```
+
+Wire format (HTTP / gRPC):
+
+| HTTP header | gRPC metadata |
+|---|---|
+| `X-Caller-Id` | `caller-id` |
+| `X-Caller-Timestamp` | `caller-timestamp` |
+| `X-Caller-Kid` | `caller-kid` |
+| `X-Caller-Signature` | `caller-signature` |
+
+Caller-side helper for minting tokens:
+
+```go
+sig, kid, ts := gateway.SignCallerIDTokenWithKid(secretV1, "k1", "alice", 60)
+req.Header.Set(gateway.PublicCallerIDHeader,        "alice")
+req.Header.Set(gateway.HMACCallerIDTimestampHeader, strconv.FormatInt(ts, 10))
+req.Header.Set(gateway.HMACCallerIDKidHeader,       kid)
+req.Header.Set(gateway.HMACCallerIDSignatureHeader, sig)
+```
+
+Same verification primitive the subscription HMAC channel auth uses —
+one rotation knob, one skew window.
+
+### Delegated mode
+
+For opaque tokens that resolve to a caller-id at issue time:
+
+```go
+gw := gateway.New(gateway.WithCallerIDDelegated(gateway.CallerIDDelegatedOptions{
+    TTL:         60 * time.Second,
+    NegativeTTL: 30 * time.Second,
+    Timeout:     3 * time.Second,
+}))
+```
+
+The gateway reads an opaque token from `X-Caller-Token` /
+`caller-token`, looks it up in a local TTL cache, and on a miss calls
+`_caller_auth/v1::Authorize(token)`. A `CallerAuthorizer` service
+registered under that namespace returns `{caller_id, code, ttl_seconds}`.
+Concurrent misses are singleflight-collapsed — a token-rotation
+thundering herd produces one RPC per `(gateway, token)`, not one per
+request. Hit rate target is >99.9% under steady-state traffic.
+
+Negative invalidation: the delegate publishes a `TokenRevoked` event
+on `events.caller_auth.Revoked` (NATS); every gateway in the cluster
+drops the matching cache entry without waiting for TTL.
+
+### Enforce mode
+
+By default, unresolved or anonymous callers are recorded as
+`caller="unknown"` and the request proceeds — the day-1 posture
+prevents adopters from bricking their own traffic while wiring the
+extractor. Once dashboards confirm every legitimate path carries an
+id, flip to reject-anonymous:
+
+```go
+gw := gateway.New(
+    gateway.WithCallerIDHMAC(opts),
+    gateway.WithCallerIDEnforce(),
+)
+```
+
+Anonymous / failed-extraction requests now short-circuit with
+`CodeUnauthenticated` (HTTP 401 / gRPC 16) before they reach the
+service. Subscriptions are not gated — the HMAC channel auth on
+subscribe is the per-subscription seam (see [§HMAC channel auth](#hmac-channel-auth)).
+
+### Metrics cardinality cap
+
+Untrusted ingress can flood the `caller` label and blow up Prometheus.
+Cap admitted labels with `WithCallerIDMetricsTopK(k)` — the first `k`
+distinct callers get their own buckets; everyone else folds into
+`__other__` (`gateway.OtherCallerID`). Admission is LRU-bumped on
+every hit so a burst of one-off callers can't displace steady
+traffic from real services:
+
+```go
+gw := gateway.New(
+    gateway.WithCallerIDPublic(),
+    gateway.WithCallerIDMetricsTopK(1000),
+)
+```
+
+### Quota: block-permit pattern
+
+`WithQuota(opts)` adds a per-`(caller_id, namespace, version)` permit
+bucket. The bucket is debited locally; when it empties the gateway
+calls `_quota_auth/v1::AcquireBlock(caller_id, namespace, version,
+requested_permits)` to refill it. No per-request RPC on the hot path:
+
+```go
+gw := gateway.New(
+    gateway.WithCallerIDHMAC(hmacOpts),
+    gateway.WithQuota(gateway.QuotaOptions{
+        BlockSize:        100,     // permits requested per refill
+        MaxBlockSize:     10_000,  // caps a misbehaving delegate
+        EmergencyPermits: 1,       // fallback when delegate is down
+        EmergencyTTL:     5 * time.Second,
+        Timeout:          3 * time.Second,
+    }),
+)
+```
+
+The `QuotaAuthorizer` delegate replies with
+`{granted_permits, valid_until}` — `valid_until` lets it enforce
+time-windowed quotas (per-second, per-minute) without a per-request
+consult.
+
+Code policy:
+
+- **OK** — bucket refilled; dispatch proceeds.
+- **DENIED** — gateway rejects with `CodeResourceExhausted` (HTTP 429 +
+  `Retry-After`, GraphQL `extensions.retryAfterSeconds`, gRPC 8).
+- **UNAVAILABLE / NOT_CONFIGURED / transport error** — gateway grants
+  an `EmergencyPermits`-sized block so a degraded quota service doesn't
+  brick traffic. `WithQuotaEnforce()` flips this to fail-closed for
+  surfaces where bypass-on-outage is unacceptable (e.g. paid-tier).
+
+Concurrent refill misses are singleflight-collapsed; per-bucket debits
+use the bucket's own mutex so distinct callers never contend on the
+hot path. Subscription dispatch bypasses the quota gate — pair with the
+HMAC channel-auth seam on subscribe instead.
+
+### Known gaps
+
+- **Permits are per-gateway, not cluster-shared.** A caller hitting
+  three gateways at burst sees up to 3× the configured burst.
+  Cluster-shared accounting needs a JetStream-backed counter or
+  delegate-side coordination; deferred until use case.
+- **Public mode is forgeable by design.** Public mode on an open
+  ingress is a configuration mistake; use HMAC or mTLS-via-proxy for
+  untrusted networks.
+
 ## Gateway overhead
 
 > First question every adopter asks: *what does this cost vs. going
@@ -981,16 +1167,13 @@ points worth re-stating in the comparison frame above:
   register/deregister into your deploy pipeline; the pipeline
   itself is yours.
 
-## What's not in here
+## Roadmap
 
-- Rolling deploy / hot reload of the gateway itself. Run blue/green
-  like any other binary, or scale by adding peers.
-- Caller-side usage tracking on deprecated operations. (Roadmap —
-  see [§Service lifecycle](#service-lifecycle).)
-- Apollo Federation. Stitching covers the common case; federation's
-  entity-merging is overkill for most teams.
-- AsyncAPI export. GraphQL SDL with Subscription types covers TS
-  codegen; AsyncAPI's TS tooling is patchier with little payoff.
+**Planned** — caller-identity + per-caller quota gating (HMAC / delegated extractors, block-permit pattern, enforce switches); MCP integration (operator-curated allowlist + schema-walk + query tools); deprecated-op caller-usage panel in the admin UI.
+
+**Open to (pulled in by a real use case)** — WSDL / SOAP ingest as a fourth kind; multipart/form-data passthrough; static `--openapi` / `--graphql` CLI flags; service-account / OAuth-JWT outbound auth helpers; opt-in static codegen + plugin supervisor for native-speed dispatch.
+
+**Not planned** — Apollo Federation entity-merging (stitching covers the common case); AsyncAPI export (GraphQL Subscription types already cover TS codegen).
 
 ## License
 
