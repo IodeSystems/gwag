@@ -31,6 +31,7 @@ Subcommands:
           the per-rep --json sidecars, write a Sweep summary JSON.
   all     run every built-in scenario (proto / openapi / mixed) back
           to back, writing one sweep-<scenario>.json per scenario.
+  report  render docs/perf.md from sweep-*.json under --in-dir.
 
 Run 'perf <subcommand> --help' for per-subcommand flags.
 `
@@ -50,6 +51,8 @@ func main() {
 		err = runSweep(args)
 	case "all":
 		err = runAll(args)
+	case "report":
+		err = runReport(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
