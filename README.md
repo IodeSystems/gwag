@@ -949,10 +949,11 @@ escalating-target-RPS sweep with automatic knee detection
 while throughput stops climbing), machine specs at the top, and
 an interpretation paragraph per scenario. Latest baseline (proto
 scenario on a 24-core Ryzen 9 3900X, single gateway, single
-greeter replica, loopback): **~26 k RPS sustained** at the 30 k
-target rung with gateway self-time mean **~87 µs** — roughly
-**1.1 k RPS / core**. Past 30 k the dispatch path saturates
-(40 k target collapses to 26 k achieved, p99 climbing to ~90 ms).
+greeter replica, loopback): **~25 k RPS sustained** at the 30 k
+target rung with gateway self-time mean **~56 µs** — roughly
+**1 k RPS / core**, gateway adding ~56 µs per request. Past 30 k
+the dispatch path saturates (40 k target collapses to 26 k
+achieved, p99 climbing to ~100 ms).
 Regenerate with `bin/bench perf all && bin/bench perf report`;
 the file carries a "do not edit" banner so a stale copy is
 visible at a glance.

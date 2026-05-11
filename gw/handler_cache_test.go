@@ -82,31 +82,12 @@ func TestWithoutGraphiQL_FallsThroughToJSON(t *testing.T) {
 	}
 }
 
-// TestWithoutPrettyJSON confirms the option suppresses indentation in
-// the JSON hot path (response has no \t prefix on result keys).
-func TestWithoutPrettyJSON(t *testing.T) {
-	_, h := gatewayWithMinimalOpenAPI(t, WithoutPrettyJSON())
-
-	req := httptest.NewRequest(http.MethodPost, "/graphql",
-		strings.NewReader(`{"query":"{ test { getThing(id:\"1\") { id } } }"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-	}
-	body := rr.Body.String()
-	// Pretty encoding indents nested fields with a tab. Without it the
-	// response is a single line modulo a trailing newline from json.Encoder.
-	if strings.Contains(body, "\n\t") {
-		t.Fatalf("WithoutPrettyJSON() response was still indented:\n%s", body)
-	}
-}
-
-// TestPrettyJSONDefault is the inverse: by default the JSON path emits
-// indented output so curl / eyeball debugging stays readable.
-func TestPrettyJSONDefault(t *testing.T) {
+// TestGraphQLResponseCompact confirms the hot path (plan branch) emits
+// compact JSON bytes directly via ExecutePlanAppend — no encoder, no
+// SetIndent, no trailing newline. The append-mode swap dropped the
+// previous pretty-JSON default; operators wanting indented bodies can
+// pipe through `jq` etc.
+func TestGraphQLResponseCompact(t *testing.T) {
 	_, h := gatewayWithMinimalOpenAPI(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql",
@@ -118,8 +99,9 @@ func TestPrettyJSONDefault(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "\n\t") {
-		t.Fatalf("default response was not indented:\n%s", rr.Body.String())
+	body := rr.Body.String()
+	if strings.Contains(body, "\n\t") || strings.Contains(body, "\n ") {
+		t.Fatalf("plan-branch response should be compact (no indentation):\n%s", body)
 	}
 }
 

@@ -332,13 +332,19 @@ GATEWAY=$gateway
 PID=0
 EOF
     echo "==> launching service $name ($kind $version → gateway $gateway)"
-    "$BIN_DIR/$kind" \
+    # The greeter binary reads protos/greeter.proto from CWD; the
+    # other managed kinds also expect their example dirs as the CWD
+    # for similar local-asset reads. Launch from examples/multi/ so
+    # those relative paths resolve regardless of where bin/bench was
+    # invoked from.
+    (cd "$REPO_DIR/examples/multi" && \
+        "$BIN_DIR/$kind" \
         --addr ":$port" --advertise "localhost:$port" \
         --gateway "localhost:$cp_port" --version "$version" \
         --max-concurrency "$max_conc" \
         --max-concurrency-per-instance "$max_conc_per_inst" \
         --delay "$delay" \
-        > "$LOG_DIR/$name.log" 2>&1 &
+        > "$LOG_DIR/$name.log" 2>&1) &
     local pid=$!
     sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"
     echo "    service $name up on :$port"

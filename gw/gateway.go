@@ -221,10 +221,7 @@ type config struct {
 
 	// disableGraphiQL skips construction of the cached GraphiQL UI
 	// handler and routes browser requests through the JSON path.
-	// disablePrettyJSON suppresses the SetIndent call on JSON
-	// responses (worth ~0.65% of bytes per the perf audit).
-	disableGraphiQL   bool
-	disablePrettyJSON bool
+	disableGraphiQL bool
 
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
@@ -652,14 +649,6 @@ func WithDocNormalization() Option {
 // operators who only ship machine clients pay zero overhead for it.
 func WithoutGraphiQL() Option {
 	return func(cfg *config) { cfg.disableGraphiQL = true }
-}
-
-// WithoutPrettyJSON suppresses indented JSON encoding on the
-// GraphQL response hot path. Saves ~0.65% of response bytes per
-// the perf audit; the cost is human-unreadable raw responses when
-// poking at the API with curl.
-func WithoutPrettyJSON() Option {
-	return func(cfg *config) { cfg.disablePrettyJSON = true }
 }
 
 func New(opts ...Option) *Gateway {
@@ -1357,10 +1346,14 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 
 	pr := g.planCache.Get(schema, opts.Query, opts.OperationName)
 
-	var result *graphql.Result
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
 	switch {
 	case len(pr.Errors) > 0:
-		result = &graphql.Result{Errors: pr.Errors}
+		// Pre-execution errors (parse / validate). Rare path; small
+		// payload; the encoder is fine here.
+		_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: pr.Errors})
 	case pr.Plan != nil:
 		args := opts.Variables
 		if len(pr.SynthArgs) > 0 {
@@ -1373,36 +1366,63 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 			}
 			args = merged
 		}
-		result = graphql.ExecutePlan(pr.Plan, graphql.ExecuteParams{
+		// Append-mode hot path: walk the cached plan, emit JSON
+		// straight into a pooled buffer, write bytes to the wire.
+		// Skips the `map[string]any` result tree + scalar boxing +
+		// final json.Encode at the egress — the fork's ExecutePlan
+		// vs ExecutePlanAppend benchmarks show ~42% alloc reduction
+		// on this codepath.
+		buf := graphqlBufPool.Get().(*[]byte)
+		body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
 			Schema:        *schema,
 			OperationName: opts.OperationName,
 			Args:          args,
 			Context:       ctx,
-		})
+		}, (*buf)[:0])
+		if len(errs) > 0 {
+			// Spec-level errors (variable coercion, etc.) occurred
+			// before data assembly. ExecutePlanAppend's doc says the
+			// caller decides whether to surface them separately or
+			// fold them into a fresh response — we emit a clean
+			// errors envelope so the partial bytes (if any) don't
+			// confuse downstream clients.
+			_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: errs})
+		} else {
+			_, _ = w.Write(body)
+		}
+		// Pool the (possibly grown) backing array unless it ballooned
+		// — a one-off MB response shouldn't pin a fat alloc forever.
+		if cap(body) <= graphqlBufPoolMax {
+			*buf = body[:0]
+			graphqlBufPool.Put(buf)
+		}
 	default:
 		// Plan == nil with no errors shouldn't happen, but stay
 		// safe by deferring to graphql.Do (parse + validate +
 		// plan + execute).
-		result = graphql.Do(graphql.Params{
+		_ = json.NewEncoder(w).Encode(graphql.Do(graphql.Params{
 			Schema:         *schema,
 			RequestString:  opts.Query,
 			RootObject:     nil,
 			VariableValues: opts.Variables,
 			OperationName:  opts.OperationName,
 			Context:        ctx,
-		})
+		}))
 	}
+}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	// Pretty JSON matches graphql-go/handler's default; cost is 0.65%
-	// of bytes on the pre-cache profile so keep it for readability.
-	// WithoutPrettyJSON() opts out for operators who want every byte.
-	enc := json.NewEncoder(w)
-	if !g.cfg.disablePrettyJSON {
-		enc.SetIndent("", "\t")
-	}
-	_ = enc.Encode(result)
+// graphqlBufPool reuses []byte buffers across GraphQL responses to
+// keep allocs out of the hot path. New buffers start at 4 KB —
+// enough for most responses; ExecutePlanAppend grows the slice as
+// needed. graphqlBufPoolMax caps the size we'll hand back to the
+// pool so a one-off megabyte response doesn't pin a fat allocation.
+const graphqlBufPoolMax = 64 * 1024
+
+var graphqlBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
 }
 
 // SchemaHandler returns an http.Handler that exports the GraphQL
