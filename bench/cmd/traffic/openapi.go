@@ -69,7 +69,7 @@ func runOpenAPI(args []string) error {
 
 	targets := make([]runner.Target, 0, len(httpTargets))
 	for _, ht := range httpTargets {
-		fire, err := makeOpenAPIFire(*timeout, *concurrency, ht, *ingressPrefix, plan, argMap)
+		fire, err := makeOpenAPIFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), ht, *ingressPrefix, plan, argMap)
 		if err != nil {
 			return err
 		}
@@ -86,7 +86,7 @@ func runOpenAPI(args []string) error {
 	for _, dt := range directTargets {
 		// Direct dial: the upstream's own HTTP server. No ingress prefix —
 		// the path comes from the OpenAPI spec verbatim.
-		fire, err := makeOpenAPIFire(*timeout, *concurrency, dt, "", plan, argMap)
+		fire, err := makeOpenAPIFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), dt, "", plan, argMap)
 		if err != nil {
 			return err
 		}

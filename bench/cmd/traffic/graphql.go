@@ -49,7 +49,7 @@ func runGraphQL(args []string) error {
 
 	targets := make([]runner.Target, 0, len(targetURLs))
 	for _, u := range targetURLs {
-		fire := makeGraphQLFire(*timeout, *concurrency, u, body)
+		fire := makeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, body)
 		targets = append(targets, runner.Target{
 			Label:      u,
 			MetricsURL: runner.MetricsURLFromGateway(u),
@@ -67,7 +67,7 @@ func runGraphQL(args []string) error {
 	}
 	directTargets := make([]runner.Target, 0, len(directURLs))
 	for _, u := range directURLs {
-		fire := makeGraphQLFire(*timeout, *concurrency, u, directBody)
+		fire := makeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, directBody)
 		directTargets = append(directTargets, runner.Target{
 			Label: "direct " + u,
 			// MetricsURL empty: gateway not in path on this pass.

@@ -90,7 +90,18 @@ func Truncate(s string, n int) string {
 // autoConcurrency is the runner's default when an adapter passes
 // Concurrency=0: max(64, rps/20). The 5%-of-RPS floor scales with
 // load so a 30k-rps run doesn't cap on the same 64 in-flight slots
-// that suit a 1k-rps smoke test.
+// that suit a 1k-rps smoke test. Exported so adapters can size
+// HTTP-client idle pools off the same value the runner will use —
+// otherwise a `--concurrency 0 --rps 25000` invocation builds an
+// http.Transport with MaxIdleConnsPerHost=0 and every request opens
+// + closes a fresh socket.
+func ResolveConcurrency(rps, requested int) int {
+	if requested > 0 {
+		return requested
+	}
+	return autoConcurrency(rps)
+}
+
 func autoConcurrency(rps int) int {
 	if c := rps / 20; c > 64 {
 		return c
@@ -99,17 +110,19 @@ func autoConcurrency(rps int) int {
 }
 
 // autoShardCount is the runner's default when an adapter passes
-// Shards=0: ceil(rps/1500). A single Go time.Ticker + goroutine-
-// spawn loop empirically caps at ~3.2k Hz on Linux (scheduler +
-// runtime-timer granularity, not CPU), so anything above ~3k RPS
-// has to be sharded across N driver goroutines or every reported
-// "achieved RPS" is bench-client-bound, not target-bound. 1500 RPS
-// per shard leaves 2× headroom under that empirical cap.
+// Shards=0: ceil(rps/500). Empirically, a Go time.Ticker firing
+// at sub-millisecond periods drops ticks under load — on Linux's
+// default 1ms scheduler tick + Go's timer machinery, a single
+// driver loop targeting >~1k Hz lands ~60% of the requested rate
+// (e.g. 5k RPS / 4 shards = 1250 Hz/shard → 62% achievement;
+// 5k RPS / 10 shards = 500 Hz/shard → 99.9% achievement).
+// 500 Hz/shard puts each ticker comfortably above the scheduler
+// granularity, so per-shard tick loss stays in the noise.
 func autoShardCount(rps int) int {
-	if rps <= 1500 {
+	if rps <= 500 {
 		return 1
 	}
-	n := (rps + 1499) / 1500 // ceil(rps/1500)
+	n := (rps + 499) / 500 // ceil(rps/500)
 	return n
 }
 
@@ -133,7 +146,7 @@ func MetricsURLFromGateway(target string) string {
 func SplitCSV(raw []string) []string {
 	var out []string
 	for _, r := range raw {
-		for _, p := range strings.Split(r, ",") {
+		for p := range strings.SplitSeq(r, ",") {
 			p = strings.TrimSpace(p)
 			if p != "" {
 				out = append(out, p)
