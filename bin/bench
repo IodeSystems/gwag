@@ -49,6 +49,9 @@
 #                              print, in one shot
 #   bench traffic args...     run the traffic generator (builds it on
 #                              demand if .run/bin/traffic missing)
+#   bench perf args...        adopter-facing perf-report driver
+#                              (regenerates docs/perf.md). Builds on
+#                              demand if .run/bin/perf missing.
 #   bench logs NAME           tail .run/logs/<NAME>.log
 #
 # State lives under bench/.run/. See bench/README.md for the full
@@ -87,7 +90,7 @@ cmd_up() {
         # cached .run/bin/gateway that embeds the OLD ui/dist/. Drop
         # the cache so up.sh re-runs `go build` and the freshly-
         # generated SPA bundle gets baked in.
-        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register"
+        rm -f "$RUN_DIR/bin/gateway" "$RUN_DIR/bin/gwag" "$RUN_DIR/bin/greeter" "$RUN_DIR/bin/traffic" "$RUN_DIR/bin/register" "$RUN_DIR/bin/perf"
     fi
     # Persist the stack kind so subsequent `bench gw add` invocations
     # spawn the matching binary without per-call --raw flags. up.sh
@@ -533,6 +536,16 @@ cmd_traffic() {
     exec "$bin" "$@"
 }
 
+cmd_perf() {
+    local bin="$RUN_DIR/bin/perf"
+    if [[ ! -x $bin ]]; then
+        echo "==> building perf driver (.run/bin/perf)"
+        mkdir -p "$RUN_DIR/bin"
+        (cd "$REPO_DIR" && go build -o "$bin" ./bench/cmd/perf)
+    fi
+    exec "$bin" "$@"
+}
+
 cmd_logs() {
     local name=${1:-}
     [[ -n $name ]] || { echo "logs needs NAME (e.g. n1, g1)" >&2; exit 1; }
@@ -555,6 +568,7 @@ case "$sub" in
     service)  cmd_service "$@" ;;
     status)   cmd_status ;;
     traffic)  cmd_traffic "$@" ;;
+    perf)     cmd_perf "$@" ;;
     logs)     cmd_logs "$@" ;;
     -h|--help|"") usage 0 ;;
     *) echo "unknown subcommand: $sub" >&2; usage ;;
