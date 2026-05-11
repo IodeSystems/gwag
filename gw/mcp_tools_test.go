@@ -24,6 +24,14 @@ func newMCPToolsFixture(t *testing.T) *Gateway {
 	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("things")); err != nil {
 		t.Fatalf("AddOpenAPIBytes: %v", err)
 	}
+	// Force initial schema build so MCPQuery sees a non-nil schema;
+	// the bench fixtures use the same pattern.
+	gw.mu.Lock()
+	if err := gw.assembleLocked(); err != nil {
+		gw.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	gw.mu.Unlock()
 	return gw
 }
 
@@ -263,6 +271,80 @@ func TestMCPSchemaExpand_TypeName(t *testing.T) {
 	}
 	if tres.Type == nil || tres.Type.Name != target {
 		t.Fatalf("type expand result=%+v want type %q", tres, target)
+	}
+}
+
+func TestMCPQuery_NoSchemaErrors(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(gw.Close)
+	_, err := gw.MCPQuery(context.Background(), MCPQueryInput{Query: "{ __typename }"})
+	if err == nil {
+		t.Fatal("expected error when no schema is loaded")
+	}
+}
+
+func TestMCPQuery_EmptyInputRejected(t *testing.T) {
+	gw := newMCPToolsFixture(t)
+	_, err := gw.MCPQuery(context.Background(), MCPQueryInput{})
+	if err == nil {
+		t.Fatal("expected error when query is empty")
+	}
+}
+
+func TestMCPQuery_WrapsResponseInEvents(t *testing.T) {
+	gw := newMCPToolsFixture(t)
+	res, err := gw.MCPQuery(context.Background(), MCPQueryInput{
+		Query: "{ __typename }",
+	})
+	if err != nil {
+		t.Fatalf("MCPQuery: %v", err)
+	}
+	if res.Response == nil {
+		t.Fatal("Response must be populated")
+	}
+	if res.Events.Level != "none" {
+		t.Errorf("Events.Level=%q, want none in v1", res.Events.Level)
+	}
+	if res.Events.Channels == nil || len(res.Events.Channels) != 0 {
+		t.Errorf("Events.Channels=%+v, want non-nil empty slice", res.Events.Channels)
+	}
+}
+
+func TestMCPQuery_VariablesPassThrough(t *testing.T) {
+	gw := newMCPToolsFixture(t)
+	// Use the introspection schema query — it has no required vars,
+	// but graphql.Do will accept and ignore extras. The point is the
+	// VariableValues map round-trips into the executor without
+	// crashing.
+	res, err := gw.MCPQuery(context.Background(), MCPQueryInput{
+		Query:     "query Q { __typename }",
+		Variables: map[string]any{"ignored": 42},
+	})
+	if err != nil {
+		t.Fatalf("MCPQuery: %v", err)
+	}
+	if res.Response == nil {
+		t.Fatal("Response must be populated")
+	}
+}
+
+func TestMCPQuery_OperationNameDispatch(t *testing.T) {
+	gw := newMCPToolsFixture(t)
+	q := `
+query First { __typename }
+query Second { __typename }
+`
+	// Without OperationName, graphql.Do errors on multi-operation docs.
+	// With OperationName, the named op runs.
+	res, err := gw.MCPQuery(context.Background(), MCPQueryInput{
+		Query:         q,
+		OperationName: "Second",
+	})
+	if err != nil {
+		t.Fatalf("MCPQuery: %v", err)
+	}
+	if res.Response == nil {
+		t.Fatal("Response must be populated")
 	}
 }
 

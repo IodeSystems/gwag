@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/graphql-go/graphql"
 
 	"github.com/iodesystems/go-api-gateway/gw/ir"
 )
@@ -567,6 +570,74 @@ func typeKindName(k ir.TypeKind) string {
 	default:
 		return "object"
 	}
+}
+
+// MCPQueryInput is the payload for the MCP `query` tool.
+type MCPQueryInput struct {
+	Query         string         `json:"query"`
+	Variables     map[string]any `json:"variables,omitempty"`
+	OperationName string         `json:"operationName,omitempty"`
+}
+
+// MCPResponseWithEvents is the uniform wrapper plan §2 mandates from
+// v1 onward so v2 subscription stitching can land additively without
+// breaking the wire shape. v1 Events.Level is always "none" and
+// Channels is always empty.
+type MCPResponseWithEvents struct {
+	Response any             `json:"response"`
+	Events   MCPEventsBundle `json:"events"`
+}
+
+type MCPEventsBundle struct {
+	// Level is one of: "none" (v1), "by_channel" (v2 default), "all"
+	// (v2 with byte threshold tripped or operator opt-in). The agent
+	// reads this to know whether the channels slice is summary or
+	// full payload.
+	Level    string            `json:"level"`
+	Channels []MCPChannelEvent `json:"channels"`
+}
+
+// MCPChannelEvent is one entry in the v2 events bundle. Always
+// empty in v1 (the slice is empty); the type is defined now so the
+// JSON Channels[] field has a stable shape from the start.
+type MCPChannelEvent struct {
+	Channel string `json:"channel"`
+	Count   int    `json:"count"`
+	Preview any    `json:"preview,omitempty"`
+}
+
+// MCPQuery executes a GraphQL operation against the gateway's
+// runtime schema in-process. Bearer auth on the MCP transport is the
+// security boundary (per plan §2: "same auth posture as admin
+// writes"); the MCPConfig allowlist is operator-curated discovery
+// guidance, not an execution gate. An agent only learns about an op
+// via schema_list / schema_search / schema_expand, so its working
+// set is implicitly bounded by what the operator has surfaced —
+// without making the gateway pay per-call AST validation cost.
+// Per-op execution gating may layer on in v1.x if adopters pull on
+// it.
+func (g *Gateway) MCPQuery(ctx context.Context, in MCPQueryInput) (*MCPResponseWithEvents, error) {
+	if in.Query == "" {
+		return nil, fmt.Errorf("mcp: query is required")
+	}
+	schema := g.schema.Load()
+	if schema == nil {
+		return nil, fmt.Errorf("mcp: gateway has no schema yet (no services registered)")
+	}
+	result := graphql.Do(graphql.Params{
+		Schema:         *schema,
+		RequestString:  in.Query,
+		VariableValues: in.Variables,
+		OperationName:  in.OperationName,
+		Context:        ctx,
+	})
+	return &MCPResponseWithEvents{
+		Response: result,
+		Events: MCPEventsBundle{
+			Level:    "none",
+			Channels: []MCPChannelEvent{},
+		},
+	}, nil
 }
 
 func firstLine(s string) string {

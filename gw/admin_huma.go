@@ -663,6 +663,83 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return mcpListOutFrom(cfg), nil
 	})
 
+	// MCP tool surface (plan §2). Dogfooded via huma so adopters can
+	// drive the schema_list / search / expand / query tools through
+	// the standard admin OpenAPI path; the dedicated /api/mcp Streamable
+	// HTTP mount (next plan §2 todo) wraps the same underlying
+	// MCPSchemaList / MCPSchemaSearch / MCPSchemaExpand / MCPQuery
+	// gateway methods.
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpSchemaList",
+		Method:      http.MethodGet,
+		Path:        "/admin/mcp/schema/list",
+		Summary:     "List every operation the MCPConfig allowlist exposes, grouped by Query / Mutation / Subscription. Plan §2.",
+	}, func(_ context.Context, _ *struct{}) (*mcpSchemaListOut, error) {
+		rows := g.MCPSchemaList()
+		out := &mcpSchemaListOut{}
+		out.Body.Entries = rows
+		if out.Body.Entries == nil {
+			out.Body.Entries = []SchemaListEntry{}
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpSchemaSearch",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/schema/search",
+		Summary:     "Search the MCP-allowed operation surface by dot-segmented path glob AND/OR regex (over op name, arg names, description body). Empty body returns every allowed op.",
+	}, func(_ context.Context, in *mcpSchemaSearchIn) (*mcpSchemaSearchOut, error) {
+		rows, err := g.MCPSchemaSearch(SchemaSearchInput{
+			PathGlob: in.Body.PathGlob,
+			Regex:    in.Body.Regex,
+		})
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+		out := &mcpSchemaSearchOut{}
+		out.Body.Entries = rows
+		if out.Body.Entries == nil {
+			out.Body.Entries = []SchemaSearchEntry{}
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpSchemaExpand",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/schema/expand",
+		Summary:     "Return the structured definition of one MCP-allowed op path or type name, plus the transitive type closure (args + return types for ops; fields + variants for types).",
+	}, func(_ context.Context, in *mcpSchemaExpandIn) (*mcpSchemaExpandOut, error) {
+		res, err := g.MCPSchemaExpand(in.Body.Name)
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+		out := &mcpSchemaExpandOut{}
+		out.Body.Result = res
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpQuery",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/query",
+		Summary:     "Execute a GraphQL operation in-process and wrap the result in ResponseWithEvents (events always empty in v1). Bearer auth (not the allowlist) is the security boundary — the allowlist is operator-curated discovery guidance.",
+	}, func(ctx context.Context, in *mcpQueryIn) (*mcpQueryOut, error) {
+		res, err := g.MCPQuery(ctx, MCPQueryInput{
+			Query:         in.Body.Query,
+			Variables:     in.Body.Variables,
+			OperationName: in.Body.OperationName,
+		})
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+		out := &mcpQueryOut{}
+		out.Body.Result = res
+		return out, nil
+	})
+
 	huma.Register(api, huma.Operation{
 		OperationID: "drain",
 		Method:      http.MethodPost,
@@ -1050,6 +1127,51 @@ func containsString(xs []string, v string) bool {
 		}
 	}
 	return false
+}
+
+type mcpSchemaListOut struct {
+	Body struct {
+		Entries []SchemaListEntry `json:"entries"`
+	}
+}
+
+type mcpSchemaSearchIn struct {
+	Body struct {
+		PathGlob string `json:"pathGlob,omitempty"`
+		Regex    string `json:"regex,omitempty"`
+	}
+}
+
+type mcpSchemaSearchOut struct {
+	Body struct {
+		Entries []SchemaSearchEntry `json:"entries"`
+	}
+}
+
+type mcpSchemaExpandIn struct {
+	Body struct {
+		Name string `json:"name"`
+	}
+}
+
+type mcpSchemaExpandOut struct {
+	Body struct {
+		Result *SchemaExpandResult `json:"result"`
+	}
+}
+
+type mcpQueryIn struct {
+	Body struct {
+		Query         string         `json:"query"`
+		Variables     map[string]any `json:"variables,omitempty"`
+		OperationName string         `json:"operationName,omitempty"`
+	}
+}
+
+type mcpQueryOut struct {
+	Body struct {
+		Result *MCPResponseWithEvents `json:"result"`
+	}
 }
 
 type drainIn struct {

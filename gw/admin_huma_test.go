@@ -847,6 +847,145 @@ func TestAdminHuma_MCP_RejectsEmptyPath(t *testing.T) {
 	}
 }
 
+// TestAdminHuma_MCPSchema_AdminRoutesRoundTrip exercises the three
+// schema tools exposed under /admin/mcp/schema/*. Confirms the wiring
+// honors the MCPConfig allowlist (the underlying tools already test
+// every flavor; here we just want the admin HTTP layer to surface the
+// right shape).
+func TestAdminHuma_MCPSchema_AdminRoutesRoundTrip(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(be.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("things")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	if err := gw.SetMCPConfig(context.Background(), MCPConfig{Include: []string{"**"}}); err != nil {
+		t.Fatalf("SetMCPConfig: %v", err)
+	}
+
+	h := newAdminRouter(t, gw)
+
+	// list
+	req := httptest.NewRequest(http.MethodGet, "/admin/mcp/schema/list", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("schema/list status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var listOut struct {
+		Entries []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&listOut); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listOut.Entries) != 2 {
+		t.Fatalf("list entries=%d, want 2: %+v", len(listOut.Entries), listOut.Entries)
+	}
+
+	// search
+	req = httptest.NewRequest(http.MethodPost, "/admin/mcp/schema/search", strings.NewReader(`{"pathGlob":"things.get*"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("schema/search status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// expand
+	req = httptest.NewRequest(http.MethodPost, "/admin/mcp/schema/expand", strings.NewReader(`{"name":"things.getThing"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("schema/expand status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// expand on unknown name returns 400
+	req = httptest.NewRequest(http.MethodPost, "/admin/mcp/schema/expand", strings.NewReader(`{"name":"things.nope"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expand on unknown name: status=%d, want 400", rr.Code)
+	}
+}
+
+// TestAdminHuma_MCPQuery exercises the in-process query tool via the
+// admin route. The schema must be materialized (assembleLocked) for
+// the query to dispatch.
+func TestAdminHuma_MCPQuery(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(be.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("things")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	// Force initial schema build (matches MCP tool fixture).
+	gw.mu.Lock()
+	if err := gw.assembleLocked(); err != nil {
+		gw.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	gw.mu.Unlock()
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodPost, "/admin/mcp/query", strings.NewReader(`{"query":"{ __typename }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Result struct {
+			Response any `json:"response"`
+			Events   struct {
+				Level    string `json:"level"`
+				Channels []any  `json:"channels"`
+			} `json:"events"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Result.Response == nil {
+		t.Fatal("Response missing")
+	}
+	if out.Result.Events.Level != "none" {
+		t.Errorf("events.level=%q, want none in v1", out.Result.Events.Level)
+	}
+	if out.Result.Events.Channels == nil || len(out.Result.Events.Channels) != 0 {
+		t.Errorf("events.channels=%+v, want empty slice", out.Result.Events.Channels)
+	}
+}
+
+// Writes require bearer.
+func TestAdminHuma_MCPQuery_RequiresBearer(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodPost, "/admin/mcp/query", strings.NewReader(`{"query":"{ __typename }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status=%d, want 401", rr.Code)
+	}
+}
+
 // TestAdminHuma_DeprecatedStats_RejectsBadWindow keeps the boundary
 // check on this endpoint in lockstep with serviceStats / servicesStats.
 func TestAdminHuma_DeprecatedStats_RejectsBadWindow(t *testing.T) {
