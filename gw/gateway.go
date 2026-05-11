@@ -66,6 +66,15 @@ type Gateway struct {
 	// joining slots that already have a deprecation set (covers the
 	// reconciler-arrives-after-watch race). Plan §5.
 	deprecation map[poolKey]string
+
+	// mcpConfig mirrors the cluster `go-api-gateway-mcp-config` KV
+	// bucket — the operator-curated MCP surface allowlist consumed
+	// by the schema_list / schema_search / schema_expand tools. The
+	// watch loop on peerTracker populates it in cluster mode;
+	// SetMCPConfig writes through KV (cluster) or direct (standalone).
+	// nil = no config observed yet (default-zero MCPConfig). Plan §2
+	// MCP integration.
+	mcpConfig *mcpConfigState
 	cfg        *config
 	cp         *controlPlane
 	peers      *peerTracker

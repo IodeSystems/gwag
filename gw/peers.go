@@ -57,6 +57,7 @@ type peerTracker struct {
 	reg        jetstream.KeyValue
 	stable     jetstream.KeyValue
 	deprecated jetstream.KeyValue
+	mcpConfig  jetstream.KeyValue
 
 	nodeID string
 	self   []byte
@@ -69,6 +70,7 @@ type peerTracker struct {
 
 	stableDone     chan struct{}
 	deprecatedDone chan struct{}
+	mcpConfigDone  chan struct{}
 
 	currentR atomic.Int32
 
@@ -159,6 +161,23 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		}
 	}
 
+	mcpConfig, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:   mcpConfigBucketName,
+		Replicas: 1,
+		TTL:      mcpConfigTTL,
+	})
+	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("mcp_config bucket: %w", err)
+	}
+	if mcpConfig == nil {
+		mcpConfig, err = cl.JS.KeyValue(ctx, mcpConfigBucketName)
+		if err != nil {
+			g.mu.Unlock()
+			return nil, fmt.Errorf("mcp_config bucket open: %w", err)
+		}
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -177,6 +196,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		reg:            reg,
 		stable:         stable,
 		deprecated:     deprecated,
+		mcpConfig:      mcpConfig,
 		nodeID:         cl.NodeID,
 		self:           selfBytes,
 		live:           map[string]struct{}{cl.NodeID: {}},
@@ -184,6 +204,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		done:           make(chan struct{}),
 		stableDone:     make(chan struct{}),
 		deprecatedDone: make(chan struct{}),
+		mcpConfigDone:  make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -206,6 +227,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.watchLoop(tctx)
 	go t.stableWatchLoop(tctx)
 	go t.deprecatedWatchLoop(tctx)
+	go t.mcpConfigWatchLoop(tctx)
 	return t, nil
 }
 
@@ -298,6 +320,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 		{peersBucketName, peerTTL},
 		{registryBucketName, registryTTL},
 		{stableBucketName, stableTTL},
+		{mcpConfigBucketName, mcpConfigTTL},
 	} {
 		_, err := t.js.UpdateKeyValue(c, jetstream.KeyValueConfig{
 			Bucket:   b.name,
@@ -355,6 +378,9 @@ func (t *peerTracker) stop() {
 	}
 	if t.deprecatedDone != nil {
 		<-t.deprecatedDone
+	}
+	if t.mcpConfigDone != nil {
+		<-t.mcpConfigDone
 	}
 	t.rec.stop()
 }
