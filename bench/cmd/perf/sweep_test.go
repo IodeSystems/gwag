@@ -5,6 +5,58 @@ import (
 	"testing"
 )
 
+func TestScenarioPresetsRegistered(t *testing.T) {
+	// Pin that the plan's three scenarios are wired and resolve to
+	// non-empty queries — the report writer + `perf all` rely on the
+	// registry shape.
+	for _, want := range []string{"proto", "openapi", "mixed"} {
+		p := scenarioPresetByName(want)
+		if p == nil {
+			t.Errorf("scenario %q missing from preset registry", want)
+			continue
+		}
+		if p.query == "" {
+			t.Errorf("scenario %q has empty query", want)
+		}
+		if len(p.requiresNamespaces) == 0 {
+			t.Errorf("scenario %q declares no required namespaces", want)
+		}
+	}
+	if scenarioPresetByName("nonexistent") != nil {
+		t.Error("scenarioPresetByName should return nil for unknown name")
+	}
+}
+
+func TestParseScenarios(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"proto,openapi,mixed", []string{"proto", "openapi", "mixed"}},
+		{" proto , openapi ", []string{"proto", "openapi"}},
+		{"", nil},
+		{",,proto,,", []string{"proto"}},
+	}
+	for _, c := range cases {
+		got := parseScenarios(c.in)
+		if !sliceEqualStr(got, c.want) {
+			t.Errorf("parseScenarios(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func sliceEqualStr(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestParseSteps(t *testing.T) {
 	cases := []struct {
 		in   string

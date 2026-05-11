@@ -29,6 +29,8 @@ Subcommands:
   specs   print the report header (host specs as markdown) and exit.
   run     drive a perf sweep: escalating target RPS × N reps, capture
           the per-rep --json sidecars, write a Sweep summary JSON.
+  all     run every built-in scenario (proto / openapi / mixed) back
+          to back, writing one sweep-<scenario>.json per scenario.
 
 Run 'perf <subcommand> --help' for per-subcommand flags.
 `
@@ -46,6 +48,8 @@ func main() {
 		err = runSpecs(args)
 	case "run":
 		err = runSweep(args)
+	case "all":
+		err = runAll(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

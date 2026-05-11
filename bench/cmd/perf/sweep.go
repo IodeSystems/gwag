@@ -100,16 +100,30 @@ func runSweep(args []string) error {
 	outPath := fs.String("out", "bench/.run/perf/sweep.json", "where to write the Sweep JSON; '-' for stdout")
 	keepReps := fs.Bool("keep-reps", false, "preserve per-rep traffic --json sidecars under <out>.reps/; default cleans them after aggregation")
 	noKnee := fs.Bool("no-knee", false, "run every step to completion even when knee predicates fire (default stops at first knee)")
-	query := fs.String("query", `{ greeter { hello(name: "world") { greeting } } }`, "GraphQL query string for this sweep")
+	query := fs.String("query", "", "GraphQL query string; defaults to the --scenario preset's query")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: perf run [flags]")
 		fs.PrintDefaults()
+		fmt.Fprintln(fs.Output())
+		fmt.Fprint(fs.Output(), scenarioHelp())
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected positional args: %v", fs.Args())
+	}
+
+	// Resolve --query from the scenario preset when the caller
+	// didn't pin one. A preset miss with an empty --query is an
+	// error: there's nothing to fire.
+	if *query == "" {
+		if p := scenarioPresetByName(*scenario); p != nil {
+			*query = p.query
+		} else {
+			return fmt.Errorf("--scenario=%q has no built-in query preset; either choose one of [%s] or pass --query explicitly",
+				*scenario, strings.Join(scenarioPresetNames(), ", "))
+		}
 	}
 
 	steps, err := parseSteps(*stepsRaw)
