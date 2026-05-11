@@ -30,6 +30,7 @@ func runAll(args []string) error {
 	reps := fs.String("reps", "3", "reps per step (passthrough)")
 	noKnee := fs.Bool("no-knee", false, "passthrough: disable knee-detection early stop")
 	keepReps := fs.Bool("keep-reps", false, "passthrough: keep per-rep traffic sidecars")
+	upstreamLatency := fs.String("upstream-latency", "0", "passthrough: --upstream-latency stamp for every sub-sweep")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: perf all [flags]")
 		fs.PrintDefaults()
@@ -67,6 +68,7 @@ func runAll(args []string) error {
 			"--steps", *stepsRaw,
 			"--duration", *duration,
 			"--reps", *reps,
+			"--upstream-latency", *upstreamLatency,
 			"--out", out,
 		}
 		if *noKnee {

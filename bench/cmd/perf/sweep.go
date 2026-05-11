@@ -17,17 +17,24 @@ import (
 // Sweep is the wire shape one `perf run` invocation produces. The
 // report writer consumes Sweeps verbatim — one Sweep per scenario.
 type Sweep struct {
-	Schema      string      `json:"schema"`
-	Specs       HostSpecs   `json:"specs"`
-	Scenario    string      `json:"scenario"`
-	Target      string      `json:"target"`
-	StartedAt   string      `json:"started_at"`
-	FinishedAt  string      `json:"finished_at"`
-	DurationSec float64     `json:"duration_seconds_per_rep"`
-	RepsPerStep int         `json:"reps_per_step"`
-	Warmup      bool        `json:"warmup_rep_discarded"`
-	Steps       []SweepStep `json:"steps"`
-	Knee        *KneeInfo   `json:"knee,omitempty"`
+	Schema              string      `json:"schema"`
+	Specs               HostSpecs   `json:"specs"`
+	Scenario            string      `json:"scenario"`
+	Target              string      `json:"target"`
+	StartedAt           string      `json:"started_at"`
+	FinishedAt          string      `json:"finished_at"`
+	DurationSec         float64     `json:"duration_seconds_per_rep"`
+	RepsPerStep         int         `json:"reps_per_step"`
+	Warmup              bool        `json:"warmup_rep_discarded"`
+	// UpstreamLatencyUs is the artificial per-call delay the operator
+	// configured on the upstream service (greeter --delay or the
+	// equivalent on the OpenAPI sibling). Metadata only — the perf
+	// driver does not configure the backend; the operator does.
+	// The report writer surfaces this as the "gateway adds X µs on top
+	// of upstream Y µs" framing. Zero when no rung was configured.
+	UpstreamLatencyUs   int64       `json:"upstream_latency_us"`
+	Steps               []SweepStep `json:"steps"`
+	Knee                *KneeInfo   `json:"knee,omitempty"`
 }
 
 // SweepStep is one rung of the sweep — N reps at a single target RPS.
@@ -100,6 +107,7 @@ func runSweep(args []string) error {
 	outPath := fs.String("out", "bench/.run/perf/sweep.json", "where to write the Sweep JSON; '-' for stdout")
 	keepReps := fs.Bool("keep-reps", false, "preserve per-rep traffic --json sidecars under <out>.reps/; default cleans them after aggregation")
 	noKnee := fs.Bool("no-knee", false, "run every step to completion even when knee predicates fire (default stops at first knee)")
+	upstreamLatency := fs.Duration("upstream-latency", 0, "metadata: artificial upstream delay configured by the operator on the backend (e.g. greeter --delay 100us). Stamped into the Sweep JSON so the report can present \"gateway adds X µs on top of upstream Y µs\". The perf driver does NOT configure the backend; bring up your service with the matching --delay before running.")
 	query := fs.String("query", "", "GraphQL query string; defaults to the --scenario preset's query")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: perf run [flags]")
@@ -140,14 +148,15 @@ func runSweep(args []string) error {
 	}
 
 	sw := Sweep{
-		Schema:      SweepSchemaVersion,
-		Specs:       CollectSpecs(),
-		Scenario:    *scenario,
-		Target:      *target,
-		StartedAt:   time.Now().UTC().Format(time.RFC3339),
-		DurationSec: duration.Seconds(),
-		RepsPerStep: *reps,
-		Warmup:      !*noWarmup && *reps > 1,
+		Schema:            SweepSchemaVersion,
+		Specs:             CollectSpecs(),
+		Scenario:          *scenario,
+		Target:            *target,
+		StartedAt:         time.Now().UTC().Format(time.RFC3339),
+		DurationSec:       duration.Seconds(),
+		RepsPerStep:       *reps,
+		Warmup:            !*noWarmup && *reps > 1,
+		UpstreamLatencyUs: upstreamLatency.Microseconds(),
 	}
 
 	repsDir := strings.TrimSuffix(*outPath, ".json") + ".reps"
