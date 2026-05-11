@@ -197,11 +197,22 @@ for the generated bindings.
   external huma service takes. Use this as the template when adding
   new admin operations.
 - **`ServiceOption`** applies to every registration entry point
-  (`AddProto`, `AddProtoDescriptor`, `AddOpenAPI`, `AddOpenAPIBytes`,
-  `AddGraphQL`). Available options: `To`, `As`, `Version` (`unstable`
-  or `vN` per plan §4 — empty defaults to `v1`), `AsInternal`,
-  `ForwardHeaders` (HTTP header allowlist), `OpenAPIClient`
-  (per-source `*http.Client`).
+  (`AddProto`, `AddProtoBytes`, `AddProtoFS`, `AddOpenAPI`,
+  `AddOpenAPIBytes`, `AddGraphQL`). Available options: `To`, `As`,
+  `Version` (`unstable` or `vN` per plan §4 — empty defaults to
+  `v1`), `AsInternal`, `ForwardHeaders` (HTTP header allowlist),
+  `OpenAPIClient` (per-source `*http.Client`), `ProtoImports`
+  (multi-file proto import map).
+- **Proto ingest is raw-source only.** Both `AddProtoBytes` (in-memory
+  bytes) and `AddProto` / `AddProtoFS` (disk / fs.FS) drive the same
+  `protocompile` pipeline with `SourceInfoStandard`, so leading /
+  trailing comments survive into the GraphQL SDL and the MCP search
+  corpus. The control plane wire ships raw `.proto` bytes
+  (`proto_source` + `proto_imports` map) — same shape as
+  `openapi_spec`. The earlier "ship a compiled FileDescriptorSet"
+  path was retired in favor of symmetry with OpenAPI ingest. Adopters
+  using `controlclient.SelfRegister` set `ProtoSource []byte` (or
+  `ProtoFS fs.FS` + `ProtoEntry string` for multi-file).
 
 ## How to build/run
 

@@ -97,10 +97,11 @@ examples/multi/
 ```
 
 The protos and bindings are only needed by the *services* (which want
-typed gRPC servers and want to ship their `FileDescriptor` to the
-gateway). The gateway itself imports nothing service-specific — it
-parses the descriptor at registration time and dispatches via
-`dynamicpb`.
+typed gRPC servers and ship the raw `.proto` source bytes to the
+gateway via `controlclient.Service.ProtoSource`). The gateway itself
+imports nothing service-specific — it compiles the `.proto` via
+`protocompile` at registration time (preserving comments) and
+dispatches via `dynamicpb`.
 
 ## Cluster mode (3 gateways, KV-backed registry)
 

@@ -147,22 +147,34 @@ missed heartbeats past TTL evict.
 
 ```go
 import (
+    _ "embed"
+
     "github.com/iodesystems/go-api-gateway/controlclient"
-    greeterv1 "yourrepo/gen/greeter/v1"
 )
+
+//go:embed greeter.proto
+var greeterProto []byte
 
 reg, _ := controlclient.SelfRegister(ctx, controlclient.Options{
     GatewayAddr: "gateway:50090",
     ServiceAddr: "greeter:50051",
     Services: []controlclient.Service{
-        {Namespace: "greeter", FileDescriptor: greeterv1.File_greeter_proto},
+        {Namespace: "greeter", ProtoSource: greeterProto},
     },
 })
 defer reg.Close(ctx) // graceful deregister
 ```
 
-OpenAPI services use the same struct with `OpenAPISpec` instead of
-`FileDescriptor`. The control-plane API is in
+Services ship raw `.proto` bytes; the gateway compiles them via
+`protocompile` so leading / trailing comments survive into the
+GraphQL SDL. Multi-file `.proto` layouts (one entrypoint with
+`import "..."` statements) use `ProtoFS fs.FS` + `ProtoEntry string`
+with any `fs.FS` (`embed.FS`, `os.DirFS(...)`, archives), or pass
+the imports map explicitly via `ProtoImports map[string][]byte`.
+
+OpenAPI services use the same `Service` struct with `OpenAPISpec`
+instead of `ProtoSource`; same shape, both formats ship raw source.
+The control-plane API is in
 [`gw/proto/controlplane/v1/control.proto`](./gw/proto/controlplane/v1/control.proto).
 
 ### Version
