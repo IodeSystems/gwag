@@ -293,6 +293,13 @@ type config struct {
 	// channel falls under the default tier (ChannelAuthHMAC). See
 	// WithChannelAuth.
 	channelAuth []channelAuthRule
+
+	// channelBindings are runtime-declared channel→payload-type pairs
+	// (non-proto adopters, gateway-shipped defaults). Applied to the
+	// gateway-internal ps slot during New() so they ride through the
+	// same tier/uniqueness policy as proto-declarative bindings. See
+	// WithChannelBinding.
+	channelBindings []ir.ChannelBinding
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -822,6 +829,14 @@ func New(opts ...Option) *Gateway {
 		}
 		if cfg.subAuth.Insecure {
 			cfg.cluster.Server.Warnf("gateway: subscriptions are in insecure mode — any client can publish and subscribe without HMAC verification")
+		}
+	}
+	// Apply runtime channel bindings (WithChannelBinding) to the
+	// gateway-internal ps slot. Runs through the same cross-slot
+	// uniqueness policy as proto-declarative bindings.
+	if len(cfg.channelBindings) > 0 {
+		if err := g.applyRuntimeBindingsLocked(cfg.channelBindings); err != nil {
+			panic(fmt.Sprintf("gateway: apply channel bindings: %v", err))
 		}
 	}
 	return g

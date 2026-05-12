@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -511,4 +512,159 @@ func TestAdminBindings_Empty(t *testing.T) {
 
 func httpGet(url string) (*http.Response, error) {
 	return http.Get(url)
+}
+
+// TestWithChannelBinding_Basic pins that WithChannelBinding populates
+// the ps slot with runtime-declared bindings during New(). The
+// bindings appear in the slot, the IR, and the aggregated index.
+func TestWithChannelBinding_Basic(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "chbind-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	defer cluster.Close()
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("test")),
+		WithChannelBinding("events.orders.*.update", "example.events.v1.OrderUpdate"),
+		WithChannelBinding("events.shipments.>", "example.events.v1.ShipmentEvent"),
+	)
+	defer g.Close()
+
+	// Check ps slot has the bindings.
+	psSlot := g.slots[poolKey{namespace: "ps", version: "v1"}]
+	if psSlot == nil {
+		t.Fatal("ps slot not installed")
+	}
+	if len(psSlot.channelBindings) != 2 {
+		t.Fatalf("ps slot has %d bindings, want 2: %#v", len(psSlot.channelBindings), psSlot.channelBindings)
+	}
+	if psSlot.channelBindings[0].Pattern != "events.orders.*.update" {
+		t.Errorf("binding[0].pattern = %q, want events.orders.*.update", psSlot.channelBindings[0].Pattern)
+	}
+	if psSlot.channelBindings[0].MessageFQN != "example.events.v1.OrderUpdate" {
+		t.Errorf("binding[0].messageFQN = %q, want example.events.v1.OrderUpdate", psSlot.channelBindings[0].MessageFQN)
+	}
+	if psSlot.channelBindings[1].Pattern != "events.shipments.>" {
+		t.Errorf("binding[1].pattern = %q, want events.shipments.>", psSlot.channelBindings[1].Pattern)
+	}
+
+	// Check aggregated index.
+	entries := g.channelBindingIndexSnapshot()
+	if len(entries) != 2 {
+		t.Fatalf("index has %d entries, want 2: %#v", len(entries), entries)
+	}
+
+	// Check lookup works.
+	idx := g.channelBindingIndex.Load()
+	if got := idx.lookupPayloadType("events.orders.42.update"); got != "example.events.v1.OrderUpdate" {
+		t.Errorf("lookupPayloadType(events.orders.42.update) = %q, want example.events.v1.OrderUpdate", got)
+	}
+	if got := idx.lookupPayloadType("events.shipments.created"); got != "example.events.v1.ShipmentEvent" {
+		t.Errorf("lookupPayloadType(events.shipments.created) = %q, want example.events.v1.ShipmentEvent", got)
+	}
+}
+
+// TestWithChannelBinding_CrossSlotConflict pins that a runtime
+// binding conflicting with an existing slot is rejected at New() time.
+func TestWithChannelBinding_CrossSlotConflict(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "chbind-conflict",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	defer cluster.Close()
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("test")),
+	)
+	defer g.Close()
+
+	// Register a proto slot with a binding.
+	optionsBytes, err := os.ReadFile("proto/ps/v1/options.proto")
+	if err != nil {
+		t.Fatalf("read options.proto: %v", err)
+	}
+	src := []byte(`syntax = "proto3";
+package example.orders.v1;
+
+import "gw/proto/ps/v1/options.proto";
+
+message OrderUpdate {
+  option (gwag.ps.v1.binding) = { pattern: "events.orders.*.update" };
+  string id = 1;
+}
+
+service S { rpc Echo(OrderUpdate) returns (OrderUpdate); }
+`)
+	fd, err := compileProtoBytes("orders.proto", src, map[string][]byte{
+		"gw/proto/ps/v1/options.proto": optionsBytes,
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	handlers := map[string]InternalProtoHandler{
+		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+			return req, nil
+		},
+	}
+	g.mu.Lock()
+	err = g.addInternalProtoSlotLocked("orders", "v1", fd, src, handlers, nil)
+	g.mu.Unlock()
+	if err != nil {
+		t.Fatalf("addInternalProtoSlotLocked: %v", err)
+	}
+
+	// Now try to apply a runtime binding that conflicts.
+	err = g.applyRuntimeBindingsLocked([]ir.ChannelBinding{
+		{Pattern: "events.orders.*.update", MessageFQN: "other.v1.Different"},
+	})
+	if err == nil {
+		t.Fatal("expected cross-slot conflict; got nil")
+	}
+	if !strings.Contains(err.Error(), "events.orders.*.update") {
+		t.Errorf("error %q missing conflicting pattern", err.Error())
+	}
+}
+
+// TestWithChannelBinding_NoPSSlot pins that applying runtime bindings
+// when the ps slot doesn't exist (no cluster) returns a clear error.
+func TestWithChannelBinding_NoPSSlot(t *testing.T) {
+	g := New(
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithAdminToken([]byte("test")),
+	)
+	defer g.Close()
+
+	err := g.applyRuntimeBindingsLocked([]ir.ChannelBinding{
+		{Pattern: "events.foo", MessageFQN: "example.Foo"},
+	})
+	if err == nil {
+		t.Fatal("expected error when ps slot missing; got nil")
+	}
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("error %q doesn't mention missing ps slot", err.Error())
+	}
 }

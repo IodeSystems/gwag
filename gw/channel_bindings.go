@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/iodesystems/gwag/gw/ir"
@@ -140,4 +142,53 @@ func bindingPatternOnMessage(md protoreflect.MessageDescriptor) string {
 		return false
 	})
 	return pattern
+}
+
+// WithChannelBinding registers a channel→payload-type pairing at the
+// gateway level, for non-proto adopters and gateway-shipped defaults.
+// Pattern uses NATS-style wildcards (same grammar as WithChannelAuth).
+// MessageFQN is the proto fully-qualified message name
+// ("<package>.<Name>").
+//
+// Multiple calls compose; declaration order is preserved. Bindings are
+// applied to the gateway-internal ps slot during New() and route
+// through the same tier/uniqueness policy as proto-declarative
+// bindings — cross-slot pattern conflicts are rejected, and vN slots
+// lock by (pattern, payload_fqn).
+//
+// Unlike the proto-declarative path (which extracts bindings from the
+// `(gwag.ps.binding)` message option at slot bake time), this API
+// accepts the FQN string directly, avoiding the need for the caller
+// to have the proto message type available at gateway construction.
+func WithChannelBinding(pattern, messageFQN string) Option {
+	return func(cfg *config) {
+		cfg.channelBindings = append(cfg.channelBindings, ir.ChannelBinding{
+			Pattern:    pattern,
+			MessageFQN: messageFQN,
+		})
+	}
+}
+
+// applyRuntimeBindingsLocked merges runtime-declared bindings
+// (WithChannelBinding) into the gateway-internal ps slot. Runs the
+// cross-slot uniqueness check before mutating. Caller does NOT hold
+// g.mu — acquires it internally.
+func (g *Gateway) applyRuntimeBindingsLocked(bindings []ir.ChannelBinding) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	psKey := poolKey{namespace: psNamespace, version: psVersion}
+	psSlot, ok := g.slots[psKey]
+	if !ok {
+		return fmt.Errorf("channel binding: ps slot %s/%s not installed (requires cluster)", psNamespace, psVersion)
+	}
+
+	// Check cross-slot uniqueness before mutating.
+	if err := g.checkCrossSlotBindingsLocked(psKey, bindings); err != nil {
+		return err
+	}
+
+	psSlot.channelBindings = append(psSlot.channelBindings, bindings...)
+	g.bakeSlotIRLocked(psSlot)
+	return g.assembleLocked()
 }
