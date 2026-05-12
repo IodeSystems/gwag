@@ -4,7 +4,7 @@ schema {
 }
 
 type AdminMutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -16,7 +16,7 @@ type AdminMutationNamespace {
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
-  undeprecate(version: String!, namespace: String!): admin_UndeprecateOutBody
+  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
   v1: AdminV1MutationNamespace!
 }
 
@@ -58,7 +58,7 @@ type AdminStableQueryNamespace {
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
-  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
+  serviceStats(window: String, namespace: String!, version: String!): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
 }
@@ -73,7 +73,7 @@ type AdminV1MutationNamespace {
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
-  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
