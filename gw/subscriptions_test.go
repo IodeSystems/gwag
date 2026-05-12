@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ type subFixture struct {
 	cluster *Cluster
 	server  *httptest.Server
 	wsURL   string
+	greeter *fakeGreeterServer
 }
 
 func (f *subFixture) close() {
@@ -43,14 +46,17 @@ func (f *subFixture) close() {
 	f.cluster.Close()
 }
 
-// newSubFixture spins an embedded NATS cluster, registers greeter, and
-// exposes gw.Handler() over httptest. opts apply to gateway.New (use
-// WithSubscriptionAuth / WithoutSubscriptionAuth to flip auth modes).
+// newSubFixture spins an embedded NATS cluster, a real upstream gRPC
+// greeter server, registers greeter pointing at it, and exposes
+// gw.Handler() over httptest. The honest server-streaming path opens
+// a direct gRPC stream to the upstream per subscriber.
+//
+// opts apply to gateway.New. WithSubscriptionAuth /
+// WithoutSubscriptionAuth are no-ops for the honest path (auth is
+// handled by the upstream, not the gateway).
 func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	t.Helper()
 	dir := t.TempDir()
-	// :0 lets the OS pick free ports — avoids collision when tests run
-	// in parallel or alongside other gateway processes on dev machines.
 	cluster, err := StartCluster(ClusterOptions{
 		NodeName:      "test",
 		ClientListen:  "127.0.0.1:0",
@@ -63,6 +69,17 @@ func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	}
 	t.Cleanup(cluster.Close)
 
+	// Real upstream gRPC server.
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, greeter)
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
 	allOpts := append([]Option{
 		WithCluster(cluster),
 		WithoutMetrics(),
@@ -72,7 +89,7 @@ func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	t.Cleanup(gw.Close)
 
 	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
-		To(nopGRPCConn{}),
+		To(beLis.Addr().String()),
 		As("greeter"),
 	); err != nil {
 		t.Fatalf("AddProtoDescriptor greeter: %v", err)
@@ -81,7 +98,7 @@ func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	srv := httptest.NewServer(gw.Handler())
 	t.Cleanup(srv.Close)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/graphql"
-	return &subFixture{gw: gw, cluster: cluster, server: srv, wsURL: wsURL}
+	return &subFixture{gw: gw, cluster: cluster, server: srv, wsURL: wsURL, greeter: greeter}
 }
 
 // dialWS opens a graphql-transport-ws connection and returns it after
@@ -146,8 +163,23 @@ func publishGreeting(t *testing.T, c *Cluster, subject, greeting, forName string
 }
 
 func TestSubscriptionE2E_HappyPath(t *testing.T) {
-	f := newSubFixture(t, WithoutSubscriptionAuth())
+	f := newSubFixture(t)
 	defer f.close()
+
+	// Configure the upstream to stream a specific greeting.
+	var sent atomic.Int32
+	f.greeter.greetingsFn = func(ctx context.Context, req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+		if err := stream.Send(&greeterv1.Greeting{
+			Greeting: "hi " + req.GetName(),
+			ForName:  req.GetName(),
+		}); err != nil {
+			return err
+		}
+		sent.Add(1)
+		// Keep the stream open briefly so the subscriber can receive.
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -161,17 +193,6 @@ func TestSubscriptionE2E_HappyPath(t *testing.T) {
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-
-	// Give the gateway a moment to register the NATS subscription.
-	deadline := time.Now().Add(2 * time.Second)
-	for f.gw.subscriptionBroker().activeSubjectCount() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("broker never registered subject")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	publishGreeting(t, f.cluster, "events.greeter.Greetings.alice", "hi alice", "alice")
 
 	msg, err := readWS(conn, ctx)
 	if err != nil {
@@ -198,110 +219,105 @@ func TestSubscriptionE2E_HappyPath(t *testing.T) {
 	if got := result.Data.GreeterGreetings["forName"]; got != "alice" {
 		t.Fatalf("forName=%v want %q", got, "alice")
 	}
-}
-
-func TestSubscriptionE2E_HMACMismatch(t *testing.T) {
-	secret := []byte("test-secret-32-bytes-long-padding")
-	f := newSubFixture(t, WithSubscriptionAuth(SubscriptionAuthOptions{Secret: secret}))
-	defer f.close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	conn := dialWS(t, ctx, f.wsURL)
-	defer conn.Close(websocket.StatusNormalClosure, "done")
-
-	// Send a wrong hmac with a current timestamp.
-	subPayload, _ := json.Marshal(subscribePayload{
-		Query: fmt.Sprintf(
-			`subscription { greeter_greetings(name:"alice", hmac:"AAAA", timestamp:%d) { greeting } }`,
-			time.Now().Unix(),
-		),
-	})
-	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-
-	msg, err := readWS(conn, ctx)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if msg.Type != "error" {
-		t.Fatalf("expected error frame, got %s payload=%s", msg.Type, msg.Payload)
-	}
-	if !strings.Contains(string(msg.Payload), "SIGNATURE_MISMATCH") {
-		t.Fatalf("expected SIGNATURE_MISMATCH in payload, got %s", msg.Payload)
+	if got := sent.Load(); got != 1 {
+		t.Fatalf("upstream sent=%d want=1", got)
 	}
 }
 
-func TestSubscriptionE2E_HMACTooOld(t *testing.T) {
-	secret := []byte("test-secret-32-bytes-long-padding")
-	f := newSubFixture(t, WithSubscriptionAuth(SubscriptionAuthOptions{
-		Secret:     secret,
-		SkewWindow: 30 * time.Second,
-	}))
-	defer f.close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	conn := dialWS(t, ctx, f.wsURL)
-	defer conn.Close(websocket.StatusNormalClosure, "done")
-
-	// Sign with the right secret but a timestamp well outside the skew.
-	old := time.Now().Add(-1 * time.Hour).Unix()
-	hmacB64, _ := SignSubscribeToken(secret, "events.greeter.Greetings.alice", 60)
-	subPayload, _ := json.Marshal(subscribePayload{
-		Query: fmt.Sprintf(
-			`subscription { greeter_greetings(name:"alice", hmac:%q, timestamp:%d) { greeting } }`,
-			hmacB64, old,
-		),
-	})
-	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-
-	msg, err := readWS(conn, ctx)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if msg.Type != "error" {
-		t.Fatalf("expected error frame, got %s payload=%s", msg.Type, msg.Payload)
-	}
-	if !strings.Contains(string(msg.Payload), "TOO_OLD") {
-		t.Fatalf("expected TOO_OLD in payload, got %s", msg.Payload)
-	}
-}
-
-func TestSubscriptionE2E_NotConfigured(t *testing.T) {
-	// No WithSubscriptionAuth and no WithoutSubscriptionAuth → secret is
-	// empty, Insecure is false → NOT_CONFIGURED.
+func TestSubscriptionE2E_MultipleFrames(t *testing.T) {
 	f := newSubFixture(t)
 	defer f.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Upstream sends multiple frames.
+	f.greeter.greetingsFn = func(ctx context.Context, req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+		for i := 0; i < 3; i++ {
+			if err := stream.Send(&greeterv1.Greeting{
+				Greeting: fmt.Sprintf("frame %d for %s", i, req.GetName()),
+				ForName:  req.GetName(),
+			}); err != nil {
+				return err
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	conn := dialWS(t, ctx, f.wsURL)
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
 	subPayload, _ := json.Marshal(subscribePayload{
+		Query: `subscription { greeter_greetings(name:"bob", hmac:"x", timestamp:0) { greeting } }`,
+	})
+	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// Receive 3 frames + complete.
+	for i := 0; i < 3; i++ {
+		msg, err := readWS(conn, ctx)
+		if err != nil {
+			t.Fatalf("read frame %d: %v", i, err)
+		}
+		if msg.Type != "next" {
+			t.Fatalf("frame %d: expected next, got %s payload=%s", i, msg.Type, msg.Payload)
+		}
+		var result struct {
+			Data struct {
+				GreeterGreetings map[string]any `json:"greeter_greetings"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(msg.Payload, &result); err != nil {
+			t.Fatalf("decode frame %d: %v", i, err)
+		}
+		if got := result.Data.GreeterGreetings["greeting"]; got != fmt.Sprintf("frame %d for bob", i) {
+			t.Fatalf("frame %d: greeting=%v", i, got)
+		}
+	}
+
+	// Stream should complete.
+	msg, err := readWS(conn, ctx)
+	if err != nil {
+		t.Fatalf("read complete: %v", err)
+	}
+	if msg.Type != "complete" {
+		t.Fatalf("expected complete, got %s payload=%s", msg.Type, msg.Payload)
+	}
+}
+
+func TestSubscriptionE2E_UpstreamError(t *testing.T) {
+	f := newSubFixture(t)
+	defer f.close()
+
+	// Upstream returns an error.
+	f.greeter.greetingsFn = func(ctx context.Context, req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+		return fmt.Errorf("upstream failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn := dialWS(t, ctx, f.wsURL)
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+subPayload, _ := json.Marshal(subscribePayload{
 		Query: `subscription { greeter_greetings(name:"alice", hmac:"x", timestamp:0) { greeting } }`,
 	})
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	msg, err := readWS(conn, ctx)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if msg.Type != "error" {
-		t.Fatalf("expected error frame, got %s payload=%s", msg.Type, msg.Payload)
-	}
-	if !strings.Contains(string(msg.Payload), "NOT_CONFIGURED") {
-		t.Fatalf("expected NOT_CONFIGURED in payload, got %s", msg.Payload)
-	}
+// The upstream error should surface as either an error frame or
+		// the subscription closing with a complete frame.
+		msg, err := readWS(conn, ctx)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if msg.Type != "error" && msg.Type != "complete" {
+			t.Fatalf("expected error or complete on upstream failure, got %s payload=%s", msg.Type, msg.Payload)
+		}
 }
 
 func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
@@ -309,8 +325,9 @@ func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
 	// field: register a service, observe a ServiceChange frame on the
 	// WS, including round-tripping the proto enum through graphql-go's
 	// JSON serialiser (action should land as "ACTION_REGISTERED", not
-	// the numeric enum value).
-	f := newSubFixture(t, WithoutSubscriptionAuth())
+	// the numeric enum value). Admin events use the internal-proto
+	// path with NATS broker, not the honest gRPC stream path.
+	f := newSubFixture(t)
 	defer f.close()
 	if err := f.gw.AddAdminEvents(); err != nil {
 		t.Fatalf("AddAdminEvents: %v", err)
@@ -324,7 +341,7 @@ func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
 
 	subPayload, _ := json.Marshal(subscribePayload{
 		Query: `subscription {
-			admin_events_watchServices(namespace: "watched", hmac: "x", timestamp: 0) {
+			admin_events_watchServices(namespace: "watched") {
 				action namespace version replicaCount
 			}
 		}`,
@@ -384,8 +401,19 @@ func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
 }
 
 func TestSubscriptionE2E_ClientCompleteCleansUp(t *testing.T) {
-	f := newSubFixture(t, WithoutSubscriptionAuth())
+	f := newSubFixture(t)
 	defer f.close()
+
+	// Upstream keeps the stream open until context cancels.
+	f.greeter.greetingsFn = func(ctx context.Context, req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+		// Send one frame, then wait for context cancellation.
+		_ = stream.Send(&greeterv1.Greeting{
+			Greeting: "hello " + req.GetName(),
+			ForName:  req.GetName(),
+		})
+		<-ctx.Done()
+		return ctx.Err()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -400,25 +428,26 @@ func TestSubscriptionE2E_ClientCompleteCleansUp(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	// Wait for the subject to register.
-	deadline := time.Now().Add(2 * time.Second)
-	for f.gw.subscriptionBroker().activeSubjectCount() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("broker never registered subject")
-		}
-		time.Sleep(20 * time.Millisecond)
+	// Receive the first frame to confirm the subscription is active.
+	msg, err := readWS(conn, ctx)
+	if err != nil {
+		t.Fatalf("read next: %v", err)
+	}
+	if msg.Type != "next" {
+		t.Fatalf("expected next, got %s payload=%s", msg.Type, msg.Payload)
 	}
 
-	// Client says complete; gateway must release the broker entry.
+	// Client says complete; gateway must cancel the upstream stream.
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "complete"}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
-	deadline = time.Now().Add(2 * time.Second)
-	for f.gw.subscriptionBroker().activeSubjectCount() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("broker still has %d active subjects", f.gw.subscriptionBroker().activeSubjectCount())
-		}
-		time.Sleep(20 * time.Millisecond)
+	// The subscription should complete cleanly.
+	msg, err = readWS(conn, ctx)
+	if err != nil {
+		t.Fatalf("read complete: %v", err)
+	}
+	if msg.Type != "complete" {
+		t.Fatalf("expected complete, got %s payload=%s", msg.Type, msg.Payload)
 	}
 }

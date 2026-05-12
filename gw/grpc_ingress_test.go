@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -10,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -169,16 +169,16 @@ func TestGRPCIngress_ClientStreamingNotRouted(t *testing.T) {
 	}
 }
 
-// grpcStreamingFixture stands up a NATS-backed gateway behind a
-// frontend gRPC server hosting GRPCUnknownHandler so server-streaming
-// proto methods can be exercised end-to-end. No backend gRPC server
-// needed — the streaming path doesn't dial out (events come through
-// NATS), so a nopGRPCConn suffices.
+// grpcStreamingFixture stands up a gateway behind a frontend gRPC
+// server hosting GRPCUnknownHandler so server-streaming proto methods
+// can be exercised end-to-end. The honest path opens a direct gRPC
+// stream to the upstream backend per subscriber.
 type grpcStreamingFixture struct {
 	gw      *Gateway
 	cluster *Cluster
 	cli     greeterv1.GreeterServiceClient
 	conn    *grpc.ClientConn
+	greeter *fakeGreeterServer
 }
 
 func newGRPCStreamingFixture(t *testing.T, opts ...Option) *grpcStreamingFixture {
@@ -196,6 +196,17 @@ func newGRPCStreamingFixture(t *testing.T, opts ...Option) *grpcStreamingFixture
 	}
 	t.Cleanup(cluster.Close)
 
+	// Real upstream gRPC server.
+	beLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{}
+	beSrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(beSrv, greeter)
+	go func() { _ = beSrv.Serve(beLis) }()
+	t.Cleanup(beSrv.Stop)
+
 	allOpts := append([]Option{
 		WithCluster(cluster),
 		WithoutMetrics(),
@@ -205,7 +216,7 @@ func newGRPCStreamingFixture(t *testing.T, opts ...Option) *grpcStreamingFixture
 	t.Cleanup(gw.Close)
 
 	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
-		To(nopGRPCConn{}),
+		To(beLis.Addr().String()),
 		As("greeter"),
 	); err != nil {
 		t.Fatalf("AddProtoDescriptor: %v", err)
@@ -230,11 +241,12 @@ func newGRPCStreamingFixture(t *testing.T, opts ...Option) *grpcStreamingFixture
 		cluster: cluster,
 		cli:     greeterv1.NewGreeterServiceClient(conn),
 		conn:    conn,
+		greeter: greeter,
 	}
 }
 
 func TestGRPCIngress_ServerStreaming_HappyPath(t *testing.T) {
-	f := newGRPCStreamingFixture(t, WithoutSubscriptionAuth())
+	f := newGRPCStreamingFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -243,53 +255,57 @@ func TestGRPCIngress_ServerStreaming_HappyPath(t *testing.T) {
 		t.Fatalf("Greetings: %v", err)
 	}
 
-	// Wait for the broker to register the subject before publishing.
-	deadline := time.Now().Add(2 * time.Second)
-	for f.gw.subscriptionBroker().activeSubjectCount() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("broker never registered subject")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	publishGreeting(t, f.cluster, "events.greeter.Greetings.alice", "hi alice", "alice")
-
 	got, err := stream.Recv()
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if got.GetGreeting() != "hi alice" {
-		t.Fatalf("greeting=%q want %q", got.GetGreeting(), "hi alice")
+	if got.GetGreeting() != "hello alice" {
+		t.Fatalf("greeting=%q want %q", got.GetGreeting(), "hello alice")
 	}
 	if got.GetForName() != "alice" {
 		t.Fatalf("forName=%q want %q", got.GetForName(), "alice")
 	}
 }
 
-func TestGRPCIngress_ServerStreaming_HMACFromMetadata(t *testing.T) {
-	// With HMAC enabled, a missing metadata triple → MALFORMED →
-	// Unauthenticated. Verifies the metadata lookup is wired.
-	secret := []byte("test-secret-32-bytes-long-padding")
-	f := newGRPCStreamingFixture(t, WithSubscriptionAuth(SubscriptionAuthOptions{Secret: secret}))
+func TestGRPCIngress_ServerStreaming_CustomUpstream(t *testing.T) {
+	f := newGRPCStreamingFixture(t)
+
+	// Configure custom upstream behavior.
+	f.greeter.greetingsFn = func(ctx context.Context, req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+		for i := 0; i < 3; i++ {
+			if err := stream.Send(&greeterv1.Greeting{
+				Greeting: fmt.Sprintf("msg-%d", i),
+				ForName:  req.GetName(),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Send with bogus HMAC in metadata — verify rejects.
-	ctx = metadata.AppendToOutgoingContext(ctx,
-		"x-gateway-hmac", "bad",
-		"x-gateway-timestamp", "0",
-	)
-	stream, err := f.cli.Greetings(ctx, &greeterv1.GreetingsFilter{Name: "alice"})
+
+	stream, err := f.cli.Greetings(ctx, &greeterv1.GreetingsFilter{Name: "bob"})
 	if err != nil {
-		// Stream open may eagerly fail with bad auth.
-		return
+		t.Fatalf("Greetings: %v", err)
 	}
+
+	for i := 0; i < 3; i++ {
+		got, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv %d: %v", i, err)
+		}
+		if got.GetGreeting() != fmt.Sprintf("msg-%d", i) {
+			t.Fatalf("Recv %d: greeting=%q", i, got.GetGreeting())
+		}
+	}
+
+	// Stream should end.
 	_, err = stream.Recv()
 	if err == nil {
-		t.Fatal("expected Recv error on bad HMAC, got nil")
+		t.Fatal("expected stream end, got nil error")
 	}
-	// Subscribe-time errors come through as raw error from the
-	// dispatcher — we just verify the stream did NOT successfully
-	// receive an event.
 }
 
 func TestGRPCIngress_RuntimeMiddlewareApplies(t *testing.T) {

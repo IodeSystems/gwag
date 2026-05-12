@@ -5,10 +5,11 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	aev1 "github.com/iodesystems/gwag/gw/proto/adminevents/v1"
 )
@@ -28,6 +29,36 @@ const (
 	adminEventsActionDeregistered = aev1.ServiceChange_ACTION_DEREGISTERED
 )
 
+// adminEventsOutputDesc caches the ServiceChange message descriptor
+// for the broker acquire call. Resolved once at first use.
+var (
+	adminEventsOutputOnce sync.Once
+	adminEventsOutputDesc protoreflect.MessageDescriptor
+	adminEventsOutputErr  error
+)
+
+func resolveAdminEventsOutputDesc() (protoreflect.MessageDescriptor, error) {
+	adminEventsOutputOnce.Do(func() {
+		fd, err := compileProtoBytes("adminevents.proto", admineventsProtoSource, nil)
+		if err != nil {
+			adminEventsOutputErr = err
+			return
+		}
+		svc := fd.Services().ByName(protoreflect.Name("AdminEvents"))
+		if svc == nil {
+			adminEventsOutputErr = fmt.Errorf("admin_events: service AdminEvents not found")
+			return
+		}
+		md := svc.Methods().ByName(protoreflect.Name("WatchServices"))
+		if md == nil {
+			adminEventsOutputErr = fmt.Errorf("admin_events: method WatchServices not found")
+			return
+		}
+		adminEventsOutputDesc = md.Output()
+	})
+	return adminEventsOutputDesc, adminEventsOutputErr
+}
+
 // AddAdminEvents registers the built-in AdminEvents proto so the
 // gateway's GraphQL schema gains the `admin_events_watchServices`
 // Subscription field. Whenever the registry mutates, the gateway
@@ -40,26 +71,52 @@ func (g *Gateway) AddAdminEvents() error {
 	if g.cfg.cluster == nil {
 		return errors.New("gateway: AddAdminEvents requires a configured cluster (NATS-backed subscriptions)")
 	}
-	return g.AddProtoBytes(
-		"adminevents.proto",
+	fd, err := compileProtoBytes("adminevents.proto", admineventsProtoSource, nil)
+	if err != nil {
+		return fmt.Errorf("admin_events: compile: %w", err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.addInternalProtoSlotLocked(
+		adminEventsNamespace,
+		"v1",
+		fd,
 		admineventsProtoSource,
-		To(noopAdminEventsConn{}),
-		As(adminEventsNamespace),
+		nil,
+		map[string]InternalProtoSubscriptionHandler{
+			"WatchServices": g.adminEventsWatchServicesHandler,
+		},
 	)
 }
 
-// noopAdminEventsConn satisfies grpc.ClientConnInterface so
-// AddProtoBytes accepts it. The gateway never dispatches the
-// AdminEvents methods through gRPC — the streaming method is
-// NATS-backed and the request type has no unary callers.
-type noopAdminEventsConn struct{}
-
-func (noopAdminEventsConn) Invoke(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
-	return fmt.Errorf("admin_events: gRPC dispatch not supported on %s (NATS-backed)", method)
-}
-
-func (noopAdminEventsConn) NewStream(_ context.Context, _ *grpc.StreamDesc, method string, _ ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, fmt.Errorf("admin_events: gRPC streaming dispatch not supported on %s (NATS-backed)", method)
+// adminEventsWatchServicesHandler is the in-process subscription
+// handler for admin_events_watchServices. It joins the gateway's
+// NATS subscription broker on the WatchServices subject for the
+// requested namespace and returns a channel of decoded ServiceChange
+// events.
+func (g *Gateway) adminEventsWatchServicesHandler(ctx context.Context, args map[string]any) (any, error) {
+	broker := g.subscriptionBroker()
+	if broker == nil {
+		return nil, fmt.Errorf("gateway: subscription broker not available")
+	}
+	ns, _ := args["namespace"].(string)
+	subject := fmt.Sprintf("events.%s.WatchServices.%s", adminEventsNamespace, ns)
+	if ns == "" {
+		subject = fmt.Sprintf("events.%s.WatchServices.*", adminEventsNamespace)
+	}
+	outputDesc, err := resolveAdminEventsOutputDesc()
+	if err != nil {
+		return nil, err
+	}
+	source, release, err := broker.acquire(subject, outputDesc)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		<-ctx.Done()
+		release()
+	}()
+	return source, nil
 }
 
 // publishServiceChange fires a ServiceChange event onto the NATS

@@ -45,7 +45,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 					}
 					sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
 					if md.IsStreamingServer() {
-						g.dispatchers.Set(sid, newProtoSubscriptionDispatcher(g, p.key.namespace, p.key.version, string(md.Name()), md.Output()))
+						g.dispatchers.Set(sid, newProtoDirectSubscriptionDispatcher(g, p, sd, md))
 						continue
 					}
 					label := methodLabel(sd, md)

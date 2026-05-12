@@ -17,15 +17,18 @@ import (
 	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 )
 
-// fakeGreeterServer implements just the unary Hello — Greetings (server
-// stream) and Echo (bidi) are intentionally left at the unimplemented
-// embed since unary tests don't drive them.
+// fakeGreeterServer implements the unary Hello and the server-streaming
+// Greetings. Echo (bidi) is left at the unimplemented embed.
 type fakeGreeterServer struct {
 	greeterv1.UnimplementedGreeterServiceServer
 
 	helloCalls atomic.Int32
 	lastReq    atomic.Pointer[greeterv1.HelloRequest]
 	helloFn    func(context.Context, *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error)
+
+	// Greetings handler: if set, called instead of the default
+	// behavior. Receives the filter and the server stream to write responses.
+	greetingsFn func(context.Context, *greeterv1.GreetingsFilter, grpc.ServerStreamingServer[greeterv1.Greeting]) error
 }
 
 func (f *fakeGreeterServer) Hello(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
@@ -35,6 +38,17 @@ func (f *fakeGreeterServer) Hello(ctx context.Context, req *greeterv1.HelloReque
 		return f.helloFn(ctx, req)
 	}
 	return &greeterv1.HelloResponse{Greeting: "hello " + req.GetName()}, nil
+}
+
+func (f *fakeGreeterServer) Greetings(req *greeterv1.GreetingsFilter, stream grpc.ServerStreamingServer[greeterv1.Greeting]) error {
+	if f.greetingsFn != nil {
+		return f.greetingsFn(stream.Context(), req, stream)
+	}
+	// Default: send one greeting and close.
+	return stream.Send(&greeterv1.Greeting{
+		Greeting: "hello " + req.GetName(),
+		ForName:  req.GetName(),
+	})
 }
 
 type grpcE2EFixture struct {
