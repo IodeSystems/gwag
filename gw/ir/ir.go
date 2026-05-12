@@ -91,6 +91,29 @@ type Service struct {
 	//   *introspectionSchema slice or JSON (KindGraphQL)
 	OriginKind Kind
 	Origin     any
+
+	// ChannelBindings declares pub/sub channel→payload-type pairs the
+	// service ships alongside its operations. Proto ingest fills this
+	// from the `(gwag.ps.binding)` custom message option at slot bake;
+	// the runtime `WithChannelBinding` API fills the same slot for non-
+	// proto adopters. The gateway aggregates across every registered
+	// slot into a process-wide pattern→FQN lookup; on Event delivery
+	// the matched FQN is stamped onto `Event.payload_type` so
+	// subscribers can fetch the descriptor and decode. Format-neutral
+	// by design — OpenAPI / GraphQL renderers ignore it, but the field
+	// rides through transforms and schema rebuild like any other.
+	ChannelBindings []ChannelBinding
+}
+
+// ChannelBinding is one proto-declarative or runtime-declared pub/sub
+// channel→message-type pairing. Pattern uses NATS-style wildcards
+// (segments split on `.`, `*` matches one segment, `>` matches the
+// rest), identical to the grammar `WithChannelAuth` uses. MessageFQN
+// is the proto fully-qualified message name (`"<package>.<Name>"`,
+// matching the keys in Service.Types for proto-origin services).
+type ChannelBinding struct {
+	Pattern    string
+	MessageFQN string
 }
 
 // OperationGroup is one nested namespace under a Service (or under

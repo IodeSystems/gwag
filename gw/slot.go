@@ -315,12 +315,14 @@ func (g *Gateway) internalProtoSlot(key poolKey) *internalProtoSource {
 // `s.openapi` / `s.graphql`) must be set before calling.
 func (g *Gateway) bakeSlotIRLocked(s *slot) {
 	var raw []*ir.Service
+	var bindings []ir.ChannelBinding
 	switch s.kind {
 	case slotKindProto:
 		if s.proto == nil {
 			return
 		}
 		raw = ir.IngestProto(s.proto.file)
+		bindings = extractChannelBindings(s.proto.file)
 	case slotKindOpenAPI:
 		if s.openapi == nil {
 			return
@@ -341,6 +343,7 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 			return
 		}
 		raw = ir.IngestProto(s.internalProto.file)
+		bindings = extractChannelBindings(s.internalProto.file)
 	default:
 		return
 	}
@@ -349,6 +352,7 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 		svc.Version = s.key.version
 		svc.Internal = g.isInternal(s.key.namespace)
 		svc.Deprecated = s.deprecationReason
+		svc.ChannelBindings = bindings
 	}
 	raw = ir.HideInternal(raw)
 	g.applySchemaRewrites(raw)
