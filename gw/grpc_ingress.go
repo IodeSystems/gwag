@@ -24,10 +24,8 @@ import (
 // into the chained Handler the canonical protoDispatcher uses.
 //
 // Streaming routes go through the canonical-args ir.Dispatcher
-// (protoSubscriptionDispatcher) since subscribeNATS already keys off
-// args; the input message converts to args once via messageToMap,
-// metadata headers add hmac/timestamp/kid, and each delivered event
-// gets re-encoded to dynamicpb on the wire.
+// (protoDirectSubscriptionDispatcher) which opens a direct gRPC
+// server-streaming call to the upstream per subscriber.
 //
 // Built once per assembleLocked from the live pool set and discarded
 // on rebuild. Atomic-swap so the unknown-service handler doesn't
@@ -43,7 +41,7 @@ type grpcIngressRoute struct {
 	bp      BackpressureConfig
 
 	// Streaming path: ir.Dispatcher whose Dispatch returns a chan any
-	// of decoded event maps from subscribeNATS.
+	// of decoded event maps from the upstream gRPC stream.
 	streamDispatcher ir.Dispatcher
 }
 
@@ -55,9 +53,9 @@ type grpcIngressTable struct {
 // one route per method. Unary routes capture the same chained
 // Handler the canonical protoDispatcher uses (so transforms apply
 // identically) alongside the per-pool BackpressureConfig. Server-
-// streaming routes capture the protoSubscriptionDispatcher already
-// registered in g.dispatchers — subscribeNATS handles HMAC + stream-
-// slot acquisition + broker fanout.
+// streaming routes capture the protoDirectSubscriptionDispatcher
+// already registered in g.dispatchers — it opens a direct gRPC
+// stream to the upstream per subscriber.
 //
 // Bidi / client-streaming methods are skipped — egress doesn't
 // support them and there's no canonical args shape to forward.
@@ -332,11 +330,10 @@ func coerceCanonicalListValue(v any) any {
 // args avoids two map↔message conversions on the proto→proto path.
 //
 // Server-streaming RPCs route through the canonical-args
-// protoSubscriptionDispatcher: messageToMap on the input plus
-// hmac/timestamp/kid pulled from gRPC metadata
-// (`x-gateway-hmac`/`-timestamp`/`-kid`) feed subscribeNATS, which
-// handles HMAC verify, stream-slot acquisition, and broker fanout.
-// Each delivered event re-encodes to dynamicpb on the wire.
+// protoDirectSubscriptionDispatcher: args are converted to a
+// dynamicpb request message and sent to the upstream via a direct
+// gRPC server-streaming call. Each delivered event re-encodes to
+// dynamicpb on the wire.
 //
 // Bidi / client-streaming RPCs return Unimplemented. Unmatched
 // methods return Unimplemented.

@@ -123,7 +123,7 @@ func (g *Gateway) adminEventsWatchServicesHandler(ctx context.Context, args map[
 // subject the admin_events_watchServices Subscription field reads
 // from. No-op when the gateway isn't in cluster mode.
 //
-// Subject convention mirrors gateway-side subjectFor:
+// Subject convention:
 //
 //	events.admin_events.WatchServices.<namespace>
 //

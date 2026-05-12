@@ -411,12 +411,6 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 	}
 	raw = ir.HideInternal(raw)
 	g.applySchemaRewrites(raw)
-	if s.kind == slotKindProto {
-		for _, svc := range raw {
-			injectProtoSubscriptionAuthArgs(svc)
-			injectProtoSubscriptionAuthDoc(svc)
-		}
-	}
 	for _, svc := range raw {
 		ir.PopulateSchemaIDs(svc)
 	}

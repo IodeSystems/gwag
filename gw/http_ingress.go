@@ -33,10 +33,9 @@ import (
 //     Lookups walk ingressTable.templated until segs match.
 //   - ingressShapeSubscription: GET /<pkg>.<Service>/<method> for a
 //     server-streaming proto method. Args come from query params
-//     (input fields plus hmac/timestamp/kid auth); response is
-//     text/event-stream — one `data:` frame per published event,
-//     terminating with `event: complete` when the upstream channel
-//     closes.
+//     (input fields); response is text/event-stream — one `data:`
+//     frame per upstream event, terminating with `event: complete`
+//     when the stream ends.
 type ingressRoute struct {
 	method     string
 	path       string // exact match for proto-style; "" when templated
@@ -76,7 +75,7 @@ const (
 
 	// ingressShapeSubscription: GET /<pkg>.<Service>/<method> on a
 	// server-streaming proto method. Query params land in canonical
-	// args (input fields + hmac/timestamp/kid). Dispatch returns a
+	// args (input fields). Dispatch returns a
 	// chan any of decoded events that the handler streams as SSE.
 	ingressShapeSubscription
 )
@@ -418,8 +417,8 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 // channel out to the client as text/event-stream. One `data:` frame
 // per event (JSON-encoded payload). When the upstream channel closes,
 // the handler emits `event: complete\ndata: {}` and returns. ctx
-// cancels propagate down to subscribeNATS, which releases stream
-// slots and unwinds the broker fanout.
+// cancels propagate down to the dispatcher, which releases stream
+// slots and closes the upstream.
 //
 // Pre-dispatch errors (HMAC verify fail, slot-acquire timeout) come
 // back as Reject — written as a regular JSON error envelope, no SSE

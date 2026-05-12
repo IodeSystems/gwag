@@ -438,10 +438,12 @@ func (g *Gateway) checkVersionTierAllowed(version string) error {
 	return nil
 }
 
-// SubscriptionAuthOptions configures HMAC verification for incoming
-// graphql-ws subscriptions. The auth args (hmac, timestamp, kid) are
-// auto-injected on every subscription field's SDL; this controls how
-// the gateway verifies them at subscribe time.
+// SubscriptionAuthOptions configures HMAC verification for ps.sub
+// (the gateway pub/sub primitive). The ps.sub field carries hmac,
+// timestamp, and ts args that the gateway verifies against these
+// secrets. Proto server-streaming subscriptions no longer go through
+// gateway HMAC auth — they open a direct gRPC stream to the upstream,
+// which handles its own authentication.
 type SubscriptionAuthOptions struct {
 	// Insecure bypasses HMAC verification entirely. Auth args are
 	// accepted (for SDL compatibility) but not checked. Dev/local only.
@@ -832,8 +834,8 @@ func New(opts ...Option) *Gateway {
 	// Auto-install gwag.ps.v1.PubSub when a cluster is bound — the
 	// pub/sub primitive needs NATS to do anything useful. Standalone
 	// gateways skip the install (schema doesn't surface ps.pub/ps.sub),
-	// matching how subscribeNATS errors out when called without a
-	// cluster on the proto-streaming path.
+	// matching how ps.pub/ps.sub error out when called without a
+	// cluster.
 	if cfg.cluster != nil {
 		if err := g.installPubSubSlot(); err != nil {
 			panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))

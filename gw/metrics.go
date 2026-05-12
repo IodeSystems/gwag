@@ -60,11 +60,6 @@ type Metrics interface {
 	// active subscription streams across all pools.
 	SetStreamsInflightTotal(inflight int)
 
-	// RecordSubscribeAuth records the outcome of a subscribe-auth
-	// attempt. code is the SubscribeAuthCode enum value's String()
-	// (e.g. "SUBSCRIBE_AUTH_CODE_OK", "..._SIGNATURE_MISMATCH").
-	RecordSubscribeAuth(namespace, version, method, code string)
-
 	// RecordSignAuth records the outcome of the SignSubscriptionToken
 	// bearer check. code is one of: "in_process" (no gRPC peer; gate
 	// bypassed), "ok_signer" / "ok_bearer" (signer-secret or admin
@@ -121,9 +116,8 @@ func (noopMetrics) RecordBackoff(string, string, string, string, string)        
 func (noopMetrics) SetQueueDepth(string, string, string, int)                   {}
 func (noopMetrics) SetReplicaQueueDepth(string, string, string, string, int)    {}
 func (noopMetrics) SetStreamsInflight(string, string, int)                      {}
-func (noopMetrics) SetStreamsInflightTotal(int)                                 {}
-func (noopMetrics) RecordSubscribeAuth(string, string, string, string)          {}
-func (noopMetrics) RecordSignAuth(string)                                       {}
+func (noopMetrics) SetStreamsInflightTotal(int)                     {}
+func (noopMetrics) RecordSignAuth(string)                              {}
 func (noopMetrics) RecordAdminAuth(string, string)                              {}
 func (noopMetrics) RecordGraphQLSubFanout(string, string)                       {}
 func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      {}
@@ -142,7 +136,6 @@ type prometheusMetrics struct {
 	replicaDepth  *prometheus.GaugeVec
 	streams       *prometheus.GaugeVec
 	streamsTotal  prometheus.Gauge
-	subAuth       *prometheus.CounterVec
 	signAuth      *prometheus.CounterVec
 	adminAuth     *prometheus.CounterVec
 	gqlSubFanout  *prometheus.CounterVec
@@ -188,10 +181,6 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_streams_inflight_total",
 		Help: "Gateway-wide count of active subscription streams across all pools.",
 	})
-	subAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_subscribe_auth_total",
-		Help: "Outcomes of subscribe-auth checks (HMAC verify and delegate).",
-	}, []string{"namespace", "version", "method", "code"})
 	signAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "go_api_gateway_sign_auth_total",
 		Help: "Outcomes of SignSubscriptionToken bearer checks (signer-secret + admin-token gate).",
@@ -222,7 +211,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_pub_no_binding_total",
 		Help: "Pubs to channels with no registered channel binding (empty payload_type).",
 	})
-	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, subAuth, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding)
+	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -232,7 +221,6 @@ func newPrometheusMetrics() *prometheusMetrics {
 		replicaDepth: replicaDepth,
 		streams:      streams,
 		streamsTotal: streamsTotal,
-		subAuth:      subAuth,
 		signAuth:     signAuth,
 		adminAuth:    adminAuth,
 		gqlSubFanout: gqlSubFanout,
@@ -274,10 +262,6 @@ func (m *prometheusMetrics) SetStreamsInflight(namespace, version string, inflig
 
 func (m *prometheusMetrics) SetStreamsInflightTotal(inflight int) {
 	m.streamsTotal.Set(float64(inflight))
-}
-
-func (m *prometheusMetrics) RecordSubscribeAuth(namespace, version, method, code string) {
-	m.subAuth.WithLabelValues(namespace, version, method, code).Inc()
 }
 
 func (m *prometheusMetrics) RecordSignAuth(code string) {

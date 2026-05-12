@@ -51,10 +51,6 @@ func TestSchemaSDL_PathBasedAddProtoSurfacesDescriptions(t *testing.T) {
 	if !strings.Contains(sdl, "Server-streaming") {
 		t.Errorf("SDL missing original Greetings comment\n--- SDL ---\n%s", sdl)
 	}
-	// Gateway's auto-injected HMAC contract on the same subscription.
-	if !strings.Contains(sdl, "HMAC channel token") {
-		t.Errorf("SDL missing subscription auto-doc\n--- SDL ---\n%s", sdl)
-	}
 	// Adopter's field-level comment from GreetingsFilter.name.
 	if !strings.Contains(sdl, "Filter by recipient") {
 		t.Errorf("SDL missing GreetingsFilter.name comment\n--- SDL ---\n%s", sdl)

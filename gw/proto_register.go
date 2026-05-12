@@ -6,7 +6,7 @@ import (
 
 // registerProtoDispatchersLocked walks every proto pool matching
 // `filter`, builds a backpressure-wrapped protoDispatcher per unary
-// RPC (and a protoSubscriptionDispatcher per server-streaming RPC),
+// RPC (and a protoDirectSubscriptionDispatcher per server-streaming RPC),
 // and registers each one in g.dispatchers under
 // MakeSchemaID(ns, ver, methodName). The methodName is the wire-level
 // PascalCase name (e.g. "Hello", "Greetings") to match what IR's
@@ -100,53 +100,4 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 	}
 }
 
-// injectProtoSubscriptionAuthArgs appends the gateway's HMAC-auth
-// arguments (hmac, timestamp, kid) to every server-streaming proto
-// op so the rendered SDL surfaces them and the WS auth verifier sees
-// them in args. The legacy buildSubscriptionField stamped the same
-// triple inline; doing it here keeps the IR canonical for the
-// renderer.
-//
-// hmac + timestamp are required (NonNull); kid is optional and used
-// only when the gateway runs SubscriptionAuthOptions.Secrets for key
-// rotation.
-func injectProtoSubscriptionAuthArgs(svc *ir.Service) {
-	for _, op := range svc.Operations {
-		if op.Kind != ir.OpSubscription {
-			continue
-		}
-		op.Args = append(op.Args,
-			&ir.Arg{Name: "hmac", Type: ir.TypeRef{Builtin: ir.ScalarString}, Required: true},
-			&ir.Arg{Name: "timestamp", Type: ir.TypeRef{Builtin: ir.ScalarInt32}, Required: true},
-			&ir.Arg{Name: "kid", Type: ir.TypeRef{Builtin: ir.ScalarString}},
-		)
-	}
-}
 
-// protoSubscriptionAuthDoc is the canonical HMAC-channel-auth contract
-// appended to every proto subscription op's Description. Single
-// source of truth so SDL, /api/schema/graphql, and the MCP search
-// corpus all carry the same auth-contract sentence. Surfaced
-// adopter-facing — keep adopter-readable.
-const protoSubscriptionAuthDoc = "Authenticated via HMAC channel token: subscribers obtain a token " +
-	"(`gwag sign --channel <subject>` or `/api/admin/sign`) and pass it as " +
-	"`hmac` + `timestamp` (+ optional `kid` for key rotation). " +
-	"Subject pattern: `events.<namespace>.<Method>.<arg0>.<arg1>…`; " +
-	"absent args wildcard to `*`."
-
-// injectProtoSubscriptionAuthDoc appends the HMAC channel-auth
-// contract to every proto subscription op's Description. Idempotent —
-// rebakes won't double-append because bakeSlotIRLocked re-ingests
-// from the source descriptor each time, restoring the original Doc.
-func injectProtoSubscriptionAuthDoc(svc *ir.Service) {
-	for _, op := range svc.Operations {
-		if op.Kind != ir.OpSubscription {
-			continue
-		}
-		if op.Description == "" {
-			op.Description = protoSubscriptionAuthDoc
-			continue
-		}
-		op.Description = op.Description + "\n\n" + protoSubscriptionAuthDoc
-	}
-}

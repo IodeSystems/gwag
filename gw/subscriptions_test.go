@@ -52,8 +52,8 @@ func (f *subFixture) close() {
 // a direct gRPC stream to the upstream per subscriber.
 //
 // opts apply to gateway.New. WithSubscriptionAuth /
-// WithoutSubscriptionAuth are no-ops for the honest path (auth is
-// handled by the upstream, not the gateway).
+// WithoutSubscriptionAuth affect ps.sub auth only; the honest
+// proto-streaming path delegates auth to the upstream.
 func newSubFixture(t *testing.T, opts ...Option) *subFixture {
 	t.Helper()
 	dir := t.TempDir()
@@ -188,7 +188,7 @@ func TestSubscriptionE2E_HappyPath(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
 	subPayload, _ := json.Marshal(subscribePayload{
-		Query: `subscription { greeter_greetings(name:"alice", hmac:"x", timestamp:0) { greeting forName } }`,
+		Query: `subscription { greeter_greetings(name:"alice") { greeting forName } }`,
 	})
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -249,7 +249,7 @@ func TestSubscriptionE2E_MultipleFrames(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
 	subPayload, _ := json.Marshal(subscribePayload{
-		Query: `subscription { greeter_greetings(name:"bob", hmac:"x", timestamp:0) { greeting } }`,
+		Query: `subscription { greeter_greetings(name:"bob") { greeting } }`,
 	})
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -303,7 +303,7 @@ func TestSubscriptionE2E_UpstreamError(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
 subPayload, _ := json.Marshal(subscribePayload{
-		Query: `subscription { greeter_greetings(name:"alice", hmac:"x", timestamp:0) { greeting } }`,
+		Query: `subscription { greeter_greetings(name:"alice") { greeting } }`,
 	})
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -422,7 +422,7 @@ func TestSubscriptionE2E_ClientCompleteCleansUp(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
 	subPayload, _ := json.Marshal(subscribePayload{
-		Query: `subscription { greeter_greetings(name:"alice", hmac:"x", timestamp:0) { greeting } }`,
+		Query: `subscription { greeter_greetings(name:"alice") { greeting } }`,
 	})
 	if err := writeWS(conn, ctx, wsMessage{ID: "1", Type: "subscribe", Payload: subPayload}); err != nil {
 		t.Fatalf("subscribe: %v", err)

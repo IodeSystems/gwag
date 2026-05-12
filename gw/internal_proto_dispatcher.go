@@ -131,9 +131,8 @@ func normaliseInternalProtoResponse(resp protoreflect.ProtoMessage, outputDesc p
 }
 
 // internalProtoSubscriptionDispatcher implements ir.Dispatcher for one
-// in-process server-streaming proto RPC. Symmetric with
-// protoSubscriptionDispatcher: Dispatch returns a chan any of decoded
-// events that graphql-go's Subscribe field receives.
+// in-process server-streaming proto RPC. Dispatch returns a chan any of
+// decoded events that graphql-go's Subscribe field receives.
 //
 // Stream-cap accounting and broker-handle release are the handler's
 // responsibility (it's the only place that knows whether a broker is
