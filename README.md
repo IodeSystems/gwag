@@ -954,14 +954,20 @@ upstream replica per scenario, loopback):
 
 | Backend kind | Recommended ceiling | Achieved | p99 | Gateway self-time |
 |---|---:|---:|---:|---:|
-| proto (gRPC) | 50 k RPS | 48,672 (97 %) | 46 ms | 109 µs |
-| openapi (HTTP/JSON) | 50 k RPS | 48,002 (96 %) | 38 ms | 208 µs |
-| graphql (stitching) | 20 k RPS | 19,828 (99 %) | 11 ms | 39 µs |
+| proto (gRPC) | 50 k RPS | 48,708 (97 %) | 40 ms | 225 µs |
+| openapi (HTTP/JSON) | 50 k RPS | 47,933 (96 %) | 45 ms | 589 µs |
+| graphql (forwarding) | 40 k RPS | 39,140 (98 %) | 22 ms | 182 µs |
 
-Proto and OpenAPI both saturate around 50 k RPS; GraphQL
-stitching tops out at ~20 k because each request adds an
-inbound→upstream GraphQL parse + result-merge. Knee fires
-when p99 crosses 50 ms (production-SLA ceiling).
+All three backends land in the same RPS band on this hardware
+(40-50 k). Knee fires when p99 crosses 50 ms (production-SLA
+ceiling).
+
+**Note on the GraphQL→GraphQL row:** GraphQL forwarding is only
+this fast because hello-graphql (the bundled bench upstream) uses
+the fork's plan-cache + ExecutePlanAppend hot path. Vanilla
+graphql-go/handler upstreams reparse every request and cap around
+20 k RPS through the same gateway — almost all of the difference
+is on the upstream side, not the gateway's mirror walk.
 Regenerate with `bin/bench perf` (single command — reads
 `bench/perf-scenarios.yaml`, brings up the stack, registers the
 upstream services each scenario needs, runs the sweeps, renders
