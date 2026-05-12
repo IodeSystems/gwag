@@ -1,0 +1,6 @@
+.build/
+.run/
+.out/
+configs/mesh/node_modules/
+configs/mesh/package-lock.json
+configs/mesh/.mesh/

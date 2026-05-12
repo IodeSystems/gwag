@@ -1,0 +1,39 @@
+# Hand-rolled supergraph SDL for the single-subgraph "federation" of
+# hello-graphql. Real Federation 2 would compose this via
+# `rover supergraph compose`; we skip that here because the only
+# subgraph isn't Federation-enabled (no @key, no _entities).
+#
+# Apollo Router accepts this minimal supergraph and forwards every
+# query to the `hello` subgraph at http://localhost:50054/graphql.
+
+schema
+  @link(url: "https://specs.apollo.dev/link/v1.0")
+  @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION)
+{
+  query: Query
+}
+
+directive @join__graph(name: String!, url: String!) on ENUM_VALUE
+directive @join__type(graph: join__Graph!, key: join__FieldSet, extension: Boolean! = false, resolvable: Boolean! = true, isInterfaceObject: Boolean! = false) repeatable on OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT | SCALAR
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, usedOverridden: Boolean) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+
+scalar join__FieldSet
+scalar link__Import
+enum link__Purpose { SECURITY EXECUTION }
+
+enum join__Graph {
+  HELLO @join__graph(name: "hello", url: "http://localhost:50054/graphql")
+}
+
+type Query
+  @join__type(graph: HELLO)
+{
+  hello(name: String!): HelloPayload! @join__field(graph: HELLO)
+}
+
+type HelloPayload
+  @join__type(graph: HELLO)
+{
+  greeting: String! @join__field(graph: HELLO)
+}

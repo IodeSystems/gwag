@@ -1,0 +1,76 @@
+# perf/competitors.yaml — declarative list of gateways under comparison.
+#
+# Each entry boots independently (no concurrent gateways) so they don't
+# fight for CPU. The orchestrator at perf/cmd/compare/main.go reads this
+# file, starts each gateway in turn, sweeps it, captures the result,
+# stops it, moves on.
+
+backends:
+  # Upstream services the gateways forward to. The orchestrator brings
+  # these up once at the start and leaves them running across all
+  # gateway runs (their CPU cost is identical for every gateway, so
+  # they don't bias the comparison).
+  - kind: hello-proto
+    addr: ":50055"
+  - kind: hello-openapi
+    addr: ":50053"
+  - kind: hello-graphql
+    addr: ":50054"
+
+# Each gateway runs every scenario it supports. Apples-to-apples
+# requires the same target URL shape, the same query, the same RPS
+# rungs — the orchestrator enforces this by sharing one sweep config.
+sweep:
+  steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+  reps: 3
+  duration: 5s
+
+scenarios:
+  - name: proto
+    query: '{ hello_proto { hello(name: "world") { greeting } } }'
+    # graphql-mesh + Apollo Router don't natively wire a proto upstream
+    # the way gwag does. They appear in this scenario only when the
+    # gateway's config explicitly bridges proto → graphql.
+    supported_by: [gwag]
+
+  - name: openapi
+    query: 'mutation { hello_openapi { Hello(body: { name: "world" }) { greeting } } }'
+    # graphql-mesh supports OpenAPI sources natively. Apollo Router
+    # doesn't; needs a connector or sidecar.
+    supported_by: [gwag, mesh]
+
+  - name: graphql
+    query: '{ hello_graphql { hello(name: "world") { greeting } } }'
+    # GraphQL-in / GraphQL-out is the universal scenario every peer
+    # supports. The most apples-to-apples row.
+    supported_by: [gwag, mesh, apollo]
+
+gateways:
+  - name: gwag
+    description: "this repo — multi-format ingest, dynamic registration, reflection dispatch"
+    # gwag's bench infra is already wired; just point at the gateway
+    # endpoint and reuse the sweep.
+    target_template: "http://localhost:18080/api/graphql"
+
+  - name: mesh
+    description: "graphql-mesh (Node, npm-distributed; multi-format ingest peer)"
+    target_template: "http://localhost:14000/graphql"
+    # Field renaming differs from gwag's namespace-prefix mirror;
+    # the orchestrator applies a per-gateway query transform when
+    # needed. See configs/mesh/.meshrc.yaml.
+    query_overrides:
+      graphql: '{ hello_graphql_hello(name: "world") { greeting } }'
+      openapi: 'mutation { Hello(body: { name: "world" }) { greeting } }'
+
+  - name: apollo
+    description: "Apollo Router (Rust, GraphQL-federation specialist; single-subgraph mode here)"
+    target_template: "http://localhost:14100/"
+    # Apollo doesn't prefix; queries hit the underlying subgraph
+    # schema directly.
+    query_overrides:
+      graphql: '{ hello(name: "world") { greeting } }'
+
+  - name: wundergraph
+    description: "WunderGraph (Go API + Node config; deferred — codegen-heavy)"
+    target_template: "http://localhost:9991/operations/Hello"
+    enabled: false

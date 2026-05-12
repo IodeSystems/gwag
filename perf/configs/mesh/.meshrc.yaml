@@ -1,0 +1,24 @@
+# graphql-mesh config for the perf comparison.
+#
+# Two sources wired:
+#   - hello_graphql: GraphQL handler pointing at hello-graphql (:50054)
+#   - hello_openapi: OpenAPI handler pointing at hello-openapi (:50053)
+# Proto isn't a native graphql-mesh source (their gRPC handler exists
+# but requires .proto files + per-call config that doesn't fit this
+# simple matrix). The proto scenario stays gwag-only.
+
+serve:
+  hostname: 0.0.0.0
+  port: 14000
+
+sources:
+  - name: hello_graphql
+    handler:
+      graphql:
+        endpoint: http://localhost:50054/graphql
+
+  - name: hello_openapi
+    handler:
+      openapi:
+        source: http://localhost:50053/openapi.json
+        endpoint: http://localhost:50053

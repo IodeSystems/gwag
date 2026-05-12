@@ -1,0 +1,18 @@
+# Apollo Router config for the perf comparison.
+# Single-subgraph mode: forwards graphql queries to hello-graphql.
+
+supergraph:
+  listen: 0.0.0.0:14100
+  introspection: false
+
+telemetry:
+  exporters:
+    metrics:
+      common:
+        service_name: apollo-router-perf
+
+# Disable extra layers that aren't representative of "minimum forward":
+sandbox:
+  enabled: false
+homepage:
+  enabled: false
