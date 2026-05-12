@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package gwag.ps.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/iodesystems/gwag/gw/proto/ps/v1;psv1";
+
+// ChannelBinding is the proto-declarative payload-type binding the
+// gateway extracts at slot bake. A message whose options carry
+// `(gwag.ps.binding) = { pattern: "events.orders.*.update" }` declares
+// that any event delivered on a channel matching `pattern` is wire-
+// compatible with that message. The pattern grammar is NATS-style
+// (segments split on `.`, `*` matches one segment, `>` matches the
+// rest), identical to the grammar `WithChannelAuth` uses.
+//
+// The binding rides in the proto's source bytes — both the boot-time
+// `AddProto` path and the control-plane `proto_source` path carry the
+// extension end-to-end without a side channel. The gateway aggregates
+// across all registered slots into a pattern→message-FQN lookup;
+// matched events get their `Event.payload_type` stamped at delivery
+// so subscribers can cross-reference the descriptor in
+// `/schema/proto?service=...` for decoding.
+message ChannelBinding {
+  // NATS-style channel subject pattern this message binds to. Required.
+  string pattern = 1;
+}
+
+extend google.protobuf.MessageOptions {
+  // Custom option in the 50000–99999 range reserved for internal use
+  // (per protobuf descriptor.proto guidance — production options would
+  // request a globally-unique number from the protobuf registry; this
+  // one is gateway-internal so the in-house range is correct).
+  optional ChannelBinding binding = 51234;
+}
