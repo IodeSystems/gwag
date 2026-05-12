@@ -29,108 +29,89 @@ Architectural test: every decision should keep the default path working for any 
 
 **Active framing: public-release prep.** "Tighten the surprise questions, hit MVP purpose completeness." Tier 1 right now is the gap between what a prospective adopter expects to find on first read and what they actually find. Perf wins / new features stay deferred until release ships.
 
-### Pub/Sub as a first-class gateway primitive: `ps.pub` / `ps.sub`
+Priority order below (top → bottom). Pitch sets framing for everything else; API audit locks the surface before tracing / uploads / WS caps add to it; competitor matrix ships *with* v1 but doesn't gate it.
 
-**The push.** We are an API gateway. Pub/sub is a *primitive* the gateway provides, not a transform applied to every server-streaming RPC declaration. Earlier drafts of this entry tried to dichotomize the existing implicit-channel transform into `subscribe` vs `stream` with shape detection across three formats — wrong shape; complicates every ingest path; leaves the schema lie ("rpc Foo(...) returns (stream Resp)" but no stream ever opens) only partially resolved. Direct fix: two new GraphQL fields, both gateway-defined; service-declared `stream Resp` methods stay as honest per-subscriber gRPC streams. Multiplexing isn't auto-magic'd from method shape — services that want it call `ps.pub` from their handlers and clients `ps.sub` from theirs, both explicit. Memory: `project_subscriptions_framing.md` — the canonical multi-listener / single-producer pattern is preserved, just made explicit instead of implicit. Pre-1.0 because the wire-format and decisions-log shifts are exactly the kind of break pre-1.0 is for.
+### The pitch: "why this is cool" — landing-page rewrite + canonical worked example
 
-**Schema.** New gateway-internal proto `gwag.ps.v1.PubSub` at `gw/proto/ps/v1/ps.proto` — the proto exists for IR / SDL / MCP / admin-listing parity with every other ingest path; *runtime* is in-process, no proxy service.
-
-```proto
-syntax = "proto3";
-package gwag.ps.v1;
-
-service PubSub {
-  rpc Pub(PubRequest) returns (PubResponse);
-  rpc Sub(SubRequest) returns (stream Event);
-}
-message PubRequest  { string channel = 1; string payload = 2; string hmac = 3; int64 ts = 4; }
-message PubResponse {}
-message SubRequest  { string channel = 1; string hmac = 2; int64 ts = 3; }
-message Event       { string channel = 1; string payload = 2; string payload_type = 3; int64 ts = 4; }
-```
-
-Renders as `Mutation.ps.pub(channel, payload, hmac, ts)` and `Subscription.ps.sub(channel, hmac, ts) → ps.Event` via the existing nested-namespace convention (same shape `admin.listPeers` uses today). Payload is `string` — JSON, base64, agreed-encoding-of-the-day; broker doesn't care. Typed payload bindings are a deferred extension.
-
-**Runtime: in-process dispatcher kind.** `slot.proto` today assumes replicas point at upstream gRPC servers (`pool.replicas` → `grpc.ClientConn`). For `ps`, dispatch resolves to a Go function in-gateway — no replica, no `Invoke`. Add an "internal proto" mode to `slot.proto` (or a new slot kind `slotKindInternalProto`) that points at a registered `map[methodName]func(ctx, req) (resp, error)`. IR baking + schema rebuild + admin/services listing treat it as a normal slot; the dispatch branch reads the handler map and calls it. Generally useful primitive — future migration of admin operations from huma/OpenAPI to proto could ride the same machinery if it ever feels worth it.
-
-**Auth tiers** (mirror admin-auth's posture). Operator configures per channel pattern via `WithChannelAuth(pattern, tier)`. Patterns use NATS-style wildcards (`.` segments + `*` segment + `>` rest-match) so auth patterns and channel subjects share grammar — operators don't learn two languages.
-
-- `open` — no auth; the `hmac` / `ts` fields are ignored.
-- `hmac` — HMAC token over `(channel, ts)`, signed by a key the operator controls; verify is hot-path crypto-fast (same primitive as today's `verifySubscribe`).
-- `delegate+hmac` — HMAC verified first; then a delegate authorizer (registered under `_pubsub_auth/v1`, same shape as `_admin_auth/v1`) gets the final say. UNAVAILABLE / NOT_CONFIGURED / transport falls through to HMAC-only; only explicit DENIED short-circuits.
-
-Default tier when no pattern matches: `hmac`. Patterns match in declaration order, first hit wins.
-
-**Wildcard subscriptions.** `Sub` requests can use NATS wildcards (`events.orders.>`). Two semantics decisions for the wildcard case:
-
-1. **HMAC binds to the literal pattern string the client requests** — not a concrete channel. A token issued for `events.orders.42.update` does *not* satisfy a sub on `events.orders.>`; the operator who hands out tokens controls the pattern surface. Otherwise a token signed for one literal could replay against any matching one.
-2. **Strictest-tier-wins** when a wildcard `Sub` spans multiple `WithChannelAuth` patterns at different tiers. The auth applied is the max over all reachable patterns. First-match-wins would leak events from private channels through wildcards subscribed at permissive patterns — the only safe rule.
-
-**Channel → payload-type registry.** Typemap from channel pattern to proto message type — first-class IR machinery, not an SDL concept. Two registration paths into the same registry, mirroring the proto-canonical / runtime-escape-hatch symmetry the rest of the codebase has:
-
-- **Proto-declarative (canonical).** Custom message option in the service's .proto:
-    ```proto
-    message OrderUpdateEvent {
-      option (gwag.ps.binding) = { pattern: "events.orders.*.update"; };
-      // ... fields
-    }
-    ```
-    Definition lives in `gw/proto/ps/v1/options.proto`. Extracted at `bakeSlotIRLocked` from `FileDescriptor.MessageOptions` and stashed on `slot.ir.ChannelBindings []ChannelBinding{Pattern, MessageFQN}`. Cluster propagation rides `proto_source` for free — bindings are part of the proto's source bytes; the existing KV bucket reconciler watches them alongside the rest of the registration. No separate KV bucket.
-- **Runtime API (escape hatch).** `WithChannelBinding(pattern, proto.Message)` for non-proto adopters or for gateway-shipped defaults (the gateway's own `gwag.ps.v1.*` namespace uses this). Populates the gateway-internal slot's `ChannelBindings` — same IR table, different source. Runs through the same tier/uniqueness policy as the declarative path.
-
-Schema rebuild walks all slots once and aggregates into a gateway-wide `pattern → MessageFQN` lookup — same pass that aggregates proto/openapi/graphql IR today. Pattern matches at delivery use the aggregated table; first-hit-wins by declaration order. On `Sub` event delivery the gateway stamps `Event.payload_type` with the matched FQN; subscribers cross-reference via the existing `/schema/proto?service=...` surface for descriptor / codegen.
-
-**Tier policy and version skew.** Bindings inherit their slot's tier. `unstable` slots' bindings overwrite on rebake (single mutable slot, identical to today's schema rebaking posture); `vN` slots' bindings lock by `(pattern, payload_fqn)` — differing pair on the same `vN` → `AlreadyExists`, mirroring `registerSlotLocked`'s existing schema-hash collision rule. Versioned messaging gets the existing version-tier story for free. Forward compat across binding versions is proto's wire-format job; subscribers refetch descriptors any time to match against the on-delivery `payload_type`.
-
-**Pattern uniqueness across slots.** Two different `(namespace, version)` slots can't both claim `events.orders.*.update`. Conflict is hard-rejected at slot registration pre-1.0 — declaration-order shadowing sets up subtle delivery bugs where a binding silently shifts under wildcard churn. Same-slot rebake on `unstable` swaps the binding; on `vN` it's `AlreadyExists` by the rule above.
-
-**Contract confirmation.** Defaults to documentation only — gateway stamps `Event.payload_type`, subscribers cross-check via fetched descriptor. Two opt-in strictness axes layer on, independently:
-
-- `WithChannelBindingEnforce()` — **shape strictness.** Mirrors `WithCallerIDEnforce` / `WithQuotaEnforce`. Gateway parses payload as the bound proto message at Pub entry, rejects type mismatch with `InvalidArgument`.
-- `WithStrictPayloadTypes()` — **coverage strictness.** Reject `Sub` deliveries from channels matching no `WithChannelBinding` pattern (where `payload_type` would otherwise be blank). Default: deliver permissively with empty `payload_type` so the `open` tier stays usable for ad-hoc / dev channels.
-
-Both can be enabled together. Memory `feedback_priorities.md`: utility first, strictness as opt-in upgrade.
-
-Admin endpoint enumerates the registry (`channel_pattern → payload_type → namespace/version → tier` rows, dogfooded via huma) so client tooling has a listing before connecting. Synthesized typed Subscription fields (`ps.subOrderUpdate` returning a typed payload directly) remain a deferred ergonomic on top of this foundation; the registry itself is the v1 must-have because without it a JSON payload is unparseable without out-of-band context.
-
-**Server-streaming RPCs at egress.** Stop filtering with a warning. Open the upstream gRPC stream per subscriber on Subscription field resolution; forward as `graphql-transport-ws` next-frames. Reuses existing `streamSem` backpressure. No multiplexing magic; one upstream call per subscriber. This is what the proto declaration always promised.
+**The push.** The hardest thing about this project is explaining what's actually unusual about it in 30 seconds — and if a maintainer can't pitch it in 30 seconds, the v1 release lands and adopters still don't get it. The wedge is **three typed client surfaces from one registration**: Python team uses `openapi-generator`, TS team uses graphql-codegen, Go team uses `buf`, all against the same registry, schema hot-reloads when services redeploy. Today's README leads with a feature checklist — good for the reader who already knows what an API gateway is, bad for the reader who hasn't seen why three surfaces simultaneously beats picking one. The pitch *is* v1 work, not after-v1 marketing.
 
 **Todo.**
+- [ ] **README rewrite around the multi-format wedge.** Lead with one-registration → three-surfaces + hot-reload as the headline. Demote the feature list to "what else you get." Replace the checkbox comparison table with one-paragraph framing per peer (Federation / Hasura / Kong) — what each is *for*, not which features each has. ~0.5d.
+- [ ] **Canonical worked example walk-through.** `docs/walkthrough.md`: proto svc A + OpenAPI svc B + GraphQL svc C → register all three, generate TS + Python + Go client packages, show the edit-redeploy-codegen cycle. Reuse `examples/multi` where possible. ~1d.
+- [ ] **Live-reload gif/screencast.** 15-30s clip: register a new service field, watch the SDL update + the UI re-render without a gateway restart. Embedded in README. ~0.5d.
+- [ ] **"Do you need federation?" positioning doc.** `docs/federation.md`: honest answer. Most teams don't need entity-merging; stitching is correct for the common case. Pulls from existing CLAUDE.md framing. ~0.25d.
 
-- [x] **`gw/proto/ps/v1/ps.proto` + generated bindings.** `package gwag.ps.v1` with `service PubSub { Pub; Sub (stream Event) }` plus the four messages from the plan body, generated bindings at `gw/proto/ps/v1/ps.pb.go` + `ps_grpc.pb.go` via `protoc -I . --go_out=. --go-grpc_out=. --go_opt=module=github.com/iodesystems/gwag --go-grpc_opt=module=github.com/iodesystems/gwag gw/proto/ps/v1/ps.proto`. `go vet ./...` clean. No callers wired yet — that's Todo #2.
-- [x] **Internal-proto dispatcher kind.** `slotKindInternalProto` + `internalProtoSource` (gw/slot.go, gw/internal_proto.go) install in-process proto services via `addInternalProtoSlotLocked(ns, ver, fd, rawSource, handlers)`. `internalProtoDispatcher` (gw/internal_proto_dispatcher.go) wraps `InternalProtoHandler` with the user runtime middleware chain; normalises concrete/dynamic responses to `*dynamicpb.Message` so the canonical-args + gRPC ingress paths stay uniform. Cross-cut: `registerProtoDispatchersLocked` + `rebuildGRPCIngressLocked` + `rebuildIngressLocked` + `collectIRRawLocked` + `newProtoIRTypeBuilder` + `ListServices` all handle the new kind (replicaCount=1 for admin listing). Subscription (server-streaming) registration skipped — the future broker commit installs Subscription resolvers separately. Tests: `internal_proto_test.go` — register PubSub proto + stub handlers, Dispatch through registry, assert SDL surfaces both fields.
-- [x] **`PubSub` handler.** `installPubSubSlot` (gw/pubsub.go) auto-installs gwag.ps.v1 as an internal-proto slot when WithCluster is set; `psPub` marshals an `Event` and publishes via `cluster.Conn.Publish(channel, ...)`; `psSub` joins the existing `subBroker` so multiple subscribers on the same channel share one NATS subscription. Wildcards rejected on publish, accepted on subscribe. New `internalProtoSubscriptionDispatcher` + `InternalProtoSubscriptionHandler` carry the streaming surface (slot's `subscriptionHandlers` map; `registerProtoDispatchersLocked` wires it). Skips install when no cluster — keeps the schema honest about deployment capability. New `registerSlotLockedSkipTierCheck` lets gateway-bundled slots bypass `--allow-tier`. Tests: `TestPubSub_RoundTrip` (sub then pub, verify Event), `TestPubSub_RejectsWildcardOnPublish`, `TestPubSub_NoClusterSkipsInstall`. Auth tier (Todo #4) deferred to next commit; hmac/ts fields accepted but not yet verified.
-- [x] **`WithChannelAuth(pattern, tier)` option + verifier.** `ChannelAuthTier` (Open / HMAC / Delegate, ordered for strictest-wins) + per-rule list on config; resolver does first-hit-wins for literal Pub channels and strictest-wins across intersecting rules for wildcard Sub patterns (with implicit-default HMAC folded in when no single rule covers). NATS wildcard grammar lives in `subjectMatchesPattern` / `patternsIntersect` / `patternCovers` (gw/auth_channel.go). Verifier reuses `cfg.subAuth.Secret` + `defaultSkewWindow` via `computeSubscribeHMAC` so operators have a single HMAC config surface; HMAC binds to the channel string as requested (concrete for Pub, the wildcard pattern itself for Sub) so a token for one literal can't replay against a covering wildcard sub. Delegate tier accepted in the option API but runs the HMAC path at runtime — fall-through wiring lands in the next commit. Tests: `auth_channel_test.go` covers pattern primitives, Pub first-hit-wins, wildcard-Sub strictest-wins, end-to-end HMAC reject/accept, and the pattern-bind security property.
-- [x] **`_pubsub_auth/v1` delegate proto + AdminAuthorizer-style fall-through.** `gw/proto/pubsubauth/v1/pubsubauth.proto` (`service PubSubAuthorizer { rpc Authorize }`, request carries channel/hmac/ts/wildcard/remote_addr, response code mirrors AdminAuthCode). `consultPubSubDelegate` in `gw/auth_channel_delegate.go` looks up `_pubsub_auth/v1` via `lookupPool`, picks a replica, calls Authorize with a 3s timeout. `checkChannelAuth` now takes ctx; for `ChannelAuthDelegate`-tier channels it runs HMAC first (always-works floor) then consults the delegate. OK accepts, DENIED short-circuits; UNAVAILABLE / NOT_CONFIGURED / UNSPECIFIED / transport fall through (HMAC already passed). Tests in `gw/auth_channel_delegate_test.go` cover all code paths plus the HMAC-fails-before-delegate ordering and the HMAC-tier-skips-delegate negative case.
-- [x] **`gwag.ps.binding` proto option + `slot.ir.ChannelBindings` extraction.** Custom message option in `gw/proto/ps/v1/options.proto` (field number 51234 in the internal-use range) carrying a `ChannelBinding{pattern}` payload; bindings ride in the proto's source bytes through both the boot-time `AddProto` path and the control-plane `proto_source` reconciler with no side channel. `ir.ChannelBinding{Pattern, MessageFQN}` + `Service.ChannelBindings []ChannelBinding` (gw/ir/ir.go) is the format-neutral resting place; `extractChannelBindings` (gw/channel_bindings.go) walks the FileDescriptor's messages (top-level + nested) at bake and stamps every Service in the slot. Extraction uses `protoreflect.Range` over MessageOptions matching `gwag.ps.v1.binding` by full-name + reading `pattern` by field-name, so it works regardless of whether the option comes back as `*dynamicpb.Message` (protocompile-resolved imports) or the generated concrete `*psv1.ChannelBinding` (Go-registered extension) — `proto.GetExtension` would panic on the dynamicpb case. `bakeSlotIRLocked` (gw/slot.go) invokes extraction for both `slotKindProto` and `slotKindInternalProto`. Tests: `channel_bindings_test.go` covers top-level + nested message extraction, the no-options-import zero case, and the end-to-end bake into `slot.ir`.
-- [x] **Tier policy + cross-slot pattern uniqueness in `registerSlotLocked`.** `slot.channelBindings` (gw/slot.go) is the canonical per-slot list, set at register-time from `extractChannelBindings(fd)` (proto / internal-proto callers) and re-used by `bakeSlotIRLocked` to stamp every IR Service. New `checkCrossSlotBindingsLocked` runs inside `registerSlotLockedSkipTierCheck` — once on fresh-insert and once before `evictSlotLocked` on the unstable-swap branch (so a rejected swap leaves the prior occupant intact). Same-slot vN rebake with differing bindings is already rejected by the existing schema-hash collision rule (proto-source bytes carry the binding option). Tests in `channel_bindings_test.go`: cross-slot conflict rejected with prior-claimant attribution, distinct-pattern coexistence, release frees the claim, unstable self-swap is not a self-conflict.
-- [x] **Schema-rebuild aggregation + admin enumeration.** `rebuildChannelBindingIndexLocked` (gw/channel_bindings.go) aggregates across all slots; `channelBindingIndexSnapshot` + `GET /admin/bindings` huma endpoint (gw/admin_huma.go) exposes the registry. Tests in `channel_bindings_test.go`.
-- [x] **`WithChannelBinding(pattern, messageFQN string)` runtime API.** `WithChannelBinding` option (gw/channel_bindings.go) appends to `cfg.channelBindings`; `applyRuntimeBindingsLocked` merges into the ps slot during `New()` with cross-slot uniqueness check + IR bake + schema assemble. Tests: `TestWithChannelBinding_Basic`, `TestWithChannelBinding_CrossSlotConflict`, `TestWithChannelBinding_NoPSSlot`.
-- [x] **Opt-in strictness knobs (`WithChannelBindingEnforce` + `WithStrictPayloadTypes`).** `config.psBindingEnforce` / `config.psStrictPayloadTypes` bools. `WithChannelBindingEnforce()` enables shape strictness: `psPub` resolves the binding's `messageDesc` from the index and validates payload via `protojson.Unmarshal` against the bound descriptor, rejecting with `CodeInvalidArgument` on mismatch. No-op when binding has no resolved descriptor (runtime bindings with unresolvable FQN). `WithStrictPayloadTypes()` enables coverage strictness: rejects `psPub` on channels with no matching binding. `channelBindingEntry` gains `messageDesc protoreflect.MessageDescriptor`; `rebuildChannelBindingIndexLocked` resolves descriptors from all proto/internal-proto slots via `resolveMessageDescriptorsLocked` + `walkMessagesForDescriptors`. `channelBindingIndex` gains `lookupBinding` and `validatePayload` methods. Tests: `TestPubSub_StrictPayloadTypes_RejectsUnboundChannel`, `TestPubSub_ChannelBindingEnforce_ValidPayload`, `TestPubSub_ChannelBindingEnforce_InvalidPayload`, `TestPubSub_ChannelBindingEnforce_NoDescriptor`, `TestPubSub_BothStrictnessKnobs`.
-- [x] **Honest server-streaming at egress.** `protoDirectSubscriptionDispatcher` (gw/proto_direct_subscription_dispatcher.go) opens a direct gRPC server-streaming call to an upstream replica per subscriber, forwarding each frame as a `map[string]any` event through a channel that graphql-go pumps as WebSocket next-frames. Stream slots (gateway-wide + per-pool `streamSem`) acquired with the same backpressure semantics as the prior NATS path. Replaces `protoSubscriptionDispatcher` in `registerProtoDispatchersLocked` for `slotKindProto`. `admin_events` migrated from `slotKindProto` with `noopAdminEventsConn` to `slotKindInternalProto` with an in-process `adminEventsWatchServicesHandler` that joins the NATS broker — preserves the gateway-internal publish/subscribe pattern without requiring a gRPC upstream. Tests: `TestSubscriptionE2E_HappyPath`, `TestSubscriptionE2E_MultipleFrames`, `TestSubscriptionE2E_UpstreamError`, `TestSubscriptionE2E_ClientCompleteCleansUp`, `TestGRPCIngress_ServerStreaming_HappyPath`, `TestGRPCIngress_ServerStreaming_CustomUpstream`, `TestHTTPIngress_SSESubscription_HappyPath`, `TestHTTPIngress_SSESubscription_MultipleFrames`.
-- [x] **Remove old implicit-channel transform.** Deleted `subjectFor`, `subscribeNATS`, `protoSubscriptionDispatcher`, `injectProtoSubscriptionAuthArgs/Doc`, and `RecordSubscribeAuth` metric. Updated all comments referencing the old path. Updated decisions log entry. Tests pass.
-- [ ] **`docs/pubsub.md` + README pointer + decisions-log amendment.** Dedicated adopter-facing doc — sits alongside `docs/perf.md`. Covers: `ps.pub` / `ps.sub` GraphQL surface + the `gwag.ps.v1.PubSub` proto behind it; the three auth tiers + `WithChannelAuth` configuration; channel→type binding registry (both proto-declarative *and* runtime); version-tier + pattern-uniqueness policy; opt-in `WithChannelBindingEnforce()` mode; migration walkthrough from the v0 implicit-channel pattern. Includes a "Why custom options for channel bindings?" design-note section — the proto-option-tunneling approach is non-standard enough to warrant explaining (vs alternatives: separate manifest, runtime-only, a dedicated `service ChannelBindings { ... }` shape). README gets a one-paragraph "Pub/Sub" section pointing here. Decisions log replaces the two affected rows with the new posture. ~1.5d.
+**Followups.** Launch announcement / blog post / HN-shaped writeup are downstream of these — write them once the doc above exists and we know what to point at.
 
-**Commit grouping.**
+### Public API audit + SemVer commitment
 
-| # | Commits | Covers Todos | Why |
-|---|---|---|---|
-| 1 | `ps.proto` + generated bindings + internal-proto dispatcher kind | 1, 2 | Scaffolding; no observable dispatch behavior change. Generated code reviewable in isolation. |
-| 2 | `PubSub` handler + `WithChannelAuth` + `_pubsub_auth/v1` delegate | 3, 4, 5 | Broker primitive with auth end-to-end. Tests cover all three auth tiers + broker integration + delegate fall-through. No bindings yet — `payload_type` ships blank. |
-| 3 | Channel-binding registry: `gwag.ps.binding` option + IR extraction + tier-policy/uniqueness + schema aggregation + admin endpoint + runtime API | 6, 7, 8, 9 | Typemap fully wired across both registration sources. Cluster propagation rides existing `proto_source` reconciler; pattern uniqueness + tier policy land in one commit so test coverage is consistent across them. |
-| 4 | Opt-in strictness knobs (`WithChannelBindingEnforce` + `WithStrictPayloadTypes`) | 10 | Two opt-in strictness axes (shape vs coverage). Pure additive on commit 3; both default off, no behavior change unless adopter turns them on. |
-| 5 | Honest server-streaming at egress | 11 | Independent of pub/sub. Could land before commit 2 if convenient; logically separable. |
-| 6 | Remove old implicit-channel transform + `docs/pubsub.md` + README pointer + decisions amendment | 12, 13 | Pre-1.0 break concentrated here. Schema lie removed, adopter-facing feature doc lands alongside so the migration walkthrough exists at the moment the old path disappears. |
+**The push.** v1 advertises "this surface won't break for 1.x." Today we can't make that promise — `gw/` has accreted exports through every feature workstream; some are intentionally public (`Option`, `Register*`, `With*`), some are test helpers that escaped, some are types that leaked for one caller. Without a curated split, the promise is unbounded. One pass with a public/internal classification before v1, then keep it. Lands before uploads / WS caps / tracing so new options ship on the locked surface.
 
-**Followups (mid-workstream, don't block).**
+**Todo.**
+- [ ] **Audit `gw/` exports; classify Public / Internal / Deprecated.** Walk `go doc github.com/iodesystems/gwag/gw` output, decide per symbol. Move internal helpers to `gw/internal/...` or unexport; nothing breaks at the import boundary. ~1.5d.
+- [ ] **Same pass for `gw/gat`.** Smaller surface — lock before gat's proto-ingest todo (Tier 2) lands. ~0.5d.
+- [ ] **Same pass for `gw/ir`.** Public-by-design (gat consumes it); quick sanity audit. ~0.25d.
+- [ ] **`docs/stability.md`.** SemVer promise spelled out: what counts as a breaking `Option` change vs additive; wire-format guarantees on `proto_source` / `openapi_spec`; when the IR is allowed to evolve. ~0.5d.
+- [ ] **Stability annotations on exported symbols.** Godoc convention — `// Stability: stable` / `// Stability: experimental`. `gat`, codegen, plugin paths are experimental; the canonical reflection path is stable. ~0.5d.
 
-- **Synthesized typed Subscription fields.** Built on the registry: `ps.subOrderUpdate(channel: ...): OrderUpdateEvent!` per registered binding, alongside the generic `ps.sub`. Pure ergonomic on top of the v1 foundation — the registry already surfaces enough info for clients to deserialize the JSON payload manually against the fetched descriptor. Pulled on adopter ask.
-- **Pub HTTP endpoint** (`POST /api/pub`) for non-GraphQL producers — a Python service, a cron, shell. Shares the backend handler; ~20 lines. Pull when an adopter asks.
-- **Internal-proto dispatcher reuse.** Future migration of admin operations from huma/OpenAPI to proto, if maintainer ergonomics ever warrant it. Not on the roadmap.
+**Followups.** When the audit surfaces a symbol that needs renaming, do it here — pre-1.0 is the only free time.
+
+### Wire-level identifier rename to `gwag-*`
+
+**The push.** JetStream bucket names (`go-api-gateway-{registry,peers,stable,deprecated,mcp-config}`), default NATS cluster name (`go-api-gateway`), MCP server-info string, and UI `localStorage` keys (`go-api-gateway:admin-token{,-changed}`) still say `go-api-gateway`. Pre-1.0 = the rename is free; post-1.0 = a breaking change with a migration story. Do it now. Existing dev installs need fresh data dirs and UI sessions lose their saved token; pre-release that's a one-line release note.
+
+**Todo.**
+- [ ] **JetStream bucket renames** + reconciler / cluster code references. ~0.25d.
+- [ ] **Default NATS cluster name** (`go-api-gateway` → `gwag`). ~0.1d.
+- [ ] **MCP server-info string + UI `localStorage` keys.** ~0.25d.
+- [ ] **Migration note** in `CHANGELOG.md` / README ("dev installs from <0.X: wipe `.gw/` and re-login"). ~0.1d.
+
+### Distributed tracing (OpenTelemetry)
+
+**The push.** "Do you support OpenTelemetry?" is one of the first questions any enterprise evaluator asks. Metrics ship; tracing doesn't. Shape: `WithTracer(tp trace.TracerProvider)` option that spans ingress → dispatch → upstream call, propagates `traceparent` headers downstream, joins inbound traces when the request carries `traceparent`. Implementation stays shallow — one span per request, one per upstream call. Optional dep (`go.opentelemetry.io/otel`) gated by the option so default builds don't pull it.
+
+**Todo.**
+- [ ] **`WithTracer` option + per-request span at ingress.** GraphQL / HTTP / gRPC each wrap in a span with `gateway.ingress`, `gateway.namespace`, `gateway.method` attrs. Honor inbound `traceparent`. ~1d.
+- [ ] **Span-per-dispatch + `traceparent` propagation downstream.** Proto / OpenAPI / GraphQL dispatchers each open a child span + inject the header. ~1d.
+- [ ] **`docs/tracing.md`** — wiring to Jaeger / Honeycomb / OTel collector; emitted span / attribute reference. ~0.5d.
+- [ ] **Tracing-overhead bench row in `docs/perf.md`.** Honest p95 delta with tracing on. ~0.25d.
+
+**Followups.** Cluster reconciler / control-plane spans — pull when an operator surfaces "I can't tell where a registration is stuck."
+
+### File uploads (multipart/form-data passthrough)
+
+**The push.** "Can I upload a file?" is a recurring question for any GraphQL system. The current answer ("base64 into a `bytes` field, ≤ N MiB") is a workaround that makes the project read as toy. Surface: GraphQL `Upload` scalar (graphql-multipart-request-spec) on inbound; HTTP ingress detects multipart and decodes; outbound forwards to OpenAPI services that accept multipart, or proto `bytes` field for proto services with a size cap. Touches inbound parsers, canonical-args shape, two dispatcher branches.
+
+**Todo.**
+- [ ] **`Upload` scalar + multipart-request-spec parser at GraphQL ingress.** ~1d.
+- [ ] **HTTP ingress multipart detection + decode into canonical args.** ~1d.
+- [ ] **Outbound dispatch.** OpenAPI: forward multipart as-is. Proto: write into a designated `bytes` field with a size cap. ~1.5d.
+- [ ] **`WithUploadLimit(maxBytes int64)` + streaming policy.** Buffered up to limit (default 32 MiB); reject larger with `InvalidArgument`. ~0.5d.
+- [ ] **`docs/uploads.md`** + README mention; remove the known-limitations row. ~0.25d.
+
+**Followups.** Resumable uploads (tus / chunked multipart) — wait for adopter ask.
+
+### WebSocket connection-rate / per-IP caps
+
+**The push.** Unmetered WS upgrade is the obvious DoS surface — a single client can open thousands of connections and exhaust the per-pool `streamSem`. Per-IP cap on concurrent WS subscriptions + a token-bucket rate limit on `Upgrade` requests is the minimum. Operators behind nginx / Cloudflare get equivalents for free; operators who run gwag at the edge (and pre-v1 there will be plenty) currently have a foot-gun.
+
+**Todo.**
+- [ ] **`WithWSLimit(maxPerIP, ratePerSec int)` option + per-IP semaphore + token-bucket on Upgrade.** Bypass for a configurable trusted-IP list (cluster-internal traffic). ~1d.
+- [ ] **Metric: `gateway_ws_rejected_total{reason=...}`.** ~0.25d.
+- [ ] **Doc note in `docs/operations.md`** — when the cap is load-bearing (gateway at the edge) vs redundant (proxy / CDN terminates WS first). ~0.25d.
+
+### `CHANGELOG.md` + release versioning
+
+**The push.** Pre-v1 has been "main is the truth, no tags." v1 = first stable tag; adopters need to know what changed between releases. Conventional-commits-derived but human-edited; one section per release; `Unreleased` at the top while main moves. Pair with `RELEASE.md` describing the release flow (tag, push, `gh release create`, container image bump if any).
+
+**Todo.**
+- [ ] **`CHANGELOG.md` v0 → v1 retrospective.** One section summarizing what landed pre-v1 — proto / OpenAPI / GraphQL ingest, tier model, control plane, pub/sub, gat, etc. Source: git log + `docs/plan.md` decisions log. ~1d.
+- [ ] **`RELEASE.md`** — tag + push + `gh release` + (later) container publish flow. ~0.25d.
+- [ ] **`Unreleased` section convention** + a one-line reminder in `AGENTS.md` to update it when a commit touches public surface. ~0.25d.
 
 ### Competitor performance matrix (gwag vs graphql-mesh / Apollo Router / WunderGraph)
 
-**The push.** "How do you compare to X?" is a top-three adopter question — `docs/perf.md` answers "how does gwag perform on my hardware?", not the comparative one. Scaffolding lives at `perf/` (root-level, separate from `bench/` which is for self-measurement only): hermetic Docker image, declarative `perf/competitors.yaml`, orchestrator at `perf/cmd/compare/main.go` running each gateway serially against shared backends to avoid CPU contention. Three peers in scope for v1: graphql-mesh (closest peer — multi-format ingest), Apollo Router (federation specialist in single-subgraph mode), and gwag itself. WunderGraph deferred (codegen-heavy, dual-process — `enabled: false` in competitors.yaml). Output: `perf/comparison.md`. Runs in parallel with the pub/sub workstream — independent code path, independent commit chain.
+**The push.** "How do you compare to X?" is a top-three adopter question — `docs/perf.md` answers "how does gwag perform on my hardware?", not the comparative one. Ships *with* v1, doesn't gate it: if the pitch / API / wire-rename / tracing / uploads / WS caps / changelog all land but the matrix isn't published, the release still goes — adopters get a "comparison coming soon" rather than blocking v1 on someone else's Docker image. Scaffolding lives at `perf/` (root-level, separate from `bench/` which is for self-measurement only): hermetic Docker image, declarative `perf/competitors.yaml`, orchestrator at `perf/cmd/compare/main.go` running each gateway serially against shared backends to avoid CPU contention. Three peers in scope for v1: graphql-mesh (closest peer — multi-format ingest), Apollo Router (federation specialist in single-subgraph mode), and gwag itself. WunderGraph deferred (codegen-heavy, dual-process — `enabled: false` in competitors.yaml). Output: `perf/comparison.md`.
 
 **Done.** Scaffolding shipped: Dockerfile, `competitors.yaml` (gateways × scenarios × sweep config), orchestrator skeleton (`perf/cmd/compare/main.go`), per-peer configs (`perf/configs/apollo/`, `perf/configs/mesh/`), start scripts, `docker-build.sh` staging the graphql-go fork into `perf/.build/graphql` so the host-absolute `replace` directive works inside Docker, and the README documenting scope + caveats. Status per peer: gwag ✅ working, graphql-mesh 🟡 scaffolded, Apollo Router 🟡 scaffolded, WunderGraph ❌ deferred.
 
@@ -185,7 +166,6 @@ Admin endpoint enumerates the registry (`channel_pattern → payload_type → na
 - [ ] **`~/.config/gwag/context.json` global fallback for `./.gw`.** kubectl-style multi-context. Wait until someone needs more than one context.
 - [ ] **`gwag --admin-data-dir` flag mirroring the example gateway's token persistence.** Today `gwag up` persists, but ad-hoc `gwag` startups don't, so `gwag sign` against a local gwag falls back to `--secret HEX`.
 - [ ] **`bin/bench traffic --metrics-path` flag (or auto-detect).** `MetricsURLFromGateway` always derives `/api/metrics`; raw gateways without it warn and skip server-side capture.
-- [ ] **File upload (`multipart/form-data` passthrough).** Recurring question for any GraphQL system. Surface: GraphQL `Upload` scalar (graphql-multipart-request-spec) on inbound; HTTP ingress detects multipart and decodes; outbound forwards to OpenAPI services that accept multipart, or proto `bytes` field for proto services with size cap. Scope: ~3-5 days; touches inbound parsers + canonical-args shape + a couple of dispatcher branches. Public-release answer for now: "planned, not in v1; bytes field works for small payloads via base64 today."
 - [ ] **Service-account token outbound auth.** Built-in helper wrapping a RoundTripper. Composable today; first-class when wanted.
 - [ ] **OAuth/JWT translation outbound auth.** Inbound token → service-specific token via configurable issuer. Composable today.
 - [ ] **Destructive read opt-in.** AdminMiddleware lets every GET through; gate destructive reads via per-route flag when first one shows up.
@@ -244,11 +224,8 @@ Real workstreams, not parked. Opt-in performance paths that layer on top of the 
 
 ## Tier 3 — operational polish
 
-- [ ] **Wire-level identifier rename to `gwag-*`.** JetStream bucket names (`go-api-gateway-{registry,peers,stable,deprecated,mcp-config}` → `gwag-*`), default NATS cluster name (`go-api-gateway` → `gwag`), MCP server-info string, and UI `localStorage` keys (`go-api-gateway:admin-token{,-changed}`). Data-migration adjacent: existing dev installs need fresh data dirs and UI sessions lose their saved token. No real pinning pre-1.0 — pull when we cut a release branch or someone asks.
-- [ ] Connection-rate limiting / per-IP caps on WebSocket terminator.
 - [ ] k8s + docker-compose example deployments for `examples/multi`.
 - [x] **NATS server log noise control.** `ClusterOptions.Logger` overrides the embedded NATS server's logger via `srv.SetLogger(Logger, Debug, Trace)` for routing through a structured logger or a no-op sink. `ClusterOptions.LogLevel` is the convenience knob: `"silent"` installs `silentNATSLogger` (drops every level), `"warn"` installs `warnNATSLogger` (Notice/Debug/Trace dropped, Warn/Error/Fatal forwarded to stderr), `"debug"`/`"trace"` toggle the matching flags on top of `ConfigureLogger`, anything else (including `""` and `"info"`) is the existing `srv.ConfigureLogger()` default. `applyClusterLogger` (gw/cluster.go) is the single decision site. Tests: `TestClusterOptions_LoggerCustomReceives` (custom Logger receives Notice on startup), `TestClusterOptions_LogLevelSilent` (silent path boots cleanly).
-- [ ] Metrics / tracing example middleware.
 - [ ] `Cluster.Close` vs `Gateway.Close` lifecycle docs.
 - [ ] Heartbeat-to-wrong-gateway smoothing (registry KV check before forcing re-register).
 - [ ] Sub-fanout drop policy configurable (per-consumer watermark + behaviour knob).
@@ -312,8 +289,8 @@ Settled. Reading these prevents re-litigating in future sessions.
 | **Proto/gRPC is canonical service-to-service** | GraphQL client codegen is excellent in TS/JS, fair in Go, weak elsewhere. `.proto` is the multilingual contract; SDL is *derived*. OpenAPI + downstream-GraphQL ingest are bridges. |
 | **Per-pool backpressure, not gateway-wide unary cap** | Slow service X shouldn't gate dispatches to service Y. Pool is the isolation primitive. |
 | **Hybrid stream caps** (per-pool + gateway-wide) | Per-pool throttles fine-grained; gateway-wide caps the actual scarce resource (FDs, RAM). Defaults: 10k per pool, 100k total. |
-| **Subscriptions = NATS pub/sub, not gRPC streams** | NATS handles fan-out natively. gRPC streams require long-lived per-client gateway-to-service connections; doesn't compose at scale. |
-| **HMAC verify on subscribe; sign is an exposed authenticated endpoint** | Verify is hot-path crypto-fast. Sign is the privileged path; the gateway publishes `SignSubscriptionToken` and downstream services authenticate to it (admin/signer secret, mTLS, or operator-supplied middleware) and apply their own business authz before calling. Inverted from the earlier pull-delegate model — the caller already has full request context, so composition beats trying to predict what the authorizer needs. |
+| **Pub/sub is a gateway primitive (`ps.pub` / `ps.sub`); `stream Resp` stays an honest gRPC stream** | Two distinct shapes, neither pretending to be the other. The `gwag.ps.v1.PubSub` proto rides NATS for multi-listener fan-out — explicit, channel-named, with a typed payload registry. Service-declared `stream Resp` resolves to a per-subscriber upstream gRPC call (see row below). Earlier drafts auto-transformed every `stream Resp` into a NATS subscription with synthesized channel names + auto-injected HMAC args; retired pre-1.0 because the schema lied (the method declared a stream but no upstream stream ever opened) and operators couldn't reason about who owned the channel surface. Memory: `project_subscriptions_framing.md`. |
+| **HMAC + per-pattern auth tiers gate `ps.sub`; sign is bearer-gated** | `WithChannelAuth(pattern, tier)` declares per-channel posture: `ChannelAuthOpen` (no auth), `ChannelAuthHMAC` (token over `(channel, ts)` verified against `WithSubscriptionAuth`'s secret), `ChannelAuthDelegate` (HMAC first, then `_pubsub_auth/v1` authorizer with AdminAuthorizer-style fall-through). Wildcard subs apply strictest-tier-wins across reachable patterns — first-match-wins would leak events from private patterns through permissive wildcards. Tokens come from `SignSubscriptionToken`, bearer-gated by `WithSignerSecret` or the admin/boot token; downstream services authenticate to the gateway and apply their own business authz before minting a token for the caller. Inverted from the earlier pull-delegate model — the caller already has full request context, so composition beats trying to predict what the authorizer needs. |
 | **Stitching for downstream GraphQL, not federation** | Federation solves entity-merging that most teams don't have. |
 | **Proto stays canonical for events** | One source of truth; AsyncAPI would be a derived view, dropped. |
 | **Tier model (`unstable` / `stable` / `vN`) is the versioning primitive; drop `--environment`** | One axis instead of two. `unstable` is mutable (single overwrite slot); `vN` is locked once registered (differing schema-hash → `AlreadyExists`); `stable` is a computed alias to the highest-ever `vN` and is monotonic — it only advances; rollback never silently moves it backward (operator-driven `RetractStable` admin RPC). Per-tier policy (`--allow-tier`) replaces env's "dev allows unstable, prod doesn't" job. NATS cluster-name auto-suffix retired — operators pick cluster names directly. The forcing function (`A.deps.stable` diverging from `A.deps.unstable` blocks A's release) makes "cut a version" a real organizational signal. |

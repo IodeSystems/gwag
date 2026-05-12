@@ -185,9 +185,12 @@ matrix.
 - [`docs/plan.md`](./docs/plan.md) — roadmap + decisions log
 
 **Pub/Sub & subscriptions** — gateway-provided `ps.pub` / `ps.sub`
-primitives with HMAC auth tiers and a channel→type binding registry.
-[`docs/pubsub.md`](./docs/pubsub.md) ships with the pre-1.0 workstream;
-design + status: [`docs/plan.md`](./docs/plan.md) Tier 1.
+primitives with per-pattern auth tiers (`ChannelAuthOpen` / `HMAC` /
+`Delegate`), a channel→type binding registry (proto-declarative *and*
+runtime), and opt-in shape/coverage strictness knobs. Service-declared
+`stream Resp` methods stay as honest per-subscriber gRPC streams.
+Full surface, migration from the pre-1.0 implicit-channel transform,
+and design notes: [`docs/pubsub.md`](./docs/pubsub.md).
 
 ## Roadmap
 
