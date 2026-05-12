@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/iodesystems/gwag/gw/ir"
 	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
@@ -129,7 +131,7 @@ func TestCombineDepReason_Precedence(t *testing.T) {
 		{"manual", "auto", "manual"}, // manual wins
 	}
 	for _, c := range cases {
-		if got := combineDepReason(c.manual, c.auto); got != c.want {
+		if got := ir.CombineDepReason(c.manual, c.auto); got != c.want {
 			t.Errorf("combineDepReason(%q, %q) = %q; want %q", c.manual, c.auto, got, c.want)
 		}
 	}

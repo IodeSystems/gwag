@@ -257,7 +257,7 @@ func mcpOpName(kind ir.Kind) func(string) string {
 	if kind == ir.KindProto {
 		return lowerCamel
 	}
-	return identityName
+	return ir.IdentityName
 }
 
 // opMatchesRegex applies `re` to op name, every arg name, and the

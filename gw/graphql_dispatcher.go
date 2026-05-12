@@ -28,8 +28,10 @@ func withGraphQLForwardInfo(ctx context.Context, info *graphql.ResolveInfo) cont
 }
 
 func graphQLForwardInfoFrom(ctx context.Context) *graphql.ResolveInfo {
-	v, _ := ctx.Value(graphQLForwardInfoKey{}).(*graphql.ResolveInfo)
-	return v
+	if v, _ := ctx.Value(graphQLForwardInfoKey{}).(*graphql.ResolveInfo); v != nil {
+		return v
+	}
+	return ir.GraphQLResolveInfoFrom(ctx)
 }
 
 // withoutGraphQLForwardInfo overrides any existing forward-info on

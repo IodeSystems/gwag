@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"github.com/iodesystems/gwag/gw/ir"
 	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
@@ -472,7 +473,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		maxVN := map[string]int{}
 		for _, s := range svcResp.GetServices() {
 			ns := s.GetNamespace()
-			n := parseRuntimeVersionN(s.GetVersion())
+			n := ir.ParseRuntimeVersionN(s.GetVersion())
 			if cur, ok := maxVN[ns]; !ok || n > cur {
 				maxVN[ns] = n
 			}
@@ -485,7 +486,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			ver := s.GetVersion()
 			manual := s.GetManualDeprecationReason()
 			auto := ""
-			if max, ok := maxVN[ns]; ok && parseRuntimeVersionN(ver) < max {
+			if max, ok := maxVN[ns]; ok && ir.ParseRuntimeVersionN(ver) < max {
 				auto = fmt.Sprintf("v%d is current", max)
 			}
 			if manual == "" && auto == "" {
