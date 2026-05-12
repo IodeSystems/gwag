@@ -17,7 +17,11 @@ pub/sub with HMAC channel auth.
 ## Read first
 
 - **[`README.md`](./README.md)** — adopter-facing pitch.
-- **This file** — maintainer rules + conventions + how to build/run.
+- **[`AGENTS.md`](./AGENTS.md)** — build, verify, proto generation, UI,
+  run examples, binary, architecture essentials, test gotchas, bench,
+  and don't-commit rules. See @AGENTS.md.
+- **This file** — conventions and design decisions not covered by
+  AGENTS.md.
 - **[`docs/architecture.md`](./docs/architecture.md)** — file-by-file
   layout, design notes, HTTP surface. Read once when you join.
 - **[`docs/plan.md`](./docs/plan.md)** if it exists locally — maintainer
@@ -69,52 +73,13 @@ generated bindings.
 
 ## Conventions
 
-- `go vet ./...` after every edit. `go test ./.` after touching
-  load-bearing code (cluster tests run ~10s each, suite ~22s).
-- **Tests follow a fixture pattern.** Httptest for OpenAPI/GraphQL
-  forwarding; in-process `grpc.Server` for gRPC; `StartCluster`
-  with `127.0.0.1:0` for cluster/subscription tests; in-process
-  `grpc.ClientConnInterface` fakes for delegate testing. Lifetime
-  gotcha: `startClusterTracking` captures its ctx as the parent of
-  the watch + reconciler goroutines — pass `context.Background()`
-  in test helpers, not a `WithTimeout`, or the goroutines die mid-
-  test. (See `cluster_dispatch_test.go` comment.)
-- Generated code: `gw/proto/controlplane/v1/control.pb.go`,
-  `gw/proto/eventsauth/v1/eventsauth.pb.go`, `gw/proto/adminauth/v1/adminauth.pb.go`,
-  `gw/proto/adminevents/v1/adminevents.pb.go`, `examples/multi/gen/**`. Never
-  edit; regenerate with protoc (`PATH=".bin:$PATH" protoc --go_out=...`).
-- **Per-pool isolation is sacred.** Anything that introduces a
-  gateway-wide cap on unary dispatches (beyond per-pool `MaxInflight`)
-  is wrong — see decisions log.
-- **Subscriptions = NATS pub/sub.** Server-streaming gRPC dispatch
-  intentionally not implemented; services publish to NATS subjects.
+See @AGENTS.md for build commands, verify steps, proto generation,
+UI workflow, test gotchas, and bench commands.
+
+Additional design decisions not in AGENTS.md:
+
 - **AsyncAPI export was considered and dropped.** GraphQL SDL +
   Subscription types is the client-facing schema for events.
-- **Proto/gRPC is canonical for service-to-service.** GraphQL is the
-  client-facing surface; OpenAPI and downstream-GraphQL ingestion are
-  bridges for legacy / external services that don't speak gRPC.
-- **Admin auth ≠ service auth.** The boot-token + AdminAuthorizer
-  delegate model is *only* for the gateway's own admin endpoints. It
-  does not authenticate services calling each other through the
-  gateway, and it has nothing to do with outbound auth to upstream
-  services (which is `WithOpenAPIClient` / `OpenAPIClient(c)` /
-  `ForwardHeaders`). Three separate concerns; keep them separate.
-- **Auto-internal `_*` namespaces.** Any namespace starting with `_`
-  is hidden from the public schema regardless of whether
-  `AsInternal()` was passed. `_events_auth`, `_admin_auth`,
-  `_admin_events`, etc. — operators don't have to remember the flag.
-- **Dogfood the OpenAPI path.** Admin operations live in
-  `admin_huma.go`, defined via huma → OpenAPI → self-ingested by the
-  gateway → surfaced as `admin_*` GraphQL fields. Same path any
-  external huma service takes. Use this as the template when adding
-  new admin operations.
-- **`ServiceOption`** applies to every registration entry point
-  (`AddProto`, `AddProtoBytes`, `AddProtoFS`, `AddOpenAPI`,
-  `AddOpenAPIBytes`, `AddGraphQL`). Available options: `To`, `As`,
-  `Version` (`unstable` or `vN` per plan §4 — empty defaults to
-  `v1`), `AsInternal`, `ForwardHeaders` (HTTP header allowlist),
-  `OpenAPIClient` (per-source `*http.Client`), `ProtoImports`
-  (multi-file proto import map).
 - **Proto ingest is raw-source only.** Both `AddProtoBytes` (in-memory
   bytes) and `AddProto` / `AddProtoFS` (disk / fs.FS) drive the same
   `protocompile` pipeline with `SourceInfoStandard`, so leading /
@@ -125,30 +90,6 @@ generated bindings.
   path was retired in favor of symmetry with OpenAPI ingest. Adopters
   using `controlclient.SelfRegister` set `ProtoSource []byte` (or
   `ProtoFS fs.FS` + `ProtoEntry string` for multi-file).
-
-## How to build/run
-
-```bash
-go build ./...
-go vet ./...
-
-# single-gateway example (greeter + library)
-cd examples/multi && ./run.sh
-
-# 3-gateway cluster
-cd examples/multi && ./run-cluster.sh
-
-# the binary
-gwag --proto path/to/foo.proto=foo-svc:50051 --addr :8080
-
-# operator subcommands
-gwag peer list     --gateway gw:50090
-gwag peer forget   --gateway gw:50090 NODE_ID
-gwag services list --gateway gw:50090
-gwag schema fetch  --endpoint https://gw/schema
-gwag schema diff   --from URL --to URL --strict
-gwag sign          --gateway gw:50090 --channel events.X --ttl 60
-```
 
 ## HTTP surface
 
