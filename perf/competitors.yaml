@@ -21,14 +21,9 @@ backends:
 # requires the same target URL shape, the same query, the same RPS
 # rungs — the orchestrator enforces this by sharing one sweep config.
 sweep:
-  # Smoke values while iterating on peer config. Bump to full sweep
-  # once mesh + apollo run clean across the matrix:
-  #   steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
-  #   reps: 3
-  #   duration: 5s
-  steps: [1000, 5000]
-  reps: 1
-  duration: 2s
+  steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+  reps: 3
+  duration: 5s
 
 scenarios:
   - name: proto
