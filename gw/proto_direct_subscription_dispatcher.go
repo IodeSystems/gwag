@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -19,10 +18,15 @@ import (
 // through a channel that graphql-go's executor pumps as WebSocket
 // next-frames.
 //
-// Reuses the existing streamSem backpressure (pool.streamSem +
-// gateway streamGlobalSem) via subscribeNATS's slot acquisition.
+// Stream caps (pool.streamSem + gateway streamGlobalSem) gate the
+// number of concurrent streams to bound FDs and memory. Unlike unary
+// backpressure, subscriptions use a non-blocking try-acquire: a
+// subscriber hitting the cap gets an immediate ResourceExhausted
+// rather than queuing with a dwell timer. A client waiting for a
+// lazy upstream message is not the same urgency as a req/rsp cycle —
+// no queue-depth, no dwell metrics, no MaxWaitTime timeout.
 // BackpressureMiddleware is intentionally NOT wrapped around this
-// dispatcher — same rationale as protoSubscriptionDispatcher.
+// dispatcher.
 type protoDirectSubscriptionDispatcher struct {
 	g          *Gateway
 	pool       *pool
@@ -46,59 +50,40 @@ func newProtoDirectSubscriptionDispatcher(g *Gateway, p *pool, sd protoreflect.S
 // Dispatch opens a direct gRPC server-streaming call to an upstream
 // replica and returns a chan any of decoded event maps. The channel
 // is closed when the upstream stream ends or the context cancels.
-// Stream slots (gateway-wide + per-pool) are acquired with the same
-// backpressure semantics as the NATS broker path.
 func (d *protoDirectSubscriptionDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	ns := d.pool.key.namespace
 	ver := d.pool.key.version
 	method := fmt.Sprintf("/%s/%s", d.sd.FullName(), d.md.Name())
 
-	// Acquire stream slots: gateway-wide cap first, then per-pool.
+	// Try-acquire stream caps: non-blocking. Subscriptions don't
+	// queue — hitting the cap is an immediate ResourceExhausted.
+	acquiredGlobal := d.g.streamGlobalSem == nil
 	if d.g.streamGlobalSem != nil {
-		waitStart := time.Now()
 		select {
 		case d.g.streamGlobalSem <- struct{}{}:
-			d.g.cfg.metrics.RecordDwell(ns, ver, string(d.md.Name()), "stream_global", time.Since(waitStart))
+			acquiredGlobal = true
 		default:
-			depth := int(d.g.streamGlobalQ.Add(1))
-			d.g.cfg.metrics.SetQueueDepth("", "", "stream_global", depth)
-			dwell, err := waitForSlot(ctx, d.g.streamGlobalSem, d.g.cfg.backpressure.MaxWaitTime)
-			now := int(d.g.streamGlobalQ.Add(-1))
-			d.g.cfg.metrics.SetQueueDepth("", "", "stream_global", now)
-			d.g.cfg.metrics.RecordDwell(ns, ver, string(d.md.Name()), "stream_global", dwell)
-			if err != nil {
-				d.g.cfg.metrics.RecordBackoff(ns, ver, string(d.md.Name()), "stream_global", "wait_timeout")
-				return nil, Reject(CodeResourceExhausted, fmt.Sprintf("gateway stream cap: %s", err.Error()))
-			}
+			return nil, Reject(CodeResourceExhausted, "gateway stream cap reached")
 		}
 	}
+	acquiredPool := d.pool.streamSem == nil
 	if d.pool.streamSem != nil {
-		waitStart := time.Now()
 		select {
 		case d.pool.streamSem <- struct{}{}:
-			d.g.cfg.metrics.RecordDwell(ns, ver, string(d.md.Name()), "stream", time.Since(waitStart))
+			acquiredPool = true
 		default:
-			depth := int(d.pool.streamQueueing.Add(1))
-			d.g.cfg.metrics.SetQueueDepth(ns, ver, "stream", depth)
-			dwell, err := waitForSlot(ctx, d.pool.streamSem, d.g.cfg.backpressure.MaxWaitTime)
-			now := int(d.pool.streamQueueing.Add(-1))
-			d.g.cfg.metrics.SetQueueDepth(ns, ver, "stream", now)
-			d.g.cfg.metrics.RecordDwell(ns, ver, string(d.md.Name()), "stream", dwell)
-			if err != nil {
-				d.g.cfg.metrics.RecordBackoff(ns, ver, string(d.md.Name()), "stream", "wait_timeout")
-				if d.g.streamGlobalSem != nil {
-					<-d.g.streamGlobalSem
-				}
-				return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: %s", ns, ver, err.Error()))
+			if acquiredGlobal {
+				<-d.g.streamGlobalSem
 			}
+			return nil, Reject(CodeResourceExhausted, fmt.Sprintf("%s/%s: stream cap reached", ns, ver))
 		}
 	}
 
 	rollbackSlots := func() {
-		if d.pool.streamSem != nil {
+		if acquiredPool {
 			<-d.pool.streamSem
 		}
-		if d.g.streamGlobalSem != nil {
+		if acquiredGlobal {
 			<-d.g.streamGlobalSem
 		}
 	}
