@@ -121,6 +121,16 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 	if err := g.checkVersionTierAllowed(key.version); err != nil {
 		return false, err
 	}
+	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance)
+}
+
+// registerSlotLockedSkipTierCheck is the body of registerSlotLocked
+// without the --allow-tier policy gate. Used by gateway-bundled
+// internal-proto installs (e.g. installPubSubSlot) — those slots are
+// gateway code, not operator/user registrations, so the tier policy
+// (which exists to constrain *user* registrations) doesn't apply.
+// Caller holds g.mu.
+func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int) (existed bool, err error) {
 	if g.slots == nil {
 		g.slots = map[poolKey]*slot{}
 	}

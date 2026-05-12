@@ -8,7 +8,7 @@ import (
 )
 
 // InternalProtoHandler is the in-process dispatch entry point for one
-// method on an internal-proto service. The dispatcher hands the
+// unary method on an internal-proto service. The dispatcher hands the
 // handler a *dynamicpb.Message populated from canonical args (or from
 // the gRPC ingress' wire-decoded request) and expects a
 // protoreflect.ProtoMessage back of the method's declared output type
@@ -19,6 +19,20 @@ import (
 // runtime middleware chain around it but no backpressure (there's no
 // upstream replica to gate against).
 type InternalProtoHandler func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error)
+
+// InternalProtoSubscriptionHandler is the in-process dispatch entry
+// point for one server-streaming method on an internal-proto service.
+// The handler receives the GraphQL-canonical args map (same shape the
+// unary side would see post-argsToMessage round-trip would produce on
+// the canonical names) and returns a `chan any` — graphql-go's
+// Subscribe field receives that channel and pumps each frame as
+// rp.Source. For ps.sub the handler joins the gateway's subscription
+// broker; future internal-proto subscription primitives reuse this
+// shape.
+//
+// The handler owns its release lifetime: typically a goroutine
+// listening on ctx.Done() that closes the broker handle.
+type InternalProtoSubscriptionHandler func(ctx context.Context, args map[string]any) (any, error)
 
 // internalProtoSource is the per-slot dispatch handle for the
 // internal-proto kind — the in-process analogue of `*pool`. Shape
@@ -35,11 +49,18 @@ type internalProtoSource struct {
 	hash      [32]byte
 	rawSource []byte
 
-	// handlers map RPC method names (matching FileDescriptor.Services()
-	// walk: "Pub", "Sub", ...) to their in-process Go callbacks. Keyed
-	// by wire-level PascalCase method name so the slot's IR-ingested
-	// op names line up with the lookup site.
+	// handlers map unary RPC method names (matching FileDescriptor.
+	// Services() walk: "Pub", ...) to their in-process Go callbacks.
+	// Keyed by wire-level PascalCase method name so the slot's IR-
+	// ingested op names line up with the lookup site.
 	handlers map[string]InternalProtoHandler
+
+	// subscriptionHandlers map server-streaming RPC method names
+	// (e.g. "Sub") to their subscription-flavored Go callbacks. A
+	// streaming method without an entry here registers no Subscription
+	// dispatcher and resolves to "no dispatcher for ..." at request
+	// time — same posture as a missing unary handler.
+	subscriptionHandlers map[string]InternalProtoSubscriptionHandler
 }
 
 // addInternalProtoSlotLocked installs the in-process proto service at
@@ -54,15 +75,15 @@ type internalProtoSource struct {
 // internal-proto add as cap-compatible.
 //
 // Caller holds g.mu.
-func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.FileDescriptor, rawSource []byte, handlers map[string]InternalProtoHandler) error {
+func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.FileDescriptor, rawSource []byte, handlers map[string]InternalProtoHandler, subscriptionHandlers map[string]InternalProtoSubscriptionHandler) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("internalproto: %w", err)
 	}
 	if fd == nil {
 		return fmt.Errorf("internalproto: %s/%s: file descriptor is nil", ns, ver)
 	}
-	if len(handlers) == 0 {
-		return fmt.Errorf("internalproto: %s/%s: handlers map is empty", ns, ver)
+	if len(handlers) == 0 && len(subscriptionHandlers) == 0 {
+		return fmt.Errorf("internalproto: %s/%s: handlers and subscriptionHandlers maps are both empty", ns, ver)
 	}
 	canonicalVer, verN, err := parseVersion(ver)
 	if err != nil {
@@ -72,8 +93,10 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 	if err != nil {
 		return fmt.Errorf("internalproto: hash %s/%s: %w", ns, canonicalVer, err)
 	}
+	// Internal-proto slots are gateway-bundled code; bypass --allow-tier
+	// policy (it gates user registrations only).
 	key := poolKey{namespace: ns, version: canonicalVer}
-	existed, err := g.registerSlotLocked(slotKindInternalProto, key, hash, 0, 0)
+	existed, err := g.registerSlotLockedSkipTierCheck(slotKindInternalProto, key, hash, 0, 0)
 	if err != nil {
 		return fmt.Errorf("internalproto: %w", err)
 	}
@@ -82,13 +105,14 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 	}
 	s := g.slots[key]
 	src := &internalProtoSource{
-		namespace: ns,
-		version:   canonicalVer,
-		versionN:  verN,
-		file:      fd,
-		hash:      hash,
-		rawSource: append([]byte(nil), rawSource...),
-		handlers:  copyInternalProtoHandlers(handlers),
+		namespace:            ns,
+		version:              canonicalVer,
+		versionN:             verN,
+		file:                 fd,
+		hash:                 hash,
+		rawSource:            append([]byte(nil), rawSource...),
+		handlers:             copyInternalProtoHandlers(handlers),
+		subscriptionHandlers: copyInternalProtoSubscriptionHandlers(subscriptionHandlers),
 	}
 	s.internalProto = src
 	g.bakeSlotIRLocked(s)
@@ -101,6 +125,14 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 
 func copyInternalProtoHandlers(in map[string]InternalProtoHandler) map[string]InternalProtoHandler {
 	out := make(map[string]InternalProtoHandler, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyInternalProtoSubscriptionHandlers(in map[string]InternalProtoSubscriptionHandler) map[string]InternalProtoSubscriptionHandler {
+	out := make(map[string]InternalProtoSubscriptionHandler, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

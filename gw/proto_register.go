@@ -77,12 +77,16 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 					if md.IsStreamingServer() {
 						// Server-streaming on the internal-proto kind
 						// is the Subscription path (e.g. PubSub.Sub).
-						// The in-process broker handler wires
-						// subscribers up directly; a generic
-						// dispatcher would have nothing to do. Skip
-						// registration here — the future broker
-						// commit installs Subscription resolvers via
-						// the schema renderer's subscription hook.
+						// The slot's subscriptionHandlers map carries
+						// the in-process broker function; if the
+						// method has no handler entry, the dispatcher
+						// is omitted and the field resolves to a
+						// "no dispatcher" reject — same posture as a
+						// missing unary handler.
+						if src.subscriptionHandlers[string(md.Name())] == nil {
+							continue
+						}
+						g.dispatchers.Set(sid, newInternalProtoSubscriptionDispatcher(src, md))
 						continue
 					}
 					dispatcher := newInternalProtoDispatcher(src, sd, md, chain, metrics)

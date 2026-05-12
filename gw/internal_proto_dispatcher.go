@@ -130,5 +130,42 @@ func normaliseInternalProtoResponse(resp protoreflect.ProtoMessage, outputDesc p
 	return dm, nil
 }
 
-// Compile-time assertion.
+// internalProtoSubscriptionDispatcher implements ir.Dispatcher for one
+// in-process server-streaming proto RPC. Symmetric with
+// protoSubscriptionDispatcher: Dispatch returns a chan any of decoded
+// events that graphql-go's Subscribe field receives.
+//
+// Stream-cap accounting and broker-handle release are the handler's
+// responsibility (it's the only place that knows whether a broker is
+// in play). For ps.sub, the handler joins the gateway's subBroker and
+// arms a goroutine on ctx.Done() that releases the per-subject fanout.
+type internalProtoSubscriptionDispatcher struct {
+	handler   InternalProtoSubscriptionHandler
+	namespace string
+	version   string
+	op        string
+}
+
+func newInternalProtoSubscriptionDispatcher(src *internalProtoSource, md protoreflect.MethodDescriptor) *internalProtoSubscriptionDispatcher {
+	methodName := string(md.Name())
+	return &internalProtoSubscriptionDispatcher{
+		handler:   src.subscriptionHandlers[methodName],
+		namespace: src.namespace,
+		version:   src.version,
+		op:        methodName,
+	}
+}
+
+// Dispatch satisfies ir.Dispatcher. Returns the broker channel as
+// `any`; graphql-go pumps frames off it and feeds each as rp.Source.
+func (d *internalProtoSubscriptionDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	if d.handler == nil {
+		return nil, fmt.Errorf("gateway: no subscription handler registered for %s/%s/%s", d.namespace, d.version, d.op)
+	}
+	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
+	return d.handler(ctx, args)
+}
+
+// Compile-time assertions.
 var _ ir.Dispatcher = (*internalProtoDispatcher)(nil)
+var _ ir.Dispatcher = (*internalProtoSubscriptionDispatcher)(nil)

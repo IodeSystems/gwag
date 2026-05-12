@@ -793,6 +793,16 @@ func New(opts ...Option) *Gateway {
 			pm.registry.MustRegister(newPlanCacheCollector(g.planCache))
 		}
 	}
+	// Auto-install gwag.ps.v1.PubSub when a cluster is bound — the
+	// pub/sub primitive needs NATS to do anything useful. Standalone
+	// gateways skip the install (schema doesn't surface ps.pub/ps.sub),
+	// matching how subscribeNATS errors out when called without a
+	// cluster on the proto-streaming path.
+	if cfg.cluster != nil {
+		if err := g.installPubSubSlot(); err != nil {
+			panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))
+		}
+	}
 	return g
 }
 

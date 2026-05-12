@@ -12,10 +12,11 @@ import (
 )
 
 // TestInternalProto_RegisterAndDispatch exercises the internal-proto
-// slot kind end-to-end: register the gateway's bundled
-// gwag.ps.v1.PubSub proto with a stub Pub handler, then call Dispatch
-// through the registry and verify the response shape + that the
-// handler observed the args.
+// slot kind end-to-end: register the bundled gwag.ps.v1.PubSub proto
+// under a side-namespace ("intpb") with a stub Pub handler (the real
+// "ps" slot is auto-installed in New() and tested separately), then
+// call Dispatch through the registry and verify the response shape +
+// that the handler observed the args.
 func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 	g := New()
 
@@ -30,26 +31,22 @@ func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 			gotPayload = m.Get(m.Descriptor().Fields().ByName("payload")).String()
 			return &psv1.PubResponse{}, nil
 		},
-		// Sub is server-streaming; the dispatcher registration skips it,
-		// but the handler map entry must be present for completeness.
-		"Sub": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
-			t.Fatal("Sub should not be dispatched through the unary path")
-			return nil, nil
-		},
 	}
 
+	// Pass nil subscriptionHandlers — this test pins the no-handler path
+	// for streaming methods; registerProtoDispatchersLocked skips Sub.
 	g.mu.Lock()
-	err := g.addInternalProtoSlotLocked("ps", "v1", psv1.File_gw_proto_ps_v1_ps_proto, nil, handlers)
+	err := g.addInternalProtoSlotLocked("intpb", "v1", psv1.File_gw_proto_ps_v1_ps_proto, nil, handlers, nil)
 	g.mu.Unlock()
 	if err != nil {
 		t.Fatalf("addInternalProtoSlotLocked: %v", err)
 	}
 
 	g.mu.Lock()
-	slot, ok := g.slots[poolKey{namespace: "ps", version: "v1"}]
+	slot, ok := g.slots[poolKey{namespace: "intpb", version: "v1"}]
 	g.mu.Unlock()
 	if !ok {
-		t.Fatal("expected slot at ps/v1 after registration")
+		t.Fatal("expected slot at intpb/v1 after registration")
 	}
 	if slot.kind != slotKindInternalProto {
 		t.Fatalf("slot.kind = %v, want slotKindInternalProto", slot.kind)
@@ -70,7 +67,7 @@ func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 	}
 	g.mu.Unlock()
 
-	sid := ir.MakeSchemaID("ps", "v1", "Pub")
+	sid := ir.MakeSchemaID("intpb", "v1", "Pub")
 	d := g.dispatchers.Get(sid)
 	if d == nil {
 		t.Fatalf("no dispatcher registered under %s", sid)
@@ -99,7 +96,7 @@ func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 
 	// Sub's server-streaming method must not have a unary dispatcher
 	// registered — registerProtoDispatchersLocked skips it.
-	subSid := ir.MakeSchemaID("ps", "v1", "Sub")
+	subSid := ir.MakeSchemaID("intpb", "v1", "Sub")
 	if g.dispatchers.Get(subSid) != nil {
 		t.Errorf("unexpected dispatcher registered for Sub (streaming)")
 	}
@@ -115,12 +112,9 @@ func TestInternalProto_AppearsInPublicSDL(t *testing.T) {
 		"Pub": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return &psv1.PubResponse{}, nil
 		},
-		"Sub": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
-			return nil, nil
-		},
 	}
 	g.mu.Lock()
-	err := g.addInternalProtoSlotLocked("ps", "v1", psv1.File_gw_proto_ps_v1_ps_proto, nil, handlers)
+	err := g.addInternalProtoSlotLocked("intpb", "v1", psv1.File_gw_proto_ps_v1_ps_proto, nil, handlers, nil)
 	g.mu.Unlock()
 	if err != nil {
 		t.Fatalf("addInternalProtoSlotLocked: %v", err)
