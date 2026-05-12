@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -18,10 +19,10 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/handler"
 
 	"github.com/iodesystems/gwag/gw/controlclient"
 )
@@ -81,11 +82,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("build schema: %v", err)
 	}
-	h := handler.New(&handler.Config{
-		Schema:     &schema,
-		Pretty:     false,
-		GraphiQL:   false,
-		Playground: false,
+	// Plan cache + ExecutePlanAppend on the upstream side mirrors the
+	// gateway's hot path: parse + validate + plan happens once per
+	// distinct query string; repeat requests skip the parser+validator
+	// entirely. Without this, every request through the bench burns
+	// ~600µs in graphql-go/handler's fresh parse-validate-plan walk,
+	// dwarfing the gateway's own per-request cost (~30µs self-time)
+	// and pushing the graphql scenario's ceiling 2.5× below proto/openapi
+	// on the matrix sweep.
+	planCache := graphql.NewPlanCache(graphql.PlanCacheOptions{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveGraphQL(w, r, &schema, planCache)
 	})
 	mux := http.NewServeMux()
 	mux.Handle(*path, h)
@@ -122,4 +129,74 @@ func main() {
 	log.Printf("hello-graphql shutting down")
 	_ = reg.Close(context.Background())
 	_ = srv.Shutdown(context.Background())
+}
+
+// gqlRequest is the GraphQL-over-HTTP request body we accept.
+// graphql-multipart-spec / GET-style query params are not supported —
+// this binary only exists to be hammered by the bench, which always
+// POSTs application/json.
+type gqlRequest struct {
+	Query         string                 `json:"query"`
+	Variables     map[string]interface{} `json:"variables,omitempty"`
+	OperationName string                 `json:"operationName,omitempty"`
+}
+
+// responseBufPool keeps the per-request []byte off the GC's hands.
+// Cap at 64 KB; one-off megabyte responses would otherwise pin a fat
+// allocation in the pool forever.
+const responseBufMax = 64 * 1024
+
+var responseBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
+}
+
+func serveGraphQL(w http.ResponseWriter, r *http.Request, schema *graphql.Schema, planCache *graphql.PlanCache) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req gqlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
+	pr := planCache.Get(schema, req.Query, req.OperationName)
+	if len(pr.Errors) > 0 {
+		_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: pr.Errors})
+		return
+	}
+	args := req.Variables
+	if len(pr.SynthArgs) > 0 {
+		merged := make(map[string]interface{}, len(args)+len(pr.SynthArgs))
+		for k, v := range args {
+			merged[k] = v
+		}
+		for k, v := range pr.SynthArgs {
+			merged[k] = v
+		}
+		args = merged
+	}
+	buf := responseBufPool.Get().(*[]byte)
+	body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
+		Schema:        *schema,
+		OperationName: req.OperationName,
+		Args:          args,
+		Context:       r.Context(),
+	}, (*buf)[:0])
+	if len(errs) > 0 {
+		_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: errs})
+	} else {
+		_, _ = w.Write(body)
+	}
+	if cap(body) <= responseBufMax {
+		*buf = body[:0]
+		responseBufPool.Put(buf)
+	}
 }
