@@ -1,0 +1,30 @@
+# Don't ship volatile / generated state into docker build contexts.
+# perf/Dockerfile only needs sources; everything below is either
+# regenerable or hostile to reproducibility.
+
+bench/.run/
+perf/.out/
+perf/.run/
+perf/configs/mesh/node_modules/
+perf/configs/mesh/package-lock.json
+perf/configs/mesh/.mesh/
+
+# UI build artifacts — gigantic, not used by perf/.
+ui/dist/
+ui/node_modules/
+
+# Editor / OS noise.
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Vendored test artifacts.
+**/*.test
+**/coverage.out
+
+# Profiles + logs — bench captures these locally; nothing for the
+# container to learn from them.
+**/*.pprof
+**/*.log
+docs/plan.md

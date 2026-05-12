@@ -20,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -92,18 +93,54 @@ func main() {
 		die("build traffic: %v", err)
 	}
 
-	if !*skipBackends {
-		fmt.Fprintln(os.Stderr, "==> starting backends")
-		if err := startBackends(*repoRoot, cfg.Backends); err != nil {
-			die("backends: %v", err)
+	// Start gwag first when it's part of the picked set, because the
+	// backends register with gwag's control plane (`--register=true`).
+	// Other gateways don't introspect through the control plane — they
+	// read the backends' HTTP/gRPC endpoints directly — so leaving
+	// gwag idle on :18080 doesn't interfere with their sweeps.
+	picked := pickGateways(cfg.Gateways, *only)
+	gwagFirst := pickGwag(picked)
+	var gwagStop func() error
+	if gwagFirst != nil {
+		fmt.Fprintf(os.Stderr, "==> starting gwag (infrastructure for backend registration + first test subject)\n")
+		stop, err := startGateway(*repoRoot, *gwagFirst)
+		if err != nil {
+			die("start gwag: %v", err)
+		}
+		gwagStop = stop
+		if err := waitForGateway(gwagFirst.TargetTemplate, 30*time.Second); err != nil {
+			die("gwag never became ready: %v", err)
 		}
 	}
+	defer func() {
+		if gwagStop != nil {
+			_ = gwagStop()
+		}
+	}()
 
-	picked := pickGateways(cfg.Gateways, *only)
+	if !*skipBackends {
+		fmt.Fprintln(os.Stderr, "==> starting backends")
+		registerBackends := gwagFirst != nil
+		if err := startBackends(*repoRoot, cfg.Backends, registerBackends); err != nil {
+			die("backends: %v", err)
+		}
+		if registerBackends {
+			// gwag rebuilds its schema asynchronously after each
+			// control-plane Register call. The backends are TCP-
+			// listening but their namespaces aren't necessarily in
+			// gwag's schema yet — the first traffic request would
+			// otherwise fail with "Cannot query field". 3s settle
+			// covers the dial + register + schema-rebuild cycle for
+			// three concurrent backends with plenty of head-room.
+			fmt.Fprintln(os.Stderr, "  waiting 3s for gwag schema to settle")
+			time.Sleep(3 * time.Second)
+		}
+	}
 	results := make(map[string]*gatewayResults, len(picked))
 	for _, gw := range picked {
 		fmt.Fprintf(os.Stderr, "\n==> gateway %s: %s\n", gw.Name, gw.Description)
-		res, err := runGateway(*repoRoot, *outDir, trafficBin, gw, cfg.Scenarios, cfg.Sweep)
+		alreadyRunning := gw.Name == "gwag" && gwagFirst != nil
+		res, err := runGateway(*repoRoot, *outDir, trafficBin, gw, cfg.Scenarios, cfg.Sweep, alreadyRunning)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  gateway %s failed: %v\n", gw.Name, err)
 			res = &gatewayResults{Name: gw.Name, Failure: err.Error()}
@@ -194,10 +231,11 @@ func ensureTrafficBinary(repoRoot string) (string, error) {
 }
 
 // startBackends launches each hello-* binary in the background and
-// leaves them running for the rest of the process. Best-effort:
-// already-bound ports are silently skipped (assume something else is
-// already serving the same kind).
-func startBackends(repoRoot string, backends []backendCfg) error {
+// leaves them running for the rest of the process. `register` toggles
+// the --register CLI flag — true when gwag is in the picked gateways
+// (backends register with the control plane), false otherwise (mesh
+// + apollo introspect the backends directly).
+func startBackends(repoRoot string, backends []backendCfg, register bool) error {
 	for _, b := range backends {
 		bin := filepath.Join(repoRoot, "bench", ".run", "bin", b.Kind)
 		if _, err := os.Stat(bin); err != nil {
@@ -216,9 +254,12 @@ func startBackends(repoRoot string, backends []backendCfg) error {
 			fmt.Fprintf(os.Stderr, "  %s already listening on %s — skipping\n", b.Kind, b.Addr)
 			continue
 		}
-		args := backendArgs(b)
+		args := backendArgs(b, register)
 		fmt.Fprintf(os.Stderr, "  starting %s %v\n", b.Kind, args)
 		cmd := exec.Command(bin, args...)
+		// hello-proto reads protos/hello.proto from cwd at startup.
+		// Both the host and the container's image stage the protos
+		// under examples/multi/protos, so cd there before exec.
 		cmd.Dir = filepath.Join(repoRoot, "examples", "multi")
 		cmd.Stdout = nil
 		cmd.Stderr = nil
@@ -250,65 +291,58 @@ func startBackends(repoRoot string, backends []backendCfg) error {
 
 // backendArgs builds the kind-specific flag set. Mirrors the bench
 // script's per-kind launcher so the backends behave identically
-// here and there.
-func backendArgs(b backendCfg) []string {
+// here and there. The `register` argument toggles --register on the
+// binary: true when gwag is in the picked set (backends register
+// with its control plane); false for runs that only test mesh /
+// apollo (no control plane).
+func backendArgs(b backendCfg, register bool) []string {
+	regFlag := "--register=true"
+	if !register {
+		regFlag = "--register=false"
+	}
 	switch b.Kind {
 	case "hello-proto":
-		return []string{"--addr", b.Addr, "--advertise", "localhost" + b.Addr}
+		return []string{"--addr", b.Addr, "--advertise", "localhost" + b.Addr, regFlag}
 	case "hello-openapi":
-		return []string{"--addr", b.Addr, "--advertise", "http://localhost" + b.Addr}
+		return []string{"--addr", b.Addr, "--advertise", "http://localhost" + b.Addr, regFlag}
 	case "hello-graphql":
-		return []string{"--addr", b.Addr, "--advertise", "http://localhost" + b.Addr + "/graphql"}
+		return []string{"--addr", b.Addr, "--advertise", "http://localhost" + b.Addr + "/graphql", regFlag}
 	default:
 		return []string{"--addr", b.Addr}
 	}
 }
 
 func listening(port string) bool {
-	c, err := http.NewRequest("GET", "http://localhost:"+port, nil)
+	// Plain TCP dial — works for HTTP and gRPC alike. HTTP-level
+	// probes used to false-negative on gRPC ports that refuse
+	// non-HTTP/2 connections; we just want "is something accepting
+	// TCP on this port?".
+	conn, err := net.DialTimeout("tcp", "localhost:"+port, 200*time.Millisecond)
 	if err != nil {
 		return false
 	}
-	client := http.Client{Timeout: 200 * time.Millisecond}
-	resp, err := client.Do(c)
-	if err == nil {
-		_ = resp.Body.Close()
-		return true
-	}
-	return strings.Contains(err.Error(), "connection reset") ||
-		strings.Contains(err.Error(), "EOF") ||
-		strings.Contains(err.Error(), "non-HTTP") // gRPC ports refuse plain HTTP
+	_ = conn.Close()
+	return true
 }
 
 // runGateway is the per-gateway entry point. It invokes the gateway-
 // specific start script (perf/scripts/start-<name>.sh), waits for the
 // target endpoint to respond, runs the sweep, then runs the stop
 // script (start-<name>.sh stop) before returning.
-func runGateway(repoRoot, outDir, trafficBin string, gw gatewayCfg, scenarios []scenarioCfg, sw sweepCfg) (*gatewayResults, error) {
-	startScript := filepath.Join(repoRoot, "perf", "scripts", "start-"+gw.Name+".sh")
-	if _, err := os.Stat(startScript); err != nil {
-		return nil, fmt.Errorf("no start script at %s", startScript)
-	}
-	fmt.Fprintf(os.Stderr, "  start: %s\n", startScript)
-	start := exec.Command(startScript, "start")
-	start.Dir = repoRoot
-	start.Stdout = os.Stderr
-	start.Stderr = os.Stderr
-	if err := start.Run(); err != nil {
-		return nil, fmt.Errorf("start gateway: %w", err)
-	}
-	defer func() {
-		stop := exec.Command(startScript, "stop")
-		stop.Dir = repoRoot
-		stop.Stdout = os.Stderr
-		stop.Stderr = os.Stderr
-		_ = stop.Run()
-	}()
-
-	// Wait for target to respond. Gateways take 2-15s to boot
-	// depending on stack (gwag fast, mesh slow because Node).
-	if err := waitForGateway(gw.TargetTemplate, 30*time.Second); err != nil {
-		return nil, fmt.Errorf("gateway never became ready: %w", err)
+//
+// alreadyRunning=true means the gateway was started earlier as
+// infrastructure (gwag's case — see main); skip start/stop and go
+// straight to sweeping.
+func runGateway(repoRoot, outDir, trafficBin string, gw gatewayCfg, scenarios []scenarioCfg, sw sweepCfg, alreadyRunning bool) (*gatewayResults, error) {
+	if !alreadyRunning {
+		stop, err := startGateway(repoRoot, gw)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = stop() }()
+		if err := waitForGateway(gw.TargetTemplate, 30*time.Second); err != nil {
+			return nil, fmt.Errorf("gateway never became ready: %w", err)
+		}
 	}
 
 	res := &gatewayResults{Name: gw.Name, Scenarios: map[string]*scenarioOutcome{}}
@@ -332,6 +366,46 @@ func runGateway(repoRoot, outDir, trafficBin string, gw gatewayCfg, scenarios []
 		res.Scenarios[sc.Name] = so
 	}
 	return res, nil
+}
+
+// pickGwag returns the gwag entry from the picked list, or nil if
+// gwag isn't being tested. Used to decide whether to bring up gwag
+// as infrastructure for backend registration before the rest of the
+// gateway sweeps start.
+func pickGwag(picked []gatewayCfg) *gatewayCfg {
+	for i := range picked {
+		if picked[i].Name == "gwag" {
+			return &picked[i]
+		}
+	}
+	return nil
+}
+
+// startGateway shells to perf/scripts/start-<name>.sh and returns a
+// stop-function the caller invokes when done. Separated from
+// runGateway so main() can manage gwag's lifecycle across all
+// gateway iterations (gwag stays up for the duration; mesh + apollo
+// start and stop per-iteration).
+func startGateway(repoRoot string, gw gatewayCfg) (func() error, error) {
+	startScript := filepath.Join(repoRoot, "perf", "scripts", "start-"+gw.Name+".sh")
+	if _, err := os.Stat(startScript); err != nil {
+		return nil, fmt.Errorf("no start script at %s", startScript)
+	}
+	fmt.Fprintf(os.Stderr, "  start: %s\n", startScript)
+	cmd := exec.Command(startScript, "start")
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("start %s: %w", gw.Name, err)
+	}
+	return func() error {
+		stop := exec.Command(startScript, "stop")
+		stop.Dir = repoRoot
+		stop.Stdout = os.Stderr
+		stop.Stderr = os.Stderr
+		return stop.Run()
+	}, nil
 }
 
 // waitForGateway polls the gateway's target endpoint until it

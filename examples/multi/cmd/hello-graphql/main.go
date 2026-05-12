@@ -68,6 +68,7 @@ func main() {
 	namespace := flag.String("namespace", "hello_graphql", "Namespace to register under")
 	version := flag.String("version", "v1", "Service version (unstable / vN)")
 	path := flag.String("path", "/graphql", "HTTP path on which to serve GraphQL")
+	register := flag.Bool("register", true, "Self-register with the gateway's control plane. Set false when running against a non-gwag gateway (Apollo Router, graphql-mesh) that introspects backends directly.")
 	flag.Parse()
 
 	if *advertise == "" {
@@ -105,29 +106,37 @@ func main() {
 		}
 	}()
 
-	reg, err := controlclient.SelfRegister(context.Background(), controlclient.Options{
-		GatewayAddr: *gatewayAddr,
-		// ServiceAddr is ignored for GraphQL bindings — the endpoint URL
-		// is the dispatch destination too — but Options requires a non-
-		// empty value, so feed it the same URL.
-		ServiceAddr: *advertise,
-		InstanceID:  fmt.Sprintf("hello-graphql@%s", *addr),
-		Services: []controlclient.Service{{
-			Namespace:       *namespace,
-			Version:         *version,
-			GraphQLEndpoint: *advertise,
-		}},
-	})
-	if err != nil {
-		log.Fatalf("self-register: %v", err)
+	var reg *controlclient.Registration
+	if *register {
+		var err error
+		reg, err = controlclient.SelfRegister(context.Background(), controlclient.Options{
+			GatewayAddr: *gatewayAddr,
+			// ServiceAddr is ignored for GraphQL bindings — the endpoint URL
+			// is the dispatch destination too — but Options requires a non-
+			// empty value, so feed it the same URL.
+			ServiceAddr: *advertise,
+			InstanceID:  fmt.Sprintf("hello-graphql@%s", *addr),
+			Services: []controlclient.Service{{
+				Namespace:       *namespace,
+				Version:         *version,
+				GraphQLEndpoint: *advertise,
+			}},
+		})
+		if err != nil {
+			log.Fatalf("self-register: %v", err)
+		}
+		log.Printf("hello-graphql registered with %s as %s:%s (endpoint %s)", *gatewayAddr, *namespace, *version, *advertise)
+	} else {
+		log.Printf("hello-graphql: --register=false, skipping control-plane registration")
 	}
-	log.Printf("hello-graphql registered with %s as %s:%s (endpoint %s)", *gatewayAddr, *namespace, *version, *advertise)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 	log.Printf("hello-graphql shutting down")
-	_ = reg.Close(context.Background())
+	if reg != nil {
+		_ = reg.Close(context.Background())
+	}
 	_ = srv.Shutdown(context.Background())
 }
 

@@ -94,6 +94,7 @@ func main() {
 	advertise := flag.String("advertise", "", "HTTP base URL to advertise to the gateway (e.g. http://localhost:50053). Defaults to http://<addr>.")
 	namespace := flag.String("namespace", "hello_openapi", "Namespace to register under")
 	version := flag.String("version", "v1", "Service version (unstable / vN)")
+	register := flag.Bool("register", true, "Self-register with the gateway's control plane. Set false when running against a non-gwag gateway (Apollo Router, graphql-mesh) that introspects backends directly.")
 	flag.Parse()
 
 	if *advertise == "" {
@@ -105,6 +106,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// /openapi.json serves the embedded spec so non-gwag gateways
+	// (graphql-mesh, etc.) that introspect via standard discovery can
+	// pull the schema directly from us.
+	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(helloSpec))
+	})
 	mux.HandleFunc("/Hello", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -127,25 +135,33 @@ func main() {
 		}
 	}()
 
-	reg, err := controlclient.SelfRegister(context.Background(), controlclient.Options{
-		GatewayAddr: *gatewayAddr,
-		ServiceAddr: *advertise,
-		InstanceID:  fmt.Sprintf("hello-openapi@%s", *addr),
-		Services: []controlclient.Service{{
-			Namespace:   *namespace,
-			Version:     *version,
-			OpenAPISpec: []byte(helloSpec),
-		}},
-	})
-	if err != nil {
-		log.Fatalf("self-register: %v", err)
+	var reg *controlclient.Registration
+	if *register {
+		var err error
+		reg, err = controlclient.SelfRegister(context.Background(), controlclient.Options{
+			GatewayAddr: *gatewayAddr,
+			ServiceAddr: *advertise,
+			InstanceID:  fmt.Sprintf("hello-openapi@%s", *addr),
+			Services: []controlclient.Service{{
+				Namespace:   *namespace,
+				Version:     *version,
+				OpenAPISpec: []byte(helloSpec),
+			}},
+		})
+		if err != nil {
+			log.Fatalf("self-register: %v", err)
+		}
+		log.Printf("hello-openapi registered with %s as %s:%s (advertise %s)", *gatewayAddr, *namespace, *version, *advertise)
+	} else {
+		log.Printf("hello-openapi: --register=false, skipping control-plane registration")
 	}
-	log.Printf("hello-openapi registered with %s as %s:%s (advertise %s)", *gatewayAddr, *namespace, *version, *advertise)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 	log.Printf("hello-openapi shutting down")
-	_ = reg.Close(context.Background())
+	if reg != nil {
+		_ = reg.Close(context.Background())
+	}
 	_ = srv.Shutdown(context.Background())
 }

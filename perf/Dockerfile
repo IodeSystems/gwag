@@ -41,6 +41,13 @@ COPY . /src
 # Re-apply the rewrite after the full COPY (go.mod from the host
 # clobbered the edited file).
 RUN go mod edit -replace github.com/graphql-go/graphql=/opt/graphql-fork
+
+# The gateway's `ui/embed.go` uses `//go:embed all:dist` which fails
+# if ui/dist/ is empty. .dockerignore strips the host's built bundle
+# to keep the context small; stub a placeholder so the embed pattern
+# matches. None of the perf-comparison endpoints serve the UI, so
+# the stub is sufficient.
+RUN mkdir -p /src/ui/dist && echo '<!-- placeholder for go:embed -->' > /src/ui/dist/index.html
 RUN mkdir -p /out/bin && \
     go build -o /out/bin/gateway        ./examples/multi/cmd/gateway && \
     go build -o /out/bin/hello-proto    ./examples/multi/cmd/hello-proto && \
@@ -100,6 +107,11 @@ WORKDIR /perf
 # and perf/.run/bin/ to match what the orchestrator expects).
 COPY perf/             /perf/perf/
 COPY bench/perf-scenarios.yaml /perf/bench/perf-scenarios.yaml
+
+# hello-proto reads protos/hello.proto from CWD at startup. Mirror
+# the host layout (examples/multi/protos/) so the orchestrator's
+# cmd.Dir works the same way in-container and on the host.
+COPY examples/multi/protos /perf/examples/multi/protos
 
 # Go-built artifacts.
 RUN mkdir -p /perf/bench/.run/bin /perf/perf/.run/bin

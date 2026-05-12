@@ -38,6 +38,7 @@ func main() {
 	advertise := flag.String("advertise", "localhost:50055", "Address to advertise to the gateway")
 	namespace := flag.String("namespace", "hello_proto", "Namespace to register under")
 	version := flag.String("version", "v1", "Service version (unstable / vN)")
+	register := flag.Bool("register", true, "Self-register with the gateway's control plane. Set false when running against a non-gwag gateway (Apollo Router, graphql-mesh) that introspects backends directly.")
 	flag.Parse()
 
 	protoSource, err := os.ReadFile("protos/hello.proto")
@@ -58,25 +59,32 @@ func main() {
 		}
 	}()
 
-	reg, err := controlclient.SelfRegister(context.Background(), controlclient.Options{
-		GatewayAddr: *gatewayAddr,
-		ServiceAddr: *advertise,
-		InstanceID:  "hello-proto@" + *addr,
-		Services: []controlclient.Service{{
-			Namespace:   *namespace,
-			Version:     *version,
-			ProtoSource: protoSource,
-		}},
-	})
-	if err != nil {
-		log.Fatalf("self-register: %v", err)
+	var reg *controlclient.Registration
+	if *register {
+		reg, err = controlclient.SelfRegister(context.Background(), controlclient.Options{
+			GatewayAddr: *gatewayAddr,
+			ServiceAddr: *advertise,
+			InstanceID:  "hello-proto@" + *addr,
+			Services: []controlclient.Service{{
+				Namespace:   *namespace,
+				Version:     *version,
+				ProtoSource: protoSource,
+			}},
+		})
+		if err != nil {
+			log.Fatalf("self-register: %v", err)
+		}
+		log.Printf("hello-proto registered with %s as %s:%s", *gatewayAddr, *namespace, *version)
+	} else {
+		log.Printf("hello-proto: --register=false, skipping control-plane registration")
 	}
-	log.Printf("hello-proto registered with %s as %s:%s", *gatewayAddr, *namespace, *version)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 	log.Printf("hello-proto shutting down")
-	_ = reg.Close(context.Background())
+	if reg != nil {
+		_ = reg.Close(context.Background())
+	}
 	srv.GracefulStop()
 }
