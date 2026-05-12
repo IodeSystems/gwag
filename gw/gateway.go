@@ -275,6 +275,13 @@ type config struct {
 	// rejects with CodeResourceExhausted instead of granting an
 	// emergency permit block. Default false. See WithQuotaEnforce.
 	quotaEnforce bool
+
+	// channelAuth is the operator-declared (pattern → tier) rule set
+	// gating ps.pub / ps.sub. Stored in declaration order; first-hit-
+	// wins at Pub entry, strictest-wins for wildcard Sub. nil → every
+	// channel falls under the default tier (ChannelAuthHMAC). See
+	// WithChannelAuth.
+	channelAuth []channelAuthRule
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept

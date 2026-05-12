@@ -29,7 +29,15 @@ func TestPubSub_RoundTrip(t *testing.T) {
 	}
 	t.Cleanup(cluster.Close)
 
-	g := New(WithCluster(cluster), WithoutMetrics(), WithoutBackpressure())
+	// Open tier on the test channel space; the round-trip test focuses
+	// on broker behaviour, not auth — the hmac tier has dedicated
+	// coverage in auth_channel_test.go.
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+	)
 	t.Cleanup(g.Close)
 
 	// Trigger a schema assemble so dispatchers are registered.
@@ -128,7 +136,12 @@ func TestPubSub_RejectsWildcardOnPublish(t *testing.T) {
 	}
 	t.Cleanup(cluster.Close)
 
-	g := New(WithCluster(cluster), WithoutMetrics(), WithoutBackpressure())
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+	)
 	t.Cleanup(g.Close)
 
 	g.mu.Lock()

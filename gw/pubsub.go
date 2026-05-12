@@ -56,9 +56,11 @@ func (g *Gateway) installPubSubSlot() error {
 // subscribers' broker fan-out (which decodes against the Event
 // descriptor) sees a typed payload.
 //
-// Auth (WithChannelAuth tiers + delegate) lands in the follow-up
-// commit; this iteration is the broker primitive only. Hmac/ts fields
-// on the request are accepted but not yet verified.
+// Auth: the channel's tier is resolved via WithChannelAuth (first-
+// hit-wins for literal Pub channels; default is hmac). Open tier
+// ignores hmac/ts; hmac/delegate tiers verify the (channel, ts) HMAC
+// against WithSubscriptionAuth. The delegate fall-through lands in
+// the follow-up commit; for now `delegate+hmac` runs the HMAC path.
 func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 	if g.cfg.cluster == nil {
 		return nil, fmt.Errorf("gateway: ps.pub requires a configured cluster (NATS)")
@@ -67,11 +69,16 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	fields := m.Descriptor().Fields()
 	channel := m.Get(fields.ByName("channel")).String()
 	payload := m.Get(fields.ByName("payload")).String()
+	hmacB64 := m.Get(fields.ByName("hmac")).String()
+	ts := m.Get(fields.ByName("ts")).Int()
 	if channel == "" {
 		return nil, fmt.Errorf("ps.pub: channel required")
 	}
 	if strings.ContainsAny(channel, "*>") {
 		return nil, fmt.Errorf("ps.pub: wildcards not valid on publish (channel=%q)", channel)
+	}
+	if err := g.checkChannelAuth(channel, false, hmacB64, ts); err != nil {
+		return nil, err
 	}
 	ev := &psv1.Event{
 		Channel: channel,
@@ -103,6 +110,12 @@ func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 	channel, _ := args["channel"].(string)
 	if channel == "" {
 		return nil, fmt.Errorf("ps.sub: channel required")
+	}
+	hmacB64, _ := args["hmac"].(string)
+	ts, _ := asInt64(args["ts"])
+	wildcard := strings.ContainsAny(channel, "*>")
+	if err := g.checkChannelAuth(channel, wildcard, hmacB64, ts); err != nil {
+		return nil, err
 	}
 	broker := g.subscriptionBroker()
 	if broker == nil {
