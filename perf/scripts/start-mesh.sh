@@ -18,6 +18,17 @@ start() {
     echo "==> npm install (graphql-mesh)"
     (cd "$MESH_DIR" && npm install --silent)
   fi
+  # Modern mesh requires an explicit `build` before `start` (it used
+  # to do this implicitly; current versions split the two). Build
+  # writes generated SDK code into .mesh/; `start` runs it.
+  if [[ ! -d $MESH_DIR/.mesh ]]; then
+    echo "==> mesh build"
+    if ! (cd "$MESH_DIR" && npx mesh build > "${LOG_FILE}.build" 2>&1); then
+      echo "==> mesh build failed; tail of ${LOG_FILE}.build:" >&2
+      tail -20 "${LOG_FILE}.build" >&2 || true
+      return 1
+    fi
+  fi
   (cd "$MESH_DIR" && nohup npx mesh start > "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE")
   echo "mesh started, pid=$(cat "$PID_FILE")"
 }

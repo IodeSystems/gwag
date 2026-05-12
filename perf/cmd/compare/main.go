@@ -111,6 +111,8 @@ func main() {
 		if err := waitForGateway(gwagFirst.TargetTemplate, 30*time.Second); err != nil {
 			die("gwag never became ready: %v", err)
 		}
+		// gwag boots in <2s; the longer timeout is for first-run
+		// JIT-cold cases (cold image cache, etc.).
 	}
 	defer func() {
 		if gwagStop != nil {
@@ -340,7 +342,12 @@ func runGateway(repoRoot, outDir, trafficBin string, gw gatewayCfg, scenarios []
 			return nil, err
 		}
 		defer func() { _ = stop() }()
-		if err := waitForGateway(gw.TargetTemplate, 30*time.Second); err != nil {
+		// Mesh's Node bootstrap is slow (schema introspection,
+		// codegen, server start); allow 2 minutes. Apollo is fast in
+		// theory but the hand-rolled supergraph SDL parsing can take
+		// a beat too. 120s covers both.
+		readyTimeout := 120 * time.Second
+		if err := waitForGateway(gw.TargetTemplate, readyTimeout); err != nil {
 			return nil, fmt.Errorf("gateway never became ready: %w", err)
 		}
 	}
