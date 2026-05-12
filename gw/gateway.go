@@ -1610,12 +1610,12 @@ func (g *Gateway) SchemaHandler() http.Handler {
 		}
 		switch r.URL.Query().Get("format") {
 		case "json":
-			result := graphql.Do(graphql.Params{Schema: *schema, RequestString: introspectionQuery})
+			result := graphql.Do(graphql.Params{Schema: *schema, RequestString: ir.IntrospectionQuery})
 			w.Header().Set("Content-Type", "application/json")
-			_ = writeJSON(w, result)
+			_ = ir.WriteJSON(w, result)
 		default:
 			w.Header().Set("Content-Type", "application/graphql; charset=utf-8")
-			_, _ = w.Write([]byte(printSchemaSDL(schema)))
+			_, _ = w.Write([]byte(ir.PrintSchemaSDL(schema)))
 		}
 	})
 }

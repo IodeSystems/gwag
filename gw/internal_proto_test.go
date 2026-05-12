@@ -130,7 +130,7 @@ func TestInternalProto_AppearsInPublicSDL(t *testing.T) {
 	if schema == nil {
 		t.Fatal("g.schema is nil after assembleLocked")
 	}
-	sdl := printSchemaSDL(schema)
+	sdl := ir.PrintSchemaSDL(schema)
 	// The IR ingest pulls method names through, so the rendered SDL
 	// contains both pub and sub fields under the ps namespace's
 	// GraphQL object.

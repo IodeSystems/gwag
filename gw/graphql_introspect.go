@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // introspectionSchema is the parsed shape of the response to the
@@ -76,7 +78,7 @@ func fetchIntrospection(ctx context.Context, client *http.Client, endpoint strin
 // (which caches the bytes in the registry KV so other peers don't
 // have to re-fetch).
 func fetchIntrospectionBytes(ctx context.Context, client *http.Client, endpoint string) (json.RawMessage, error) {
-	resp, err := dispatchGraphQL(ctx, client, endpoint, introspectionQuery, nil, nil)
+	resp, err := dispatchGraphQL(ctx, client, endpoint, ir.IntrospectionQuery, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -432,7 +432,7 @@ func TestIRTypeBuilder_ValidatesAsSchema(t *testing.T) {
 		t.Fatalf("schema validate: %v", err)
 	}
 	// Sanity: the schema's PrintSchema-equivalent contains both types.
-	sdl := printSchemaSDL(&schema)
+	sdl := ir.PrintSchemaSDL(&schema)
 	if !strings.Contains(sdl, "type Pet") || !strings.Contains(sdl, "type Owner") {
 		t.Errorf("schema missing expected types:\n%s", sdl)
 	}

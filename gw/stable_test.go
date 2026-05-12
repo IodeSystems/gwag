@@ -348,7 +348,7 @@ func TestStableViaGatewayRegistration(t *testing.T) {
 // TestStableSDLContainsAlias confirms stable surfaces in the printed
 // SDL — schema diff and codegen both consume the SDL, so the field
 // must reach there. Light-touch fixture: no full Gateway boot, just a
-// runtime-rendered schema piped through printSchemaSDL.
+// runtime-rendered schema piped through ir.PrintSchemaSDL.
 func TestStableSDLContainsAlias(t *testing.T) {
 	svc := &ir.Service{
 		Namespace:  "pets",
@@ -369,7 +369,7 @@ func TestStableSDLContainsAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
-	sdl := printSchemaSDL(schema)
+	sdl := ir.PrintSchemaSDL(schema)
 	if !strings.Contains(sdl, "stable: PetsStableQueryNamespace!") {
 		t.Errorf("SDL missing `stable: PetsStableQueryNamespace!`:\n%s", sdl)
 	}

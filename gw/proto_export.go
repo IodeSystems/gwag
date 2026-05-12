@@ -152,7 +152,7 @@ func emitProtoSDL(w http.ResponseWriter, fds *descriptorpb.FileDescriptorSet) {
 		out = append(out, fileSDL{Name: fp.GetName(), SDL: sb.String()})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := writeJSON(w, out); err != nil {
+	if err := ir.WriteJSON(w, out); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -306,7 +306,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		if err := writeJSON(w, out); err != nil {
+		if err := ir.WriteJSON(w, out); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

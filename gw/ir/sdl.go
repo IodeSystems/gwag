@@ -1,4 +1,4 @@
-package gateway
+package ir
 
 import (
 	"encoding/json"
@@ -10,10 +10,10 @@ import (
 	"github.com/IodeSystems/graphql-go"
 )
 
-// introspectionQuery is the canonical GraphQL introspection query —
+// IntrospectionQuery is the canonical GraphQL introspection query —
 // what every codegen tool sends to learn a server's schema. Mirrors
 // graphql-js' getIntrospectionQuery (without descriptions for brevity).
-const introspectionQuery = `query IntrospectionQuery {
+const IntrospectionQuery = `query IntrospectionQuery {
   __schema {
     queryType { name }
     mutationType { name }
@@ -77,17 +77,18 @@ fragment TypeRef on __Type {
   }
 }`
 
-func writeJSON(w io.Writer, v any) error {
+// WriteJSON encodes v as indented JSON to w.
+func WriteJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-// printSchemaSDL walks a graphql.Schema and emits a GraphQL SDL string
+// PrintSchemaSDL walks a graphql.Schema and emits a GraphQL SDL string
 // representing it. Covers what this gateway emits: object types, input
 // objects, enums, scalars, and field deprecation. Runtime concerns
 // (resolvers, defaults beyond String/Int/Bool/Enum) are not reflected.
-func printSchemaSDL(s *graphql.Schema) string {
+func PrintSchemaSDL(s *graphql.Schema) string {
 	var b strings.Builder
 	tm := s.TypeMap()
 
