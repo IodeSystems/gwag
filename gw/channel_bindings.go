@@ -3,7 +3,9 @@ package gateway
 import (
 	"fmt"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )
@@ -12,10 +14,11 @@ import (
 // coordinate. Used by the gateway-wide index for publish-time
 // payload_type stamping and admin enumeration.
 type channelBindingEntry struct {
-	pattern    string
-	messageFQN string
-	namespace  string
-	version    string
+	pattern     string
+	messageFQN  string
+	namespace   string
+	version     string
+	messageDesc protoreflect.MessageDescriptor
 }
 
 // channelBindingIndex is the gateway-wide aggregation of all slot
@@ -40,22 +43,93 @@ func (idx *channelBindingIndex) lookupPayloadType(channel string) string {
 	return ""
 }
 
+// lookupBinding returns the full binding entry for the first pattern
+// that matches the channel, or nil. Used by the enforcement path to
+// access the message descriptor for payload validation.
+func (idx *channelBindingIndex) lookupBinding(channel string) *channelBindingEntry {
+	if idx == nil {
+		return nil
+	}
+	for i := range idx.entries {
+		if subjectMatchesPattern(idx.entries[i].pattern, channel) {
+			return &idx.entries[i]
+		}
+	}
+	return nil
+}
+
+// validatePayload attempts to parse the payload JSON as the bound
+// proto message. Returns nil if the payload is valid, or a Reject
+// error with CodeInvalidArgument if parsing fails.
+func (idx *channelBindingIndex) validatePayload(channel, payload string) error {
+	binding := idx.lookupBinding(channel)
+	if binding == nil || binding.messageDesc == nil {
+		return nil
+	}
+	msg := dynamicpb.NewMessage(binding.messageDesc)
+	if err := protojson.Unmarshal([]byte(payload), msg); err != nil {
+		return Reject(CodeInvalidArgument, fmt.Sprintf("ps.pub: payload for channel %q does not match bound type %s: %v", channel, binding.messageFQN, err))
+	}
+	return nil
+}
+
 // rebuildChannelBindingIndexLocked aggregates channelBindings from
-// every slot into a fresh index and atomic-swaps it. Caller holds g.mu.
+// every slot into a fresh index and atomic-swaps it. Also resolves
+// message descriptors from registered proto slots for payload
+// validation. Caller holds g.mu.
 func (g *Gateway) rebuildChannelBindingIndexLocked() {
+	// Build a message FQN → descriptor lookup from all proto slots.
+	msgDescs := g.resolveMessageDescriptorsLocked()
 	var entries []channelBindingEntry
 	for _, s := range g.slots {
 		for _, b := range s.channelBindings {
-			entries = append(entries, channelBindingEntry{
+			entry := channelBindingEntry{
 				pattern:    b.Pattern,
 				messageFQN: b.MessageFQN,
 				namespace:  s.key.namespace,
 				version:    s.key.version,
-			})
+			}
+			if desc, ok := msgDescs[b.MessageFQN]; ok {
+				entry.messageDesc = desc
+			}
+			entries = append(entries, entry)
 		}
 	}
 	idx := &channelBindingIndex{entries: entries}
 	g.channelBindingIndex.Store(idx)
+}
+
+// resolveMessageDescriptorsLocked walks all proto and internal-proto
+// slots and returns a map from message FQN to MessageDescriptor.
+// Used by rebuildChannelBindingIndexLocked to resolve bound types
+// for payload validation. Caller holds g.mu.
+func (g *Gateway) resolveMessageDescriptorsLocked() map[string]protoreflect.MessageDescriptor {
+	out := make(map[string]protoreflect.MessageDescriptor)
+	for _, s := range g.slots {
+		var fd protoreflect.FileDescriptor
+		switch {
+		case s.proto != nil:
+			fd = s.proto.file
+		case s.internalProto != nil:
+			fd = s.internalProto.file
+		default:
+			continue
+		}
+		walkMessagesForDescriptors(fd, out)
+	}
+	return out
+}
+
+func walkMessagesForDescriptors(fd protoreflect.FileDescriptor, out map[string]protoreflect.MessageDescriptor) {
+	var walk func(protoreflect.MessageDescriptors)
+	walk = func(ms protoreflect.MessageDescriptors) {
+		for i := 0; i < ms.Len(); i++ {
+			md := ms.Get(i)
+			out[string(md.FullName())] = md
+			walk(md.Messages())
+		}
+	}
+	walk(fd.Messages())
 }
 
 // channelBindingIndexSnapshot returns a copy of the current binding
@@ -191,4 +265,23 @@ func (g *Gateway) applyRuntimeBindingsLocked(bindings []ir.ChannelBinding) error
 	psSlot.channelBindings = append(psSlot.channelBindings, bindings...)
 	g.bakeSlotIRLocked(psSlot)
 	return g.assembleLocked()
+}
+
+// WithChannelBindingEnforce enables shape strictness for ps.pub: when
+// a channel has a binding, the payload is parsed as the bound proto
+// message and rejected with InvalidArgument if it doesn't match.
+// Default false (permissive). See WithStrictPayloadTypes for coverage
+// strictness. Both can be enabled together.
+func WithChannelBindingEnforce() Option {
+	return func(cfg *config) { cfg.psBindingEnforce = true }
+}
+
+// WithStrictPayloadTypes enables coverage strictness for ps.pub:
+// rejects publishes to channels that match no WithChannelBinding
+// pattern (where payload_type would otherwise be blank). Default
+// false (permissive) so the open tier stays usable for ad-hoc / dev
+// channels. See WithChannelBindingEnforce for shape strictness. Both
+// can be enabled together.
+func WithStrictPayloadTypes() Option {
+	return func(cfg *config) { cfg.psStrictPayloadTypes = true }
 }

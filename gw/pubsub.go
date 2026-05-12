@@ -80,9 +80,18 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	if err := g.checkChannelAuth(ctx, channel, false, hmacB64, ts); err != nil {
 		return nil, err
 	}
-	payloadType := g.channelBindingIndex.Load().lookupPayloadType(channel)
+	idx := g.channelBindingIndex.Load()
+	payloadType := idx.lookupPayloadType(channel)
 	if payloadType == "" {
 		g.cfg.metrics.RecordPubNoBinding()
+		if g.cfg.psStrictPayloadTypes {
+			return nil, Reject(CodeInvalidArgument, fmt.Sprintf("ps.pub: channel %q has no channel binding (strict payload types enabled)", channel))
+		}
+	}
+	if g.cfg.psBindingEnforce {
+		if err := idx.validatePayload(channel, payload); err != nil {
+			return nil, err
+		}
 	}
 	ev := &psv1.Event{
 		Channel:     channel,

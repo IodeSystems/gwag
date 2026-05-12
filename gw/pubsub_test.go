@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/iodesystems/gwag/gw/ir"
+	psv1 "github.com/iodesystems/gwag/gw/proto/ps/v1"
 )
 
 // TestPubSub_RoundTrip exercises the gateway-bundled gwag.ps.v1.PubSub
@@ -369,4 +371,330 @@ func TestPubSub_PayloadTypeEmpty_NoBinding(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for event")
 	}
+}
+
+// TestPubSub_StrictPayloadTypes_RejectsUnboundChannel pins that
+// WithStrictPayloadTypes rejects publishes to channels with no
+// matching channel binding.
+func TestPubSub_StrictPayloadTypes_RejectsUnboundChannel(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+		WithStrictPayloadTypes(),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "example.events.v1.OrderUpdate", namespace: "orders", version: "v1"},
+		},
+	})
+	g.mu.Unlock()
+
+	pub := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub"))
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	// Channel with no binding should be rejected.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.unknown.foo",
+		"payload": "test",
+	})
+	if err == nil {
+		t.Fatal("expected error for unbound channel with strict payload types; got nil")
+	}
+	if !containsStr(err.Error(), "no channel binding") {
+		t.Errorf("error %q doesn't mention missing binding", err.Error())
+	}
+
+	// Channel WITH a binding should still succeed (no shape enforcement
+	// since WithChannelBindingEnforce is not set).
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": "anything goes",
+	})
+	if err != nil {
+		t.Fatalf("Pub on bound channel should succeed without shape enforcement: %v", err)
+	}
+}
+
+// TestPubSub_ChannelBindingEnforce_ValidPayload pins that with
+// WithChannelBindingEnforce, a valid JSON payload matching the bound
+// proto message type is accepted.
+func TestPubSub_ChannelBindingEnforce_ValidPayload(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+		WithChannelBindingEnforce(),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	// Use the ps.v1.Event message descriptor as the bound type — it has
+	// fields: channel(string), payload(string), payload_type(string), ts(int64).
+	eventDesc := psv1.File_gw_proto_ps_v1_ps_proto.Messages().ByName("Event")
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "gwag.ps.v1.Event", namespace: "ps", version: "v1", messageDesc: eventDesc},
+		},
+	})
+	g.mu.Unlock()
+
+	pub := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub"))
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	// Valid JSON matching the Event shape should succeed.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": `{"channel":"events.orders.42.update","payload":"order data"}`,
+	})
+	if err != nil {
+		t.Fatalf("Pub with valid payload: %v", err)
+	}
+}
+
+// TestPubSub_ChannelBindingEnforce_InvalidPayload pins that with
+// WithChannelBindingEnforce, a payload that doesn't match the bound
+// proto message type is rejected with InvalidArgument.
+func TestPubSub_ChannelBindingEnforce_InvalidPayload(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+		WithChannelBindingEnforce(),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	eventDesc := psv1.File_gw_proto_ps_v1_ps_proto.Messages().ByName("Event")
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "gwag.ps.v1.Event", namespace: "ps", version: "v1", messageDesc: eventDesc},
+		},
+	})
+	g.mu.Unlock()
+
+	pub := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub"))
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	// Invalid JSON should be rejected.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": "not json at all",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid payload; got nil")
+	}
+	if !containsStr(err.Error(), "does not match bound type") {
+		t.Errorf("error %q doesn't mention type mismatch", err.Error())
+	}
+
+	// JSON with wrong field types (ts expects int64, not string) should also reject.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": `{"channel":"x","ts":"notanumber"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong field types; got nil")
+	}
+}
+
+// TestPubSub_ChannelBindingEnforce_NoDescriptor pins that enforcement
+// is a no-op when the binding has no resolved message descriptor
+// (e.g. runtime binding with FQN that doesn't match any registered
+// proto slot). The publish should succeed without validation.
+func TestPubSub_ChannelBindingEnforce_NoDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+		WithChannelBindingEnforce(),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	// Binding with no messageDesc — simulates a runtime binding whose
+	// FQN doesn't resolve to any registered proto slot.
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "unresolved.v1.Foo", namespace: "orders", version: "v1"},
+		},
+	})
+	g.mu.Unlock()
+
+	pub := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub"))
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	// Should succeed — no descriptor to validate against.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": "anything",
+	})
+	if err != nil {
+		t.Fatalf("Pub should succeed when binding has no descriptor: %v", err)
+	}
+}
+
+// TestPubSub_BothStrictnessKnobs pins that both knobs can be enabled
+// together and interact correctly: strict payload types rejects
+// unbound channels, and binding enforce validates shape on bound ones.
+func TestPubSub_BothStrictnessKnobs(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+		WithChannelBindingEnforce(),
+		WithStrictPayloadTypes(),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	eventDesc := psv1.File_gw_proto_ps_v1_ps_proto.Messages().ByName("Event")
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "gwag.ps.v1.Event", namespace: "ps", version: "v1", messageDesc: eventDesc},
+		},
+	})
+	g.mu.Unlock()
+
+	pub := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub"))
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	// Unbound channel rejected by strict payload types.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.unknown.foo",
+		"payload": "test",
+	})
+	if err == nil {
+		t.Fatal("expected error for unbound channel; got nil")
+	}
+
+	// Bound channel with invalid payload rejected by binding enforce.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": "not json",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid payload; got nil")
+	}
+
+	// Bound channel with valid payload succeeds.
+	_, err = pub.Dispatch(context.Background(), map[string]any{
+		"channel": "events.orders.42.update",
+		"payload": `{"channel":"x","payload":"y"}`,
+	})
+	if err != nil {
+		t.Fatalf("Pub with valid payload on bound channel: %v", err)
+	}
+}
+
+func containsStr(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

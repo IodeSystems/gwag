@@ -300,6 +300,17 @@ type config struct {
 	// same tier/uniqueness policy as proto-declarative bindings. See
 	// WithChannelBinding.
 	channelBindings []ir.ChannelBinding
+
+	// psBindingEnforce enables shape strictness for ps.pub: when a
+	// channel has a binding, the payload is parsed as the bound proto
+	// message and rejected with InvalidArgument on mismatch. Default
+	// false. See WithChannelBindingEnforce.
+	psBindingEnforce bool
+
+	// psStrictPayloadTypes enables coverage strictness for ps.pub:
+	// rejects publishes to channels with no matching binding pattern.
+	// Default false. See WithStrictPayloadTypes.
+	psStrictPayloadTypes bool
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
