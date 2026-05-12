@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package gwag.ps.v1;
+
+option go_package = "github.com/iodesystems/gwag/gw/proto/ps/v1;psv1";
+
+// PubSub is the gateway-internal pub/sub primitive. It renders as
+// `Mutation.ps.pub(channel, payload, hmac, ts)` and
+// `Subscription.ps.sub(channel, hmac, ts) -> ps.Event` via the same
+// nested-namespace convention `admin.listPeers` already uses.
+//
+// The proto exists for IR / SDL / MCP / admin-listing parity with every
+// other ingest path. Runtime is in-process: there is no proxy service
+// behind these RPCs; dispatch resolves to a Go handler registered with
+// the gateway.
+service PubSub {
+  // Pub publishes a single payload onto a channel. Auth is governed by
+  // the operator's WithChannelAuth(pattern, tier) registrations; default
+  // tier when no pattern matches is hmac.
+  rpc Pub(PubRequest) returns (PubResponse);
+
+  // Sub opens a subscriber stream for a channel (NATS-style wildcards
+  // supported: `events.orders.>`). HMAC binds to the literal pattern
+  // string the client requests, not a concrete channel.
+  rpc Sub(SubRequest) returns (stream Event);
+}
+
+message PubRequest {
+  // Target channel subject (e.g. `events.orders.42.update`). Wildcards
+  // are not valid on publish.
+  string channel = 1;
+
+  // Opaque payload bytes encoded as a string — JSON, base64, or any
+  // agreed encoding-of-the-day. Channel->message-type bindings give
+  // subscribers the descriptor to deserialize against; the broker
+  // itself does not parse.
+  string payload = 2;
+
+  // HMAC token over (channel, ts), signed by a key the operator
+  // controls. Ignored when the channel pattern's auth tier is `open`.
+  string hmac = 3;
+
+  // Wall-clock unix timestamp the client used when signing. Bounded by
+  // the operator's skew window to prevent replay.
+  int64 ts = 4;
+}
+
+message PubResponse {}
+
+message SubRequest {
+  // Channel subject or NATS-wildcard pattern (`events.orders.*.update`,
+  // `events.orders.>`). HMAC, when required, binds to this literal
+  // string.
+  string channel = 1;
+
+  // HMAC token over (channel, ts). Ignored when the matched auth tier
+  // is `open`.
+  string hmac = 2;
+
+  // Wall-clock unix timestamp the client used when signing. Bounded by
+  // the operator's skew window.
+  int64 ts = 3;
+}
+
+message Event {
+  // Resolved channel subject the event was published on (always
+  // concrete, even when the subscriber asked for a wildcard).
+  string channel = 1;
+
+  // Payload bytes as published. Encoding is whatever the publisher
+  // wrote; the broker is opaque to it.
+  string payload = 2;
+
+  // Fully-qualified proto message name the payload conforms to, when a
+  // WithChannelBinding pattern matched the channel; empty otherwise.
+  // Subscribers cross-reference via `/schema/proto?service=...` to get
+  // the descriptor for decoding.
+  string payload_type = 3;
+
+  // Wall-clock unix timestamp the event was accepted at Pub entry.
+  int64 ts = 4;
+}
