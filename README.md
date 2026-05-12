@@ -182,14 +182,16 @@ gateways: [`docs/comparison.md`](./docs/comparison.md).
 
 ## Performance & the graphql-go fork
 
-Throughput ceiling is the GraphQL executor itself. We maintain a
-[graphql-go fork](https://github.com/iodesystems/graphql) with an
-append-mode plan-cache executor that walks the plan straight to a JSON
-byte buffer — projected **~3-4× end-to-end wedge** vs upstream
+Throughput ceiling is the GraphQL executor itself. The gateway depends
+on a [graphql-go fork](https://github.com/iodesystems/graphql) (currently
+`v1.0.0`) — a hardened cut of `graphql-go/graphql` with extra plan-cache
++ subscription primitives plus an `ExecutePlanAppend` walker that emits
+the response straight to a JSON byte buffer. Projected wedge once the
+gateway swaps onto the append walker: **~3-4× end-to-end**
 (`~430 µs / ~970 allocs → ~120 µs / ~200 allocs` on
-`BenchmarkProtoSchemaExec`). Default builds use upstream graphql-go;
-opt into the fork via a `go.mod` `replace` directive for the perf
-upgrade.
+`BenchmarkProtoSchemaExec`). Default gateway code path today calls the
+older `ExecutePlan` + JSON-encoder pair; the swap is a follow-on perf
+step, not a release gate.
 
 Self-measurement (your hardware): [`docs/perf.md`](./docs/perf.md) —
 escalating-target-RPS sweep with knee detection. Head-to-head vs peers

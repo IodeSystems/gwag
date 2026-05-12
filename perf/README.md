@@ -41,10 +41,7 @@ perf/
 
 **Docker (recommended — full hermetic env):**
 ```bash
-# perf/docker-build.sh stages the graphql-go fork into perf/.build/graphql
-# (go.mod has a host-absolute replace directive that Docker can't see)
-# then runs `docker build`.
-perf/docker-build.sh
+docker build -t gwag-perf -f perf/Dockerfile .
 
 # Run the full comparison sweep (writes perf/.out/comparison.md):
 docker run --rm -v $(pwd)/perf/.out:/out gwag-perf

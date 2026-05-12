@@ -3,7 +3,8 @@ module github.com/iodesystems/gwag
 go 1.26.2
 
 require (
-	github.com/IodeSystems/graphql-go v0.8.1
+	connectrpc.com/connect v1.19.2
+	github.com/IodeSystems/graphql-go v1.0.0
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/getkin/kin-openapi v0.138.0
@@ -15,6 +16,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
 	go.yaml.in/yaml/v3 v3.0.4
+	golang.org/x/net v0.54.0
 	golang.org/x/sync v0.20.0
 	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
@@ -22,7 +24,6 @@ require (
 )
 
 require (
-	connectrpc.com/connect v1.19.2 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.7.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -52,7 +53,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

@@ -27,20 +27,10 @@ ENV PATH=/usr/local/go/bin:$PATH
 
 WORKDIR /src
 
-# Stage the fork into a known location and rewrite go.mod's
-# host-absolute replace path to point inside the container. The
-# fork is staged into perf/.build/graphql by perf/docker-build.sh
-# before `docker build` is invoked.
-COPY perf/.build/graphql /opt/graphql-fork
-
 COPY go.mod go.sum ./
-RUN go mod edit -replace github.com/IodeSystems/graphql-go=/opt/graphql-fork \
-    && go mod download
+RUN go mod download
 
 COPY . /src
-# Re-apply the rewrite after the full COPY (go.mod from the host
-# clobbered the edited file).
-RUN go mod edit -replace github.com/IodeSystems/graphql-go=/opt/graphql-fork
 
 # The gateway's `ui/embed.go` uses `//go:embed all:dist` which fails
 # if ui/dist/ is empty. .dockerignore strips the host's built bundle

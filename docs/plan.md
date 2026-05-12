@@ -35,11 +35,10 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **The push.** The hardest thing about this project is explaining what's actually unusual about it in 30 seconds — and if a maintainer can't pitch it in 30 seconds, the v1 release lands and adopters still don't get it. The wedge is **three typed client surfaces from one registration**: Python team uses `openapi-generator`, TS team uses graphql-codegen, Go team uses `buf`, all against the same registry, schema hot-reloads when services redeploy. Today's README leads with a feature checklist — good for the reader who already knows what an API gateway is, bad for the reader who hasn't seen why three surfaces simultaneously beats picking one. The pitch *is* v1 work, not after-v1 marketing.
 
+**Done.** README rewritten around the multi-format wedge (882b51a). Canonical walkthrough at `docs/walkthrough.md` covering proto+OpenAPI+GraphQL registration and per-language codegen (fdd9ccf). `docs/federation.md` answers the recurring "do I need federation?" question honestly (d26b5ed).
+
 **Todo.**
-- [ ] **README rewrite around the multi-format wedge.** Lead with one-registration → three-surfaces + hot-reload as the headline. Demote the feature list to "what else you get." Replace the checkbox comparison table with one-paragraph framing per peer (Federation / Hasura / Kong) — what each is *for*, not which features each has. ~0.5d.
-- [ ] **Canonical worked example walk-through.** `docs/walkthrough.md`: proto svc A + OpenAPI svc B + GraphQL svc C → register all three, generate TS + Python + Go client packages, show the edit-redeploy-codegen cycle. Reuse `examples/multi` where possible. ~1d.
-- [ ] **Live-reload gif/screencast.** 15-30s clip: register a new service field, watch the SDL update + the UI re-render without a gateway restart. Embedded in README. ~0.5d.
-- [ ] **"Do you need federation?" positioning doc.** `docs/federation.md`: honest answer. Most teams don't need entity-merging; stitching is correct for the common case. Pulls from existing CLAUDE.md framing. ~0.25d.
+- [ ] **Live-reload gif/screencast.** 15-30s clip: register a new service field, watch the SDL update + the UI re-render without a gateway restart. Embedded in README. ~0.5d. *(Requires interactive recording — not gating v1; pull when a maintainer has the screen-cap setup handy.)*
 
 **Followups.** Launch announcement / blog post / HN-shaped writeup are downstream of these — write them once the doc above exists and we know what to point at.
 
