@@ -21,9 +21,8 @@ backends:
 # requires the same target URL shape, the same query, the same RPS
 # rungs — the orchestrator enforces this by sharing one sweep config.
 sweep:
-  # Smoke values — tight enough to surface integration bugs in every
-  # gateway in a single pass. Once the matrix runs clean, bump to the
-  # full sweep:
+  # Smoke values while iterating on peer config. Bump to full sweep
+  # once mesh + apollo run clean across the matrix:
   #   steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
   #   reps: 3
   #   duration: 5s
@@ -77,15 +76,6 @@ gateways:
   - name: apollo
     description: "Apollo Router (Rust, GraphQL-federation specialist; single-subgraph mode here)"
     target_template: "http://localhost:14100/"
-    # Disabled — hand-rolled supergraph SDL fails fed2 validation in
-    # Apollo Router 1.55: "@join__implements should exist for a fed2
-    # supergraph". Real composition needs `rover supergraph compose`
-    # against a Federation-aware subgraph; hello-graphql doesn't expose
-    # @key/@external so we can't compose properly. Resolving this needs
-    # either (a) adapt hello-graphql to support Federation 2, or
-    # (b) downgrade to an Apollo Router version with looser supergraph
-    # validation. Both are real-work; deferred.
-    enabled: false
     # Apollo doesn't prefix; queries hit the underlying subgraph
     # schema directly.
     query_overrides:
