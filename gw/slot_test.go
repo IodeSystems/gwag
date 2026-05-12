@@ -27,7 +27,7 @@ func TestRegisterSlot_FreshInsert(t *testing.T) {
 	hash := [32]byte{1}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16)
+	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16, nil)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -48,10 +48,10 @@ func TestRegisterSlot_IdempotentSameKindHashCaps(t *testing.T) {
 	hash := [32]byte{2}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindOpenAPI, key("billing", "v3"), hash, 100, 10); err != nil {
+	if _, err := g.registerSlotLocked(slotKindOpenAPI, key("billing", "v3"), hash, 100, 10, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	existed, err := g.registerSlotLocked(slotKindOpenAPI, key("billing", "v3"), hash, 100, 10)
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key("billing", "v3"), hash, 100, 10, nil)
 	if err != nil {
 		t.Fatalf("second register: %v", err)
 	}
@@ -64,10 +64,10 @@ func TestRegisterSlot_VN_DiffHashRejected(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v2"), [32]byte{3}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v2"), [32]byte{3}, 0, 0, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	_, err := g.registerSlotLocked(slotKindProto, key("greeter", "v2"), [32]byte{4}, 0, 0)
+	_, err := g.registerSlotLocked(slotKindProto, key("greeter", "v2"), [32]byte{4}, 0, 0, nil)
 	if err == nil {
 		t.Fatalf("expected reject for vN diff-hash; got nil")
 	}
@@ -84,10 +84,10 @@ func TestRegisterSlot_VN_DiffCapsRejected(t *testing.T) {
 	hash := [32]byte{5}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	_, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16)
+	_, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16, nil)
 	if err == nil {
 		t.Fatalf("expected reject for vN diff-caps; got nil")
 	}
@@ -115,7 +115,7 @@ func TestRegisterSlot_VN_DiffCapsRejected(t *testing.T) {
 	}
 
 	// Subsequent rejection bumps the counter.
-	_, _ = g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 256, 32)
+	_, _ = g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 256, 32, nil)
 	sum = g.rejectedJoins[key("greeter", "v1")]
 	if sum.Count != 2 {
 		t.Errorf("Count after second rejection=%d want 2", sum.Count)
@@ -133,10 +133,10 @@ func TestRegisterSlot_RejectedJoinsClearedOnSlotRelease(t *testing.T) {
 	hash := [32]byte{11}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 64, 16, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16); err == nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16, nil); err == nil {
 		t.Fatalf("expected reject")
 	}
 	if g.rejectedJoins[key("greeter", "v1")] == nil {
@@ -155,7 +155,7 @@ func TestRegisterSlot_RejectedJoinsClearedOnSlotRelease(t *testing.T) {
 
 	// Fresh registration with a different cap profile — should
 	// succeed now that the slot is gone.
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 128, 16, nil); err != nil {
 		t.Fatalf("re-register after release: %v", err)
 	}
 	if g.rejectedJoins[key("greeter", "v1")] != nil {
@@ -168,14 +168,14 @@ func TestRegisterSlot_VN_CrossKindRejected(t *testing.T) {
 	hash := [32]byte{6}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), hash, 0, 0, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
 	// Attempting to re-occupy the slot as openapi at vN must reject —
 	// even with identical hash bytes (they wouldn't be the same
 	// schema, but the slot helper trusts the kind tag as the
 	// distinguishing axis).
-	_, err := g.registerSlotLocked(slotKindOpenAPI, key("greeter", "v1"), hash, 0, 0)
+	_, err := g.registerSlotLocked(slotKindOpenAPI, key("greeter", "v1"), hash, 0, 0, nil)
 	if err == nil {
 		t.Fatalf("expected reject for vN cross-kind; got nil")
 	}
@@ -188,10 +188,10 @@ func TestRegisterSlot_Unstable_SwapOnDiffHash(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{7}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{7}, 0, 0, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{8}, 0, 0)
+	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{8}, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("unstable swap: %v", err)
 	}
@@ -210,11 +210,11 @@ func TestRegisterSlot_Unstable_SwapAcrossKinds(t *testing.T) {
 	defer g.mu.Unlock()
 	// Pretend the prior occupant left per-kind state on the slot so
 	// we can verify evictSlotLocked clears it on the swap.
-	if _, err := g.registerSlotLocked(slotKindOpenAPI, key("greeter", "unstable"), [32]byte{9}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindOpenAPI, key("greeter", "unstable"), [32]byte{9}, 0, 0, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
 	g.slots[key("greeter", "unstable")].openapi = &openAPISource{}
-	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{10}, 0, 0)
+	existed, err := g.registerSlotLocked(slotKindProto, key("greeter", "unstable"), [32]byte{10}, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("cross-kind unstable swap: %v", err)
 	}
@@ -239,10 +239,10 @@ func TestRegisterSlot_AllowTier_DefaultAcceptsAll(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{20}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{20}, 0, 0, nil); err != nil {
 		t.Errorf("default policy rejected unstable: %v", err)
 	}
-	if _, err := g.registerSlotLocked(slotKindProto, key("b", "v1"), [32]byte{21}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("b", "v1"), [32]byte{21}, 0, 0, nil); err != nil {
 		t.Errorf("default policy rejected vN: %v", err)
 	}
 }
@@ -252,10 +252,10 @@ func TestRegisterSlot_AllowTier_VNOnly_RejectsUnstable(t *testing.T) {
 	t.Cleanup(g.Close)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{22}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{22}, 0, 0, nil); err != nil {
 		t.Errorf("vN allowed but rejected: %v", err)
 	}
-	_, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{23}, 0, 0)
+	_, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{23}, 0, 0, nil)
 	if err == nil {
 		t.Fatalf("expected reject for unstable when --allow-tier=vN; got nil")
 	}
@@ -272,10 +272,10 @@ func TestRegisterSlot_AllowTier_UnstableOnly_RejectsVN(t *testing.T) {
 	t.Cleanup(g.Close)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{24}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{24}, 0, 0, nil); err != nil {
 		t.Errorf("unstable allowed but rejected: %v", err)
 	}
-	_, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{25}, 0, 0)
+	_, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{25}, 0, 0, nil)
 	if err == nil {
 		t.Fatalf("expected reject for vN when --allow-tier=unstable; got nil")
 	}
@@ -292,10 +292,10 @@ func TestRegisterSlot_AllowTier_StableOnly_RejectsRegistrations(t *testing.T) {
 	t.Cleanup(g.Close)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{26}, 0, 0); err == nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "v1"), [32]byte{26}, 0, 0, nil); err == nil {
 		t.Errorf("expected reject for vN when --allow-tier=stable")
 	}
-	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{27}, 0, 0); err == nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("a", "unstable"), [32]byte{27}, 0, 0, nil); err == nil {
 		t.Errorf("expected reject for unstable when --allow-tier=stable")
 	}
 }
@@ -304,7 +304,7 @@ func TestReleaseSlotLocked_DropsIndex(t *testing.T) {
 	g := newSlotGateway(t)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), [32]byte{11}, 0, 0); err != nil {
+	if _, err := g.registerSlotLocked(slotKindProto, key("greeter", "v1"), [32]byte{11}, 0, 0, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	g.releaseSlotLocked(key("greeter", "v1"))

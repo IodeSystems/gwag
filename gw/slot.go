@@ -98,6 +98,19 @@ type slot struct {
 	openapi       *openAPISource
 	graphql       *graphQLSource
 	internalProto *internalProtoSource
+
+	// channelBindings is the slot-level canonical list of pub/sub
+	// channel→payload-type pairings carried by this slot's source
+	// (proto / internalproto only; openapi / graphql are always nil).
+	// Set once at `registerSlotLocked` time from the incoming
+	// FileDescriptor and read back at bake to stamp each IR Service
+	// and at cross-slot uniqueness check time to enforce the pre-1.0
+	// "two slots can't claim the same pattern" rule. A re-register
+	// that matches kind+hash+caps re-uses the prior bindings (hash
+	// captures the proto source bytes, which captures the bindings);
+	// an `unstable` swap installs fresh bindings alongside the new
+	// per-kind handle.
+	channelBindings []ir.ChannelBinding
 }
 
 // registerSlotLocked applies the §4 tier policy at registration time.
@@ -117,11 +130,11 @@ type slot struct {
 //     differentiator. vN is locked once registered.
 //
 // Caller holds g.mu.
-func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int) (existed bool, err error) {
+func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
 	if err := g.checkVersionTierAllowed(key.version); err != nil {
 		return false, err
 	}
-	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance)
+	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings)
 }
 
 // registerSlotLockedSkipTierCheck is the body of registerSlotLocked
@@ -130,12 +143,15 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 // gateway code, not operator/user registrations, so the tier policy
 // (which exists to constrain *user* registrations) doesn't apply.
 // Caller holds g.mu.
-func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int) (existed bool, err error) {
+func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
 	if g.slots == nil {
 		g.slots = map[poolKey]*slot{}
 	}
 	s, ok := g.slots[key]
 	if !ok {
+		if err := g.checkCrossSlotBindingsLocked(key, bindings); err != nil {
+			return false, err
+		}
 		g.slots[key] = &slot{
 			key:                       key,
 			kind:                      kind,
@@ -143,6 +159,7 @@ func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, ha
 			maxConcurrency:            maxConcurrency,
 			maxConcurrencyPerInstance: maxConcurrencyPerInstance,
 			deprecationReason:         g.deprecation[key],
+			channelBindings:           bindings,
 		}
 		return false, nil
 	}
@@ -168,6 +185,13 @@ func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, ha
 		g.recordRejectedJoinLocked(key, s, rej.Error(), maxConcurrency, maxConcurrencyPerInstance)
 		return false, rej
 	}
+	// unstable swap: validate cross-slot binding uniqueness *before*
+	// eviction so a rejected swap leaves the prior slot intact. The
+	// outgoing bindings (this slot's own) are skipped by the check
+	// since they're about to be replaced.
+	if err := g.checkCrossSlotBindingsLocked(key, bindings); err != nil {
+		return false, err
+	}
 	// unstable swap: evict the prior occupant — including its kind-
 	// specific storage if the kind changed — and install a fresh slot
 	// record. The caller's creation path then builds a fresh per-kind
@@ -182,8 +206,42 @@ func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, ha
 		hash:                      hash,
 		maxConcurrency:            maxConcurrency,
 		maxConcurrencyPerInstance: maxConcurrencyPerInstance,
+		channelBindings:           bindings,
 	}
 	return false, nil
+}
+
+// checkCrossSlotBindingsLocked enforces the pre-1.0 rule that no two
+// `(namespace, version)` slots can claim the same channel binding
+// pattern. Same-slot conflicts are out of scope here: the schema-hash
+// collision rule already rejects same-`vN` rebakes that change the
+// bound pattern set (changing a `(gwag.ps.binding)` option mutates the
+// proto source bytes, which mutates the hash), and `unstable` rebakes
+// install the new bindings wholesale.
+//
+// Caller holds g.mu. `key` is the slot key being registered; its own
+// existing bindings (if any) are skipped so an unstable swap doesn't
+// self-conflict on a pattern it already declares.
+func (g *Gateway) checkCrossSlotBindingsLocked(key poolKey, bindings []ir.ChannelBinding) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+	incoming := make(map[string]struct{}, len(bindings))
+	for _, b := range bindings {
+		incoming[b.Pattern] = struct{}{}
+	}
+	for otherKey, other := range g.slots {
+		if otherKey == key {
+			continue
+		}
+		for _, ob := range other.channelBindings {
+			if _, hit := incoming[ob.Pattern]; hit {
+				return fmt.Errorf("channel binding pattern %q already claimed by %s/%s; cannot also be claimed by %s/%s (cross-slot pattern conflict)",
+					ob.Pattern, otherKey.namespace, otherKey.version, key.namespace, key.version)
+			}
+		}
+	}
+	return nil
 }
 
 // evictSlotLocked drops the per-kind dispatch storage and IR cache
@@ -315,14 +373,12 @@ func (g *Gateway) internalProtoSlot(key poolKey) *internalProtoSource {
 // `s.openapi` / `s.graphql`) must be set before calling.
 func (g *Gateway) bakeSlotIRLocked(s *slot) {
 	var raw []*ir.Service
-	var bindings []ir.ChannelBinding
 	switch s.kind {
 	case slotKindProto:
 		if s.proto == nil {
 			return
 		}
 		raw = ir.IngestProto(s.proto.file)
-		bindings = extractChannelBindings(s.proto.file)
 	case slotKindOpenAPI:
 		if s.openapi == nil {
 			return
@@ -343,7 +399,6 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 			return
 		}
 		raw = ir.IngestProto(s.internalProto.file)
-		bindings = extractChannelBindings(s.internalProto.file)
 	default:
 		return
 	}
@@ -352,7 +407,7 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 		svc.Version = s.key.version
 		svc.Internal = g.isInternal(s.key.namespace)
 		svc.Deprecated = s.deprecationReason
-		svc.ChannelBindings = bindings
+		svc.ChannelBindings = s.channelBindings
 	}
 	raw = ir.HideInternal(raw)
 	g.applySchemaRewrites(raw)

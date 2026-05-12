@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -146,5 +148,148 @@ service Heartbeat {
 		if got != want {
 			t.Errorf("svc[%d].ChannelBindings[0] = %+v, want %+v", i, got, want)
 		}
+	}
+}
+
+// installInternalProtoWithBinding registers a single-message,
+// single-method internal-proto slot at (ns, ver) whose only message
+// declares `(gwag.ps.v1.binding) = { pattern }`. Helper used by the
+// cross-slot uniqueness tests below — keeps each test self-contained
+// without re-spelling the proto source.
+func installInternalProtoWithBinding(t *testing.T, g *Gateway, ns, ver, pattern string) {
+	t.Helper()
+	optionsBytes, err := os.ReadFile("proto/ps/v1/options.proto")
+	if err != nil {
+		t.Fatalf("read options.proto: %v", err)
+	}
+	pkg := strings.ReplaceAll(ns, "_", ".") + "." + ver
+	entry := fmt.Sprintf("entry_%s_%s.proto", ns, ver)
+	src := []byte(fmt.Sprintf(`syntax = "proto3";
+package %s;
+
+import "gw/proto/ps/v1/options.proto";
+
+message Event {
+  option (gwag.ps.v1.binding) = { pattern: %q };
+  string id = 1;
+}
+
+service S {
+  rpc Echo(Event) returns (Event);
+}
+`, pkg, pattern))
+	fd, err := compileProtoBytes(entry, src, map[string][]byte{
+		"gw/proto/ps/v1/options.proto": optionsBytes,
+	})
+	if err != nil {
+		t.Fatalf("compile %s/%s: %v", ns, ver, err)
+	}
+	handlers := map[string]InternalProtoHandler{
+		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+			return req, nil
+		},
+	}
+	if err := g.addInternalProtoSlotLocked(ns, ver, fd, src, handlers, nil); err != nil {
+		t.Fatalf("addInternalProtoSlotLocked(%s/%s): %v", ns, ver, err)
+	}
+}
+
+// TestRegisterSlot_CrossSlotBindingConflict_Rejected pins the pre-1.0
+// rule that two different `(namespace, version)` slots cannot both
+// declare the same channel binding pattern. The conflict is hard-
+// rejected at slot registration; the prior occupant stays intact.
+func TestRegisterSlot_CrossSlotBindingConflict_Rejected(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.*.update")
+
+	optionsBytes, err := os.ReadFile("proto/ps/v1/options.proto")
+	if err != nil {
+		t.Fatalf("read options.proto: %v", err)
+	}
+	// Different namespace/version, same pattern → must reject.
+	conflictSrc := []byte(`syntax = "proto3";
+package shipments.v1;
+
+import "gw/proto/ps/v1/options.proto";
+
+message Update {
+  option (gwag.ps.v1.binding) = { pattern: "events.orders.*.update" };
+  string id = 1;
+}
+
+service S { rpc Echo(Update) returns (Update); }
+`)
+	fd, err := compileProtoBytes("conflict.proto", conflictSrc, map[string][]byte{
+		"gw/proto/ps/v1/options.proto": optionsBytes,
+	})
+	if err != nil {
+		t.Fatalf("compile conflict: %v", err)
+	}
+	handlers := map[string]InternalProtoHandler{
+		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+			return req, nil
+		},
+	}
+	err = g.addInternalProtoSlotLocked("shipments", "v1", fd, conflictSrc, handlers, nil)
+	if err == nil {
+		t.Fatal("expected cross-slot binding conflict reject; got nil")
+	}
+	if !strings.Contains(err.Error(), "events.orders.*.update") {
+		t.Errorf("error %q missing conflicting pattern", err.Error())
+	}
+	if !strings.Contains(err.Error(), "already claimed by orders/v1") {
+		t.Errorf("error %q missing prior-claimant attribution", err.Error())
+	}
+	if _, ok := g.slots[poolKey{namespace: "shipments", version: "v1"}]; ok {
+		t.Error("rejected slot was inserted anyway")
+	}
+	// Prior slot should still own its binding.
+	s := g.slots[poolKey{namespace: "orders", version: "v1"}]
+	if s == nil || len(s.channelBindings) != 1 || s.channelBindings[0].Pattern != "events.orders.*.update" {
+		t.Errorf("prior slot lost bindings after rejection: %+v", s)
+	}
+}
+
+// TestRegisterSlot_CrossSlotBinding_NoConflictWhenPatternsDiffer pins
+// that two slots with distinct patterns coexist — the check fires
+// only on overlap.
+func TestRegisterSlot_CrossSlotBinding_NoConflictWhenPatternsDiffer(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.>")
+	installInternalProtoWithBinding(t, g, "shipments", "v1", "events.shipments.>")
+	if g.slots[poolKey{namespace: "shipments", version: "v1"}] == nil {
+		t.Fatal("second slot not installed despite distinct pattern")
+	}
+}
+
+// TestRegisterSlot_CrossSlotBindingReleased_ClearsClaim pins that
+// when a slot's last replica drops (`releaseSlotLocked`), its bindings
+// release with it, so a fresh slot can claim the freed pattern.
+func TestRegisterSlot_CrossSlotBindingReleased_ClearsClaim(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.>")
+	g.mu.Lock()
+	g.releaseSlotLocked(poolKey{namespace: "orders", version: "v1"})
+	g.mu.Unlock()
+	// With the slot released, a different namespace can adopt the pattern.
+	installInternalProtoWithBinding(t, g, "shipments", "v1", "events.orders.>")
+	s := g.slots[poolKey{namespace: "shipments", version: "v1"}]
+	if s == nil || len(s.channelBindings) != 1 {
+		t.Fatalf("shipments/v1 did not install after orders/v1 released: %+v", s)
+	}
+}
+
+// TestRegisterSlot_CrossSlotBinding_UnstableSelfSwap pins that an
+// unstable slot re-registering with the SAME pattern is not a self-
+// conflict — the registration is a no-op (same hash) or a swap whose
+// own bindings are excluded from the cross-slot check.
+func TestRegisterSlot_CrossSlotBinding_UnstableSelfSwap(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "unstable", "events.orders.>")
+	// Re-register the same slot with the same proto → hash match, idempotent.
+	installInternalProtoWithBinding(t, g, "orders", "unstable", "events.orders.>")
+	s := g.slots[poolKey{namespace: "orders", version: "unstable"}]
+	if s == nil || len(s.channelBindings) != 1 || s.channelBindings[0].Pattern != "events.orders.>" {
+		t.Fatalf("self-swap clobbered slot: %+v", s)
 	}
 }

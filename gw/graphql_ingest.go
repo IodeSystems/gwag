@@ -76,7 +76,7 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		g.internal[ns] = true
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0)
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil)
 	if err != nil {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
@@ -143,7 +143,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		httpClient = http.DefaultClient
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0)
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil)
 	if err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}

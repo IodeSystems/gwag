@@ -102,7 +102,7 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		httpClient = g.cfg.openAPIHTTP
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, sc.maxConcurrency, sc.maxConcurrencyPerInstance)
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, sc.maxConcurrency, sc.maxConcurrencyPerInstance, nil)
 	if err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", label, err)
 	}
@@ -383,7 +383,7 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		addr = "http://" + addr
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, maxConcurrency, maxConcurrencyPerInstance)
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, maxConcurrency, maxConcurrencyPerInstance, nil)
 	if err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
