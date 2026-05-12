@@ -22,6 +22,7 @@ require (
 )
 
 require (
+	connectrpc.com/connect v1.19.2 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.7.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
