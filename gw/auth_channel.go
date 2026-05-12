@@ -139,6 +139,9 @@ func (g *Gateway) checkChannelAuth(ctx context.Context, channel string, wildcard
 	if tier == ChannelAuthOpen {
 		return nil
 	}
+	if g.cfg.subAuth.Insecure {
+		return nil
+	}
 	if err := g.verifyChannelHMAC(channel, hmacB64, ts); err != nil {
 		return err
 	}

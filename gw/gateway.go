@@ -30,6 +30,12 @@ import (
 type Gateway struct {
 	mu sync.Mutex
 
+	// stableChanged is a broadcast channel signaled whenever stableVN
+	// changes. Tests select on it with a context deadline to wait for
+	// logical convergence instead of polling with time.Sleep.
+	// Unbuffered — the broadcast helper drains safely.
+	stableChanged chan struct{}
+
 	// slots is the §4 single-occupant index per (namespace, version).
 	// Every registration goes through `registerSlotLocked` first to
 	// enforce the tier policy (unstable swap / vN immutability /
@@ -177,6 +183,11 @@ type Gateway struct {
 	// "Loud surface for slot-policy mismatches on `vN` joins". Caller
 	// holds g.mu.
 	rejectedJoins map[poolKey]*rejectedJoinSummary
+
+	// channelBindingIndex aggregates channel→payload-type bindings
+	// across all slots. Rebuilt on every assembleLocked; atomic-
+	// swapped so the psPub hot path reads without g.mu.
+	channelBindingIndex atomic.Pointer[channelBindingIndex]
 }
 
 // rejectedJoinSummary captures the most recent rejection plus a
@@ -764,6 +775,7 @@ func New(opts ...Option) *Gateway {
 		lifeCancel:  cancel,
 		dispatchers: ir.NewDispatchRegistry(),
 		stats:       stats,
+		stableChanged: make(chan struct{}, 16),
 	}
 	// WithCallerIDDelegated needs the live *Gateway to look up the
 	// _caller_auth/v1 pool at call time, so the extractor wrapper is
@@ -807,6 +819,9 @@ func New(opts ...Option) *Gateway {
 	if cfg.cluster != nil {
 		if err := g.installPubSubSlot(); err != nil {
 			panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))
+		}
+		if cfg.subAuth.Insecure {
+			cfg.cluster.Server.Warnf("gateway: subscriptions are in insecure mode — any client can publish and subscribe without HMAC verification")
 		}
 	}
 	return g

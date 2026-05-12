@@ -105,6 +105,7 @@ export type AdminMutationNamespaceUndeprecateArgs = {
 export type AdminQueryNamespace = {
   __typename?: 'AdminQueryNamespace';
   deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
+  listBindings: Maybe<Admin_BindingsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
@@ -223,6 +224,7 @@ export type AdminStableMutationNamespaceUndeprecateArgs = {
 export type AdminStableQueryNamespace = {
   __typename?: 'AdminStableQueryNamespace';
   deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
+  listBindings: Maybe<Admin_BindingsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
@@ -339,6 +341,7 @@ export type AdminV1MutationNamespaceUndeprecateArgs = {
 export type AdminV1QueryNamespace = {
   __typename?: 'AdminV1QueryNamespace';
   deprecatedStats: Maybe<Admin_DeprecatedStatsOutBody>;
+  listBindings: Maybe<Admin_BindingsOutBody>;
   listChannels: Maybe<Admin_ChannelsOutBody>;
   listInjectors: Maybe<Admin_InjectorsOutBody>;
   listPeers: Maybe<Admin_PeersOutBody>;
@@ -380,6 +383,19 @@ export type Mutation = {
 export type Query = {
   __typename?: 'Query';
   admin: AdminQueryNamespace;
+};
+
+export type Admin_BindingInfo = {
+  __typename?: 'admin_BindingInfo';
+  messageFQN: Scalars['String']['output'];
+  namespace: Scalars['String']['output'];
+  pattern: Scalars['String']['output'];
+  version: Scalars['String']['output'];
+};
+
+export type Admin_BindingsOutBody = {
+  __typename?: 'admin_BindingsOutBody';
+  bindings: Array<Maybe<Admin_BindingInfo>>;
 };
 
 export type Admin_CallerStatsRow = {

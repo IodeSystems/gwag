@@ -57,6 +57,10 @@
 #                              (regenerates docs/perf.md). Builds on
 #                              demand if .run/bin/perf missing.
 #   bench logs NAME           tail .run/logs/<NAME>.log
+#   bench pub --channel SUB --payload MSG
+#                             publish a message via ps.pub (GraphQL)
+#   bench sub --channel SUB   subscribe to ps.sub via WebSocket,
+#                             print events as JSON lines
 #
 # State lives under bench/.run/. See bench/README.md for the full
 # layout.
@@ -204,6 +208,7 @@ EOF
             --node-name "$name" \
             --data-dir "$data" \
             --no-context-write \
+            --insecure-subscribe \
             $peers \
             > "$LOG_DIR/$name.log" 2>&1 &
         local pid=$!
@@ -234,6 +239,8 @@ EOF
     # --pprof is on for the bench gateway by default — /debug/pprof
     # is admin-bearer gated, and the bench stack is local dev, so the
     # leak risk is moot. `bin/bench perf profile` relies on it.
+    # --insecure-subscribe enables ps.pub/ps.sub from the GraphQL UI
+    # without HMAC friction — the bench is a local dev stack.
     # shellcheck disable=SC2086
     "$BIN_DIR/gateway" \
         --node-name "$name" \
@@ -241,6 +248,7 @@ EOF
         --nats-listen ":$nats_listen" --nats-cluster ":$nats_cluster" \
         --nats-data "$data" \
         --pprof \
+        --insecure-subscribe \
         $peers \
         > "$LOG_DIR/$name.log" 2>&1 &
     local pid=$!
@@ -608,6 +616,88 @@ cmd_logs() {
 }
 
 # -----------------------------------------------------------------
+# Pub/Sub helpers
+# -----------------------------------------------------------------
+
+# cmd_pub publishes a message to a ps channel via the gateway's
+# GraphQL endpoint. ps.pub renders under Query (not Mutation) because
+# the proto ingester classifies unary RPCs as OpQuery. Works in
+# insecure-subscribe mode (default for bench) or with HMAC auth when
+# the gateway has --subscribe-secret.
+cmd_pub() {
+    local channel="" payload="" gateway=""
+    while (($#)); do
+        case $1 in
+            --channel) channel=$2; shift 2 ;;
+            --payload) payload=$2; shift 2 ;;
+            --gateway) gateway=$2; shift 2 ;;
+            -h|--help)
+                echo "usage: bench pub --channel SUBJECT --payload PAYLOAD [--gateway GW]"
+                echo ""
+                echo "Publish a message to a ps.pub channel via GraphQL."
+                echo ""
+                echo "Example:"
+                echo "  bin/bench pub --channel events.test --payload 'hello world'"
+                exit 0
+                ;;
+            *) echo "unknown arg: $1" >&2; exit 1 ;;
+        esac
+    done
+    [[ -n $channel ]] || { echo "pub: --channel required" >&2; exit 1; }
+    [[ -n $payload ]] || { echo "pub: --payload required" >&2; exit 1; }
+    gateway=$(resolve_gateway "$gateway") || exit 1
+    local http_port; http_port=$(load_env "$GW_DIR/$gateway.env"; echo "$HTTP_PORT")
+    # JSON-escape channel and payload to prevent injection.
+    local esc_channel esc_payload
+    esc_channel=$(printf '%s' "$channel" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g')
+    esc_payload=$(printf '%s' "$payload" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g')
+    curl -s -X POST "http://localhost:$http_port/api/graphql" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"{ ps { pub(channel: \\\"${esc_channel}\\\", payload: \\\"${esc_payload}\\\") { __typename } } }\"}"
+    echo
+}
+
+# cmd_sub subscribes to a ps channel via GraphQL WebSocket
+# (graphql-transport-ws protocol). Runs until interrupted or --timeout
+# expires. Each event is printed as a JSON line to stdout.
+cmd_sub() {
+    local channel="" gateway="" timeout=""
+    while (($#)); do
+        case $1 in
+            --channel) channel=$2; shift 2 ;;
+            --gateway) gateway=$2; shift 2 ;;
+            --timeout) timeout=$2; shift 2 ;;
+            -h|--help)
+                echo "usage: bench sub --channel SUBJECT [--gateway GW] [--timeout SECS]"
+                echo ""
+                echo "Subscribe to a ps.sub channel via GraphQL WebSocket."
+                echo "Events are printed as JSON lines to stdout."
+                echo "NATS wildcards are supported (e.g. events.test.>)."
+                echo ""
+                echo "Example:"
+                echo "  bin/bench sub --channel events.test.>"
+                exit 0
+                ;;
+            *) echo "unknown arg: $1" >&2; exit 1 ;;
+        esac
+    done
+    [[ -n $channel ]] || { echo "sub: --channel required" >&2; exit 1; }
+    gateway=$(resolve_gateway "$gateway") || exit 1
+    local http_port; http_port=$(load_env "$GW_DIR/$gateway.env"; echo "$HTTP_PORT")
+    local bin="$RUN_DIR/bin/sub"
+    if [[ ! -x $bin ]]; then
+        echo "==> building sub client (.run/bin/sub)"
+        mkdir -p "$RUN_DIR/bin"
+        (cd "$REPO_DIR" && go build -o "$bin" ./bench/cmd/sub)
+    fi
+    local args=(--target "http://localhost:$http_port" --channel "$channel")
+    if [[ -n $timeout ]]; then
+        args+=(--timeout "$timeout")
+    fi
+    exec "$bin" "${args[@]}"
+}
+
+# -----------------------------------------------------------------
 # Dispatch
 # -----------------------------------------------------------------
 
@@ -623,6 +713,8 @@ case "$sub" in
     traffic)  cmd_traffic "$@" ;;
     perf)     cmd_perf "$@" ;;
     logs)     cmd_logs "$@" ;;
+    pub)      cmd_pub "$@" ;;
+    sub)      cmd_sub "$@" ;;
     -h|--help|"") usage 0 ;;
     *) echo "unknown subcommand: $sub" >&2; usage ;;
 esac

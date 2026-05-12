@@ -189,3 +189,184 @@ func TestPubSub_NoClusterSkipsInstall(t *testing.T) {
 		t.Error("Sub dispatcher registered without cluster")
 	}
 }
+
+// TestPubSub_PayloadTypeStamped pins that ps.pub stamps
+// Event.payload_type with the matching binding's MessageFQN when a
+// channel binding registry entry covers the publish channel.
+func TestPubSub_PayloadTypeStamped(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+	)
+	t.Cleanup(g.Close)
+
+	// Manually install a binding index entry so ps.pub has something
+	// to look up. In production this comes from a slot's channelBindings
+	// aggregated by rebuildChannelBindingIndexLocked.
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	// Store binding index after assembleLocked (which rebuilds from
+	// slots; no slot here has bindings, so assemble would clear it).
+	g.channelBindingIndex.Store(&channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "example.events.v1.OrderUpdate", namespace: "orders", version: "v1"},
+		},
+	})
+	g.mu.Unlock()
+
+	pubSID := ir.MakeSchemaID(psNamespace, psVersion, "Pub")
+	pub := g.dispatchers.Get(pubSID)
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	subSID := ir.MakeSchemaID(psNamespace, psVersion, "Sub")
+	sub := g.dispatchers.Get(subSID)
+	if sub == nil {
+		t.Fatal("no Sub dispatcher")
+	}
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	t.Cleanup(subCancel)
+
+	channel := "events.orders.42.update"
+	src, err := sub.Dispatch(subCtx, map[string]any{"channel": channel})
+	if err != nil {
+		t.Fatalf("Sub dispatch: %v", err)
+	}
+	events, ok := src.(chan any)
+	if !ok {
+		t.Fatalf("Sub returned %T, want chan any", src)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for cluster.Server.NumSubscriptions() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if _, err := pub.Dispatch(context.Background(), map[string]any{
+		"channel": channel,
+		"payload": `{"order_id":"42"}`,
+	}); err != nil {
+		t.Fatalf("Pub dispatch: %v", err)
+	}
+
+	select {
+	case raw := <-events:
+		ev, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("event %T, want map[string]any", raw)
+		}
+		if got := ev["payloadType"]; got != "example.events.v1.OrderUpdate" {
+			t.Errorf("event.payloadType = %v, want example.events.v1.OrderUpdate", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestPubSub_PayloadTypeEmpty_NoBinding pins that when no binding
+// matches the channel, payloadType is delivered empty (proto3 default
+// string "" is not serialized by messageToMap, so the key is absent
+// from the resulting map).
+func TestPubSub_PayloadTypeEmpty_NoBinding(t *testing.T) {
+	dir := t.TempDir()
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "pubsub-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       dir,
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	g := New(
+		WithCluster(cluster),
+		WithoutMetrics(),
+		WithoutBackpressure(),
+		WithChannelAuth("events.>", ChannelAuthOpen),
+	)
+	t.Cleanup(g.Close)
+
+	g.mu.Lock()
+	if err := g.assembleLocked(); err != nil {
+		g.mu.Unlock()
+		t.Fatalf("assembleLocked: %v", err)
+	}
+	g.mu.Unlock()
+
+	pubSID := ir.MakeSchemaID(psNamespace, psVersion, "Pub")
+	pub := g.dispatchers.Get(pubSID)
+	if pub == nil {
+		t.Fatal("no Pub dispatcher")
+	}
+
+	subSID := ir.MakeSchemaID(psNamespace, psVersion, "Sub")
+	sub := g.dispatchers.Get(subSID)
+	if sub == nil {
+		t.Fatal("no Sub dispatcher")
+	}
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	t.Cleanup(subCancel)
+
+	channel := "events.unknown.foo"
+	src, err := sub.Dispatch(subCtx, map[string]any{"channel": channel})
+	if err != nil {
+		t.Fatalf("Sub dispatch: %v", err)
+	}
+	events, ok := src.(chan any)
+	if !ok {
+		t.Fatalf("Sub returned %T, want chan any", src)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for cluster.Server.NumSubscriptions() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if _, err := pub.Dispatch(context.Background(), map[string]any{
+		"channel": channel,
+		"payload": "test",
+	}); err != nil {
+		t.Fatalf("Pub dispatch: %v", err)
+	}
+
+	select {
+	case raw := <-events:
+		ev, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("event %T, want map[string]any", raw)
+		}
+		// proto3 default string "" is not serialized by messageToMap,
+		// so the key is absent (nil) when no binding matches.
+		if got := ev["payloadType"]; got != nil {
+			t.Errorf("event.payloadType = %v, want nil (no matching binding)", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}

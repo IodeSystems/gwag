@@ -2,7 +2,11 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -189,9 +193,12 @@ service S {
 			return req, nil
 		},
 	}
+	g.mu.Lock()
 	if err := g.addInternalProtoSlotLocked(ns, ver, fd, src, handlers, nil); err != nil {
+		g.mu.Unlock()
 		t.Fatalf("addInternalProtoSlotLocked(%s/%s): %v", ns, ver, err)
 	}
+	g.mu.Unlock()
 }
 
 // TestRegisterSlot_CrossSlotBindingConflict_Rejected pins the pre-1.0
@@ -230,7 +237,9 @@ service S { rpc Echo(Update) returns (Update); }
 			return req, nil
 		},
 	}
+	g.mu.Lock()
 	err = g.addInternalProtoSlotLocked("shipments", "v1", fd, conflictSrc, handlers, nil)
+	g.mu.Unlock()
 	if err == nil {
 		t.Fatal("expected cross-slot binding conflict reject; got nil")
 	}
@@ -292,4 +301,214 @@ func TestRegisterSlot_CrossSlotBinding_UnstableSelfSwap(t *testing.T) {
 	if s == nil || len(s.channelBindings) != 1 || s.channelBindings[0].Pattern != "events.orders.>" {
 		t.Fatalf("self-swap clobbered slot: %+v", s)
 	}
+}
+
+// TestRebuildChannelBindingIndex_AggregatesAcrossSlots pins that
+// rebuildChannelBindingIndexLocked collects bindings from every
+// registered slot into the gateway-wide index.
+func TestRebuildChannelBindingIndex_AggregatesAcrossSlots(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.*.update")
+	installInternalProtoWithBinding(t, g, "shipments", "v1", "events.shipments.>")
+
+	g.mu.Lock()
+	g.rebuildChannelBindingIndexLocked()
+	g.mu.Unlock()
+
+	entries := g.channelBindingIndexSnapshot()
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2: %#v", len(entries), entries)
+	}
+
+	// Check both entries are present.
+	found := map[string]channelBindingEntry{}
+	for _, e := range entries {
+		found[e.pattern] = e
+	}
+	if e, ok := found["events.orders.*.update"]; !ok {
+		t.Error("missing orders binding")
+	} else {
+		if e.namespace != "orders" || e.version != "v1" {
+			t.Errorf("orders binding ns/ver = %s/%s, want orders/v1", e.namespace, e.version)
+		}
+		if e.messageFQN != "orders.v1.Event" {
+			t.Errorf("orders binding messageFQN = %s, want orders.v1.Event", e.messageFQN)
+		}
+	}
+	if e, ok := found["events.shipments.>"]; !ok {
+		t.Error("missing shipments binding")
+	} else {
+		if e.namespace != "shipments" || e.version != "v1" {
+			t.Errorf("shipments binding ns/ver = %s/%s, want shipments/v1", e.namespace, e.version)
+		}
+	}
+}
+
+// TestRebuildChannelBindingIndex_SlotReleaseRemovesBinding pins that
+// when a slot is released, its bindings disappear from the index
+// after the next rebuild.
+func TestRebuildChannelBindingIndex_SlotReleaseRemovesBinding(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.>")
+	installInternalProtoWithBinding(t, g, "shipments", "v1", "events.shipments.>")
+
+	g.mu.Lock()
+	g.rebuildChannelBindingIndexLocked()
+	g.mu.Unlock()
+
+	if got := len(g.channelBindingIndexSnapshot()); got != 2 {
+		t.Fatalf("initial index has %d entries, want 2", got)
+	}
+
+	// Release orders slot.
+	g.mu.Lock()
+	g.releaseSlotLocked(poolKey{namespace: "orders", version: "v1"})
+	g.rebuildChannelBindingIndexLocked()
+	g.mu.Unlock()
+
+	entries := g.channelBindingIndexSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("after release got %d entries, want 1: %#v", len(entries), entries)
+	}
+	if entries[0].pattern != "events.shipments.>" {
+		t.Errorf("remaining binding = %q, want events.shipments.>", entries[0].pattern)
+	}
+}
+
+// TestChannelBindingIndex_LookupPayloadType pins the pattern matching
+// logic used by psPub to stamp Event.payload_type.
+func TestChannelBindingIndex_LookupPayloadType(t *testing.T) {
+	idx := &channelBindingIndex{
+		entries: []channelBindingEntry{
+			{pattern: "events.orders.*.update", messageFQN: "example.OrderUpdate", namespace: "orders", version: "v1"},
+			{pattern: "events.shipments.>", messageFQN: "example.ShipmentEvent", namespace: "shipments", version: "v1"},
+			{pattern: "ticks", messageFQN: "example.Tick", namespace: "clock", version: "v1"},
+		},
+	}
+
+	tests := []struct {
+		channel string
+		want    string
+	}{
+		{"events.orders.42.update", "example.OrderUpdate"},
+		{"events.orders.999.update", "example.OrderUpdate"},
+		{"events.shipments.created", "example.ShipmentEvent"},
+		{"events.shipments.legs.1.arrive", "example.ShipmentEvent"},
+		{"ticks", "example.Tick"},
+		{"events.unknown.foo", ""},
+	}
+	for _, tc := range tests {
+		got := idx.lookupPayloadType(tc.channel)
+		if got != tc.want {
+			t.Errorf("lookupPayloadType(%q) = %q, want %q", tc.channel, got, tc.want)
+		}
+	}
+}
+
+// TestChannelBindingIndex_LookupPayloadType_NilIndex pins the nil-safe
+// path — a gateway that has never assembled returns "" for any channel.
+func TestChannelBindingIndex_LookupPayloadType_NilIndex(t *testing.T) {
+	var idx *channelBindingIndex
+	if got := idx.lookupPayloadType("anything"); got != "" {
+		t.Errorf("nil index lookup returned %q, want empty", got)
+	}
+}
+
+// TestAdminBindings_Endpoint pins the GET /admin/bindings huma
+// endpoint: it returns the aggregated binding entries with namespace,
+// version, pattern, and messageFQN.
+func TestAdminBindings_Endpoint(t *testing.T) {
+	g := newSlotGateway(t)
+	installInternalProtoWithBinding(t, g, "orders", "v1", "events.orders.*.update")
+	installInternalProtoWithBinding(t, g, "shipments", "v1", "events.shipments.>")
+
+	// Rebuild the index so the admin endpoint has data.
+	g.mu.Lock()
+	g.rebuildChannelBindingIndexLocked()
+	g.mu.Unlock()
+
+	mux, _, err := g.AdminHumaRouter()
+	if err != nil {
+		t.Fatalf("AdminHumaRouter: %v", err)
+	}
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := httpGet(srv.URL + "/admin/bindings")
+	if err != nil {
+		t.Fatalf("GET /admin/bindings: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	// Huma wraps response with $schema at top level; use flat struct
+	// to match the actual JSON shape (same pattern as
+	// TestAdminHuma_Channels_EmptyWhenNoBroker).
+	var out struct {
+		Bindings []bindingInfo `json:"bindings"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, body)
+	}
+	if len(out.Bindings) != 2 {
+		t.Fatalf("got %d bindings, want 2: %s", len(out.Bindings), body)
+	}
+
+	patterns := map[string]bindingInfo{}
+	for _, b := range out.Bindings {
+		patterns[b.Pattern] = b
+	}
+	if b, ok := patterns["events.orders.*.update"]; !ok {
+		t.Error("missing orders binding in admin response")
+	} else {
+		if b.Namespace != "orders" || b.Version != "v1" {
+			t.Errorf("orders binding ns/ver = %s/%s, want orders/v1", b.Namespace, b.Version)
+		}
+	}
+	if b, ok := patterns["events.shipments.>"]; !ok {
+		t.Error("missing shipments binding in admin response")
+	} else {
+		if b.Namespace != "shipments" || b.Version != "v1" {
+			t.Errorf("shipments binding ns/ver = %s/%s, want shipments/v1", b.Namespace, b.Version)
+		}
+	}
+}
+
+// TestAdminBindings_Empty pins the empty case: no slots with bindings
+// returns an empty array (not null).
+func TestAdminBindings_Empty(t *testing.T) {
+	g := newSlotGateway(t)
+
+	mux, _, err := g.AdminHumaRouter()
+	if err != nil {
+		t.Fatalf("AdminHumaRouter: %v", err)
+	}
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := httpGet(srv.URL + "/admin/bindings")
+	if err != nil {
+		t.Fatalf("GET /admin/bindings: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var out struct {
+		Bindings []bindingInfo `json:"bindings"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, body)
+	}
+	if out.Bindings == nil {
+		t.Error("bindings is nil, want empty slice")
+	}
+	if len(out.Bindings) != 0 {
+		t.Errorf("got %d bindings, want 0", len(out.Bindings))
+	}
+}
+
+func httpGet(url string) (*http.Response, error) {
+	return http.Get(url)
 }

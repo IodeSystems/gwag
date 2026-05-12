@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -118,12 +119,17 @@ func startTwoNodeCluster(t *testing.T) (a, b *clusterNode) {
 
 	// Wait for each side to see the other in its live peer set —
 	// that's how we know the watch loops have caught up.
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
+	peerCtx, peerCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer peerCancel()
+	for peerCtx.Err() == nil {
 		if len(a.gw.peers.LivePeers()) >= 2 && len(b.gw.peers.LivePeers()) >= 2 {
 			return a, b
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-peerCtx.Done():
+			break
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	t.Fatalf("peer convergence timeout: A live=%v B live=%v",
 		a.gw.peers.LivePeers(), b.gw.peers.LivePeers())
@@ -147,15 +153,20 @@ func registerGreeterOn(t *testing.T, n *clusterNode, serviceAddr string) {
 			},
 		},
 	}
-	deadline := time.Now().Add(30 * time.Second)
+	regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer regCancel()
 	var lastErr error
-	for time.Now().Before(deadline) {
-		resp, err := n.gw.ControlPlane().Register(context.Background(), req)
+	for regCtx.Err() == nil {
+		resp, err := n.gw.ControlPlane().Register(regCtx, req)
 		if err == nil && resp.GetRegistrationId() != "" {
 			return
 		}
 		lastErr = err
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-regCtx.Done():
+			break
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	t.Fatalf("Register never succeeded: %v", lastErr)
 }
@@ -164,18 +175,66 @@ func registerGreeterOn(t *testing.T, n *clusterNode, serviceAddr string) {
 // (ns, ver). Returns the pool or fatals.
 func waitForPool(t *testing.T, gw *Gateway, ns, ver string, timeout time.Duration) *pool {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
 		gw.mu.Lock()
 		p := gw.protoSlot(poolKey{namespace: ns, version: ver})
 		gw.mu.Unlock()
 		if p != nil && p.replicaCount() > 0 {
 			return p
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("pool %s/%s never appeared on gateway (timeout %v)", ns, ver, timeout)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	t.Fatalf("pool %s/%s never appeared on gateway", ns, ver)
-	return nil
+}
+
+// waitForStableConvergence waits until predicate(gw.stableVN) returns
+// true on all given gateways. It listens on each gateway's
+// stableChanged channel so it wakes up only when state actually
+// changes, instead of busy-polling with time.Sleep.
+func waitForStableConvergence(t *testing.T, timeout time.Duration, gateways []*Gateway, predicate func(map[string]int) bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		ok := true
+		for _, gw := range gateways {
+			gw.mu.Lock()
+			snap := make(map[string]int, len(gw.stableVN))
+			for k, v := range gw.stableVN {
+				snap[k] = v
+			}
+			gw.mu.Unlock()
+			if !predicate(snap) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			var snaps []string
+			for i, gw := range gateways {
+				gw.mu.Lock()
+				snaps = append(snaps, fmt.Sprintf("gw[%d]=%v", i, gw.stableVN))
+				gw.mu.Unlock()
+			}
+			t.Fatalf("stable convergence timeout (%v): %s", timeout, strings.Join(snaps, ", "))
+		case <-time.After(100 * time.Millisecond):
+			for _, gw := range gateways {
+				select {
+				case <-gw.stableChanged:
+				default:
+				}
+			}
+		}
+	}
 }
 
 func startGreeterServer(t *testing.T) (*fakeGreeterServer, string) {
@@ -193,7 +252,11 @@ func startGreeterServer(t *testing.T) (*fakeGreeterServer, string) {
 }
 
 func TestClusterE2E_CrossGatewayDispatch(t *testing.T) {
-	a, b := startTwoNodeCluster(t)
+	resetSharedCluster(t)
+	_, _ = getSharedCluster(t)
+	a := newSharedClusterNode(t, testCluster.a)
+	b := newSharedClusterNode(t, testCluster.b)
+	waitForPeers(t, a.gw, b.gw)
 	greeter, greeterAddr := startGreeterServer(t)
 
 	// Register the service against gateway A. KV write replicates

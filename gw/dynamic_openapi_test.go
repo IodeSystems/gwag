@@ -182,7 +182,11 @@ func TestDynamicOpenAPI_NeitherSpecNorDescriptorRejected(t *testing.T) {
 // the registry KV reconciler — the cluster equivalent of the proto
 // cross-gateway test.
 func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
-	a, b := startTwoNodeCluster(t)
+	resetSharedCluster(t)
+	_, _ = getSharedCluster(t)
+	a := newSharedClusterNode(t, testCluster.a)
+	b := newSharedClusterNode(t, testCluster.b)
+	waitForPeers(t, a.gw, b.gw)
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -191,10 +195,11 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	// Register on A.
-	deadline := time.Now().Add(30 * time.Second)
+	regCtx, regCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer regCancel()
 	var lastErr error
-	for time.Now().Before(deadline) {
-		_, err := a.gw.ControlPlane().Register(context.Background(), &cpv1.RegisterRequest{
+	for regCtx.Err() == nil {
+		_, err := a.gw.ControlPlane().Register(regCtx, &cpv1.RegisterRequest{
 			Addr: backend.URL,
 			Services: []*cpv1.ServiceBinding{{
 				Namespace:   "billing",
@@ -206,29 +211,18 @@ func TestDynamicOpenAPI_CrossGatewayDispatch(t *testing.T) {
 			break
 		}
 		lastErr = err
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-regCtx.Done():
+			break
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	if lastErr != nil {
 		t.Fatalf("Register: %v", lastErr)
 	}
 
 	// Wait for B's reconciler to install the openAPISource locally.
-	deadline = time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		b.gw.mu.Lock()
-		ok := b.gw.openAPISlot(poolKey{namespace: "billing", version: "v1"}) != nil
-		b.gw.mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	b.gw.mu.Lock()
-	ok := b.gw.openAPISlot(poolKey{namespace: "billing", version: "v1"}) != nil
-	b.gw.mu.Unlock()
-	if !ok {
-		t.Fatal("billing openAPISource never appeared on gateway B")
-	}
+	waitForSlotTest(t, b.gw, "billing", "v1", 15*time.Second)
 
 	// Query through B → dispatches HTTP to backend.
 	got := postGraphQLForDynamic(t, b.httpSrv.URL,

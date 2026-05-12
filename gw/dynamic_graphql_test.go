@@ -300,7 +300,11 @@ func TestDynamicGraphQL_MultiReplica(t *testing.T) {
 // pick up the introspection bytes from KV and create the source so a
 // query through B forwards to the upstream.
 func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
-	a, b := startTwoNodeCluster(t)
+	resetSharedCluster(t)
+	_, _ = getSharedCluster(t)
+	a := newSharedClusterNode(t, testCluster.a)
+	b := newSharedClusterNode(t, testCluster.b)
+	waitForPeers(t, a.gw, b.gw)
 
 	backend, _ := dynamicGraphQLBackend(t, func(_ string, _ map[string]any) any {
 		return map[string]any{
@@ -308,10 +312,11 @@ func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
 		}
 	})
 
-	deadline := time.Now().Add(30 * time.Second)
+	regCtx, regCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer regCancel()
 	var lastErr error
-	for time.Now().Before(deadline) {
-		_, err := a.gw.ControlPlane().Register(context.Background(), &cpv1.RegisterRequest{
+	for regCtx.Err() == nil {
+		_, err := a.gw.ControlPlane().Register(regCtx, &cpv1.RegisterRequest{
 			Addr: backend.URL,
 			Services: []*cpv1.ServiceBinding{{
 				Namespace:       "pets",
@@ -323,29 +328,18 @@ func TestDynamicGraphQL_CrossGatewayDispatch(t *testing.T) {
 			break
 		}
 		lastErr = err
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-regCtx.Done():
+			break
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	if lastErr != nil {
 		t.Fatalf("Register: %v", lastErr)
 	}
 
 	// Wait for B's reconciler to install the source.
-	deadline = time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		b.gw.mu.Lock()
-		ok := b.gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"}) != nil
-		b.gw.mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	b.gw.mu.Lock()
-	ok := b.gw.graphQLSlot(poolKey{namespace: "pets", version: "v1"}) != nil
-	b.gw.mu.Unlock()
-	if !ok {
-		t.Fatal("pets graphQLSource never appeared on gateway B")
-	}
+	waitForSlotTest(t, b.gw, "pets", "v1", 15*time.Second)
 
 	// Query through B forwards to backend.
 	got := postGraphQLForDynamic(t, b.httpSrv.URL,

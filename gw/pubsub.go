@@ -80,10 +80,15 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	if err := g.checkChannelAuth(ctx, channel, false, hmacB64, ts); err != nil {
 		return nil, err
 	}
+	payloadType := g.channelBindingIndex.Load().lookupPayloadType(channel)
+	if payloadType == "" {
+		g.cfg.metrics.RecordPubNoBinding()
+	}
 	ev := &psv1.Event{
-		Channel: channel,
-		Payload: payload,
-		Ts:      time.Now().Unix(),
+		Channel:     channel,
+		Payload:     payload,
+		PayloadType: payloadType,
+		Ts:          time.Now().Unix(),
 	}
 	b, err := proto.Marshal(ev)
 	if err != nil {

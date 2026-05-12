@@ -11,6 +11,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// broadcastStableChanged signals the stableChanged channel so
+// waiters (tests) can react to stableVN mutations without polling.
+// Caller holds g.mu. Best-effort: sends on the buffered channel
+// without blocking.
+func (g *Gateway) broadcastStableChanged() {
+	select {
+	case g.stableChanged <- struct{}{}:
+	default:
+	}
+}
+
 // stableVN tracks the highest-ever-seen "vN" cut per namespace.
 // Plan §4 stable-alias support: at schema render time, if
 // stableVN[ns] > 0 and a service with matching version is currently
@@ -56,6 +67,7 @@ func (g *Gateway) advanceStableLocked(ns string, vN int) {
 	}
 	if cur := g.stableVN[ns]; vN > cur {
 		g.stableVN[ns] = vN
+		g.broadcastStableChanged()
 		if t := g.peers; t != nil && t.stable != nil {
 			go writeStableMonotonic(g.life, t.stable, ns, vN)
 		}
@@ -89,6 +101,7 @@ func (g *Gateway) retractStableLocked(ns string, target int) (prior int) {
 		g.stableVN = map[string]int{}
 	}
 	g.stableVN[ns] = target
+	g.broadcastStableChanged()
 	return prior
 }
 
@@ -118,9 +131,11 @@ func (g *Gateway) observeStableFromKVLocked(ns string, vN int) bool {
 		// rather than leave it at 0 so stableSnapshotLocked still
 		// distinguishes "never set" from "set to zero".
 		delete(g.stableVN, ns)
+		g.broadcastStableChanged()
 		return has
 	}
 	g.stableVN[ns] = vN
+	g.broadcastStableChanged()
 	return true
 }
 

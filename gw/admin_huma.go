@@ -167,6 +167,25 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "listBindings",
+		Method:      http.MethodGet,
+		Path:        "/admin/bindings",
+		Summary:     "List all channel binding patterns with their payload message types.",
+	}, func(_ context.Context, _ *struct{}) (*bindingsOut, error) {
+		out := &bindingsOut{}
+		out.Body.Bindings = []bindingInfo{}
+		for _, e := range g.channelBindingIndexSnapshot() {
+			out.Body.Bindings = append(out.Body.Bindings, bindingInfo{
+				Pattern:    e.pattern,
+				MessageFQN: e.messageFQN,
+				Namespace:  e.namespace,
+				Version:    e.version,
+			})
+		}
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "listInjectors",
 		Method:      http.MethodGet,
 		Path:        "/admin/injectors",
@@ -868,6 +887,19 @@ type channelInfo struct {
 type channelsOut struct {
 	Body struct {
 		Channels []channelInfo `json:"channels"`
+	}
+}
+
+type bindingInfo struct {
+	Pattern    string `json:"pattern"`
+	MessageFQN string `json:"messageFQN"`
+	Namespace  string `json:"namespace"`
+	Version    string `json:"version"`
+}
+
+type bindingsOut struct {
+	Body struct {
+		Bindings []bindingInfo `json:"bindings"`
 	}
 }
 

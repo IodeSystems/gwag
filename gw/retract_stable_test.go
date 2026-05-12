@@ -196,7 +196,11 @@ func TestObserveStableFromKV_AcceptsRetract(t *testing.T) {
 // node B via the stable KV bucket and B's local stable map drops too.
 // Verifies the cross-cluster wire of RetractStable.
 func TestClusterE2E_RetractStablePropagates(t *testing.T) {
-	a, b := startTwoNodeCluster(t)
+	resetSharedCluster(t)
+	_, _ = getSharedCluster(t)
+	a := newSharedClusterNode(t, testCluster.a)
+	b := newSharedClusterNode(t, testCluster.b)
+	waitForPeers(t, a.gw, b.gw)
 
 	// Seed stable=v3 on both via direct advance + KV propagation. We
 	// also need a slot for v3 on A so the retract guard (target_vN
@@ -213,28 +217,9 @@ func TestClusterE2E_RetractStablePropagates(t *testing.T) {
 	}
 
 	// Wait for both nodes to converge on stable=v3.
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		a.gw.mu.Lock()
-		ga := a.gw.stableVN["svc"]
-		a.gw.mu.Unlock()
-		b.gw.mu.Lock()
-		gb := b.gw.stableVN["svc"]
-		b.gw.mu.Unlock()
-		if ga == 3 && gb == 3 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	a.gw.mu.Lock()
-	ga := a.gw.stableVN["svc"]
-	a.gw.mu.Unlock()
-	b.gw.mu.Lock()
-	gb := b.gw.stableVN["svc"]
-	b.gw.mu.Unlock()
-	if ga != 3 || gb != 3 {
-		t.Fatalf("convergence on v3 timed out: A=%d B=%d", ga, gb)
-	}
+	waitForStableConvergence(t, 15*time.Second, []*Gateway{a.gw, b.gw}, func(snap map[string]int) bool {
+		return snap["svc"] == 3
+	})
 
 	// Retract on A → expect B to follow.
 	cp := a.gw.ControlPlane().(*controlPlane)
@@ -245,18 +230,7 @@ func TestClusterE2E_RetractStablePropagates(t *testing.T) {
 		t.Fatalf("RetractStable on A: %v", err)
 	}
 
-	deadline = time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		b.gw.mu.Lock()
-		gb := b.gw.stableVN["svc"]
-		b.gw.mu.Unlock()
-		if gb == 1 {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	b.gw.mu.Lock()
-	gb = b.gw.stableVN["svc"]
-	b.gw.mu.Unlock()
-	t.Fatalf("B never observed retract: stableVN[svc] = %d, want 1", gb)
+	waitForStableConvergence(t, 15*time.Second, []*Gateway{b.gw}, func(snap map[string]int) bool {
+		return snap["svc"] == 1
+	})
 }

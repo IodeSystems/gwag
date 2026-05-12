@@ -156,36 +156,42 @@ func TestMCPConfig_Snapshot(t *testing.T) {
 // stable-cluster convergence pattern (jetstream.IncludeHistory replays
 // the bucket's current state to a fresh watcher).
 func TestMCPConfig_ClusterConverges(t *testing.T) {
-	a, b := startTwoNodeCluster(t)
+	resetSharedCluster(t)
+	_, _ = getSharedCluster(t)
+	a := newSharedClusterNode(t, testCluster.a)
+	b := newSharedClusterNode(t, testCluster.b)
+	waitForPeers(t, a.gw, b.gw)
 
 	cfg := MCPConfig{
 		AutoInclude: false,
 		Include:     []string{"admin.peers.*", "library.book.list"},
 	}
 
-	// JetStream stream-leader election in a fresh two-node cluster
-	// can take a couple of seconds; retry the seed until it lands
-	// (mirrors stable_cluster_test.go's seedDeadline pattern).
-	seedDeadline := time.Now().Add(15 * time.Second)
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer seedCancel()
 	var seedErr error
-	for time.Now().Before(seedDeadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	for seedCtx.Err() == nil {
+		ctx, cancel := context.WithTimeout(seedCtx, 2*time.Second)
 		seedErr = a.gw.SetMCPConfig(ctx, cfg)
 		cancel()
 		if seedErr == nil {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-seedCtx.Done():
+			break
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	if seedErr != nil {
 		t.Fatalf("A.SetMCPConfig: %v", seedErr)
 	}
 
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
+	convergeCtx, convergeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer convergeCancel()
+	for convergeCtx.Err() == nil {
 		snap := b.gw.MCPConfigSnapshot()
 		if len(snap.Include) == 2 && snap.Include[0] == "admin.peers.*" && snap.Include[1] == "library.book.list" {
-			// Sanity-check MCPAllows on B too.
 			if !b.gw.MCPAllows("admin.peers.list") {
 				t.Fatalf("B.MCPAllows(admin.peers.list) should be true after convergence: %+v", snap)
 			}
@@ -194,7 +200,11 @@ func TestMCPConfig_ClusterConverges(t *testing.T) {
 			}
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-convergeCtx.Done():
+			break
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	t.Fatalf("B did not converge on A's MCPConfig: B snapshot=%+v", b.gw.MCPConfigSnapshot())
 }

@@ -4,7 +4,7 @@ schema {
 }
 
 type AdminMutationNamespace {
-  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
+  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -22,6 +22,7 @@ type AdminMutationNamespace {
 
 type AdminQueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
@@ -47,24 +48,25 @@ type AdminStableMutationNamespace {
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
-  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
+  undeprecate(version: String!, namespace: String!): admin_UndeprecateOutBody
 }
 
 type AdminStableQueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
-  serviceStats(window: String, namespace: String!, version: String!): admin_ServiceStatsOutBody
+  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
 }
 
 type AdminV1MutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -80,13 +82,14 @@ type AdminV1MutationNamespace {
 
 type AdminV1QueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
-  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
+  serviceStats(version: String!, window: String, namespace: String!): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
 }
@@ -103,6 +106,17 @@ type Mutation {
 
 type Query {
   admin: AdminQueryNamespace!
+}
+
+type admin_BindingInfo {
+  messageFQN: String!
+  namespace: String!
+  pattern: String!
+  version: String!
+}
+
+type admin_BindingsOutBody {
+  bindings: [admin_BindingInfo]!
 }
 
 type admin_CallerStatsRow {
