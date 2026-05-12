@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package gateway.pubsubauth.v1;
+
+option go_package = "github.com/iodesystems/gwag/gw/proto/pubsubauth/v1;pubsubauthv1";
+
+// PubSubAuthorizer is the optional delegate the gateway calls when a
+// pub/sub channel is governed by tier `delegate+hmac`
+// (WithChannelAuth(..., ChannelAuthDelegate)). HMAC is verified first;
+// only after it passes does the delegate get the final say.
+//
+// Register an implementation under namespace "_pubsub_auth" / version
+// v1. Policy mirrors AdminAuthorizer: OK accepts, DENIED rejects
+// without falling through. Anything else (UNAVAILABLE, NOT_CONFIGURED,
+// UNSPECIFIED, transport error) falls through to HMAC-only — the
+// always-works posture stays the floor when the delegate is sick.
+service PubSubAuthorizer {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+message AuthorizeRequest {
+  // The requested channel string as the client sent it. Concrete
+  // subject for Pub; may be a NATS-style wildcard pattern for Sub.
+  string channel = 1;
+
+  // The HMAC token presented by the client (base64), already verified
+  // by the gateway before the delegate is called. Forwarded so the
+  // delegate can correlate against its own token issuance records.
+  string hmac = 2;
+
+  // Timestamp (unix seconds) the HMAC was minted with. Forwarded for
+  // the same correlation reason.
+  int64 ts = 3;
+
+  // True when the call site is Subscription.ps.sub (channel may be a
+  // wildcard); false when it's Mutation.ps.pub (channel is literal).
+  bool wildcard = 4;
+
+  // Inbound remote address, best-effort. May be empty when the gateway
+  // is behind a proxy that doesn't forward it.
+  string remote_addr = 5;
+}
+
+message AuthorizeResponse {
+  PubSubAuthCode code = 1;
+  // Optional, for operator logs. Never leaked to clients.
+  string reason = 2;
+}
+
+enum PubSubAuthCode {
+  PUBSUB_AUTH_CODE_UNSPECIFIED = 0;
+  // Delegate authorized the call. The gateway accepts.
+  PUBSUB_AUTH_CODE_OK = 1;
+  // Delegate explicitly rejected. The gateway returns an error to the
+  // client without falling through to HMAC-only.
+  PUBSUB_AUTH_CODE_DENIED = 2;
+  // Delegate is currently unavailable (degraded backend, exceeded
+  // budget, etc.). Gateway falls through to HMAC-only.
+  PUBSUB_AUTH_CODE_UNAVAILABLE = 3;
+  // Delegate is registered but unwilling to make a decision (e.g.
+  // policy not loaded). Gateway falls through to HMAC-only.
+  PUBSUB_AUTH_CODE_NOT_CONFIGURED = 4;
+}
