@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/gqlerrors"
+	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/gqlerrors"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"nhooyr.io/websocket"
 

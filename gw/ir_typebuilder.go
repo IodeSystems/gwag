@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/language/ast"
+	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/language/ast"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )

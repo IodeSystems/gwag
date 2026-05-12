@@ -3,11 +3,10 @@ module github.com/iodesystems/gwag
 go 1.26.2
 
 require (
+	github.com/IodeSystems/graphql-go v0.8.1
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/getkin/kin-openapi v0.138.0
-	github.com/graphql-go/graphql v0.8.1
-	github.com/graphql-go/handler v0.2.4
 	github.com/jhump/protoreflect v1.18.0
 	github.com/mark3labs/mcp-go v0.52.0
 	github.com/nats-io/nats-server/v2 v2.14.0
@@ -15,6 +14,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.20.0
 	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
@@ -50,7 +50,6 @@ require (
 	github.com/woodsbury/decimal128 v1.4.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
@@ -58,9 +57,3 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260504160031-60b97b32f348 // indirect
 )
-
-// graphql-go fork at github.com/IodeSystems/graphql adds Plan +
-// PlanQuery + ExecutePlan so we can cache parsed+validated+planned
-// query state, not just the AST. See plan-cache branch + the benches
-// in the fork.
-replace github.com/graphql-go/graphql => /home/nthalk/local/src/iodesystems/graphql

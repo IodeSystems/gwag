@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/language/ast"
+	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/language/ast"
 )
 
 // AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape

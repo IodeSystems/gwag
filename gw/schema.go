@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/handler"
+	"github.com/IodeSystems/graphql-go"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )
@@ -30,12 +29,7 @@ func (g *Gateway) assembleLocked() error {
 	}
 	g.schema.Store(schema)
 	if !g.cfg.disableGraphiQL {
-		gh := handler.New(&handler.Config{
-			Schema:   schema,
-			Pretty:   true,
-			GraphiQL: true,
-		})
-		g.graphiqlHandler.Store(gh)
+		g.graphiqlHandler.Store(newGraphiqlServer(schema))
 	}
 	g.rebuildIngressLocked()
 	g.rebuildGRPCIngressLocked()

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graphql-go/graphql"
+	"github.com/IodeSystems/graphql-go"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graphql-go/graphql"
+	"github.com/IodeSystems/graphql-go"
 	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 

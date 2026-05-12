@@ -34,13 +34,13 @@ WORKDIR /src
 COPY perf/.build/graphql /opt/graphql-fork
 
 COPY go.mod go.sum ./
-RUN go mod edit -replace github.com/graphql-go/graphql=/opt/graphql-fork \
+RUN go mod edit -replace github.com/IodeSystems/graphql-go=/opt/graphql-fork \
     && go mod download
 
 COPY . /src
 # Re-apply the rewrite after the full COPY (go.mod from the host
 # clobbered the edited file).
-RUN go mod edit -replace github.com/graphql-go/graphql=/opt/graphql-fork
+RUN go mod edit -replace github.com/IodeSystems/graphql-go=/opt/graphql-fork
 
 # The gateway's `ui/embed.go` uses `//go:embed all:dist` which fails
 # if ui/dist/ is empty. .dockerignore strips the host's built bundle

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/graphql-go/graphql"
+	"github.com/IodeSystems/graphql-go"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/language/ast"
-	"github.com/graphql-go/graphql/language/printer"
+	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/language/ast"
+	"github.com/IodeSystems/graphql-go/language/printer"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )

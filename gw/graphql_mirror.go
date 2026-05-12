@@ -3,7 +3,7 @@ package gateway
 import (
 	"encoding/json"
 
-	"github.com/graphql-go/graphql/language/ast"
+	"github.com/IodeSystems/graphql-go/language/ast"
 )
 
 // graphQLMirror is the per-source AST helper used by graphQLDispatcher

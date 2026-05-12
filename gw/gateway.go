@@ -19,8 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/handler"
+	"github.com/IodeSystems/graphql-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -134,12 +133,12 @@ type Gateway struct {
 	// underlying PlanCache handles that).
 	planCache *graphql.PlanCache
 
-	// graphiqlHandler is the cached graphql-go/handler used to render
-	// the GraphiQL browser UI. Built once per assembleLocked (schema
-	// is bound at construction); the per-request handler.New alloc
-	// the old code paid is gone. nil when WithoutGraphiQL() is set —
-	// browser requests fall through to the JSON path.
-	graphiqlHandler atomic.Pointer[handler.Handler]
+	// graphiqlHandler is the cached GraphiQL UI server used to render
+	// the in-browser IDE. Built once per assembleLocked (schema is
+	// bound at construction). nil when WithoutGraphiQL() is set —
+	// browser requests fall through to the JSON path. Backed by the
+	// vendored graphiqlServer in gw/graphiql.go.
+	graphiqlHandler atomic.Pointer[graphiqlServer]
 
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
@@ -1420,7 +1419,7 @@ func isGraphiQLRequest(r *http.Request) bool {
 // with Pretty: true on a hit; on a miss we go through parser.Parse +
 // graphql.ValidateDocument once and store the result.
 func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, w http.ResponseWriter, r *http.Request) {
-	opts := handler.NewRequestOptions(r)
+	opts := parseGraphqlRequest(r)
 
 	pr := g.planCache.Get(schema, opts.Query, opts.OperationName)
 

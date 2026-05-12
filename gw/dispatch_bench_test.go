@@ -33,7 +33,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/graphql-go/graphql"
+	"github.com/IodeSystems/graphql-go"
 
 	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 	"github.com/iodesystems/gwag/gw/ir"
