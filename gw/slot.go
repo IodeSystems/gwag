@@ -18,6 +18,15 @@ const (
 	slotKindProto slotKind = iota + 1
 	slotKindOpenAPI
 	slotKindGraphQL
+	// slotKindInternalProto is a proto-shaped slot whose dispatch
+	// resolves in-process: no replicas, no grpc.ClientConn, no
+	// upstream. The slot owns a FileDescriptor (so IR / SDL / MCP /
+	// admin-listing render the same way they would for any other
+	// proto slot) plus a per-method handler map for direct Go-call
+	// dispatch. Used by the gateway's own pub/sub primitive
+	// (`gwag.ps.v1.PubSub`); future migrations of admin operations
+	// off huma/OpenAPI can ride the same machinery.
+	slotKindInternalProto
 )
 
 func (k slotKind) String() string {
@@ -28,6 +37,8 @@ func (k slotKind) String() string {
 		return "openapi"
 	case slotKindGraphQL:
 		return "graphql"
+	case slotKindInternalProto:
+		return "internalproto"
 	default:
 		return "unknown"
 	}
@@ -80,9 +91,13 @@ type slot struct {
 	// struct holds the format handle (`*pool.file`, `*openAPISource.doc`,
 	// `*graphQLSource.introspection`), the original schema bytes for
 	// `/schema/*` re-emit, the replicas, and the backpressure sems.
-	proto   *pool
-	openapi *openAPISource
-	graphql *graphQLSource
+	// `internalProto` is the in-process analogue of `proto`: same
+	// FileDescriptor / hash / raw-source shape, but a handler map
+	// stands in for replicas + grpc.ClientConn.
+	proto         *pool
+	openapi       *openAPISource
+	graphql       *graphQLSource
+	internalProto *internalProtoSource
 }
 
 // registerSlotLocked applies the §4 tier policy at registration time.
@@ -170,6 +185,7 @@ func (g *Gateway) evictSlotLocked(s *slot) {
 	s.proto = nil
 	s.openapi = nil
 	s.graphql = nil
+	s.internalProto = nil
 	s.ir = nil
 }
 
@@ -261,6 +277,16 @@ func (g *Gateway) graphQLSlot(key poolKey) *graphQLSource {
 	return s.graphql
 }
 
+// internalProtoSlot returns the internal-proto source stored on the
+// slot at `key`, or nil. Caller holds g.mu.
+func (g *Gateway) internalProtoSlot(key poolKey) *internalProtoSource {
+	s := g.slots[key]
+	if s == nil || s.kind != slotKindInternalProto {
+		return nil
+	}
+	return s.internalProto
+}
+
 // bakeSlotIRLocked fills `s.ir` from the slot's per-kind handle,
 // applying the gateway's current schema-half transforms in the same
 // order the legacy `*ServicesAsIRLocked` walks did:
@@ -300,6 +326,11 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 			return
 		}
 		raw = []*ir.Service{svc}
+	case slotKindInternalProto:
+		if s.internalProto == nil {
+			return
+		}
+		raw = ir.IngestProto(s.internalProto.file)
 	default:
 		return
 	}

@@ -207,6 +207,17 @@ func (g *Gateway) collectIRRawLocked() ([]*ir.Service, error) {
 			svc.Version = k.version
 			svc.Internal = g.isInternal(k.namespace)
 			out = append(out, svc)
+		case slotKindInternalProto:
+			if s.internalProto == nil {
+				continue
+			}
+			svcs := ir.IngestProto(s.internalProto.file)
+			for _, svc := range svcs {
+				svc.Namespace = k.namespace
+				svc.Version = k.version
+				svc.Internal = g.isInternal(k.namespace)
+				out = append(out, svc)
+			}
 		}
 	}
 	return out, nil

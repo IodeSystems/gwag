@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )
@@ -110,14 +111,28 @@ func (g *Gateway) rebuildIngressLocked() {
 	// Proto-style: POST /<pkg>.<Service>/<method> for unary,
 	// GET on the same path for server-streaming (text/event-stream).
 	for _, slot := range g.slots {
-		if slot.kind != slotKindProto {
+		var fd protoreflect.FileDescriptor
+		var key poolKey
+		switch slot.kind {
+		case slotKindProto:
+			if slot.proto == nil {
+				continue
+			}
+			fd = slot.proto.file
+			key = slot.proto.key
+		case slotKindInternalProto:
+			if slot.internalProto == nil {
+				continue
+			}
+			fd = slot.internalProto.file
+			key = slot.key
+		default:
 			continue
 		}
-		p := slot.proto
-		if g.isInternal(p.key.namespace) {
+		if g.isInternal(key.namespace) {
 			continue
 		}
-		services := p.file.Services()
+		services := fd.Services()
 		for i := 0; i < services.Len(); i++ {
 			sd := services.Get(i)
 			methods := sd.Methods()
@@ -128,7 +143,7 @@ func (g *Gateway) rebuildIngressLocked() {
 					// support them, ingress can't synthesise them.
 					continue
 				}
-				sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
+				sid := ir.MakeSchemaID(key.namespace, key.version, string(md.Name()))
 				d := g.dispatchers.Get(sid)
 				if d == nil {
 					continue

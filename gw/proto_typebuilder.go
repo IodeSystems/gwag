@@ -15,10 +15,21 @@ import (
 func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *IRTypeBuilder {
 	merged := &ir.Service{Types: map[string]*ir.Type{}}
 	for _, slot := range slots {
-		if slot.kind != slotKindProto || slot.proto == nil {
+		var svcs []*ir.Service
+		switch slot.kind {
+		case slotKindProto:
+			if slot.proto == nil {
+				continue
+			}
+			svcs = ir.IngestProto(slot.proto.file)
+		case slotKindInternalProto:
+			if slot.internalProto == nil {
+				continue
+			}
+			svcs = ir.IngestProto(slot.internalProto.file)
+		default:
 			continue
 		}
-		svcs := ir.IngestProto(slot.proto.file)
 		for _, s := range svcs {
 			for k, v := range s.Types {
 				if _, ok := merged.Types[k]; !ok {

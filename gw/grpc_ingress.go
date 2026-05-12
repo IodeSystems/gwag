@@ -79,48 +79,81 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 	bpOpts := g.cfg.backpressure
 	t := &grpcIngressTable{routes: map[string]*grpcIngressRoute{}}
 	for _, slot := range g.slots {
-		if slot.kind != slotKindProto {
-			continue
-		}
-		p := slot.proto
-		if g.isInternal(p.key.namespace) {
-			continue
-		}
-		services := p.file.Services()
-		for i := 0; i < services.Len(); i++ {
-			sd := services.Get(i)
-			methods := sd.Methods()
-			for j := 0; j < methods.Len(); j++ {
-				md := methods.Get(j)
-				if md.IsStreamingClient() {
-					// bidi/client-streaming — egress can't synthesise
-					// these and ingress has no canonical-args shape.
-					continue
-				}
-				path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
-				if md.IsStreamingServer() {
-					sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
-					sd := g.dispatchers.Get(sid)
-					if sd == nil {
+		switch slot.kind {
+		case slotKindProto:
+			p := slot.proto
+			if g.isInternal(p.key.namespace) {
+				continue
+			}
+			services := p.file.Services()
+			for i := 0; i < services.Len(); i++ {
+				sd := services.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if md.IsStreamingClient() {
+						// bidi/client-streaming — egress can't synthesise
+						// these and ingress has no canonical-args shape.
 						continue
 					}
-					t.routes[path] = &grpcIngressRoute{
-						pool:             p,
-						inputDesc:        md.Input(),
-						outputDesc:       md.Output(),
-						streaming:        true,
-						streamDispatcher: sd,
+					path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+					if md.IsStreamingServer() {
+						sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
+						sd := g.dispatchers.Get(sid)
+						if sd == nil {
+							continue
+						}
+						t.routes[path] = &grpcIngressRoute{
+							pool:             p,
+							inputDesc:        md.Input(),
+							outputDesc:       md.Output(),
+							streaming:        true,
+							streamDispatcher: sd,
+						}
+						continue
 					}
-					continue
+					inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
+					label := methodLabel(sd, md)
+					t.routes[path] = &grpcIngressRoute{
+						pool:       p,
+						inputDesc:  md.Input(),
+						outputDesc: md.Output(),
+						handler:    chain(inner),
+						bp:         poolBackpressureConfig(p, label, metrics, bpOpts),
+					}
 				}
-				inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
-				label := methodLabel(sd, md)
-				t.routes[path] = &grpcIngressRoute{
-					pool:       p,
-					inputDesc:  md.Input(),
-					outputDesc: md.Output(),
-					handler:    chain(inner),
-					bp:         poolBackpressureConfig(p, label, metrics, bpOpts),
+			}
+		case slotKindInternalProto:
+			src := slot.internalProto
+			if g.isInternal(slot.key.namespace) {
+				continue
+			}
+			services := src.file.Services()
+			for i := 0; i < services.Len(); i++ {
+				sd := services.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if md.IsStreamingClient() {
+						continue
+					}
+					path := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+					if md.IsStreamingServer() {
+						// Subscription path is broker-driven (see
+						// registerProtoDispatchersLocked); gRPC
+						// ingress for in-process subscriptions
+						// lands when the PubSub handler does.
+						continue
+					}
+					inner := newInternalProtoInvocationHandler(src, sd, md, metrics)
+					// No pool / backpressure for in-process dispatch —
+					// route.bp left zero (acquireBackpressureSlot
+					// short-circuits on a nil Sem).
+					t.routes[path] = &grpcIngressRoute{
+						inputDesc:  md.Input(),
+						outputDesc: md.Output(),
+						handler:    chain(inner),
+					}
 				}
 			}
 		}
@@ -133,7 +166,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 	// config is intentionally left zero — acquireBackpressureSlot
 	// short-circuits on a nil Sem.
 	for k, slot := range g.slots {
-		if slot.kind == slotKindProto {
+		if slot.kind == slotKindProto || slot.kind == slotKindInternalProto {
 			continue
 		}
 		if g.isInternal(k.namespace) {

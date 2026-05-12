@@ -856,6 +856,13 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			if s.graphql != nil {
 				replicaCount = s.graphql.replicaCount()
 			}
+		case slotKindInternalProto:
+			// In-process; no upstream replicas. Report 1 so admin
+			// listings show the service as "live" rather than
+			// "unbacked" — the slot is its own dispatcher.
+			if s.internalProto != nil {
+				replicaCount = 1
+			}
 		}
 		out.Services = append(out.Services, &cpv1.ServiceInfo{
 			Namespace:               k.namespace,

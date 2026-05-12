@@ -25,36 +25,72 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
 	for _, slot := range g.slots {
-		if slot.kind != slotKindProto {
-			continue
-		}
-		p := slot.proto
-		if !filter.matchPool(p.key) {
-			continue
-		}
-		if g.isInternal(p.key.namespace) {
-			continue
-		}
-		services := p.file.Services()
-		for i := 0; i < services.Len(); i++ {
-			sd := services.Get(i)
-			methods := sd.Methods()
-			for j := 0; j < methods.Len(); j++ {
-				md := methods.Get(j)
-				if md.IsStreamingClient() {
-					continue
+		switch slot.kind {
+		case slotKindProto:
+			p := slot.proto
+			if !filter.matchPool(p.key) {
+				continue
+			}
+			if g.isInternal(p.key.namespace) {
+				continue
+			}
+			services := p.file.Services()
+			for i := 0; i < services.Len(); i++ {
+				sd := services.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if md.IsStreamingClient() {
+						continue
+					}
+					sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
+					if md.IsStreamingServer() {
+						g.dispatchers.Set(sid, newProtoSubscriptionDispatcher(g, p.key.namespace, p.key.version, string(md.Name()), md.Output()))
+						continue
+					}
+					label := methodLabel(sd, md)
+					core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp)
+					dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
+					dispatcher = g.quotaMiddleware(p.key.namespace, p.key.version)(dispatcher)
+					dispatcher = g.callerIDEnforceMiddleware()(dispatcher)
+					g.dispatchers.Set(sid, dispatcher)
 				}
-				sid := ir.MakeSchemaID(p.key.namespace, p.key.version, string(md.Name()))
-				if md.IsStreamingServer() {
-					g.dispatchers.Set(sid, newProtoSubscriptionDispatcher(g, p.key.namespace, p.key.version, string(md.Name()), md.Output()))
-					continue
+			}
+		case slotKindInternalProto:
+			src := slot.internalProto
+			if !filter.matchPool(slot.key) {
+				continue
+			}
+			if g.isInternal(slot.key.namespace) {
+				continue
+			}
+			services := src.file.Services()
+			for i := 0; i < services.Len(); i++ {
+				sd := services.Get(i)
+				methods := sd.Methods()
+				for j := 0; j < methods.Len(); j++ {
+					md := methods.Get(j)
+					if md.IsStreamingClient() {
+						continue
+					}
+					sid := ir.MakeSchemaID(slot.key.namespace, slot.key.version, string(md.Name()))
+					if md.IsStreamingServer() {
+						// Server-streaming on the internal-proto kind
+						// is the Subscription path (e.g. PubSub.Sub).
+						// The in-process broker handler wires
+						// subscribers up directly; a generic
+						// dispatcher would have nothing to do. Skip
+						// registration here — the future broker
+						// commit installs Subscription resolvers via
+						// the schema renderer's subscription hook.
+						continue
+					}
+					dispatcher := newInternalProtoDispatcher(src, sd, md, chain, metrics)
+					var d ir.Dispatcher = dispatcher
+					d = g.quotaMiddleware(slot.key.namespace, slot.key.version)(d)
+					d = g.callerIDEnforceMiddleware()(d)
+					g.dispatchers.Set(sid, d)
 				}
-				label := methodLabel(sd, md)
-				core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp)
-				dispatcher := BackpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
-				dispatcher = g.quotaMiddleware(p.key.namespace, p.key.version)(dispatcher)
-				dispatcher = g.callerIDEnforceMiddleware()(dispatcher)
-				g.dispatchers.Set(sid, dispatcher)
 			}
 		}
 	}
