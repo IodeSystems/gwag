@@ -1,0 +1,158 @@
+# gat — embedded GraphQL + gRPC for huma services
+
+`gat` (GraphQL API Translator) is gwag's embedded sibling: a
+single-server, in-process translator that turns a [huma](https://huma.rocks/)
+HTTP service into REST + GraphQL + gRPC on **one** port. No NATS, no
+cluster, no admin endpoints, no MCP — just typed surfaces emitted
+from the same handlers huma already runs.
+
+Import:
+
+```go
+import "github.com/iodesystems/gwag/gw/gat"
+```
+
+A runnable end-to-end demo with React/TypeScript codegen lives at
+[`examples/gat/`](../examples/gat/README.md).
+
+## When to reach for gat (vs full gwag)
+
+Pick gat when:
+
+- You have one Go binary, not a fleet of microservices.
+- Your "current/next rolling deploy" model means you don't need NATS
+  clustering, multi-gateway slot sync, or runtime control-plane
+  registration.
+- You want typed clients off your huma service without standing up a
+  separate gateway process.
+- You'd rather pay ~250 deps than ~498.
+
+Pick full gwag when:
+
+- Multiple service binaries register at runtime with one or more
+  gateway processes.
+- You need NATS-backed subscriptions / pub/sub fanout.
+- You need the admin UI, MCP tools, or self-introspecting OpenAPI of
+  the gateway's own admin operations.
+- You need cluster KV / reconcilers across N gateway peers.
+
+## Mental model
+
+Huma is the source of truth. You register each operation with huma
+as you always have — except you call `gat.Register` instead of
+`huma.Register` for the operations you want surfaced via GraphQL
+and/or gRPC. `gat.Register` is a paired drop-in:
+
+```go
+func Register[I, O any](
+    api huma.API,
+    g *gat.Gateway,
+    op huma.Operation,
+    handler func(context.Context, *I) (*O, error),
+)
+```
+
+It calls `huma.Register(api, op, handler)` (so REST keeps working
+exactly as before) AND captures the handler reference on `g` so gat
+can dispatch GraphQL and gRPC requests to it in-process. No loopback
+HTTP, no network hops, no second handler implementation.
+
+After all operations are registered, you wire gat's two mount points:
+
+```go
+gat.RegisterHuma(api, g, "/api")    // GraphQL + 3 schema views
+gat.RegisterGRPC(mux, g, "/api/grpc") // connect-go handlers
+```
+
+`RegisterHuma` finalizes the gateway: it reads huma's accumulated
+`OpenAPI` document, ingests it via the same IR pipeline as full
+gwag, wires the captured handlers as in-process dispatchers, builds
+the GraphQL schema, and mounts the GraphQL + schema-view endpoints
+as huma operations.
+
+`RegisterGRPC` adds [connect-go](https://connectrpc.com/) handlers
+per operation. Each operation gets a path of the canonical Connect /
+gRPC shape: `{prefix}/{Service.FullName}/{MethodName}`. Wire-protocol
+coverage is what connect-go gives: grpc-go clients, connect-go
+clients, and grpc-web clients all hit the same handler.
+
+## Routes
+
+For a `gat.RegisterHuma(api, g, "/api")` + `gat.RegisterGRPC(mux, g, "/api/grpc")`
+setup, the endpoints are:
+
+| URL                                            | What                                        |
+| ---------------------------------------------- | ------------------------------------------- |
+| `POST /api/graphql`                            | GraphQL queries + mutations                 |
+| `GET  /api/schema/graphql`                     | SDL (default), `?format=json` introspection |
+| `GET  /api/schema/proto`                       | `descriptorpb.FileDescriptorSet` (binary)   |
+| `GET  /api/schema/openapi`                     | Re-emitted OpenAPI document                 |
+| `POST /api/grpc/{Service.FullName}/{Method}`   | Connect / gRPC / gRPC-Web                   |
+
+Plus huma's own routes — REST per the operation paths, and huma's
+default `/openapi.json` for huma's spec.
+
+## Incremental adoption
+
+`gat.Register` is opt-in per operation. Operations registered with
+plain `huma.Register` continue to serve REST exactly as before; gat
+has no view into them, so they don't appear in the GraphQL schema or
+the proto descriptor set.
+
+This means a service migrating from "huma + openapi-typescript on
+the UI" to "huma + gat + graphql-codegen on the UI" can move one
+handler at a time:
+
+```go
+// Migrated:
+gat.Register(api, g, projectsOp, listProjectsHandler)
+
+// Not migrated yet (REST clients only — fine):
+huma.Register(api, healthOp, healthHandler)
+```
+
+## Dispatch internals
+
+Each captured operation gets an `ir.Dispatcher` that:
+
+1. Receives the canonical args map (`map[string]any` keyed by IR Arg
+   name) from the graphql-go runtime or from a Connect/gRPC request
+   (after `protojson` round-trip).
+2. Allocates a fresh `*I` via `reflect.New(inputType)`.
+3. Walks the IR's `op.Args` and binds each arg's value into the
+   matching huma input field by tag (`path:"id"`, `query:"limit"`,
+   `header:"X-Foo"`, `cookie:"sid"`) or, for body args, JSON-
+   unmarshals into the `Body` field.
+4. Calls the captured handler.
+5. Extracts `Body` from the typed output (or returns the whole
+   struct if there is no `Body` field).
+
+The reflection-based binding is JSON-shaped, so anything huma's
+codec already accepts at the REST boundary also works at the GraphQL
+and gRPC boundaries.
+
+## Schema endpoints
+
+The three schema views over the **same** IR projection mean
+different codegen pipelines can consume the same source of truth:
+
+- `graphql-codegen` (TanStack Query / typed-document-node / gql.tada)
+  → `/api/schema/graphql`
+- `ts-proto`, `protobuf-es`, `buf` → `/api/schema/proto`
+- `openapi-typescript`, `openapi-fetch`, `kubb`, `orval` → huma's
+  `/openapi.json` (or gat's re-emitted `/api/schema/openapi`)
+
+The point is **you don't have to pick one**. SPA UI on GraphQL for
+field selection, mobile/CLI/service-to-service clients on proto for
+strict types and cross-language reuse, external webhook integrations
+on OpenAPI.
+
+## Constraints (current shape)
+
+- One huma API per gat gateway. Multi-huma is doable (BYO-IR path)
+  but not the recommended path.
+- Subscriptions over WebSocket are not in gat. The pub/sub stack
+  lives in full gwag (`gw/subscriptions.go`).
+- gat doesn't manage auth. Whatever middleware the adopter wraps
+  the huma router with applies to gat's GraphQL/gRPC routes too,
+  since they ride on the same handler chain.

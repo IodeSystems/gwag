@@ -166,6 +166,19 @@ Admin endpoint enumerates the registry (`channel_pattern → payload_type → na
 
 ## Tier 2 — design-completing (priority order)
 
+### gw/gat — GraphQL API Translator (NATS-free embedded)
+
+**The push.** Minimum-cost entry: a single huma app wants GraphQL over its OpenAPI / proto / GraphQL specs, same port, no separate gwag process, no NATS. `gw/gat` is `import "github.com/iodesystems/gwag/gw/gat"` — `gat.New(regs...)` returns a `*Gateway` that mounts onto the adopter's existing huma router via `gat.RegisterHuma(api, prefix, g)`. Depends only on `gw/ir`, `graphql-go`, `kin-openapi`, `protobuf`. Zero NATS, zero Prometheus, zero MCP, zero admin. ~250 deps vs. ~498 for full `gw`.
+
+**Done.** Moved `IRTypeBuilder` + naming helpers to `gw/ir/typebuilder.go`. Moved `RenderGraphQLRuntime` to `gw/ir/render_graphql_runtime.go` (exported `ParseRuntimeVersionN`, `CombineDepReason`, `IdentityName`). `gw/` delegates to `ir.` via thin wrappers. Created `gw/gat/gat.go` (Gateway struct, New, Handler, context keys) and `gw/gat/openapi.go` (openAPIDispatcher with HTTP forwarding). `gw/ir` is now NATS-free (0 NATS deps). Renamed from `gw/lite` pre-review. Paired `gat.Register` + `gat.RegisterHuma` + `gat.RegisterGRPC` (connect-go) with in-process reflection-based dispatch landed; runnable end-to-end example at `examples/gat/`; concept page at `docs/gat.md`.
+
+**Todo.**
+- [ ] **`gat.Sign` Go-only pubsub channel signer.** HMAC channel signing exposed as a Go method on `*Gateway` (not via HTTP). Import boundary == auth boundary, so no admin-token gate. Deferred — pubsub isn't on the simple-start path.
+- [ ] **Proto ingest path for gat.** `gat.WithProtoFile()` that ingests via `ir.IngestProto` and registers dispatchers. Requires the gat package to carry a simplified proto-dispatch path (no gRPC pool, just `grpc.Dial` + `Invoke` per dispatch). ~1 day.
+- [ ] **`gwag serve` subcommand.** `gwag serve --openapi spec.yaml --to http://localhost:8081` — boots gat without NATS. ~0.5 day.
+
+---
+
 ### Existing tier-2 tail (parked behind real use cases)
 
 - [ ] **Static `--openapi` / `--graphql` registration flags for `gwag`.** Runtime control-plane registration is the only path for those kinds today; the operator who wants a CLI-driven static registration pipeline pulls on this.

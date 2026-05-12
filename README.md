@@ -95,6 +95,33 @@ curl https://gw.internal/api/schema/openapi?service=billing > billing.json
 openapi-generator-cli generate -i billing.json -g typescript-axios -o ./gen
 ```
 
+## Embedded mode (`gat`)
+
+Single Go binary, no NATS, no cluster — just want GraphQL + gRPC
+typed surfaces on top of a [huma](https://huma.rocks/) service?
+Use **`gat`** (GraphQL API Translator), gwag's embedded sibling.
+One huma source of truth, three typed surfaces (REST + GraphQL +
+gRPC) on one port:
+
+```go
+import "github.com/iodesystems/gwag/gw/gat"
+
+g, _ := gat.New()
+gat.Register(api, g, huma.Operation{ /* ... */ }, listProjects) // drop-in for huma.Register
+gat.Register(api, g, huma.Operation{ /* ... */ }, getProject)
+gat.RegisterHuma(api, g, "/api")     // /api/graphql + /api/schema/*
+gat.RegisterGRPC(mux, g, "/api/grpc") // connect-go handlers
+```
+
+UI consumers use **graphql-codegen** off `/api/schema/graphql`;
+service-to-service clients use **buf / ts-proto** off
+`/api/schema/proto`; legacy REST integrations stay on huma's own
+`/openapi.json`. No second schema, no second server, no extra
+ports.
+
+Concept doc: [`docs/gat.md`](./docs/gat.md). Runnable end-to-end
+demo with React + Vite + graphql-codegen: [`examples/gat/`](./examples/gat/README.md).
+
 ## Compared to…
 
 | | gwag | Apollo Federation | Hasura | Kong / Envoy |
