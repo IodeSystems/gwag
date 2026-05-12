@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/hmac"
 	"encoding/base64"
 	"fmt"
@@ -16,10 +17,10 @@ import (
 //     against the gateway's WithSubscriptionAuth secret. Hot-path
 //     crypto-fast.
 //   - ChannelAuthDelegate — delegate authorizer registered under
-//     `_pubsub_auth/v1` gets the final say after HMAC. The delegate
-//     wiring lands in the follow-up commit; for now this tier is
-//     equivalent to ChannelAuthHMAC at runtime so operators can
-//     declare it without waiting on the wire-up.
+//     `_pubsub_auth/v1` gets the final say after HMAC. Fall-through
+//     mirrors AdminAuthorizer: OK accepts, DENIED rejects without
+//     falling through; UNAVAILABLE / NOT_CONFIGURED / UNSPECIFIED /
+//     transport error fall through to HMAC-only (already verified).
 //
 // The default tier when no WithChannelAuth pattern matches is
 // ChannelAuthHMAC.
@@ -128,9 +129,12 @@ func (g *Gateway) resolveChannelTier(channel string, wildcard bool) ChannelAuthT
 // indicates a Sub-open (vs Pub) call site so the wildcard-specific
 // strictest-wins rule kicks in. Returns nil when the request passes.
 //
-// Open tier ignores hmac/ts. HMAC and Delegate tiers both run the
-// HMAC verifier (delegate fall-through wiring is the next commit).
-func (g *Gateway) checkChannelAuth(channel string, wildcard bool, hmacB64 string, ts int64) error {
+// Open tier ignores hmac/ts. HMAC tier runs the HMAC verifier and
+// returns. Delegate tier runs the HMAC verifier first, then consults
+// the _pubsub_auth/v1 delegate; UNAVAILABLE / NOT_CONFIGURED /
+// UNSPECIFIED / transport falls through to HMAC-only, only explicit
+// DENIED short-circuits.
+func (g *Gateway) checkChannelAuth(ctx context.Context, channel string, wildcard bool, hmacB64 string, ts int64) error {
 	tier := g.resolveChannelTier(channel, wildcard)
 	if tier == ChannelAuthOpen {
 		return nil
@@ -138,11 +142,20 @@ func (g *Gateway) checkChannelAuth(channel string, wildcard bool, hmacB64 string
 	if err := g.verifyChannelHMAC(channel, hmacB64, ts); err != nil {
 		return err
 	}
-	// TODO(plan Tier 1 #5): when tier == ChannelAuthDelegate, consult
-	// the _pubsub_auth/v1 delegate after HMAC passes; UNAVAILABLE /
-	// NOT_CONFIGURED / transport falls through to HMAC-only, only
-	// explicit DENIED short-circuits.
-	return nil
+	if tier != ChannelAuthDelegate {
+		return nil
+	}
+	switch outcome, reason := g.consultPubSubDelegate(ctx, channel, hmacB64, ts, wildcard); outcome {
+	case channelDelegateReject:
+		if reason != "" {
+			return fmt.Errorf("ps: channel %q denied by delegate: %s", channel, reason)
+		}
+		return fmt.Errorf("ps: channel %q denied by delegate", channel)
+	default:
+		// accept and fallthrough are both "HMAC-passed, proceed"; the
+		// HMAC check above is the always-works floor.
+		return nil
+	}
 }
 
 // verifyChannelHMAC checks the (channel, hmac, ts) tuple. `channel`

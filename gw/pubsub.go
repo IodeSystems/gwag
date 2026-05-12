@@ -77,7 +77,7 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	if strings.ContainsAny(channel, "*>") {
 		return nil, fmt.Errorf("ps.pub: wildcards not valid on publish (channel=%q)", channel)
 	}
-	if err := g.checkChannelAuth(channel, false, hmacB64, ts); err != nil {
+	if err := g.checkChannelAuth(ctx, channel, false, hmacB64, ts); err != nil {
 		return nil, err
 	}
 	ev := &psv1.Event{
@@ -114,7 +114,7 @@ func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 	hmacB64, _ := args["hmac"].(string)
 	ts, _ := asInt64(args["ts"])
 	wildcard := strings.ContainsAny(channel, "*>")
-	if err := g.checkChannelAuth(channel, wildcard, hmacB64, ts); err != nil {
+	if err := g.checkChannelAuth(ctx, channel, wildcard, hmacB64, ts); err != nil {
 		return nil, err
 	}
 	broker := g.subscriptionBroker()
