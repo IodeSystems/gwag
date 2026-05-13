@@ -243,6 +243,28 @@ type config struct {
 	// handler and routes browser requests through the JSON path.
 	disableGraphiQL bool
 
+	// uploadStore backs the Upload scalar (multipart-spec inline and
+	// tus.io chunked endpoints both stage bytes here). nil = no store
+	// configured; the tus endpoints return 503 and the multipart-spec
+	// parser stages to an ephemeral default. See WithUploadStore /
+	// WithUploadDataDir.
+	uploadStore UploadStore
+
+	// uploadDataDir, if non-empty, asks New() to build a default
+	// FilesystemUploadStore at the directory. Mutually exclusive with
+	// WithUploadStore — whichever option ran last wins.
+	uploadDataDir string
+
+	// uploadStoreOwned is true when the gateway created the store
+	// itself via WithUploadDataDir (so Close() must shut it down).
+	// WithUploadStore-supplied stores stay owned by the caller.
+	uploadStoreOwned bool
+
+	// uploadLimit is the per-upload byte cap, enforced at tus
+	// Upload-Length declaration and at multipart-spec parser. 0 =
+	// unlimited (gateway adds no constraint beyond the store / edge).
+	uploadLimit int64
+
 	// grpcConnPoolSize is the number of grpc.ClientConn instances
 	// the gateway dials per upstream replica address. 0 means
 	// defaultGRPCConnPoolSize. HTTP/2 caps concurrent streams per
@@ -756,6 +778,49 @@ func WithoutGraphiQL() Option {
 	return func(cfg *config) { cfg.disableGraphiQL = true }
 }
 
+// WithUploadStore plugs a custom UploadStore implementation. The
+// store backs both the graphql-multipart-request-spec inline parser
+// and the tus.io HTTP endpoints; resolvers receive an *Upload whose
+// File reader is opened from the store on demand. The gateway does
+// not Close the supplied store on shutdown — its lifetime is the
+// caller's. Use WithUploadDataDir for the default filesystem
+// implementation.
+//
+// Stability: stable
+func WithUploadStore(s UploadStore) Option {
+	return func(cfg *config) {
+		cfg.uploadStore = s
+		cfg.uploadDataDir = ""
+		cfg.uploadStoreOwned = false
+	}
+}
+
+// WithUploadDataDir installs the default filesystem-backed
+// UploadStore rooted at dir, with a 24h TTL on staged uploads. New()
+// constructs the store and Close() shuts it down; if dir cannot be
+// created, New() panics with the underlying error. Conflicting with
+// WithUploadStore is fine — the last option wins.
+//
+// Stability: stable
+func WithUploadDataDir(dir string) Option {
+	return func(cfg *config) {
+		cfg.uploadDataDir = dir
+		cfg.uploadStore = nil
+	}
+}
+
+// WithUploadLimit caps the per-upload byte total enforced at both the
+// graphql-multipart-request-spec parser and the tus.io PATCH path.
+// 0 means unlimited (the gateway adds no constraint beyond the
+// underlying store). Adopters behind reverse proxies / edge load
+// balancers should set this in concert with their LB's request-body
+// limit to fail fast at the right layer.
+//
+// Stability: stable
+func WithUploadLimit(maxBytes int64) Option {
+	return func(cfg *config) { cfg.uploadLimit = maxBytes }
+}
+
 // defaultGRPCConnPoolSize is the per-replica pool fan-out used
 // when WithGRPCConnPoolSize is not set. Empirically 4 conns is
 // enough to spread the per-conn transport-mutex contention seen
@@ -833,6 +898,14 @@ func New(opts ...Option) *Gateway {
 			panic(fmt.Sprintf("gateway: admin token: %v", err))
 		}
 		cfg.adminToken = tok
+	}
+	if cfg.uploadStore == nil && cfg.uploadDataDir != "" {
+		s, err := NewFilesystemUploadStore(cfg.uploadDataDir, 24*time.Hour)
+		if err != nil {
+			panic(fmt.Sprintf("gateway: upload store: %v", err))
+		}
+		cfg.uploadStore = s
+		cfg.uploadStoreOwned = true
 	}
 	life, cancel := context.WithCancel(context.Background())
 	// One shared limiter across both metric sinks so the Prometheus
@@ -931,9 +1004,16 @@ func (g *Gateway) Close() {
 	g.mu.Lock()
 	tracker := g.peers
 	g.peers = nil
+	store := g.cfg.uploadStore
+	owned := g.cfg.uploadStoreOwned
 	g.mu.Unlock()
 	tracker.stop()
 	g.lifeCancel()
+	if owned {
+		if fs, ok := store.(*FilesystemUploadStore); ok {
+			fs.Close()
+		}
+	}
 }
 
 // Cluster returns the bound cluster, or nil if running standalone.
