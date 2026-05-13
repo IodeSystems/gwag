@@ -28,7 +28,10 @@ ensure_binary() {
     *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
   esac
   local url="https://github.com/apollographql/router/releases/download/v${APOLLO_VERSION}/router-v${APOLLO_VERSION}-${arch}.tar.gz"
-  curl -fsSL "$url" | tar -xz -C "$(dirname "$APOLLO_BIN")"
+  # The tarball lays out as dist/{router,LICENSE,...};
+  # --strip-components=1 drops the dist/ prefix so the binary
+  # lands directly at $APOLLO_BIN.
+  curl -fsSL "$url" | tar -xz --strip-components=1 -C "$(dirname "$APOLLO_BIN")" dist/router
   chmod +x "$APOLLO_BIN"
 }
 
