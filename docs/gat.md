@@ -111,6 +111,50 @@ gat.Register(api, g, projectsOp, listProjectsHandler)
 huma.Register(api, healthOp, healthHandler)
 ```
 
+## Front a remote gRPC service from a .proto
+
+The huma-paired flow above hosts handlers in the same Go binary as
+gat. The companion `gat.ProtoFile` / `gat.ProtoSource` helpers point
+gat at a *remote* gRPC service instead — gat compiles the `.proto`,
+dials the target, and dispatches GraphQL queries to the upstream via
+`grpc.ClientConn.Invoke` per call.
+
+```go
+regs, err := gat.ProtoFile("greeter.proto", "localhost:50051")
+if err != nil { log.Fatal(err) }
+g, err := gat.New(regs...)
+if err != nil { log.Fatal(err) }
+http.Handle("/graphql", g.Handler())
+```
+
+The bytes variant accepts an embedded `.proto`:
+
+```go
+//go:embed greeter.proto
+var greeterProto []byte
+
+regs, _ := gat.ProtoSource("greeter.proto", greeterProto, nil, "localhost:50051")
+g, _ := gat.New(regs...)
+```
+
+Namespace / version derive from the proto package by default —
+`greeter.v1` → namespace `greeter` + version `v1` (the trailing `vN`
+segment is recognised); `pets` → namespace `pets` + version `v1`.
+Override per-service after the helper returns:
+
+```go
+regs[0].Service.Namespace = "external"
+regs[0].Service.Version = "v2"
+```
+
+The default transport is insecure (no TLS). For mTLS or other dial
+credentials, dial yourself and supply custom dispatchers via
+`ServiceRegistration.Dispatchers` — see `gat.New`'s BYO-IR pattern.
+
+This path is unary-only. Server-streaming RPCs (GraphQL
+subscriptions) aren't supported by gat; bring full gwag if you need
+them.
+
 ## Dispatch internals
 
 Each captured operation gets an `ir.Dispatcher` that:

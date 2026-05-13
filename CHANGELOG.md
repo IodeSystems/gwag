@@ -10,6 +10,19 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gat.ProtoFile(path, target)` and `gat.ProtoSource(entry, body, imports, target)`
+  (gw/gat/proto.go) compile a `.proto` via `protocompile`, ingest via
+  `ir.IngestProto`, dial the target gRPC server, and return
+  `[]ServiceRegistration` ready for `gat.New(...)`. The returned
+  dispatchers do `grpc.ClientConn.Invoke` per call with `dynamicpb`
+  marshal/unmarshal — no pool, no replicas, no backpressure (gat is
+  the simple-start variant; pull full gwag for those). Default
+  transport is insecure; mTLS or custom dials route through the
+  existing `ServiceRegistration.Dispatchers` BYO path. Namespace and
+  version derive from the proto package: `greeter.v1` →
+  `greeter`/`v1` (trailing `vN` is the version), `pets` →
+  `pets`/`v1`. Unary-only; server-streaming is not in gat's scope.
+  Doc: `docs/gat.md` "Front a remote gRPC service from a .proto".
 - `gw.WithWSLimit(gw.WSLimitOptions{MaxPerIP, RatePerSec, Burst, TrustedIPs})`
   (gw/ws_limit.go) caps the graphql-transport-ws Upgrade path per
   peer IP — a concurrent-connection semaphore plus a token-bucket
