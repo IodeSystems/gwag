@@ -1,10 +1,10 @@
 # gat — embedded GraphQL + gRPC for huma services
 
-`gat` (GraphQL API Translator) is gwag's embedded sibling: a
-single-server, in-process translator that turns a [huma](https://huma.rocks/)
-HTTP service into REST + GraphQL + gRPC on **one** port. No NATS, no
-cluster, no admin endpoints, no MCP — just typed surfaces emitted
-from the same handlers huma already runs.
+`gat` (GraphQL API Translator) is gwag's in-process variant: a
+single-server translator that turns a [huma](https://huma.rocks/)
+HTTP service into REST + GraphQL + gRPC on **one** port. No NATS,
+no cluster, no admin endpoints, no MCP — just typed surfaces
+emitted from the same handlers huma already runs.
 
 Import:
 

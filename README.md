@@ -2,44 +2,47 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-GraphQL as it was meant to be — multi-dispatch API composition,
-fewer client round trips, less egress.
+A polyglot API gateway. Register services that speak gRPC, OpenAPI,
+or GraphQL; clients consume them as any of the three. Auth, quotas,
+backpressure, metrics, tracing, and MCP derive from one unified
+schema, declared once and applied at every protocol edge.
 
-Register a service once in the protocol it already speaks. Get
-typed clients in proto, OpenAPI, and GraphQL off the same registry,
-hot-reloading as services redeploy.
+## What it gives you
 
-`.proto` / OpenAPI 3.x / downstream GraphQL in. One consolidated
-GraphQL surface for browser and mobile; the same registry re-emitted
-as proto FileDescriptorSet / OpenAPI 3.x / GraphQL SDL for typed
-service-to-service clients. Same auth, backpressure, metrics across
-all three.
+- **GraphQL + gRPC on top of a huma OpenAPI server.** Same handlers,
+  same port, no second schema, no second binary. `gat` mode; see
+  [Embedded mode (`gat`)](#embedded-mode-gat).
 
-```
-TS / mobile ─┐                              ┌── auth-svc      (.proto)
-             ├──▶  /api/graphql      ──┐    ├── billing-svc   (OpenAPI)
-service A ──▶│  /api/schema/{*} ◀── codegen ├── inventory-svc (.proto)
-service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    (GraphQL stitch)
-             └──┬─ gwag (1 binary) ─┬─┘     ├── …
-                │ tiered versioning │       └── any new service: register at runtime
-                │ HA via NATS + JS  │
-                │ subscriptions out │
-                └───────────────────┘
-```
+- **Composition of mixed-protocol services under one schema.**
+  Register gRPC, OpenAPI, and GraphQL services together; clients query
+  the composed schema in one request, and the same schema feeds an
+  MCP endpoint for LLM agents. Clustered via embedded NATS +
+  JetStream — any node dispatches to any service registered with any
+  peer.
 
-## Why
+- **Typed clients in any protocol against any upstream.** proto
+  upstream → typed TS or OpenAPI clients. OpenAPI upstream → typed
+  gRPC or GraphQL clients. The registry round-trips through all
+  three IRs; each client team uses the codegen tool it already runs,
+  off the same `/api/schema/*` endpoint.
 
-- **One service, three typed-client surfaces.** TS uses
-  graphql-codegen, Go uses `buf`, Python uses `openapi-generator` —
-  all off one live registry.
-- **Compose across services in one round trip.** Query auth + billing
-  + inventory in a single GraphQL document; the gateway dispatches
-  each part to the right backend and shapes one response.
-- **Hot reload, no restart.** Services self-register over the
-  control plane; the schema rebuilds. The next codegen run picks
-  up the change.
-- **Same auth, backpressure, and metrics across every protocol.**
-  One declaration, applies to proto + OpenAPI + GraphQL traffic.
+- **Tier-based versioning with a CI gate.** `unstable` / `stable` /
+  `vN`; older `vN` is auto-`@deprecated`; CI fails the build on a
+  breaking schema diff. The live registry rebuilds on every register
+  / deregister, so codegen picks up changes without a server restart.
+  The same diff applies to the proto FDS and OpenAPI exports — one
+  breaking change fails the build for every client team that consumes
+  any of the three. See [`docs/lifecycle.md`](./docs/lifecycle.md).
+
+- **Transforms and middleware.** Auth, header injection, quota
+  enforcement, field reshaping — one declaration applied across every
+  protocol edge. ~15–20 µs per active rule on the hot path.
+  `InjectType[T]` / `InjectPath` / `InjectHeader` for the "fill from
+  context, hide from external schema" pattern.
+
+- **Typed pub/sub on the embedded NATS.** The cluster already runs
+  NATS + JetStream; `ps.pub` / `ps.sub` expose typed multi-listener
+  channels with HMAC auth. No separate broker to run.
 
 ## How to use it
 
@@ -132,17 +135,6 @@ Services can also self-register over the gRPC control plane — no
 gateway restart, no static config edit. Same `/api/schema/*`
 endpoints reflect it immediately.
 
-## What else you get
-
-- **Tier-based versioning** — `unstable` / `stable` / `vN`; older `vN` auto-`@deprecated`; CI gate on schema diff.
-- **HA out of the box** — embedded NATS + JetStream KV; any node dispatches to any service registered with any peer.
-- **Pub/Sub primitive + honest streaming** — gateway-provided `ps.pub` / `ps.sub` for multi-listener channels (HMAC-gated, typed channel registry); service-declared `stream Resp` methods pass through as per-subscriber gRPC streams.
-- **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y.
-- **Per-caller identity + quotas** — one extractor seam (Public / HMAC / Delegated / mTLS-via-proxy) feeds per-caller metrics; opt into block-permit quotas via a delegate.
-- **Auth / logging as middleware** — one declaration applies across every protocol. `InjectType[T]` / `InjectPath` / `InjectHeader` for the "fill from context, hide from external schema" pattern.
-- **MCP for LLM agents** — `gw.MCPHandler()` exposes four tools (`schema_list` / `schema_search` / `schema_expand` / `query`) over MCP Streamable HTTP. Mark which operations agents see with `WithMCPInclude("greeter.**", "library.**")`.
-- **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus.
-
 ## Cost
 
 One Go binary or library import. Cluster is opt-in. Default dispatch
@@ -166,11 +158,10 @@ recipe: [`perf/`](./perf)).
 
 ## Embedded mode (`gat`)
 
-Single Go binary, no NATS, no cluster — just want GraphQL + gRPC
-typed surfaces on top of a [huma](https://huma.rocks/) service?
-Use **`gat`** (GraphQL API Translator), gwag's embedded sibling.
-One huma source of truth, three typed surfaces (REST + GraphQL +
-gRPC) on one port:
+**`gat`** (GraphQL API Translator) is gwag's in-process variant
+for the single-binary case. GraphQL + gRPC typed surfaces on top
+of a [huma](https://huma.rocks/) service, no NATS, no cluster.
+REST + GraphQL + gRPC on one port:
 
 ```go
 import "github.com/iodesystems/gwag/gw/gat"
@@ -220,6 +211,13 @@ with a client driver: [`examples/multi/cmd/mcp-demo`](./examples/multi/cmd/mcp-d
 - **graphql-mesh / Apollo Router (single-subgraph mode)** — closest
   peers on multi-format ingest. Head-to-head numbers:
   [`perf/comparison.md`](./perf/comparison.md).
+- **[gqlgen](https://github.com/99designs/gqlgen)** — Go GraphQL
+  server framework. You write SDL, gqlgen generates resolver stubs,
+  you implement them. Different layer: gqlgen builds one Go service's
+  GraphQL surface; gwag composes existing services and runs on top
+  of graphql-go. Directive support is narrow — `@deprecated` only;
+  the runtime side of cross-cutting concerns lives in transforms and
+  providers. See [`docs/directives.md`](./docs/directives.md).
 
 Deeper breakdown: [`docs/comparison.md`](./docs/comparison.md).
 
@@ -240,6 +238,7 @@ peers: [`perf/comparison.md`](./perf/comparison.md) (harness:
 **Operations** — wiring the gateway into a real deployment:
 
 - [`docs/lifecycle.md`](./docs/lifecycle.md) — register / version / deprecate / retire; tier model; CI gate
+- [`docs/directives.md`](./docs/directives.md) — `@deprecated` rendering; rationale for not carrying custom directives
 - [`docs/operations.md`](./docs/operations.md) — health, drain, backpressure, metrics
 - [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring + span reference
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — admin boot token + AdminAuthorizer delegate + outbound HTTP transport
