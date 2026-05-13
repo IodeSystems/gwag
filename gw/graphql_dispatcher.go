@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -188,6 +189,116 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	return data[d.remoteFieldName], nil
 }
 
+// DispatchAppend is the byte-splice variant of dispatchUnary. Same
+// upstream call, but extracts the per-field JSON without recursing
+// into nested objects (single-level map[string]json.RawMessage) and
+// appends the bytes directly to dst. Subscriptions don't take this
+// path — the renderer only installs ResolveAppend for unary fields.
+//
+// The append path captures most of the per-request alloc reclaim
+// from the projected wedge: ~970 allocs → ~200 on
+// BenchmarkProtoSchemaExec by skipping the full-tree map walk that
+// Dispatch performs.
+func (d *graphQLDispatcher) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.graphql",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+	)
+	defer span.End()
+	if d.opLabel == "subscription" {
+		return dst, fmt.Errorf("graphql ingest: DispatchAppend not supported for subscriptions")
+	}
+
+	start := time.Now()
+	record := func(err error) error {
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
+		return err
+	}
+
+	info := graphQLForwardInfoFrom(ctx)
+	var printed string
+	var vars map[string]any
+	if info != nil && len(info.FieldASTs) > 0 {
+		rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
+		opType := ast.OperationTypeQuery
+		var varDefs []*ast.VariableDefinition
+		if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+			if op.Operation == ast.OperationTypeMutation {
+				opType = ast.OperationTypeMutation
+			}
+			varDefs = op.VariableDefinitions
+		}
+		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+			Operation:           opType,
+			VariableDefinitions: varDefs,
+			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+				Selections: []ast.Selection{rewritten},
+			}),
+		})
+		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+		raw := printer.Print(doc)
+		got, ok := raw.(string)
+		if !ok {
+			return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+		}
+		printed = got
+		vars = info.VariableValues
+	} else if d.canonicalQuery != "" {
+		printed = d.canonicalQuery
+		if len(d.canonicalArgNames) > 0 && len(args) > 0 {
+			vars = make(map[string]any, len(d.canonicalArgNames))
+			for _, name := range d.canonicalArgNames {
+				if v, ok := args[name]; ok {
+					vars[name] = v
+				}
+			}
+		}
+	} else {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName)))
+	}
+
+	src := d.mirror.src
+	r := src.pickReplica()
+	if r == nil {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
+	}
+	r.inflight.Add(1)
+	defer r.inflight.Add(-1)
+	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, vars, src.forwardHeaders)
+	if err != nil {
+		return dst, record(err)
+	}
+	if len(resp.Errors) > 0 {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql remote: %s", resp.Errors[0])))
+	}
+	if len(resp.Data) == 0 {
+		record(nil)
+		return append(dst, "null"...), nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql decode data: %s", err.Error())))
+	}
+	rawField, ok := data[d.remoteFieldName]
+	if !ok || len(rawField) == 0 {
+		record(nil)
+		return append(dst, "null"...), nil
+	}
+	// Re-prefix upstream __typename values so the local response
+	// shows the gateway-prefixed type name (matches the local
+	// schema). graphql-go's __typename handling runs on the per-
+	// field-resolver path, which ResolveAppend bypasses.
+	rawField = d.mirror.prefixResponseTypenames(rawField)
+	record(nil)
+	return append(dst, rawField...), nil
+}
+
+var _ ir.AppendDispatcher = (*graphQLDispatcher)(nil)
+
 // graphqlGroupDispatcher forwards an entire local sub-selection rooted
 // at a GraphQL-origin OperationGroup as a single upstream request.
 // Wired by `emitGroupContainer` for graphql-origin groups so the
@@ -322,8 +433,117 @@ func (d *graphqlGroupDispatcher) Dispatch(ctx context.Context, _ map[string]any)
 	return data[respKey], nil
 }
 
-// Compile-time assertion: graphqlGroupDispatcher implements ir.Dispatcher.
-var _ ir.Dispatcher = (*graphqlGroupDispatcher)(nil)
+// DispatchAppend emits the upstream's response data for this group
+// field directly into dst, skipping the full-tree unmarshal that
+// Dispatch performs. The upstream's JSON for `data["greeter"]` is
+// already exactly the shape this field's value should take in the
+// local response (we forward the LOCAL selection upstream, so
+// projection matches by construction), so we splice the bytes
+// verbatim.
+//
+// One outer Unmarshal into map[string]json.RawMessage keeps the
+// values as []byte without recursing into nested objects — saves
+// the full-tree map allocation that Dispatch performs. The
+// AppendDispatcher caller (graphql-go's writePlannedField) drops
+// us into the response buffer at the right offset.
+func (d *graphqlGroupDispatcher) DispatchAppend(ctx context.Context, _ map[string]any, dst []byte) ([]byte, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.graphql",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+	)
+	defer span.End()
+
+	start := time.Now()
+	record := func(err error) error {
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
+		return err
+	}
+
+	info := graphQLForwardInfoFrom(ctx)
+	if info == nil || len(info.FieldASTs) == 0 {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for group %s (canonical-args ingress on a nested-namespace GraphQL upstream)", d.group.Name)))
+	}
+
+	localField := info.FieldASTs[0]
+	groupField := ast.NewField(&ast.Field{
+		Alias:      localField.Alias,
+		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
+		Arguments:  localField.Arguments,
+		Directives: localField.Directives,
+	})
+	if localField.SelectionSet != nil {
+		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
+	}
+
+	opType := ast.OperationTypeQuery
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		if op.Operation == ast.OperationTypeMutation {
+			opType = ast.OperationTypeMutation
+		}
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           opType,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{groupField},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	printed, ok := raw.(string)
+	if !ok {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+	}
+
+	src := d.mirror.src
+	r := src.pickReplica()
+	if r == nil {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
+	}
+	r.inflight.Add(1)
+	defer r.inflight.Add(-1)
+	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	if err != nil {
+		return dst, record(err)
+	}
+	if len(resp.Errors) > 0 {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql remote: %s", resp.Errors[0])))
+	}
+
+	// One-level unmarshal: keep each field value as raw JSON bytes
+	// rather than recursing into nested maps. Savings vs Dispatch's
+	// full-tree map[string]any unmarshal scale with response size.
+	respKey := d.group.Name
+	if localField.Alias != nil && localField.Alias.Value != "" {
+		respKey = localField.Alias.Value
+	}
+	if len(resp.Data) == 0 {
+		record(nil)
+		return append(dst, "null"...), nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql decode data: %s", err.Error())))
+	}
+	raw2, ok := data[respKey]
+	if !ok || len(raw2) == 0 {
+		record(nil)
+		return append(dst, "null"...), nil
+	}
+	raw2 = d.mirror.prefixResponseTypenames(raw2)
+	record(nil)
+	return append(dst, raw2...), nil
+}
+
+// Compile-time assertion: graphqlGroupDispatcher implements both
+// ir.Dispatcher and ir.AppendDispatcher.
+var _ ir.AppendDispatcher = (*graphqlGroupDispatcher)(nil)
 
 // buildGraphQLCanonicalQuery synthesizes a printable graphql operation
 // for canonical-args dispatch. Returns ("", nil) when synthesis can't

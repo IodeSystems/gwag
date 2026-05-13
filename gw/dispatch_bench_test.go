@@ -2,13 +2,19 @@
 //
 //   BenchmarkProtoDispatcher_Dispatch     ~185 µs/op   10.9 KB/op   174 allocs/op
 //   BenchmarkOpenAPIDispatcher_Dispatch   ~128 µs/op    7.8 KB/op    86 allocs/op
-//   BenchmarkProtoSchemaExec              ~430 µs/op   67.8 KB/op   972 allocs/op
-//   BenchmarkOpenAPISchemaExec            ~391 µs/op   67.5 KB/op   982 allocs/op
+//   BenchmarkProtoSchemaExec              ~436 µs/op   68.6 KB/op   937 allocs/op   (graphql.Do + Dispatch path; legacy ExecutePlan walker)
+//   BenchmarkProtoSchemaExecAppend        ~201 µs/op   11.5 KB/op   187 allocs/op   (ExecutePlanAppend + DispatchAppend; production path)
+//   BenchmarkOpenAPISchemaExec            ~391 µs/op   68.1 KB/op   937 allocs/op
+//   BenchmarkOpenAPISchemaExecAppend      ~151 µs/op    8.9 KB/op   102 allocs/op
 //
 // _Dispatch benches isolate the per-call work in front of grpc /
 // net/http (they call ir.Dispatcher directly); _SchemaExec benches
-// drive the same path through graphql.Do so the executor + resolver
-// closure overhead shows up.
+// drive the same path through graphql.Do (legacy walker, Dispatch);
+// _SchemaExecAppend benches drive through ExecutePlanAppend +
+// ResolveAppend / DispatchAppend (the production hot path used by
+// gw.Handler()). The Append→Plain delta is the wedge the
+// AppendDispatcher capability captures: ~2.2× faster, ~5-6× less
+// memory, ~5-9× fewer allocations.
 //
 // IR overhead vs pre-cutover (commit 8fd7de8, just before step 3):
 //   * Proto SchemaExec:   431 → 429 µs/op,  973 → 972 allocs/op  — flat
@@ -34,6 +40,7 @@ import (
 	"testing"
 
 	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/language/parser"
 
 	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 	"github.com/iodesystems/gwag/gw/ir"
@@ -102,6 +109,49 @@ func BenchmarkProtoSchemaExec(b *testing.B) {
 	}
 }
 
+// BenchmarkProtoSchemaExecAppend measures the production hot path:
+// ExecutePlanAppend (the append-mode walker) drives ResolveAppend on
+// every field whose dispatcher implements ir.AppendDispatcher. The
+// proto dispatcher's DispatchAppend skips messageToMap entirely,
+// walking the dynamicpb response directly into the response buffer
+// via appendProtoMessage. This is the benchmark that reflects what
+// gateway.Handler() actually runs against in production traffic.
+//
+// Use this against BenchmarkProtoSchemaExec to see the wedge from
+// switching ExecutePlan + Dispatch → ExecutePlanAppend +
+// DispatchAppend.
+func BenchmarkProtoSchemaExecAppend(b *testing.B) {
+	gw, _, cleanup := newProtoBenchGateway(b)
+	defer cleanup()
+
+	schema := gw.schema.Load()
+	if schema == nil {
+		b.Fatal("schema not built")
+	}
+	query := `{ greeter { hello(name:"x") { greeting } } }`
+	doc, err := parser.Parse(parser.ParseParams{Source: query})
+	if err != nil {
+		b.Fatalf("parse: %v", err)
+	}
+	plan, err := graphql.PlanQuery(schema, doc, "")
+	if err != nil {
+		b.Fatalf("plan: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		body, errs := graphql.ExecutePlanAppend(plan, graphql.ExecuteParams{
+			Schema:  *schema,
+			Context: context.Background(),
+		}, nil)
+		if len(errs) > 0 {
+			b.Fatalf("errors: %v", errs)
+		}
+		_ = body
+	}
+}
+
 // BenchmarkOpenAPIDispatcher_Dispatch covers the HTTP/JSON dispatch
 // hot path: canonical args → URL substitution → http.Do → JSON
 // decode → canonical map. The backend is httptest with a static
@@ -123,6 +173,43 @@ func BenchmarkOpenAPIDispatcher_Dispatch(b *testing.B) {
 		if _, err := disp.Dispatch(ctx, args); err != nil {
 			b.Fatalf("Dispatch: %v", err)
 		}
+	}
+}
+
+// BenchmarkOpenAPISchemaExecAppend is the production-path equivalent
+// of BenchmarkOpenAPISchemaExec: ExecutePlanAppend + DispatchAppend
+// instead of graphql.Do + Dispatch. Skips the upstream json.Unmarshal
+// AND graphql-go's per-leaf resolver tree; emits JSON straight to
+// the response buffer via appendOpenAPIValue.
+func BenchmarkOpenAPISchemaExecAppend(b *testing.B) {
+	gw, cleanup := newOpenAPIBenchGateway(b)
+	defer cleanup()
+
+	schema := gw.schema.Load()
+	if schema == nil {
+		b.Fatal("schema not built")
+	}
+	query := `{ test { getThing(id:"x") { id name } } }`
+	doc, err := parser.Parse(parser.ParseParams{Source: query})
+	if err != nil {
+		b.Fatalf("parse: %v", err)
+	}
+	plan, err := graphql.PlanQuery(schema, doc, "")
+	if err != nil {
+		b.Fatalf("plan: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		body, errs := graphql.ExecutePlanAppend(plan, graphql.ExecuteParams{
+			Schema:  *schema,
+			Context: context.Background(),
+		}, nil)
+		if len(errs) > 0 {
+			b.Fatalf("errors: %v", errs)
+		}
+		_ = body
 	}
 }
 

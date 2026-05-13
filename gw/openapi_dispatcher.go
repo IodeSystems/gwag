@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/IodeSystems/graphql-go/language/ast"
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/iodesystems/gwag/gw/ir"
@@ -31,6 +33,15 @@ type openAPIDispatcher struct {
 	ns              string
 	ver             string
 	label           string // "<METHOD> <pathTemplate>" — proto-side metric parity
+
+	// Set by registerOpenAPIDispatchersLocked after construction; used
+	// only by the AppendDispatcher path to enable type-aware projection
+	// (union discrimination, __typename emission with local prefix).
+	// Nil-safe — appendOpenAPIValueTyped falls back to untyped walking
+	// when svc/irOp are nil.
+	svc        *ir.Service
+	irOp       *ir.Operation
+	typePrefix string
 }
 
 func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []headerInjector, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
@@ -88,6 +99,77 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	}
 	return resp, nil
 }
+
+// DispatchAppend is the byte-splice variant. dispatchOpenAPIRaw
+// returns the upstream HTTP body without json.Unmarshal; we then
+// walk the bytes in lockstep with the local selection AST via
+// appendOpenAPIValue, emitting only the requested fields. Skips both
+// the full-tree map allocation and graphql-go's per-leaf-resolver
+// projection.
+//
+// Limitation: scalar type coercion (e.g. upstream `"42"` → local
+// Int) does not happen on this path. OpenAPI specs that publish
+// loose JSON types relative to the local GraphQL schema should stay
+// on the Dispatch path (which goes through graphql-go's Serialize).
+// The dispatcher implements both methods; the renderer's
+// AppendDispatcher capability check installs ResolveAppend
+// unconditionally when this dispatcher is wired — tighten the spec
+// or fall back via a wrapping middleware to opt out.
+func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.openapi",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+		httpMethodAttr(d.method),
+		httpRouteAttr(d.pathTemplate),
+	)
+	defer span.End()
+	start := time.Now()
+	r := d.src.pickReplica()
+	if r == nil {
+		err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
+		return dst, err
+	}
+	releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, d.src, d.label, d.metrics, d.bp)
+	if err != nil {
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
+		return dst, err
+	}
+	defer releaseInstance()
+
+	r.inflight.Add(1)
+	defer r.inflight.Add(-1)
+	respBytes, err := dispatchOpenAPIRaw(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, d.src.uploadStore)
+	elapsed := time.Since(start)
+	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+	addDispatchTime(ctx, elapsed)
+	if err != nil {
+		return dst, err
+	}
+	if len(respBytes) == 0 {
+		return append(dst, "null"...), nil
+	}
+
+	info := graphQLForwardInfoFrom(ctx)
+	var sel *ast.SelectionSet
+	if info != nil && len(info.FieldASTs) > 0 {
+		sel = info.FieldASTs[0].SelectionSet
+	}
+	walker := openAPIWalker{svc: d.svc, prefix: d.typePrefix}
+	var outRef *ir.TypeRef
+	if d.irOp != nil {
+		outRef = d.irOp.Output
+	}
+	return walker.appendValue(dst, json.RawMessage(respBytes), sel, outRef)
+}
+
+var _ ir.AppendDispatcher = (*openAPIDispatcher)(nil)
 
 // acquireOpenAPIReplicaSlot is the per-instance counterpart to
 // acquireBackpressureSlot for OpenAPI sources. Same shape as the

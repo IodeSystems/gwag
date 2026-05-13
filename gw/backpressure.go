@@ -67,6 +67,9 @@ func backpressureMiddleware(cfg backpressureConfig) ir.DispatcherMiddleware {
 		if cfg.Sem == nil {
 			return next
 		}
+		if appendNext, ok := next.(ir.AppendDispatcher); ok {
+			return &backpressureAppendWrapper{cfg: cfg, next: appendNext}
+		}
 		return ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 			release, err := acquireBackpressureSlot(ctx, cfg)
 			if err != nil {
@@ -77,4 +80,35 @@ func backpressureMiddleware(cfg backpressureConfig) ir.DispatcherMiddleware {
 		})
 	}
 }
+
+// backpressureAppendWrapper carries the AppendDispatcher capability
+// through the backpressure middleware so an upstream byte-splice
+// dispatcher (graphqlGroupDispatcher, etc.) doesn't degrade to the
+// Dispatch + json.Marshal path just because backpressure wrapped it.
+// The slot-acquire + release wraps both surfaces; the metric tags
+// (cfg.Label) cover both call shapes through addDispatchTime.
+type backpressureAppendWrapper struct {
+	cfg  backpressureConfig
+	next ir.AppendDispatcher
+}
+
+func (b *backpressureAppendWrapper) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	release, err := acquireBackpressureSlot(ctx, b.cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return b.next.Dispatch(ctx, args)
+}
+
+func (b *backpressureAppendWrapper) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	release, err := acquireBackpressureSlot(ctx, b.cfg)
+	if err != nil {
+		return dst, err
+	}
+	defer release()
+	return b.next.DispatchAppend(ctx, args, dst)
+}
+
+var _ ir.AppendDispatcher = (*backpressureAppendWrapper)(nil)
 

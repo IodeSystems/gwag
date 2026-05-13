@@ -10,6 +10,44 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `ir.AppendDispatcher` (gw/ir/dispatch.go) — optional capability
+  interface for dispatchers that can emit their result as JSON bytes
+  directly. The runtime renderer prefers `DispatchAppend` over
+  `Dispatch` when a registered dispatcher implements it, routing
+  through the fork's `ExecutePlanAppend` walker's `ResolveAppend`
+  fast path (no per-field resolver tree, no full-tree map
+  allocation, no leaf-emitter coercion round-trip). The built-in
+  `protoDispatcher`, `openAPIDispatcher`, `graphQLDispatcher` (flat-
+  upstream forwarder), and `graphqlGroupDispatcher` (nested-
+  namespace forwarder) all implement it; the middleware chain
+  (`backpressureMiddleware`, `quotaMiddleware`,
+  `callerIDEnforceMiddleware`) passes the capability through. Adopters
+  with BYO dispatchers (`gat.ServiceRegistration.Dispatchers`) opt in
+  by implementing the method; plain `Dispatcher` continues to work
+  unchanged.
+
+  Measured impact (Ryzen 9 3900X, loopback, -benchtime=2s, single
+  greeter / pets-style schema):
+
+  | Bench | Before (Dispatch) | After (DispatchAppend) | Speedup |
+  |---|---|---|---|
+  | `BenchmarkProtoSchemaExec*`   | 436 µs / 68 KB / 937 allocs | 201 µs / 11.5 KB / 187 allocs | 2.2× / 5.9× / 5.0× |
+  | `BenchmarkOpenAPISchemaExec*` | 391 µs / 68 KB / 937 allocs | 151 µs / 8.9 KB / 102 allocs | 2.6× / 7.6× / 9.2× |
+
+  Fields whose return type contains a Union or Interface take the
+  append path on graphql-origin (upstream resolves `__typename`,
+  `prefixResponseTypenames` rewrites to the local prefix) and on
+  openAPI-origin (the walker carries IR Service + type prefix to
+  discriminate variants via `DiscriminatorProperty` / `Mapping`, then
+  a required-fields heuristic, mirroring `IRTypeBuilder.unionFor`'s
+  `ResolveType`). Proto-origin abstract returns stay on the Dispatch
+  path until proto ingest synthesizes `TypeUnion` and the
+  dispatcher carries the discriminator closure.
+
+  New helper files: `gw/proto_append.go` (proto-message → JSON walker
+  with selection projection + snake_case→camelCase renaming),
+  `gw/openapi_append.go` (JSON-byte projector walking the local
+  selection AST, type-aware for Union dispatch).
 - `gwag serve --graphql URL [--mcp] [--mcp-include GLOB]`
   (gw/cmd/gwag/serve.go) fronts one downstream GraphQL service with
   the full gateway — metrics, backpressure, subscription proxy, and

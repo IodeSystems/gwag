@@ -669,6 +669,35 @@ func dispatchOpenAPI(
 	httpClient *http.Client,
 	store UploadStore,
 ) (any, error) {
+	respBytes, err := dispatchOpenAPIRaw(ctx, method, baseURL, pathTemplate, op, gqlArgs, forwardHeaders, headerInjectors, httpClient, store)
+	if err != nil {
+		return nil, err
+	}
+	if len(respBytes) == 0 {
+		return nil, nil
+	}
+	var out any
+	if err := json.Unmarshal(respBytes, &out); err != nil {
+		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", err.Error()))
+	}
+	return out, nil
+}
+
+// dispatchOpenAPIRaw mirrors dispatchOpenAPI but returns the upstream
+// response body as raw JSON bytes — used by
+// openAPIDispatcher.DispatchAppend so the byte-splice path skips the
+// full-tree map allocation. Empty body returns (nil, nil); the caller
+// emits "null".
+func dispatchOpenAPIRaw(
+	ctx context.Context,
+	method, baseURL, pathTemplate string,
+	op *openapi3.Operation,
+	gqlArgs map[string]any,
+	forwardHeaders []string,
+	headerInjectors []headerInjector,
+	httpClient *http.Client,
+	store UploadStore,
+) ([]byte, error) {
 	resolvedPath := pathTemplate
 	queryArgs := url.Values{}
 	for _, paramRef := range op.Parameters {
@@ -757,14 +786,7 @@ func dispatchOpenAPI(
 		return nil, Reject(httpStatusToCode(resp.StatusCode),
 			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
-	if len(respBytes) == 0 {
-		return nil, nil
-	}
-	var out any
-	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", err.Error()))
-	}
-	return out, nil
+	return respBytes, nil
 }
 
 // isMultipartOp reports whether the OpenAPI op declares its request

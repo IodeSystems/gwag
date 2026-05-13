@@ -32,6 +32,40 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, args map[string]any) (any, error)
 }
 
+// AppendDispatcher is the optional capability interface for
+// dispatchers that can emit their result as JSON bytes directly,
+// bypassing the canonical-result allocation + the graphql-go
+// leaf-emitter machinery. The renderer prefers DispatchAppend over
+// Dispatch when a registered dispatcher implements both; falls back
+// to Dispatch + graphql-go's serialization for plain Dispatchers.
+//
+// Contract:
+//   - The implementation MUST append a complete, well-formed JSON
+//     value matching the field's declared return type to dst and
+//     return the extended slice. dst may grow; always use the
+//     returned slice.
+//   - For composite return types (Object, List), the emitted bytes
+//     MUST cover the entire selection — the renderer does not
+//     recurse into per-field resolvers when DispatchAppend handles
+//     the field. Selection-aware emission is the implementer's job;
+//     read the selection AST from rp.Info.FieldASTs (via the
+//     graphql_dispatcher.go context plumbing in gateway code).
+//   - Errors trigger the standard null-bubble-up: the renderer rolls
+//     the field bytes back to entry length and records the error in
+//     the response envelope.
+//
+// Middleware that wraps an AppendDispatcher and wants the append
+// fast path to flow through MUST also implement AppendDispatcher
+// (delegating DispatchAppend to the inner). Middleware that doesn't
+// pass it through downgrades the chain to the Dispatch path with no
+// correctness loss — just no perf win.
+//
+// Stability: stable
+type AppendDispatcher interface {
+	Dispatcher
+	DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error)
+}
+
 // DispatcherFunc adapts a plain function to Dispatcher.
 //
 // Stability: stable

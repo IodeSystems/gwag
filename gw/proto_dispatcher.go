@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/IodeSystems/graphql-go/language/ast"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -159,6 +160,42 @@ func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 	releaseDynamicMessage(respMsg.Descriptor(), respMsg)
 	return out, nil
 }
+
+// DispatchAppend is the byte-splice variant of Dispatch. Same proto
+// invocation + Handler chain; instead of messageToMap → map[string]any
+// (and graphql-go's per-field resolver tree projecting against that
+// map), appendProtoMessage walks the dynamicpb response in lockstep
+// with the local selection AST and writes JSON straight to dst with
+// proto snake_case → lowerCamel renaming applied via the cached
+// fieldInfo lookup.
+//
+// Per-request alloc drops to roughly the depth of the response tree
+// (one slice grow per JSON nesting layer) instead of one map per
+// nested message that messageToMap allocates. This is the bulk of
+// the projected wedge for proto-origin services.
+func (d *protoDispatcher) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
+	req := acquireDynamicMessage(d.inputDesc)
+	defer releaseDynamicMessage(d.inputDesc, req)
+	if err := argsToMessage(args, req); err != nil {
+		return dst, err
+	}
+	resp, err := d.handler(ctx, req)
+	if err != nil {
+		return dst, err
+	}
+	respMsg := resp.(*dynamicpb.Message)
+	defer releaseDynamicMessage(respMsg.Descriptor(), respMsg)
+
+	info := graphQLForwardInfoFrom(ctx)
+	var sel *ast.SelectionSet
+	if info != nil && len(info.FieldASTs) > 0 {
+		sel = info.FieldASTs[0].SelectionSet
+	}
+	return appendProtoMessage(dst, respMsg, sel), nil
+}
+
+var _ ir.AppendDispatcher = (*protoDispatcher)(nil)
 
 // methodLabel returns the proto wire path for an RPC, used as the
 // metric label and the backpressureMiddleware Label slot. Mirrors

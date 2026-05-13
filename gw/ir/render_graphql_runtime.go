@@ -314,6 +314,8 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 		// Top of a graphql-origin chain: install the group dispatcher
 		// so one upstream call captures the whole sub-selection.
 		sid := g.SchemaID
+		d := registry.Get(sid)
+		_, canAppend := d.(AppendDispatcher)
 		field.Resolve = func(rp graphql.ResolveParams) (any, error) {
 			d := registry.Get(sid)
 			if d == nil {
@@ -324,6 +326,20 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 				ctx = context.WithValue(ctx, graphqlResolveInfoKey{}, &rp.Info)
 			}
 			return d.Dispatch(ctx, rp.Args)
+		}
+		if canAppend {
+			field.ResolveAppend = func(rp graphql.ResolveParams, dst []byte) ([]byte, error) {
+				d := registry.Get(sid)
+				ad, ok := d.(AppendDispatcher)
+				if !ok {
+					return dst, fmt.Errorf("gateway: group dispatcher %s lost AppendDispatcher capability", sid)
+				}
+				ctx := rp.Context
+				if ctx != nil {
+					ctx = context.WithValue(ctx, graphqlResolveInfoKey{}, &rp.Info)
+				}
+				return ad.DispatchAppend(ctx, rp.Args, dst)
+			}
 		}
 	case inGraphQLGroup:
 		// Sub-group inside an outer graphql group: dereference from
@@ -385,8 +401,50 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		out = o
 	}
 	sid := op.SchemaID
+	// Capability check at render time. Dispatchers are registered
+	// before RenderGraphQLRuntimeFields runs (gw/schema.go's
+	// assembleLocked sequences register*DispatchersLocked → render),
+	// so the registry is fully populated by the time we get here.
+	// Adopters with hot-reload semantics rebuild the schema after each
+	// re-registration, so the registry state at render time matches
+	// the request-time state until the next rebuild.
+	d := registry.Get(sid)
+	_, canAppend := d.(AppendDispatcher)
+	if canAppend && outputHasAbstractType(out) && op.OriginKind == KindProto {
+		// Abstract returns (Union / Interface) need __typename
+		// resolution. graphql-origin dispatchers handle this naturally:
+		// the upstream graphql server resolves __typename against its
+		// schema, and prefixResponseTypenames in the gateway rewrites
+		// the upstream type names to the local prefixed form before
+		// emit. openAPI's append walker carries the IR Service +
+		// type prefix so it can discriminate Union variants
+		// (DiscriminatorProperty + Mapping, then a required-fields
+		// heuristic) and emit __typename with the local prefix —
+		// matching IRTypeBuilder.unionFor's ResolveType. Proto-origin
+		// dispatchers haven't been updated to discriminate yet
+		// (proto ingest doesn't synthesize TypeUnion today, but
+		// adopters can construct them via IR transforms), so they
+		// stay on the Dispatch path for now.
+		canAppend = false
+	}
+
 	var dispatch graphql.FieldResolveFn
+	var appendDispatch graphql.FieldResolveAppendFn
 	if op.OriginKind == KindGraphQL {
+		if canAppend {
+			appendDispatch = func(rp graphql.ResolveParams, dst []byte) ([]byte, error) {
+				d := registry.Get(sid)
+				ad, ok := d.(AppendDispatcher)
+				if !ok {
+					return dst, fmt.Errorf("gateway: dispatcher %s lost AppendDispatcher capability", sid)
+				}
+				ctx := rp.Context
+				if ctx != nil {
+					ctx = context.WithValue(ctx, graphqlResolveInfoKey{}, &rp.Info)
+				}
+				return ad.DispatchAppend(ctx, rp.Args, dst)
+			}
+		}
 		dispatch = func(rp graphql.ResolveParams) (any, error) {
 			d := registry.Get(sid)
 			if d == nil {
@@ -399,6 +457,24 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 			return d.Dispatch(ctx, rp.Args)
 		}
 	} else {
+		if canAppend {
+			appendDispatch = func(rp graphql.ResolveParams, dst []byte) ([]byte, error) {
+				d := registry.Get(sid)
+				ad, ok := d.(AppendDispatcher)
+				if !ok {
+					return dst, fmt.Errorf("gateway: dispatcher %s lost AppendDispatcher capability", sid)
+				}
+				// Proto / OpenAPI append dispatchers need the local
+				// selection AST to project the upstream response down
+				// to just the selected fields. Plumb rp.Info via the
+				// same context key the graphql-origin path uses.
+				ctx := rp.Context
+				if ctx != nil {
+					ctx = context.WithValue(ctx, graphqlResolveInfoKey{}, &rp.Info)
+				}
+				return ad.DispatchAppend(ctx, rp.Args, dst)
+			}
+		}
 		dispatch = func(rp graphql.ResolveParams) (any, error) {
 			d := registry.Get(sid)
 			if d == nil {
@@ -441,7 +517,26 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		Description:       op.Description,
 		DeprecationReason: op.Deprecated,
 		Resolve:           dispatch,
+		ResolveAppend:     appendDispatch,
 	}, nil
+}
+
+// outputHasAbstractType walks a graphql.Output (unwrapping NonNull
+// and List layers) and reports whether the underlying type is — or
+// contains — a Union or Interface. The renderer uses this to decide
+// whether ResolveAppend is safe for the field: those abstract types
+// require graphql-go's __typename machinery to fire on per-field
+// resolution, which ResolveAppend bypasses.
+func outputHasAbstractType(o graphql.Output) bool {
+	switch t := o.(type) {
+	case *graphql.NonNull:
+		return outputHasAbstractType(t.OfType)
+	case *graphql.List:
+		return outputHasAbstractType(t.OfType)
+	case *graphql.Union, *graphql.Interface:
+		return true
+	}
+	return false
 }
 
 // graphqlGroupChildResolver dereferences a field's value from the

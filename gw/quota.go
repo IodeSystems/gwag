@@ -438,6 +438,16 @@ func (g *Gateway) quotaMiddleware(ns, ver string) ir.DispatcherMiddleware {
 	extractor := g.cfg.callerIDExtractor
 	headers := g.cfg.callerHeaders
 	return func(next ir.Dispatcher) ir.Dispatcher {
+		if appendNext, ok := next.(ir.AppendDispatcher); ok {
+			return &quotaAppendWrapper{
+				next:      appendNext,
+				delegate:  d,
+				extractor: extractor,
+				headers:   headers,
+				ns:        ns,
+				ver:       ver,
+			}
+		}
 		return ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 			caller := resolveCallerID(ctx, extractor, headers)
 			if err := d.check(ctx, caller, ns, ver); err != nil {
@@ -447,6 +457,37 @@ func (g *Gateway) quotaMiddleware(ns, ver string) ir.DispatcherMiddleware {
 		})
 	}
 }
+
+// quotaAppendWrapper preserves the AppendDispatcher capability across
+// the quota gate. Same check + delegate logic as the Dispatch path;
+// just runs on both surfaces so an inner byte-splice dispatcher
+// doesn't degrade.
+type quotaAppendWrapper struct {
+	next      ir.AppendDispatcher
+	delegate  *quotaAuthDelegate
+	extractor CallerIDExtractor
+	headers   []string
+	ns        string
+	ver       string
+}
+
+func (q *quotaAppendWrapper) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	caller := resolveCallerID(ctx, q.extractor, q.headers)
+	if err := q.delegate.check(ctx, caller, q.ns, q.ver); err != nil {
+		return nil, err
+	}
+	return q.next.Dispatch(ctx, args)
+}
+
+func (q *quotaAppendWrapper) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	caller := resolveCallerID(ctx, q.extractor, q.headers)
+	if err := q.delegate.check(ctx, caller, q.ns, q.ver); err != nil {
+		return dst, err
+	}
+	return q.next.DispatchAppend(ctx, args, dst)
+}
+
+var _ ir.AppendDispatcher = (*quotaAppendWrapper)(nil)
 
 // callDelegateFn is the test-injection seam (see callDelegate). Kept
 // as a value field on the struct (not a closure) so the test helper

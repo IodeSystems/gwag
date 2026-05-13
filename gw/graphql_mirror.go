@@ -122,3 +122,129 @@ func (m *graphQLMirror) unprefixTypeName(name string) string {
 func jsonUnmarshalLoose(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
+
+// prefixResponseTypenames rewrites every `"__typename":"<value>"`
+// occurrence in `src` so the value is prepended with the gateway's
+// namespace prefix (matching what mirror.unprefixTypeName strips on
+// the way out). Needed on the DispatchAppend path: the fork's
+// ExecutePlanAppend walker bypasses per-field resolution for fields
+// that set ResolveAppend, so graphql-go's __typename machinery never
+// fires — the upstream's bare type name would leak into the local
+// response unless we patch it here.
+//
+// The scanner tracks string-literal context so a string VALUE that
+// literally contains the substring `"__typename":"..."` doesn't get
+// rewritten (rare in practice — JSON would have escaped the inner
+// quotes, but defensive). Numbers, true/false/null on the value side
+// are not type names; the scanner requires a quoted value.
+func (m *graphQLMirror) prefixResponseTypenames(src []byte) []byte {
+	prefix := m.src.namespace + "_"
+	target := []byte(`"__typename"`)
+	out := make([]byte, 0, len(src)+8)
+	i := 0
+	for i < len(src) {
+		// Find next candidate key position. To be a key, the
+		// `"__typename"` literal must appear at a JSON-key slot,
+		// preceded by `{` or `,` (with optional whitespace) and
+		// followed by `:` (with optional whitespace).
+		j := indexAtKey(src[i:], target)
+		if j < 0 {
+			out = append(out, src[i:]...)
+			break
+		}
+		// Append up to and including the key + colon + whitespace.
+		out = append(out, src[i:i+j+len(target)]...)
+		i += j + len(target)
+		// Skip optional whitespace.
+		for i < len(src) && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
+			out = append(out, src[i])
+			i++
+		}
+		// Expect colon.
+		if i >= len(src) || src[i] != ':' {
+			continue
+		}
+		out = append(out, src[i])
+		i++
+		// Skip optional whitespace after colon.
+		for i < len(src) && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
+			out = append(out, src[i])
+			i++
+		}
+		// Expect quoted value.
+		if i >= len(src) || src[i] != '"' {
+			continue
+		}
+		// Emit opening quote, then prefix, then the rest of the value
+		// up to the closing quote.
+		out = append(out, '"')
+		out = append(out, prefix...)
+		i++
+		for i < len(src) {
+			c := src[i]
+			if c == '\\' && i+1 < len(src) {
+				out = append(out, c, src[i+1])
+				i += 2
+				continue
+			}
+			out = append(out, c)
+			i++
+			if c == '"' {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// indexAtKey returns the index of the first occurrence of `key`
+// (a quoted JSON identifier, e.g. `"__typename"`) in src that sits
+// at a JSON-object key position — preceded by `{` or `,` with
+// optional whitespace, and not inside a string literal. Returns -1
+// when no such occurrence exists.
+//
+// The scanner is byte-level; doesn't allocate.
+func indexAtKey(src, key []byte) int {
+	inString := false
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		switch {
+		case inString:
+			if c == '\\' && i+1 < len(src) {
+				i++ // skip escaped char
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+		case c == '"':
+			// Check whether this `"` begins our target key. The key
+			// itself starts with `"`; if the surrounding context is a
+			// key slot, this is the match. The preceding non-whitespace
+			// byte should be `{` or `,`.
+			pos := i - 1
+			for pos >= 0 && (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r') {
+				pos--
+			}
+			if pos < 0 || src[pos] == '{' || src[pos] == ',' {
+				if i+len(key) <= len(src) && bytesEqual(src[i:i+len(key)], key) {
+					return i
+				}
+			}
+			inString = true
+		}
+	}
+	return -1
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

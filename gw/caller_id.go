@@ -162,6 +162,9 @@ func (g *Gateway) callerIDEnforceMiddleware() ir.DispatcherMiddleware {
 	ex := g.cfg.callerIDExtractor
 	headers := g.cfg.callerHeaders
 	return func(next ir.Dispatcher) ir.Dispatcher {
+		if appendNext, ok := next.(ir.AppendDispatcher); ok {
+			return &callerIDEnforceAppendWrapper{next: appendNext, extractor: ex, headers: headers}
+		}
 		return ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 			if err := enforceCallerID(ctx, ex, headers); err != nil {
 				return nil, err
@@ -170,6 +173,31 @@ func (g *Gateway) callerIDEnforceMiddleware() ir.DispatcherMiddleware {
 		})
 	}
 }
+
+// callerIDEnforceAppendWrapper preserves AppendDispatcher across the
+// caller-id enforcement gate so an inner byte-splice dispatcher keeps
+// its fast path. Same enforce-then-call shape; just on both surfaces.
+type callerIDEnforceAppendWrapper struct {
+	next      ir.AppendDispatcher
+	extractor CallerIDExtractor
+	headers   []string
+}
+
+func (c *callerIDEnforceAppendWrapper) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	if err := enforceCallerID(ctx, c.extractor, c.headers); err != nil {
+		return nil, err
+	}
+	return c.next.Dispatch(ctx, args)
+}
+
+func (c *callerIDEnforceAppendWrapper) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	if err := enforceCallerID(ctx, c.extractor, c.headers); err != nil {
+		return dst, err
+	}
+	return c.next.DispatchAppend(ctx, args, dst)
+}
+
+var _ ir.AppendDispatcher = (*callerIDEnforceAppendWrapper)(nil)
 
 // OtherCallerID is the bucket label every caller past the
 // WithCallerIDMetricsTopK cap is folded into. Operators can scrape it

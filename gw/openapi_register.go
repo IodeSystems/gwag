@@ -40,6 +40,10 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 		chain = g.runtimeChain()
 	}
 
+	// Compute latest version per namespace so the dispatcher can emit
+	// the same `<ns>_` or `<ns>_<vN>_` __typename prefix the renderer
+	// builds. Mirrors graphql_register.go's latestByNS pass.
+	latestByNS := map[string]int{}
 	for _, svc := range svcs {
 		if svc.OriginKind != ir.KindOpenAPI {
 			continue
@@ -48,12 +52,33 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 		if src == nil {
 			continue
 		}
+		if v, ok := latestByNS[svc.Namespace]; !ok || src.versionN > v {
+			latestByNS[svc.Namespace] = src.versionN
+		}
+	}
+
+	for _, svc := range svcs {
+		if svc.OriginKind != ir.KindOpenAPI {
+			continue
+		}
+		src := g.openAPISlot(poolKey{namespace: svc.Namespace, version: svc.Version})
+		if src == nil {
+			continue
+		}
+		isLatest := src.versionN == latestByNS[svc.Namespace]
+		typePrefix := svc.Namespace + "_"
+		if !isLatest && svc.Version != "" {
+			typePrefix = svc.Namespace + "_" + svc.Version + "_"
+		}
 		for _, op := range svc.Operations {
 			openAPIOp, _ := op.Origin.(*openapi3.Operation)
 			if openAPIOp == nil {
 				return fmt.Errorf("openapi: ingest dropped op origin for %s/%s/%s", svc.Namespace, svc.Version, op.Name)
 			}
 			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp)
+			core.svc = svc
+			core.irOp = op
+			core.typePrefix = typePrefix
 			var dispatcher ir.Dispatcher = backpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
 			if chain != nil {
 				if md, ok := inputDescs[op.SchemaID]; ok {
