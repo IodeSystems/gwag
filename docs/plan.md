@@ -76,15 +76,6 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 - [ ] **Metric: `gateway_ws_rejected_total{reason=...}`.** ~0.25d.
 - [ ] **Doc note in `docs/operations.md`** — when the cap is load-bearing (gateway at the edge) vs redundant (proxy / CDN terminates WS first). ~0.25d.
 
-### `CHANGELOG.md` + release versioning
-
-**The push.** Pre-v1 has been "main is the truth, no tags." v1 = first stable tag; adopters need to know what changed between releases. Conventional-commits-derived but human-edited; one section per release; `Unreleased` at the top while main moves. Pair with `RELEASE.md` describing the release flow (tag, push, `gh release create`, container image bump if any).
-
-**Todo.**
-- [ ] **`CHANGELOG.md` v0 → v1 retrospective.** One section summarizing what landed pre-v1 — proto / OpenAPI / GraphQL ingest, tier model, control plane, pub/sub, gat, etc. Source: git log + `docs/plan.md` decisions log. ~1d.
-- [ ] **`RELEASE.md`** — tag + push + `gh release` + (later) container publish flow. ~0.25d.
-- [ ] **`Unreleased` section convention** + a one-line reminder in `AGENTS.md` to update it when a commit touches public surface. ~0.25d.
-
 ### Competitor performance matrix (gwag vs graphql-mesh / Apollo Router / WunderGraph)
 
 **The push.** "How do you compare to X?" is a top-three adopter question — `docs/perf.md` answers "how does gwag perform on my hardware?", not the comparative one. Ships *with* v1, doesn't gate it: if the pitch / API / wire-rename / tracing / uploads / WS caps / changelog all land but the matrix isn't published, the release still goes — adopters get a "comparison coming soon" rather than blocking v1 on someone else's Docker image. Scaffolding lives at `perf/` (root-level, separate from `bench/` which is for self-measurement only): hermetic Docker image, declarative `perf/competitors.yaml`, orchestrator at `perf/cmd/compare/main.go` running each gateway serially against shared backends to avoid CPU contention. Three peers in scope for v1: graphql-mesh (closest peer — multi-format ingest), Apollo Router (federation specialist in single-subgraph mode), and gwag itself. WunderGraph deferred (codegen-heavy, dual-process — `enabled: false` in competitors.yaml). Output: `perf/comparison.md`.

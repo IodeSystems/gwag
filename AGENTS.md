@@ -139,3 +139,16 @@ Example:
 
     Extract ChannelBindings into slot.ir at bake time so the
     reconciler can route deletes without walking per-kind maps.
+
+## Changelog
+
+If your change touches a public surface (exported symbols marked
+`// Stability: stable`, wire-format fields, HTTP routes, metric
+names, build / release artefacts), add a one-line entry to
+`CHANGELOG.md` under `## Unreleased`. Section by intent: `Added` /
+`Changed` / `Deprecated` / `Removed` / `Fixed` / `Security` /
+`Migration`. Skip the file entirely for internal refactors, tests,
+docs that don't promise anything new.
+
+Stability contract: [`docs/stability.md`](./docs/stability.md).
+Release flow: [`RELEASE.md`](./RELEASE.md).
