@@ -123,6 +123,38 @@ func MakeSchemaID(namespace, version, flatName string) SchemaID {
 	return SchemaID(namespace + "/" + version + "/" + flatName)
 }
 
+// Parts splits a SchemaID into its three components: namespace,
+// version, and flat operation name. Empty strings come back when the
+// id has fewer than two "/" separators; the registry treats the id as
+// opaque, but tracing / logging sites benefit from the split.
+//
+// Stability: stable
+func (id SchemaID) Parts() (namespace, version, op string) {
+	s := string(id)
+	first := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return "", "", s
+	}
+	rest := s[first+1:]
+	second := -1
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '/' {
+			second = i
+			break
+		}
+	}
+	if second < 0 {
+		return s[:first], rest, ""
+	}
+	return s[:first], rest[:second], rest[second+1:]
+}
+
 // PopulateSchemaIDs walks every Operation reachable from `svc`
 // (top-level + every Group descendant) and stamps SchemaID using
 // MakeSchemaID with the flat path-joined name. Idempotent — call

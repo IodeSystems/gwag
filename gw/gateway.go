@@ -21,6 +21,7 @@ import (
 
 	"github.com/IodeSystems/graphql-go"
 	"github.com/IodeSystems/graphql-go/gqlerrors"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -91,6 +92,12 @@ type Gateway struct {
 	cp         *controlPlane
 	peers      *peerTracker
 	broker     *subBroker
+
+	// tracer wraps the configured OpenTelemetry TracerProvider plus a
+	// W3C TraceContext propagator. Always non-nil — when WithTracer is
+	// unset it adapts a noop provider so ingress / dispatch sites can
+	// open spans unconditionally.
+	tracer *tracer
 
 	// dispatchers holds one ir.Dispatcher per (namespace, version,
 	// flat-op-name) populated by the per-format field builders during
@@ -217,10 +224,11 @@ type rejectedJoinSummary struct {
 // Stability: stable
 type Option func(*config)
 type config struct {
-	cluster      *Cluster
-	tls          *tls.Config
-	metrics      Metrics
-	backpressure BackpressureOptions
+	cluster        *Cluster
+	tls            *tls.Config
+	metrics        Metrics
+	tracerProvider oteltrace.TracerProvider
+	backpressure   BackpressureOptions
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
@@ -616,6 +624,24 @@ func WithoutMetrics() Option {
 	return func(cfg *config) { cfg.metrics = noopMetrics{} }
 }
 
+// WithTracer installs an OpenTelemetry TracerProvider for distributed
+// tracing. When set, the gateway opens one server-kind span per ingress
+// request (GraphQL / HTTP / gRPC) with `gateway.ingress`, plus
+// `gateway.namespace` and `gateway.method` on the typed ingresses, and
+// one client-kind child span per outbound dispatch. Inbound traceparent
+// headers (W3C TraceContext) join the caller's trace; outbound calls
+// inject traceparent on HTTP headers and gRPC metadata so downstream
+// services see the same trace.
+//
+// Pass any trace.TracerProvider — the SDK at go.opentelemetry.io/otel/sdk
+// is the canonical choice; the no-op default applies when WithTracer is
+// not called (tracing-related cost stays near zero).
+//
+// Stability: stable
+func WithTracer(tp oteltrace.TracerProvider) Option {
+	return func(cfg *config) { cfg.tracerProvider = tp }
+}
+
 // WithCluster binds the gateway to an embedded NATS cluster. When set,
 // the gateway uses JetStream KV for the service registry and peer
 // tracking (replacing the in-memory map). Without it, the gateway falls
@@ -936,6 +962,7 @@ func New(opts ...Option) *Gateway {
 		dispatchers: ir.NewDispatchRegistry(),
 		stats:       stats,
 		stableChanged: make(chan struct{}, 16),
+		tracer:      newTracer(cfg.tracerProvider),
 	}
 	// WithCallerIDDelegated needs the live *Gateway to look up the
 	// _caller_auth/v1 pool at call time, so the extractor wrapper is
@@ -1612,7 +1639,14 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		schema := g.schema.Load()
-		ctx, accum := withDispatchAccumulator(r.Context())
+		ctx := g.tracer.extractHTTP(r.Context(), r.Header)
+		ctx, span := g.tracer.startIngressSpan(ctx, "gateway.graphql",
+			ingressAttr("graphql"),
+			httpMethodAttr(r.Method),
+			httpTargetAttr(r.URL.Path),
+		)
+		defer span.End()
+		ctx, accum := withDispatchAccumulator(ctx)
 		ctx = withInjectCache(ctx)
 		ctx = withHTTPRequest(ctx, r)
 		start := time.Now()

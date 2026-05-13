@@ -427,16 +427,39 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ns, ver, op := route.schemaID.Parts()
 	if route.shape == ingressShapeSubscription {
 		// SSE subscription lifetime is open-ended; request_*_seconds is
 		// not meaningful here. Skip the accumulator + recording.
-		ctx := withInjectCache(r.Context())
+		ctx := g.tracer.extractHTTP(r.Context(), r.Header)
+		ctx, span := g.tracer.startIngressSpan(ctx, "gateway.http.subscription",
+			ingressAttr("http"),
+			namespaceAttr(ns),
+			versionAttr(ver),
+			methodAttr(op),
+			httpMethodAttr(r.Method),
+			httpTargetAttr(r.URL.Path),
+			httpRouteAttr(route.path),
+		)
+		defer span.End()
+		ctx = withInjectCache(ctx)
 		ctx = withHTTPRequest(ctx, r)
 		streamSSE(ctx, w, route, args)
 		return
 	}
 
-	ctx, accum := withDispatchAccumulator(r.Context())
+	ctx := g.tracer.extractHTTP(r.Context(), r.Header)
+	ctx, span := g.tracer.startIngressSpan(ctx, "gateway.http",
+		ingressAttr("http"),
+		namespaceAttr(ns),
+		versionAttr(ver),
+		methodAttr(op),
+		httpMethodAttr(r.Method),
+		httpTargetAttr(r.URL.Path),
+		httpRouteAttr(route.path),
+	)
+	defer span.End()
+	ctx, accum := withDispatchAccumulator(ctx)
 	ctx = withInjectCache(ctx)
 	ctx = withHTTPRequest(ctx, r)
 	start := time.Now()

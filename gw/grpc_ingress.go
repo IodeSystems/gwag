@@ -374,8 +374,26 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return status.Errorf(codes.Unimplemented, "ingress: no route for %s", method)
 	}
 
+	ns, ver := "", ""
+	if route.pool != nil {
+		ns, ver = route.pool.key.namespace, route.pool.key.version
+	}
+
 	if route.streaming {
 		// Subscription lifetime is open-ended; skip request_*_seconds.
+		// Trace context is extracted + a span opened so the ingress
+		// timing lands in the trace; child spans on the dispatcher
+		// path land under the ingress span via the per-dispatch wiring.
+		ctx := g.tracer.extractGRPC(stream.Context())
+		_, span := g.tracer.startIngressSpan(ctx, "gateway.grpc.subscription",
+			ingressAttr("grpc"),
+			namespaceAttr(ns),
+			versionAttr(ver),
+			methodAttr(method),
+			grpcSystemAttr(),
+			rpcMethodAttr(method),
+		)
+		defer span.End()
 		return g.serveGRPCStreamingUnknown(stream, route)
 	}
 
@@ -391,7 +409,17 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		return status.Errorf(codes.InvalidArgument, "ingress: decode request: %v", err)
 	}
 
-	ctx, accum := withDispatchAccumulator(stream.Context())
+	ctx := g.tracer.extractGRPC(stream.Context())
+	ctx, span := g.tracer.startIngressSpan(ctx, "gateway.grpc",
+		ingressAttr("grpc"),
+		namespaceAttr(ns),
+		versionAttr(ver),
+		methodAttr(method),
+		grpcSystemAttr(),
+		rpcMethodAttr(method),
+	)
+	defer span.End()
+	ctx, accum := withDispatchAccumulator(ctx)
 	ctx = withInjectCache(ctx)
 	start := time.Now()
 	defer func() {

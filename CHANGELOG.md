@@ -10,6 +10,19 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gw.WithTracer(trace.TracerProvider)` (gw/gateway.go) installs an
+  OpenTelemetry TracerProvider for distributed tracing. Per-request
+  server-kind spans land at every ingress shape: GraphQL
+  (`gateway.graphql`), HTTP/JSON (`gateway.http`), gRPC
+  (`gateway.grpc`), plus `.subscription` variants for SSE and gRPC
+  server-streaming. Spans carry the canonical `gateway.ingress` /
+  `gateway.namespace` / `gateway.method` attribute trio plus
+  ingress-specific `http.*` / `rpc.*` keys from the OpenTelemetry
+  semantic conventions. W3C TraceContext (`traceparent`) is honoured on
+  inbound HTTP headers and gRPC metadata so the gateway joins the
+  caller's trace. When the option is unset, a noop tracer is wired and
+  per-request cost stays near zero. Default builds depend on
+  `go.opentelemetry.io/otel` directly.
 - `Upload` GraphQL scalar (`gw.UploadScalar`, `*gw.Upload`) — exposed
   in every assembled schema so clients can declare `mutation
   ($f: Upload!)` against upload-capable fields. End-to-end multipart
