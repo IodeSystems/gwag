@@ -13,8 +13,8 @@
 // Authorization header in graphql-request's lazy headers callback
 // always reads the current value (the callback fires per request).
 
-const KEY = 'go-api-gateway:admin-token';
-const EVENT = 'go-api-gateway:admin-token-changed';
+const KEY = 'gwag:admin-token';
+const EVENT = 'gwag:admin-token-changed';
 
 /**
  * Returns the currently-stored token, or null if unset / SSR.

@@ -33,7 +33,7 @@ import (
 // edits converge cluster-wide without per-call coordination.
 
 const (
-	mcpConfigBucketName = "go-api-gateway-mcp-config"
+	mcpConfigBucketName = "gwag-mcp-config"
 	mcpConfigKey        = "config"
 	mcpConfigTTL        = 0
 )

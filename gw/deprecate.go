@@ -15,7 +15,7 @@ import (
 // it on/off via Deprecate / Undeprecate admin RPCs; the renderer OR-
 // combines the manual reason with auto-deprecation of older `vN`
 // cuts. State lives on the slot in-process and (in cluster mode) in
-// the `go-api-gateway-deprecated` KV bucket so it propagates across
+// the `gwag-deprecated` KV bucket so it propagates across
 // peers and survives restarts.
 
 // deprecatedKVValue is the JSON payload written to the deprecated KV

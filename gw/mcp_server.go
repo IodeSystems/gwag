@@ -26,7 +26,7 @@ import (
 // Stability: experimental
 func (g *Gateway) MCPHandler() http.Handler {
 	srv := server.NewMCPServer(
-		"go-api-gateway",
+		"gwag",
 		"1.0.0",
 		server.WithToolCapabilities(false),
 	)

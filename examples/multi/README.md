@@ -116,7 +116,7 @@ using admin token from /tmp/gwag-multi/admin-token (64 hex chars)
   → MCPConfig: {"auto_include":false,"include":["greeter.**","library.**"],"exclude":[]}
 
 --- step 2 — open MCP client at http://localhost:8080/api/mcp ---
-  → server: go-api-gateway 1.0.0
+  → server: gwag 1.0.0
 
 --- step 3 — tools/list ---
   → schema_list — List every operation exposed via the MCP surface, grouped by Query / Mutation / Subscription.
@@ -203,7 +203,7 @@ $ for p in 18080 18081 18082; do
 ```
 
 Behind the scenes:
-- `Register` writes to the `go-api-gateway-registry` KV bucket; it does
+- `Register` writes to the `gwag-registry` KV bucket; it does
   not touch local pool state.
 - Every gateway watches that bucket and reconciles its pools on each
   Put/Delete, dialing the advertised addr through its own conn pool.

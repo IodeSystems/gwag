@@ -65,8 +65,8 @@ func TestMCPHandler_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	if initRes.ServerInfo.Name != "go-api-gateway" {
-		t.Errorf("server name=%q, want go-api-gateway", initRes.ServerInfo.Name)
+	if initRes.ServerInfo.Name != "gwag" {
+		t.Errorf("server name=%q, want gwag", initRes.ServerInfo.Name)
 	}
 
 	tools, err := client.ListTools(ctx, mcp.ListToolsRequest{})

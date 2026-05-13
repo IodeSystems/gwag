@@ -1,5 +1,5 @@
 // Package controlclient is the convenience layer subservices use to
-// self-register with a go-api-gateway control plane: one Register call,
+// self-register with a gwag control plane: one Register call,
 // a background heartbeat goroutine, and graceful Deregister on Close.
 //
 //	//go:embed greeter.proto

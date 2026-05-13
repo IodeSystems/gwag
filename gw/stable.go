@@ -34,7 +34,7 @@ func (g *Gateway) broadcastStableChanged() {
 // RPC (separate todo, plan §4) is the only path that decrements.
 //
 // Standalone gateways keep this map purely in-process. Cluster-mode
-// gateways persist it in the dedicated `go-api-gateway-stable` KV
+// gateways persist it in the dedicated `gwag-stable` KV
 // bucket (TTL=0): a TTL-less monotonic value per namespace. Each
 // node watches the bucket and converges its local map; writeback on
 // advance uses CAS so concurrent peers picking different values

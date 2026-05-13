@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	peersBucketName      = "go-api-gateway-peers"
-	registryBucketName   = "go-api-gateway-registry"
-	stableBucketName     = "go-api-gateway-stable"
-	deprecatedBucketName = "go-api-gateway-deprecated"
+	peersBucketName      = "gwag-peers"
+	registryBucketName   = "gwag-registry"
+	stableBucketName     = "gwag-stable"
+	deprecatedBucketName = "gwag-deprecated"
 
 	peerTTL     = 30 * time.Second
 	peerRefresh = 10 * time.Second

@@ -42,16 +42,6 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **Followups.** Launch announcement / blog post / HN-shaped writeup are downstream of these — write them once the doc above exists and we know what to point at.
 
-### Wire-level identifier rename to `gwag-*`
-
-**The push.** JetStream bucket names (`go-api-gateway-{registry,peers,stable,deprecated,mcp-config}`), default NATS cluster name (`go-api-gateway`), MCP server-info string, and UI `localStorage` keys (`go-api-gateway:admin-token{,-changed}`) still say `go-api-gateway`. Pre-1.0 = the rename is free; post-1.0 = a breaking change with a migration story. Do it now. Existing dev installs need fresh data dirs and UI sessions lose their saved token; pre-release that's a one-line release note.
-
-**Todo.**
-- [ ] **JetStream bucket renames** + reconciler / cluster code references. ~0.25d.
-- [ ] **Default NATS cluster name** (`go-api-gateway` → `gwag`). ~0.1d.
-- [ ] **MCP server-info string + UI `localStorage` keys.** ~0.25d.
-- [ ] **Migration note** in `CHANGELOG.md` / README ("dev installs from <0.X: wipe `.gw/` and re-login"). ~0.1d.
-
 ### Distributed tracing (OpenTelemetry)
 
 **The push.** "Do you support OpenTelemetry?" is one of the first questions any enterprise evaluator asks. Metrics ship; tracing doesn't. Shape: `WithTracer(tp trace.TracerProvider)` option that spans ingress → dispatch → upstream call, propagates `traceparent` headers downstream, joins inbound traces when the request carries `traceparent`. Implementation stays shallow — one span per request, one per upstream call. Optional dep (`go.opentelemetry.io/otel`) gated by the option so default builds don't pull it.

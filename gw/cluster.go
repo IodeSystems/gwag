@@ -51,9 +51,8 @@ type ClusterOptions struct {
 	DataDir       string // JetStream storage; required for persistence
 
 	// ClusterName is the NATS cluster identifier. Empty keeps the
-	// default "go-api-gateway"; set to anything distinct (e.g.
-	// "go-api-gateway-prod") to prevent cross-cluster federation in
-	// shared networks.
+	// default "gwag"; set to anything distinct (e.g. "gwag-prod") to
+	// prevent cross-cluster federation in shared networks.
 	ClusterName string
 
 	// StartTimeout caps how long we wait for the server to be ready.
@@ -149,7 +148,7 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		}
 		clusterName := opts.ClusterName
 		if clusterName == "" {
-			clusterName = "go-api-gateway"
+			clusterName = "gwag"
 		}
 		srvOpts.Cluster = natsd.ClusterOpts{
 			Name: clusterName,

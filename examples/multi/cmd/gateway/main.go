@@ -82,7 +82,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "Server cert (PEM); enables mTLS on cluster routes + outbound gRPC")
 	tlsKey := flag.String("tls-key", "", "Server key (PEM); pair with --tls-cert")
 	tlsCA := flag.String("tls-ca", "", "CA bundle (PEM) used to verify peer certs")
-	clusterName := flag.String("nats-cluster-name", "", "NATS cluster identifier; empty defaults to \"go-api-gateway\". Set distinct values across deployments that must not federate.")
+	clusterName := flag.String("nats-cluster-name", "", "NATS cluster identifier; empty defaults to \"gwag\". Set distinct values across deployments that must not federate.")
 	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool unary dispatch concurrency cap; 0 disables")
 	maxStreams := flag.Int("max-streams", gateway.DefaultBackpressure.MaxStreams, "Per-pool subscription stream cap; 0 disables")
 	maxStreamsTotal := flag.Int("max-streams-total", gateway.DefaultBackpressure.MaxStreamsTotal, "Gateway-wide subscription stream cap; 0 disables")

@@ -72,13 +72,13 @@ type Gateway struct {
 	stats *statsRegistry
 
 	// deprecation is the side-state mirror of the cluster
-	// `go-api-gateway-deprecated` KV bucket. The watch loop
+	// `gwag-deprecated` KV bucket. The watch loop
 	// populates it; registerSlotLocked reads it to stamp newly-
 	// joining slots that already have a deprecation set (covers the
 	// reconciler-arrives-after-watch race). Plan §5.
 	deprecation map[poolKey]string
 
-	// mcpConfig mirrors the cluster `go-api-gateway-mcp-config` KV
+	// mcpConfig mirrors the cluster `gwag-mcp-config` KV
 	// bucket — the operator-curated MCP surface allowlist consumed
 	// by the schema_list / schema_search / schema_expand tools. The
 	// watch loop on peerTracker populates it in cluster mode;
