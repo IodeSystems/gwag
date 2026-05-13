@@ -43,17 +43,32 @@ service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    
 
 ## How to use it
 
-Two shapes, same wire surface:
+Four shapes, same wire surface — pick the one that matches your
+deployment:
 
-- **Standalone gwag** — one binary fronting many services. Runtime
-  registration over the gRPC control plane; HA via embedded NATS;
-  admin UI; subscriptions. Start here if you have a fleet. Jump to
-  [Quickstart](#unified-cross-format-apis) below.
-- **Embedded gat** — one Go binary serving its own
-  [huma](https://huma.rocks/) operations as REST + GraphQL + gRPC
-  on one port. No NATS, no cluster, no admin endpoints. Start here
-  if you have one binary and want typed clients without standing
-  up a separate gateway process. Jump to [Embedded mode (`gat`)](#embedded-mode-gat).
+- **Standalone gwag — API gateway, aggregator, translator.** One
+  binary fronting many services. Runtime registration over the gRPC
+  control plane; HA via embedded NATS; admin UI; subscriptions.
+  Start here if you have a fleet. Jump to
+  [Quickstart](#unified-cross-format-apis).
+- **Embedded gat — in-process GraphQL API translator.** One Go
+  binary serving its own [huma](https://huma.rocks/) operations as
+  REST + GraphQL + gRPC on one port. No NATS, no cluster, no admin.
+  Start here if you have one binary and want typed clients without
+  standing up a separate gateway process. Jump to
+  [Embedded mode (`gat`)](#embedded-mode-gat).
+- **MCP exposure — let LLM agents query the gateway directly.**
+  `gw.MountMCP(mux)` wraps the gateway as four MCP tools
+  (`schema_list` / `schema_search` / `schema_expand` / `query`) on
+  `/mcp`. Operator-curated allowlist; AdminMiddleware-gated. See
+  [`docs/mcp.md`](./docs/mcp.md).
+- **CLI shortcut — typed surfaces + metrics over one upstream.**
+  `gwag serve --openapi spec.yaml --to URL`,
+  `gwag serve --proto file.proto --to HOST:PORT`, or
+  `gwag serve --graphql URL` exposes any single upstream as all
+  three typed surfaces. `--graphql` routes through the full
+  gateway (metrics, backpressure, subscription proxy, optional
+  `--mcp`); `--openapi` / `--proto` use the lite gat path.
 
 ## Unified cross-format APIs
 
@@ -277,9 +292,18 @@ After 1.0:
 - **Static codegen + plugin supervisor.** Opt-in native-speed
   dispatch on top of reflection. Layers on; default stays reflection.
 
-Open to: WSDL / SOAP ingest; service-account / OAuth-JWT outbound
-auth helpers; static `--openapi` / `--graphql` flags on the full
-gateway (gat already covers single-upstream via `gwag serve`).
+Open to (pulled in by a real use case):
+
+- **AddMCP ingest** — register a downstream MCP server as a fourth
+  ingest kind. Each upstream tool becomes an IR operation, surfacing
+  through GraphQL / proto / OpenAPI clients alongside everything
+  else. Two frictions to size first: most MCP tools don't ship an
+  `outputSchema` (falls back to a `JSON` scalar passthrough), and
+  `tools/listChanged` notifications need a refresh story.
+- **WSDL / SOAP ingest.** Corporate legacy services that can't be
+  rewritten.
+- **Service-account / OAuth-JWT outbound auth helpers.** Composable
+  today; first-class when an adopter pulls.
 
 Not planned: Apollo Federation entity-merging (stitching covers
 the common case); AsyncAPI export.

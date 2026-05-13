@@ -10,6 +10,12 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gwag serve --graphql URL [--mcp] [--mcp-include GLOB]`
+  (gw/cmd/gwag/serve.go) fronts one downstream GraphQL service with
+  the full gateway — metrics, backpressure, subscription proxy, and
+  an optional `/mcp` mount. `--openapi` and `--proto` keep using the
+  lighter gat translator. README "How to use it" lists all four
+  shapes (standalone, gat, MCP exposure, CLI shortcut).
 - `gw.WithMCPInclude(globs...)` / `gw.WithMCPExclude(globs...)` /
   `gw.WithMCPAutoInclude()` (gw/gateway.go) seed the MCP allowlist at
   construction. Operators declare which operations agents can call
