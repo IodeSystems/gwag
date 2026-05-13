@@ -11,6 +11,14 @@ serve:
   hostname: 0.0.0.0
   port: 14000
 
+# Use the in-memory LRU cache (server-side). Mesh's default is
+# `localforage`, but that package ships browser DB drivers and ends
+# up nested under @graphql-mesh/cli/node_modules in current installs,
+# where `include()` (which uses cwd-rooted jiti) can't resolve it.
+# The in-memory cache is a top-level dep and avoids the whole path.
+cache:
+  inmemoryLRU: {}
+
 sources:
   - name: hello_graphql
     handler:

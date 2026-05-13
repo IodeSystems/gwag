@@ -4,9 +4,10 @@
   "private": true,
   "description": "graphql-mesh harness for the gwag perf comparison.",
   "dependencies": {
-    "@graphql-mesh/cli": "^0.95.0",
-    "@graphql-mesh/graphql": "^0.103.0",
-    "@graphql-mesh/openapi": "^0.105.0",
-    "graphql": "^16.9.0"
+    "@graphql-mesh/cli": "0.100.52",
+    "@graphql-mesh/graphql": "0.104.39",
+    "@graphql-mesh/openapi": "0.109.53",
+    "@graphql-mesh/cache-inmemory-lru": "0.8.37",
+    "graphql": "16.11.0"
   }
 }

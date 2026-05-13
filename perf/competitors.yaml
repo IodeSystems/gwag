@@ -55,18 +55,15 @@ gateways:
   - name: mesh
     description: "graphql-mesh (Node, npm-distributed; multi-format ingest peer)"
     target_template: "http://localhost:14000/graphql"
-    # Disabled in default config — current mesh CLI (^0.95.0) hits
-    # "TypeError: Cache is not a constructor" at `mesh build` time.
-    # Cross-version pinning across @graphql-mesh/cli + handlers needs
-    # work; bumping to mesh 1.x will likely require config rewrite
-    # (new package names @graphql-mesh/serve-cli etc.).
-    enabled: false
-    # Field renaming differs from gwag's namespace-prefix mirror;
-    # the orchestrator applies a per-gateway query transform when
-    # needed. See configs/mesh/.meshrc.yaml.
+    # Mesh's stitched schema doesn't prefix per-source by default —
+    # both sources land at the schema root. The gwag canonical
+    # queries use `hello_proto`/`hello_openapi`/`hello_graphql`
+    # namespaces; mesh's overrides drop the prefix. OpenAPI input
+    # parameter name is also `input` (mesh's mapping) not `body`
+    # (gwag's mapping).
     query_overrides:
-      graphql: '{ hello_graphql_hello(name: "world") { greeting } }'
-      openapi: 'mutation { Hello(body: { name: "world" }) { greeting } }'
+      graphql: '{ hello(name: "world") { greeting } }'
+      openapi: 'mutation { Hello(input: { name: "world" }) { greeting } }'
 
   - name: apollo
     description: "Apollo Router (Rust, GraphQL-federation specialist; single-subgraph mode here)"
