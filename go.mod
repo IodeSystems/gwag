@@ -2,17 +2,9 @@ module github.com/iodesystems/gwag
 
 go 1.26.2
 
-// Local replace while the fork's Path-removal change is unreleased.
-// Drops `Path *ResponsePath` from ResolveInfo + the ResponsePath
-// type; both walkers (ExecutePlan + ExecutePlanAppend) and the
-// subscription handler now use eCtx.pathBuf as the single source
-// for error-envelope paths. To be removed once the fork tags
-// v2.0.0 and this module's import path bumps accordingly.
-replace github.com/IodeSystems/graphql-go => ../graphql-go
-
 require (
 	connectrpc.com/connect v1.19.2
-	github.com/IodeSystems/graphql-go v1.0.0
+	github.com/IodeSystems/graphql-go v1.1.0
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/getkin/kin-openapi v0.138.0
