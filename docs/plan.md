@@ -42,21 +42,6 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **Followups.** Launch announcement / blog post / HN-shaped writeup are downstream of these — write them once the doc above exists and we know what to point at.
 
-### Public API audit + SemVer commitment
-
-**The push.** v1 advertises "this surface won't break for 1.x." Today we can't make that promise — `gw/` has accreted exports through every feature workstream; some are intentionally public (`Option`, `Register*`, `With*`), some are test helpers that escaped, some are types that leaked for one caller. Without a curated split, the promise is unbounded. One pass with a public/internal classification before v1, then keep it. Lands before uploads / WS caps / tracing so new options ship on the locked surface.
-
-**Done.** `gw/` classified in `docs/api-audit.md` — 94 Public / 25 Internal / 8 Keep-Public-Pending-Review / 0 Deprecated (ae6e42f). Boundary calls ruled on: IR re-export shims dropped (4fb9a54); InternalProto handler types, admin-internal MCP/stats/inject wire types, BackpressureConfig+Middleware, the Hide/Nullable rewrite concrete types, the auth/HTTP context helpers, and Transform.{Headers,Inventory} (now opaque) all unexported (7923f9e). Handler+Middleware function types stayed Public on review — `docs/middleware.md` documents the manual `Transform{Runtime: mw}` pattern, which the audit initially missed.
-
-**Todo.**
-- [x] **Audit `gw/` exports; classify Public / Internal / Deprecated.** Walk `go doc github.com/iodesystems/gwag/gw` output, decide per symbol. Move internal helpers to `gw/internal/...` or unexport; nothing breaks at the import boundary. ~1.5d.
-- [x] **Same pass for `gw/gat`.** Smaller surface — lock before gat's proto-ingest todo (Tier 2) lands. ~0.5d. *(a469423: dropped six dead exports — `Option`, `config`, `As`, `Version`, `ServiceOption`, `ServiceConfig` — none had a single caller in or out of the package.)*
-- [x] **Same pass for `gw/ir`.** Public-by-design (gat consumes it); quick sanity audit. ~0.25d. *(No moves needed; `docs/api-audit.md` records the result.)*
-- [ ] **`docs/stability.md`.** SemVer promise spelled out: what counts as a breaking `Option` change vs additive; wire-format guarantees on `proto_source` / `openapi_spec`; when the IR is allowed to evolve. ~0.5d.
-- [ ] **Stability annotations on exported symbols.** Godoc convention — `// Stability: stable` / `// Stability: experimental`. `gat`, codegen, plugin paths are experimental; the canonical reflection path is stable. ~0.5d.
-
-**Followups.** When the audit surfaces a symbol that needs renaming, do it here — pre-1.0 is the only free time.
-
 ### Wire-level identifier rename to `gwag-*`
 
 **The push.** JetStream bucket names (`go-api-gateway-{registry,peers,stable,deprecated,mcp-config}`), default NATS cluster name (`go-api-gateway`), MCP server-info string, and UI `localStorage` keys (`go-api-gateway:admin-token{,-changed}`) still say `go-api-gateway`. Pre-1.0 = the rename is free; post-1.0 = a breaking change with a migration story. Do it now. Existing dev installs need fresh data dirs and UI sessions lose their saved token; pre-release that's a one-line release note.
