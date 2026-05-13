@@ -48,38 +48,6 @@ type Gateway struct {
 	built bool
 }
 
-// Option configures the gat gateway.
-type Option func(*config)
-
-type config struct {
-	namespace string
-	version   string
-}
-
-// As sets the GraphQL namespace prefix for a service. Default is
-// derived from the spec's title or "openapi".
-func As(ns string) ServiceOption {
-	return func(sc *ServiceConfig) {
-		sc.namespace = ns
-	}
-}
-
-// Version sets the service version (e.g. "v1"). Default is "v1".
-func Version(v string) ServiceOption {
-	return func(sc *ServiceConfig) {
-		sc.version = v
-	}
-}
-
-// ServiceOption configures one service registration.
-type ServiceOption func(*ServiceConfig)
-
-// ServiceConfig holds registration options for one service.
-type ServiceConfig struct {
-	namespace string
-	version   string
-}
-
 // ServiceRegistration pairs an IR service with its dispatch config.
 type ServiceRegistration struct {
 	Service   *ir.Service

@@ -298,3 +298,40 @@ These are `*Gateway` methods that power the admin HTTP surface — they're calle
 
 ### `BackpressureConfig` / `BackpressureMiddleware`
 These are exported but used only internally to wire per-pool dispatch. The public config surface is `BackpressureOptions` (passed to `WithBackpressure`). `BackpressureConfig` / `BackpressureMiddleware` are the internal plumbing and should move to `gw/internal/`. The only risk is if an adopter has built a custom dispatcher; check issue tracker / changelog before moving.
+
+---
+
+## gw/gat surface
+
+Smaller package; only `examples/gat/server/` consumes it. Confirmed
+external usages: `gat.New`, `gat.Register`, `gat.RegisterHuma`,
+`gat.RegisterGRPC` — plus the `*Gateway` they return / accept.
+
+### Symbol table
+
+| Symbol | Kind | File | External users | Classification | Notes |
+|---|---|---|---|---|---|
+| `Gateway` | type | `gw/gat/gat.go` | `examples/gat/server` (via `*Gateway`) | Public | Primary library type. |
+| `New` | func | `gw/gat/gat.go` | `examples/gat/server` | Public | Constructor. |
+| `Register[I, O]` | func | `gw/gat/register.go` | `examples/gat/server` | Public | Paired drop-in for `huma.Register` that also captures the handler ref. |
+| `RegisterHuma` | func | `gw/gat/huma_adapter.go` | `examples/gat/server` | Public | Finalises the schema + mounts `/graphql` + `/schema/*` on the adopter's huma router. |
+| `RegisterGRPC` | func | `gw/gat/grpc_ingress.go` | `examples/gat/server` | Public | Mounts connect-go handlers per captured op. |
+| `HandleMux` | type | `gw/gat/grpc_ingress.go` | — | Public | Interface for `RegisterGRPC`'s mux param; `*http.ServeMux` satisfies it. |
+| `ServiceRegistration` | type | `gw/gat/gat.go` | — | Public | BYO-IR registration shape, documented in `gat.New` godoc. |
+| `(g *Gateway) Handler` | method | `gw/gat/gat.go` | — | Public | Stand-alone GraphQL HTTP handler (alt to `RegisterHuma`). |
+| `(g *Gateway) Schema` | method | `gw/gat/gat.go` | — | Public | Introspection accessor. |
+| `(g *Gateway) Services` | method | `gw/gat/gat.go` | — | Public | Introspection accessor. |
+| `HTTPRequestFromContext` | func | `gw/gat/gat.go` | gat-internal | Public | Read the inbound `*http.Request` from ctx; pairs with `WithHTTPRequest`. |
+| `WithHTTPRequest` | func | `gw/gat/gat.go` | — | Public | Adopter-side helper to inject the inbound request into ctx (gat's own dispatchers read via `HTTPRequestFromContext`). |
+
+### Deletions (dead code)
+
+These were exported but never referenced inside or outside `gw/gat`. Removed pre-v1:
+
+- `Option` + `config` — the `Option` type was declared but `New` doesn't take `...Option`; `config` was its target. Dead.
+- `As(ns string) ServiceOption` — declared but never applied. The `ServiceRegistration` path takes a fully-ingested `ir.Service` whose `Namespace` is already set; there is no `ServiceConfig`-applying call site.
+- `Version(v string) ServiceOption` — same shape as `As`. Dead.
+- `ServiceOption` (`func(*ServiceConfig)`) — return type for the two dead funcs above; nothing else references it.
+- `ServiceConfig` — target of the dead `ServiceOption`; all fields were unexported, so adopters couldn't author their own `ServiceOption` anyway.
+
+If gat needs per-registration knobs in the future, add them on `ServiceRegistration` directly (fields, not an options chain).
