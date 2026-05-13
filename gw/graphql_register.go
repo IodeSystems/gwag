@@ -80,10 +80,35 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		enforceMW := g.callerIDEnforceMiddleware()
 		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW)
 		for _, grp := range svc.Groups {
+			// Each top-level group gets a graphqlGroupDispatcher that
+			// captures the whole sub-selection and forwards in one
+			// upstream call. Per-leaf dispatchers under graphql groups
+			// stay registered for the canonical-args (HTTP/gRPC ingress)
+			// path; they short-circuit to a "no AST" error when the
+			// renderer's bypass-resolver path takes over for GraphQL
+			// ingress.
+			registerGraphQLGroupDispatcher(g.dispatchers, mirror, grp, metrics, bp, quotaMW, enforceMW)
 			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW)
 		}
 	}
 	return nil
+}
+
+// registerGraphQLGroupDispatcher installs a graphqlGroupDispatcher at
+// the group's SchemaID. Backpressure wraps it (one slot per upstream
+// call, same posture as a per-leaf dispatch). Quota + caller-id
+// enforce wrap the outside, matching the per-leaf wiring.
+func registerGraphQLGroupDispatcher(registry *ir.DispatchRegistry, mirror *graphQLMirror, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, quotaMW, enforceMW ir.DispatcherMiddleware) {
+	core := newGraphqlGroupDispatcher(mirror, grp, metrics)
+	var dispatcher ir.Dispatcher = core
+	dispatcher = backpressureMiddleware(graphQLBackpressureConfig(mirror.src, core.label, metrics, bp))(core)
+	if quotaMW != nil {
+		dispatcher = quotaMW(dispatcher)
+	}
+	if enforceMW != nil {
+		dispatcher = enforceMW(dispatcher)
+	}
+	registry.Set(grp.SchemaID, dispatcher)
 }
 
 func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string, quotaMW, enforceMW ir.DispatcherMiddleware) {

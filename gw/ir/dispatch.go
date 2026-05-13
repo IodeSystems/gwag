@@ -155,10 +155,12 @@ func (id SchemaID) Parts() (namespace, version, op string) {
 	return s[:first], rest[:second], rest[second+1:]
 }
 
-// PopulateSchemaIDs walks every Operation reachable from `svc`
-// (top-level + every Group descendant) and stamps SchemaID using
-// MakeSchemaID with the flat path-joined name. Idempotent — call
-// after Service.Namespace / Service.Version are set.
+// PopulateSchemaIDs walks every Operation and every OperationGroup
+// reachable from `svc` (top-level + every Group descendant) and
+// stamps SchemaID using MakeSchemaID. Operations use their flat
+// path-joined name; Groups use `_group_<path>` so the IDs don't
+// collide with leaf ops. Idempotent — call after Service.Namespace /
+// Service.Version are set.
 //
 // Stability: stable
 func PopulateSchemaIDs(svc *Service) {
@@ -172,6 +174,7 @@ func PopulateSchemaIDs(svc *Service) {
 
 func populateGroupSchemaIDs(svc *Service, g *OperationGroup, prefix string) {
 	pre := prefix + g.Name + "_"
+	g.SchemaID = MakeSchemaID(svc.Namespace, svc.Version, "_group_"+pre[:len(pre)-1])
 	for _, op := range g.Operations {
 		op.SchemaID = MakeSchemaID(svc.Namespace, svc.Version, pre+op.Name)
 	}

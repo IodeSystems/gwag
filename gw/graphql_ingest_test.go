@@ -830,3 +830,151 @@ func TestGraphQLIngest_HTTPIngressRouteSynthesized(t *testing.T) {
 		}
 	}
 }
+
+// nestedGreeterIntrospection describes a downstream service whose
+// Query type uses the namespace-container pattern — exactly the shape
+// gwag itself emits, and the case where the per-leaf forwarder used
+// to misroute:
+//
+//	type Query        { greeter: GreeterNamespace! }
+//	type GreeterNamespace {
+//	  hello(name: String!): HelloPayload!
+//	  echo(msg: String!): String!
+//	}
+//	type HelloPayload { greeting: String! }
+const nestedGreeterIntrospection = `{
+  "data": {
+    "__schema": {
+      "queryType": {"name": "Query"},
+      "mutationType": null,
+      "subscriptionType": null,
+      "types": [
+        {
+          "kind": "OBJECT", "name": "Query", "fields": [
+            {
+              "name": "greeter",
+              "args": [],
+              "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "GreeterNamespace"}}
+            }
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "GreeterNamespace", "fields": [
+            {
+              "name": "hello",
+              "args": [{"name": "name", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}],
+              "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "HelloPayload"}}
+            },
+            {
+              "name": "echo",
+              "args": [{"name": "msg", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}],
+              "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}
+            }
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "HelloPayload", "fields": [
+            {"name": "greeting", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}
+          ]
+        }
+      ]
+    }
+  }
+}`
+
+// newNestedRemoteFixture mirrors newRemoteFixture but serves the
+// nested-namespace introspection above.
+func newNestedRemoteFixture(t *testing.T) *remoteFixture {
+	rf := &remoteFixture{t: t}
+	rf.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(nestedGreeterIntrospection))
+			return
+		}
+		rf.lastQuery.Store(&req.Query)
+		var data any
+		if rf.queryHandler != nil {
+			data = rf.queryHandler(req.Query, req.Variables)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(rf.server.Close)
+	return rf
+}
+
+// TestGraphQLIngest_NestedNamespaceForwarding pins the per-group
+// forwarder: a single local query against a nested-namespace upstream
+// sends ONE wrapped upstream call carrying every sibling leaf the
+// caller selected, and the response demuxes back through graphql-go's
+// default map dereference.
+func TestGraphQLIngest_NestedNamespaceForwarding(t *testing.T) {
+	rf := newNestedRemoteFixture(t)
+	rf.queryHandler = func(query string, vars map[string]any) any {
+		return map[string]any{
+			"greeter": map[string]any{
+				"hello": map[string]any{"greeting": "Hello, alice!"},
+				"echo":  "ack: hi",
+			},
+		}
+	}
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("svc")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Post(srv.URL+"/graphql", "application/json",
+		strings.NewReader(`{"query":"{ svc { greeter { hello(name: \"alice\") { greeting } echo(msg: \"hi\") } } }"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "errors") {
+		t.Fatalf("response had errors: %s", body)
+	}
+	if !strings.Contains(string(body), "Hello, alice!") || !strings.Contains(string(body), "ack: hi") {
+		t.Fatalf("unexpected response: %s", body)
+	}
+
+	last := rf.lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received a non-introspection query")
+	}
+	// Upstream must see the WRAPPED selection: greeter { hello echo }
+	// with both leaves in one call. The forwarded query must NOT
+	// leak the local "svc" namespace prefix and must NOT collapse to
+	// just the leaf fields.
+	if !strings.Contains(*last, "greeter") {
+		t.Fatalf("forwarded query missing greeter wrap: %s", *last)
+	}
+	if !strings.Contains(*last, "hello") || !strings.Contains(*last, "echo") {
+		t.Fatalf("forwarded query missing one of the leaves: %s", *last)
+	}
+	if strings.Contains(*last, "svc {") || strings.Contains(*last, "svc_greeter") {
+		t.Fatalf("forwarded query leaked local namespace wrapper: %s", *last)
+	}
+	// One upstream call, not two — assert by checking lastQuery wasn't
+	// overwritten by a per-leaf followup. The fixture stores the
+	// *most recent* query; for one round trip we expect both fields
+	// in that same query string.
+	helloIdx := strings.Index(*last, "hello")
+	echoIdx := strings.Index(*last, "echo")
+	if helloIdx == -1 || echoIdx == -1 {
+		t.Fatalf("expected hello + echo in a single query, got: %s", *last)
+	}
+}

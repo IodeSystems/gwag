@@ -215,7 +215,12 @@ func tryGraphQLGroup(types []wireGraphQLType, f *wireGraphQLField, kind OpKind, 
 	seen[objName] = true
 	defer delete(seen, objName)
 
-	grp := &OperationGroup{Name: f.Name, Description: f.Description, Kind: kind}
+	grp := &OperationGroup{
+		Name:        f.Name,
+		Description: f.Description,
+		Kind:        kind,
+		OriginKind:  KindGraphQL,
+	}
 	subFields := append([]wireGraphQLField(nil), target.Fields...)
 	sort.Slice(subFields, func(i, j int) bool { return subFields[i].Name < subFields[j].Name })
 	for i := range subFields {

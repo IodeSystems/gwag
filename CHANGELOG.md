@@ -140,6 +140,29 @@ changes on MINOR, drops on MAJOR.
 - `docs/api-audit.md` — pre-v1 export classification with per-symbol
   rationale.
 - `CHANGELOG.md` (this file) and `RELEASE.md` (release process).
+- `ir.OperationGroup.OriginKind` and `ir.OperationGroup.SchemaID`
+  (gw/ir/ir.go) — group-level metadata so the runtime renderer can
+  distinguish graphql-origin groups (which now install a single
+  forwarding resolver at the top of the chain) from passthroughs.
+  Group SchemaIDs use a `_group_<path>` suffix to avoid colliding
+  with leaf Operation SchemaIDs. `PopulateSchemaIDs` populates them.
+
+### Fixed
+- `gw.AddGraphQL` against nested-namespace upstreams. Previously the
+  per-leaf forwarder dropped the parent group chain: a local
+  `{ ns { greeter { hello(...) } } }` produced an upstream
+  `{ hello(...) }` that any sane GraphQL server rejects ("Cannot
+  query field 'hello' on type 'Query'"). Now a single
+  `graphqlGroupDispatcher` registers at each top-level graphql
+  group; it captures the local sub-selection, forwards once with
+  the container path intact (`{ greeter { hello(...) } }`), and
+  graphql-go's DefaultResolveFn demuxes the response map back into
+  per-leaf field positions. Sibling leaves under one group ride a
+  single upstream round trip — preserves GraphQL's batching across
+  fields, no longer N round-trips. Affected schemas:
+  gwag-fronting-gwag, Hot Chocolate's grouped operations, some
+  Apollo subgraph layouts. Pinned by
+  `TestGraphQLIngest_NestedNamespaceForwarding`.
 
 ### Changed
 - `gw.MCPConfig` and `gw.MCPHandler` promoted from `Stability:

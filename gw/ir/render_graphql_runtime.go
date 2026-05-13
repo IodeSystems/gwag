@@ -247,7 +247,7 @@ func addServiceContent(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, kind
 		if op.Kind != kind {
 			continue
 		}
-		if err := emitOperation(dst, op, tb, depReason, registry, rename); err != nil {
+		if err := emitOperation(dst, op, tb, depReason, registry, rename, false); err != nil {
 			return err
 		}
 	}
@@ -255,23 +255,45 @@ func addServiceContent(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, kind
 		if g.Kind != kind {
 			continue
 		}
-		if err := emitGroupContainer(dst, g, tb, kind, parentPath, depReason, registry, rename); err != nil {
+		if err := emitGroupContainer(dst, g, tb, kind, parentPath, depReason, registry, rename, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder, kind OpKind, parentPath, depReason string, registry *DispatchRegistry, rename func(string) string) error {
+// emitGroupContainer renders one OperationGroup as a nested
+// graphql.Object field.
+//
+// When the group is GraphQL-origin and we're at the top of the
+// graphql chain (`inGraphQLGroup` arrives as false), the field's
+// Resolve forwards the entire local sub-selection upstream as one
+// call (via the graphqlGroupDispatcher registered at g.SchemaID)
+// and returns the response map. Children are rendered with
+// `inGraphQLGroup=true` so their own Resolve hooks are skipped —
+// graphql-go's DefaultResolveFn dereferences from the parent's
+// map[string]any source.
+//
+// For non-graphql groups (proto / openapi don't produce groups
+// today, but the structural shape is preserved) and for inner
+// passthrough levels, the field's Resolve returns `struct{}{}` so
+// graphql-go drives into the inner Resolve chain — each leaf op
+// owns its own dispatcher in that path.
+func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder, kind OpKind, parentPath, depReason string, registry *DispatchRegistry, rename func(string) string, inGraphQLGroup bool) error {
 	childPath := parentPath + pascalCaseRuntime(g.Name)
+	// Once we cross into a graphql-origin group, every descendant
+	// resolves via map dereference. If `inGraphQLGroup` is already
+	// true (sub-group inside an outer graphql group), keep it; if
+	// this group is itself graphql-origin, flip it for descendants.
+	childInGroup := inGraphQLGroup || g.OriginKind == KindGraphQL
 	fields := graphql.Fields{}
 	for _, op := range g.Operations {
-		if err := emitOperation(fields, op, tb, depReason, registry, rename); err != nil {
+		if err := emitOperation(fields, op, tb, depReason, registry, rename, childInGroup); err != nil {
 			return fmt.Errorf("group %s: %w", g.Name, err)
 		}
 	}
 	for _, sub := range g.Groups {
-		if err := emitGroupContainer(fields, sub, tb, kind, childPath, depReason, registry, rename); err != nil {
+		if err := emitGroupContainer(fields, sub, tb, kind, childPath, depReason, registry, rename, childInGroup); err != nil {
 			return err
 		}
 	}
@@ -286,7 +308,31 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 	field := &graphql.Field{
 		Type:        graphql.NewNonNull(container),
 		Description: g.Description,
-		Resolve:     func(rp graphql.ResolveParams) (any, error) { return struct{}{}, nil },
+	}
+	switch {
+	case g.OriginKind == KindGraphQL && !inGraphQLGroup:
+		// Top of a graphql-origin chain: install the group dispatcher
+		// so one upstream call captures the whole sub-selection.
+		sid := g.SchemaID
+		field.Resolve = func(rp graphql.ResolveParams) (any, error) {
+			d := registry.Get(sid)
+			if d == nil {
+				return nil, fmt.Errorf("gateway: no dispatcher for group %s", sid)
+			}
+			ctx := rp.Context
+			if ctx != nil {
+				ctx = context.WithValue(ctx, graphqlResolveInfoKey{}, &rp.Info)
+			}
+			return d.Dispatch(ctx, rp.Args)
+		}
+	case inGraphQLGroup:
+		// Sub-group inside an outer graphql group: leave Resolve nil
+		// so DefaultResolveFn dereferences from the parent map.
+	default:
+		// Proto/OpenAPI passthrough: each leaf op owns its own
+		// dispatcher; this container just yields a sentinel so
+		// graphql-go drives the inner resolvers.
+		field.Resolve = func(rp graphql.ResolveParams) (any, error) { return struct{}{}, nil }
 	}
 	if depReason != "" {
 		field.DeprecationReason = depReason
@@ -298,8 +344,8 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 	return nil
 }
 
-func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReason string, registry *DispatchRegistry, rename func(string) string) error {
-	field, err := buildRuntimeOperation(tb, op, registry)
+func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReason string, registry *DispatchRegistry, rename func(string) string, inGraphQLGroup bool) error {
+	field, err := buildRuntimeOperation(tb, op, registry, inGraphQLGroup)
 	if err != nil {
 		return fmt.Errorf("op %s: %w", op.Name, err)
 	}
@@ -314,7 +360,7 @@ func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReas
 	return nil
 }
 
-func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchRegistry) (*graphql.Field, error) {
+func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchRegistry, inGraphQLGroup bool) (*graphql.Field, error) {
 	args := graphql.FieldConfigArgument{}
 	for _, a := range op.Args {
 		t, err := tb.Input(a.Type, a.Repeated, a.Required, a.ItemRequired)
@@ -370,6 +416,18 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 			},
 		}, nil
 	}
+	if inGraphQLGroup {
+		// Parent graphql group dispatcher already forwarded the whole
+		// sub-selection upstream and returned a map[string]any. Leave
+		// Resolve nil so graphql-go's DefaultResolveFn dereferences
+		// this leaf out of the map by field name.
+		return &graphql.Field{
+			Type:              out,
+			Args:              args,
+			Description:       op.Description,
+			DeprecationReason: op.Deprecated,
+		}, nil
+	}
 	return &graphql.Field{
 		Type:              out,
 		Args:              args,
@@ -398,7 +456,7 @@ func addSubscriptionFlat(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, pr
 		if op.Kind != OpSubscription {
 			continue
 		}
-		f, err := buildRuntimeOperation(tb, op, registry)
+		f, err := buildRuntimeOperation(tb, op, registry, false)
 		if err != nil {
 			return fmt.Errorf("op %s: %w", op.Name, err)
 		}
@@ -425,7 +483,7 @@ func addSubscriptionFlat(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, pr
 func flattenSubGroupWithPrefix(dst graphql.Fields, g *OperationGroup, prefix, depReason string, registry *DispatchRegistry, tb *IRTypeBuilder, rename func(string) string) error {
 	pre := prefix + g.Name + "_"
 	for _, op := range g.Operations {
-		f, err := buildRuntimeOperation(tb, op, registry)
+		f, err := buildRuntimeOperation(tb, op, registry, false)
 		if err != nil {
 			return fmt.Errorf("op %s: %w", op.Name, err)
 		}

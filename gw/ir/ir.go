@@ -150,6 +150,21 @@ type OperationGroup struct {
 	Kind        OpKind
 	Operations  []*Operation
 	Groups      []*OperationGroup // recursive
+
+	// OriginKind tags the registration kind that produced this group.
+	// Only GraphQL ingest creates Groups today (`tryGraphQLGroup`); proto
+	// and OpenAPI flatten via `_` path-joining. The runtime renderer
+	// consults this to install a per-group forwarding resolver when the
+	// upstream is GraphQL: one round trip per group selection, with
+	// nested fields dereferenced from the upstream response by
+	// graphql-go's DefaultResolveFn.
+	OriginKind Kind
+
+	// SchemaID is the dispatcher-registry key for this group's
+	// forwarding resolver. Populated by `PopulateSchemaIDs` with a
+	// `_group_<path>` suffix so it doesn't collide with leaf Operation
+	// SchemaIDs.
+	SchemaID SchemaID
 }
 
 // OpKind groups operations by invocation shape so cross-kind

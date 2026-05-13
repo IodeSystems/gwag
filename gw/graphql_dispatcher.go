@@ -188,6 +188,143 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	return data[d.remoteFieldName], nil
 }
 
+// graphqlGroupDispatcher forwards an entire local sub-selection rooted
+// at a GraphQL-origin OperationGroup as a single upstream request.
+// Wired by `emitGroupContainer` for graphql-origin groups so the
+// caller-side query `{ ns { greeter { hello echo } } }` becomes one
+// upstream POST `{ greeter { hello echo } }` instead of N round
+// trips per leaf — preserves GraphQL's batching property across
+// sibling fields under a namespace.
+//
+// One graphqlGroupDispatcher per top-level group per source. Nested
+// sub-groups don't get their own dispatcher; they're folded into the
+// parent group's sub-selection and dereferenced from the response
+// map via graphql-go's DefaultResolveFn.
+//
+// canonical-args ingress (HTTP/JSON, gRPC) doesn't reach this
+// dispatcher — the per-leaf graphQLDispatcher still owns those
+// ingress paths and falls back to its "no AST" error for grouped
+// ops. That's a separate limitation worth fixing if HTTP/gRPC clients
+// need to reach a namespace-grouped GraphQL upstream.
+type graphqlGroupDispatcher struct {
+	mirror  *graphQLMirror
+	group   *ir.OperationGroup
+	metrics Metrics
+	ns      string
+	ver     string
+	label   string // e.g. "query greeter"
+}
+
+func newGraphqlGroupDispatcher(m *graphQLMirror, group *ir.OperationGroup, metrics Metrics) *graphqlGroupDispatcher {
+	label := "query"
+	if group.Kind == ir.OpMutation {
+		label = "mutation"
+	}
+	return &graphqlGroupDispatcher{
+		mirror:  m,
+		group:   group,
+		metrics: metrics,
+		ns:      m.src.namespace,
+		ver:     m.src.version,
+		label:   label + " " + group.Name,
+	}
+}
+
+func (d *graphqlGroupDispatcher) Dispatch(ctx context.Context, _ map[string]any) (any, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.graphql",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+	)
+	defer span.End()
+
+	start := time.Now()
+	record := func(err error) error {
+		elapsed := time.Since(start)
+		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
+		addDispatchTime(ctx, elapsed)
+		return err
+	}
+
+	info := graphQLForwardInfoFrom(ctx)
+	if info == nil || len(info.FieldASTs) == 0 {
+		// Canonical-args ingress reaches this only when an HTTP/gRPC
+		// client targets a leaf op inside a graphql-origin group —
+		// surface the gap rather than fabricate a selection.
+		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for group %s (canonical-args ingress on a nested-namespace GraphQL upstream)", d.group.Name)))
+	}
+
+	// Build the upstream field: same name as the local group field
+	// (graphql-origin: local and remote share the namespace path
+	// structure post-introspection), with the local sub-selection
+	// rewritten via the mirror so inline-fragment type conditions get
+	// unprefixed.
+	localField := info.FieldASTs[0]
+	groupField := ast.NewField(&ast.Field{
+		Alias:      localField.Alias,
+		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
+		Arguments:  localField.Arguments,
+		Directives: localField.Directives,
+	})
+	if localField.SelectionSet != nil {
+		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
+	}
+
+	opType := ast.OperationTypeQuery
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		if op.Operation == ast.OperationTypeMutation {
+			opType = ast.OperationTypeMutation
+		}
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           opType,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{groupField},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	printed, ok := raw.(string)
+	if !ok {
+		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+	}
+
+	src := d.mirror.src
+	r := src.pickReplica()
+	if r == nil {
+		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
+	}
+	r.inflight.Add(1)
+	defer r.inflight.Add(-1)
+	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	if err != nil {
+		return nil, record(err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql remote: %s", resp.Errors[0])))
+	}
+	var data map[string]any
+	if len(resp.Data) > 0 {
+		if err := jsonUnmarshalLoose(resp.Data, &data); err != nil {
+			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql decode data: %s", err.Error())))
+		}
+	}
+	record(nil)
+	// Response key is the alias if present, else the field name.
+	respKey := d.group.Name
+	if localField.Alias != nil && localField.Alias.Value != "" {
+		respKey = localField.Alias.Value
+	}
+	return data[respKey], nil
+}
+
+// Compile-time assertion: graphqlGroupDispatcher implements ir.Dispatcher.
+var _ ir.Dispatcher = (*graphqlGroupDispatcher)(nil)
+
 // buildGraphQLCanonicalQuery synthesizes a printable graphql operation
 // for canonical-args dispatch. Returns ("", nil) when synthesis can't
 // produce something the upstream will accept (output type missing
