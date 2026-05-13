@@ -1,5 +1,19 @@
 # gwag — Agent Instructions
 
+A Go library + binary that fronts three kinds of upstream services
+under a single typed GraphQL surface:
+
+- **gRPC services** described by `.proto`, registered via
+  `AddProto[Descriptor]` or the gRPC control plane.
+- **OpenAPI 3.x services** described by a JSON/YAML spec, registered
+  via `AddOpenAPI[Bytes]` or the same control plane (proto field
+  `ServiceBinding.openapi_spec`).
+- **Existing GraphQL services** stitched in via `AddGraphQL`
+  (boot-time introspection + namespace-prefixed type mirror).
+
+Multi-gateway clustering via embedded NATS; subscriptions via NATS
+pub/sub with HMAC channel auth.
+
 ## Build
 
 ```
@@ -81,6 +95,8 @@ Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
 - **Admin operations**: defined via huma → OpenAPI → self-ingested.
   See `gw/admin_huma.go`. Dogfoods the same OpenAPI path external services take.
 - **Subscriptions**: NATS pub/sub, not server-streaming gRPC dispatch.
+  AsyncAPI export was considered and dropped — GraphQL SDL +
+  Subscription types is the client-facing schema for events.
 - **Auto-internal**: namespaces starting with `_` are hidden from public schema.
 - **Cluster**: embedded NATS + JetStream KV. Reconcilers sync slots across nodes.
 - **Per-pool isolation is sacred** — no gateway-wide caps on unary dispatch
