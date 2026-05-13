@@ -67,6 +67,8 @@ func resolveAdminEventsOutputDesc() (protoreflect.MessageDescriptor, error) {
 //
 // Cluster mode is required (subscriptions are NATS-backed); calling
 // this without a configured cluster returns an error.
+//
+// Stability: stable
 func (g *Gateway) AddAdminEvents() error {
 	if g.cfg.cluster == nil {
 		return errors.New("gateway: AddAdminEvents requires a configured cluster (NATS-backed subscriptions)")

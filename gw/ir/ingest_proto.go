@@ -16,6 +16,8 @@ import (
 // file — the gateway derives it from the registration's pool key.
 // Caller fills Service.Namespace + Service.Version on the returned
 // values.
+//
+// Stability: stable
 func IngestProto(fd protoreflect.FileDescriptor) []*Service {
 	fileProto := protodesc.ToFileDescriptorProto(fd)
 

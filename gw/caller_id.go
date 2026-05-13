@@ -25,15 +25,21 @@ import (
 // Plan §Caller-ID — one seam, four implementations: Public, HMAC,
 // Delegated, mTLS-via-proxy. v1 ships Public via WithCallerIDPublic;
 // the rest layer on without touching the seam.
+//
+// Stability: stable
 type CallerIDExtractor func(ctx context.Context) (string, error)
 
 // PublicCallerIDHeader is the HTTP / WebSocket header consulted by
 // the WithCallerIDPublic extractor.
+//
+// Stability: stable
 const PublicCallerIDHeader = "X-Caller-Id"
 
 // PublicCallerIDMetadata is the gRPC metadata key consulted by the
 // WithCallerIDPublic extractor. gRPC normalises keys to lower-case
 // per the spec.
+//
+// Stability: stable
 const PublicCallerIDMetadata = "caller-id"
 
 // WithCallerIDExtractor installs a custom caller-id extraction
@@ -44,6 +50,8 @@ const PublicCallerIDMetadata = "caller-id"
 // and WithCallerHeaders are set, the extractor wins; the older
 // header-allowlist option stays as the no-extractor fallback so
 // pre-seam adopters keep working unchanged.
+//
+// Stability: stable
 func WithCallerIDExtractor(ex CallerIDExtractor) Option {
 	return func(cfg *config) { cfg.callerIDExtractor = ex }
 }
@@ -55,6 +63,8 @@ func WithCallerIDExtractor(ex CallerIDExtractor) Option {
 // an authenticated reverse proxy, or with mTLS-via-proxy terminating
 // in front of the gateway. For untrusted-network production, use the
 // HMAC flavor (plan §Caller-ID HMAC mode — next todo).
+//
+// Stability: stable
 func WithCallerIDPublic() Option {
 	return WithCallerIDExtractor(publicCallerIDExtractor)
 }
@@ -113,6 +123,8 @@ func resolveCallerID(ctx context.Context, ex CallerIDExtractor, headers []string
 // the per-subscription auth seam.
 //
 // Plan §Caller-ID + quota ladder.
+//
+// Stability: stable
 func WithCallerIDEnforce() Option {
 	return func(cfg *config) { cfg.callerIDEnforce = true }
 }
@@ -163,6 +175,8 @@ func (g *Gateway) callerIDEnforceMiddleware() ir.DispatcherMiddleware {
 // WithCallerIDMetricsTopK cap is folded into. Operators can scrape it
 // directly to see overflow volume; bounded label cardinality keeps
 // Prometheus from blowing up on a flood of unique callers.
+//
+// Stability: stable
 const OtherCallerID = "__other__"
 
 // WithCallerIDMetricsTopK caps the number of distinct caller-id values
@@ -182,6 +196,8 @@ const OtherCallerID = "__other__"
 // Plan §Caller-ID — guards against Prometheus scrape blowups when an
 // untrusted ingress / public-mode deployment sees high-cardinality
 // X-Caller-Id values.
+//
+// Stability: stable
 func WithCallerIDMetricsTopK(k int) Option {
 	return func(cfg *config) { cfg.callerIDMetricsTopK = k }
 }

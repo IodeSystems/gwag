@@ -22,6 +22,8 @@ var protoMessageType = reflect.TypeOf((*proto.Message)(nil)).Elem()
 //   - Other Go types: the package-qualified name (e.g. "x/y/pkg.Foo").
 //     Won't match anything in IR until a non-proto path registers a
 //     binding for the same name.
+//
+// Stability: stable
 func HideType[T any]() SchemaRewrite {
 	return hideTypeRewrite{Name: irNameForGoType[T]()}
 }

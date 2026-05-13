@@ -13,6 +13,8 @@ import (
 // so the final graphql.Schema sees one named instance — graphql-go
 // rejects two scalars sharing a Name even when they're equivalently
 // shaped.
+//
+// Stability: stable
 func StandardScalars() (long *graphql.Scalar, jsonValue *graphql.Scalar) {
 	long = graphql.NewScalar(graphql.ScalarConfig{
 		Name: "Long",

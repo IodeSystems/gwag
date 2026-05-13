@@ -24,6 +24,8 @@ import (
 // their structure but don't get a Types entry — TypeRef.Map
 // handles map-shaped inlines, otherwise they fall through to
 // Builtin scalars when possible.
+//
+// Stability: stable
 func IngestOpenAPI(doc *openapi3.T) *Service {
 	desc := ""
 	if doc.Info != nil {

@@ -341,6 +341,8 @@ func coerceCanonicalListValue(v any) any {
 // Safe to call before any service is registered; the handler reads
 // the route table at dispatch time so registrations after the
 // listener is up are visible immediately.
+//
+// Stability: stable
 func (g *Gateway) GRPCUnknownHandler() grpc.StreamHandler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {

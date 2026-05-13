@@ -27,6 +27,12 @@ import (
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
+// Gateway is the primary library type. It fronts one or more upstream
+// services under a single GraphQL surface. Create with New; register
+// services with AddProto / AddOpenAPI / AddGraphQL; mount Handler on
+// your HTTP server.
+//
+// Stability: stable
 type Gateway struct {
 	mu sync.Mutex
 
@@ -205,6 +211,9 @@ type rejectedJoinSummary struct {
 	CurrentMaxConcurrencyPerInstance int
 }
 
+// Option is a gateway-wide configuration function. Pass to New.
+//
+// Stability: stable
 type Option func(*config)
 type config struct {
 	cluster      *Cluster
@@ -323,6 +332,8 @@ type config struct {
 //   - Stable: the schema-render `<ns>.stable` alias is emitted. Stable
 //     itself is not a registerable version (it's a computed alias),
 //     so this gates rendering only.
+//
+// Stability: stable
 type AllowedTiers struct {
 	Unstable bool
 	Stable   bool
@@ -362,6 +373,8 @@ func (t AllowedTiers) describe() string {
 // Plan §5: the caller string lands as a dimension on the in-process
 // stats registry (admin UI consumes it) and as a Prometheus label on
 // go_api_gateway_dispatch_duration_seconds.
+//
+// Stability: stable
 func WithCallerHeaders(headers ...string) Option {
 	return func(cfg *config) {
 		cfg.callerHeaders = append([]string(nil), headers...)
@@ -391,6 +404,8 @@ func WithCallerHeaders(headers ...string) Option {
 //
 // "stable" itself is never a registerable version — `parseVersion`
 // rejects it. The flag controls only whether the alias surfaces.
+//
+// Stability: stable
 func WithAllowTier(tiers ...string) Option {
 	return func(cfg *config) {
 		t := AllowedTiers{}
@@ -444,6 +459,8 @@ func (g *Gateway) checkVersionTierAllowed(version string) error {
 // secrets. Proto server-streaming subscriptions no longer go through
 // gateway HMAC auth — they open a direct gRPC stream to the upstream,
 // which handles its own authentication.
+//
+// Stability: stable
 type SubscriptionAuthOptions struct {
 	// Insecure bypasses HMAC verification entirely. Auth args are
 	// accepted (for SDL compatibility) but not checked. Dev/local only.
@@ -473,12 +490,16 @@ type SubscriptionAuthOptions struct {
 }
 
 // WithSubscriptionAuth enables HMAC verification on subscribes.
+//
+// Stability: stable
 func WithSubscriptionAuth(o SubscriptionAuthOptions) Option {
 	return func(cfg *config) { cfg.subAuth = o }
 }
 
 // WithoutSubscriptionAuth marks subscriptions insecure. Equivalent to
 // passing WithSubscriptionAuth(SubscriptionAuthOptions{Insecure: true}).
+//
+// Stability: stable
 func WithoutSubscriptionAuth() Option {
 	return func(cfg *config) { cfg.subAuth = SubscriptionAuthOptions{Insecure: true} }
 }
@@ -497,6 +518,8 @@ func WithoutSubscriptionAuth() Option {
 // who want fine-grained throttling.
 //
 // The MaxWaitTime budget applies to all three caps.
+//
+// Stability: stable
 type BackpressureOptions struct {
 	// MaxInflight is the per-pool ceiling on simultaneous unary
 	// dispatches. 0 disables.
@@ -529,6 +552,8 @@ type BackpressureOptions struct {
 // services. 10,000 streams per pool accommodates typical per-channel
 // fan-out without micro-throttling. 100,000 streams gateway-wide is
 // the per-node ceiling — beyond this, scale horizontally.
+//
+// Stability: stable
 var DefaultBackpressure = BackpressureOptions{
 	MaxInflight:     256,
 	MaxStreams:      10_000,
@@ -537,12 +562,16 @@ var DefaultBackpressure = BackpressureOptions{
 }
 
 // WithBackpressure overrides the default per-pool concurrency caps.
+//
+// Stability: stable
 func WithBackpressure(b BackpressureOptions) Option {
 	return func(cfg *config) { cfg.backpressure = b }
 }
 
 // WithoutBackpressure removes per-pool limits entirely. Dispatches
 // proceed without queueing or waiting; useful for tests and dev.
+//
+// Stability: stable
 func WithoutBackpressure() Option {
 	return func(cfg *config) { cfg.backpressure = BackpressureOptions{} }
 }
@@ -550,12 +579,16 @@ func WithoutBackpressure() Option {
 // WithMetrics swaps the default Prometheus-backed metrics sink for a
 // caller-supplied implementation. Pass nil or use WithoutMetrics to
 // disable metrics entirely.
+//
+// Stability: stable
 func WithMetrics(m Metrics) Option {
 	return func(cfg *config) { cfg.metrics = m }
 }
 
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches
 // still run normally with no per-call instrumentation.
+//
+// Stability: stable
 func WithoutMetrics() Option {
 	return func(cfg *config) { cfg.metrics = noopMetrics{} }
 }
@@ -564,6 +597,8 @@ func WithoutMetrics() Option {
 // the gateway uses JetStream KV for the service registry and peer
 // tracking (replacing the in-memory map). Without it, the gateway falls
 // back to the single-node in-memory path.
+//
+// Stability: stable
 func WithCluster(c *Cluster) Option {
 	return func(cfg *config) { cfg.cluster = c }
 }
@@ -572,6 +607,8 @@ func WithCluster(c *Cluster) Option {
 // reconciler when it talks to registered services. Pass the same
 // config used for the embedded NATS cluster routes (build it with
 // LoadMTLSConfig) so one cert covers both surfaces.
+//
+// Stability: stable
 func WithTLS(c *tls.Config) Option {
 	return func(cfg *config) { cfg.tls = c }
 }
@@ -585,6 +622,8 @@ func WithTLS(c *tls.Config) Option {
 // The token gates non-public /admin/* HTTP routes and, transitively,
 // admin_* GraphQL mutations dispatched through them. It does not
 // authenticate services calling each other through the gateway.
+//
+// Stability: stable
 func WithAdminToken(token []byte) Option {
 	return func(cfg *config) { cfg.adminToken = token }
 }
@@ -593,6 +632,8 @@ func WithAdminToken(token []byte) Option {
 // (and reloads) its boot admin token. Pairs naturally with the
 // JetStream data dir on a clustered gateway, but standalone gateways
 // can pass any writable path.
+//
+// Stability: stable
 func WithAdminDataDir(dir string) Option {
 	return func(cfg *config) { cfg.adminDataDir = dir }
 }
@@ -607,6 +648,8 @@ func WithAdminDataDir(dir string) Option {
 // the trust boundary.
 //
 // Pass raw bytes; the operator-presented form is hex.
+//
+// Stability: stable
 func WithSignerSecret(secret []byte) Option {
 	return func(cfg *config) { cfg.signerSecret = secret }
 }
@@ -618,6 +661,8 @@ func WithSignerSecret(secret []byte) Option {
 // `OpenAPIClient(...)` ServiceOption beat this default.
 //
 // When unset, dispatches use http.DefaultClient.
+//
+// Stability: stable
 func WithOpenAPIClient(c *http.Client) Option {
 	return func(cfg *config) { cfg.openAPIHTTP = c }
 }
@@ -630,6 +675,8 @@ func WithOpenAPIClient(c *http.Client) Option {
 //
 // When unset, PprofMux returns nil so the operator's wiring code can
 // detect the disabled state without consulting a separate flag.
+//
+// Stability: stable
 func WithPprof() Option {
 	return func(cfg *config) { cfg.pprof = true }
 }
@@ -647,6 +694,8 @@ func WithPprof() Option {
 // swallowed (the log is non-critical).
 //
 // Pass `nil` to disable (matches the default state).
+//
+// Stability: stable
 func WithRequestLog(w io.Writer) Option {
 	return func(cfg *config) { cfg.requestLog = w }
 }
@@ -654,6 +703,8 @@ func WithRequestLog(w io.Writer) Option {
 // WithDocCacheSize sets the maximum number of distinct query strings
 // retained in the plan cache (LRU eviction past it). Default 1024.
 // Pass 0 to disable; equivalent to WithoutDocCache().
+//
+// Stability: stable
 func WithDocCacheSize(n int) Option {
 	return func(cfg *config) {
 		cfg.docCacheSize = n
@@ -665,6 +716,8 @@ func WithDocCacheSize(n int) Option {
 
 // WithDocCacheMaxQueryBytes sets the per-query byte cap above which a
 // query bypasses the cache. Default 64 KiB. 0 → no per-query cap.
+//
+// Stability: stable
 func WithDocCacheMaxQueryBytes(n int) Option {
 	return func(cfg *config) { cfg.docCacheMaxQuery = n }
 }
@@ -673,6 +726,8 @@ func WithDocCacheMaxQueryBytes(n int) Option {
 // matters more than throughput, or when every request has a unique
 // query string and normalization is also off (in which case the
 // cache only adds bookkeeping with no payback).
+//
+// Stability: stable
 func WithoutDocCache() Option {
 	return func(cfg *config) { cfg.docCacheDisabled = true }
 }
@@ -684,6 +739,8 @@ func WithoutDocCache() Option {
 // the request's variables before ExecutePlan. Costs ~50 µs/call
 // for parse + AST walk + fingerprint hash; off by default because
 // well-behaved clients use GraphQL variables already.
+//
+// Stability: stable
 func WithDocNormalization() Option {
 	return func(cfg *config) { cfg.docCacheNormalize = true }
 }
@@ -692,6 +749,8 @@ func WithDocNormalization() Option {
 // requests that would otherwise render the UI fall through to the
 // JSON path. The cached GraphiQL handler is never built, so
 // operators who only ship machine clients pay zero overhead for it.
+//
+// Stability: stable
 func WithoutGraphiQL() Option {
 	return func(cfg *config) { cfg.disableGraphiQL = true }
 }
@@ -732,6 +791,8 @@ func newDefaultOutboundHTTPClient() *http.Client {
 // 100) and the transport's send mutex serialises framing — under
 // high RPS this becomes a contention point that a small pool
 // dissolves. Values ≤ 0 fall back to the default.
+//
+// Stability: stable
 func WithGRPCConnPoolSize(n int) Option {
 	return func(cfg *config) {
 		if n <= 0 {
@@ -741,6 +802,11 @@ func WithGRPCConnPoolSize(n int) Option {
 	}
 }
 
+// New creates a Gateway with the supplied options.
+// AddProto / AddOpenAPI / AddGraphQL register services; call Handler
+// to get the GraphQL HTTP handler.
+//
+// Stability: stable
 func New(opts ...Option) *Gateway {
 	cfg := &config{
 		backpressure: DefaultBackpressure,
@@ -858,6 +924,8 @@ func New(opts ...Option) *Gateway {
 // Close stops background goroutines (peer tracker, janitor). Safe to
 // call multiple times. Does not close the bound *Cluster — owners of
 // the cluster shut it down themselves.
+//
+// Stability: stable
 func (g *Gateway) Close() {
 	g.mu.Lock()
 	tracker := g.peers
@@ -868,10 +936,16 @@ func (g *Gateway) Close() {
 }
 
 // Cluster returns the bound cluster, or nil if running standalone.
+//
+// Stability: stable
 func (g *Gateway) Cluster() *Cluster {
 	return g.cfg.cluster
 }
 
+// ServiceOption is a per-registration configuration function.
+// Pass to AddProto / AddOpenAPI / AddGraphQL.
+//
+// Stability: stable
 type ServiceOption func(*serviceConfig)
 type serviceConfig struct {
 	namespace      string
@@ -921,6 +995,8 @@ func (g *Gateway) isInternal(ns string) bool {
 
 // As overrides the default namespace (filename stem) for a registered
 // proto. Collisions across registered protos are an error.
+//
+// Stability: stable
 func As(namespace string) ServiceOption {
 	return func(c *serviceConfig) { c.namespace = namespace }
 }
@@ -932,6 +1008,8 @@ func As(namespace string) ServiceOption {
 // AddGraphQL it identifies the source within a namespace, mirroring
 // the proto pool model: latest-flat under the namespace + every
 // version addressable as `<ns>.<vN>` with @deprecated on older.
+//
+// Stability: stable
 func Version(v string) ServiceOption {
 	return func(c *serviceConfig) { c.version = v }
 }
@@ -942,6 +1020,8 @@ func Version(v string) ServiceOption {
 // statements; values are the raw .proto bytes. Single-file .protos
 // don't need this option. Well-known imports (google/protobuf/*)
 // resolve automatically.
+//
+// Stability: stable
 func ProtoImports(m map[string][]byte) ServiceOption {
 	return func(c *serviceConfig) { c.protoImports = m }
 }
@@ -949,6 +1029,8 @@ func ProtoImports(m map[string][]byte) ServiceOption {
 // To wires the gRPC destination for a registered proto. Accepts either
 // a host:port string (sugar for grpc.NewClient with insecure creds, for
 // dev) or a caller-managed *grpc.ClientConn.
+//
+// Stability: stable
 func To(dest any) ServiceOption {
 	return func(c *serviceConfig) {
 		switch v := dest.(type) {
@@ -972,6 +1054,8 @@ func To(dest any) ServiceOption {
 // services from the external GraphQL surface. Use for infrastructure
 // services (auth, policy, lookup) that hooks call but external clients
 // should not see.
+//
+// Stability: stable
 func AsInternal() ServiceOption {
 	return func(c *serviceConfig) { c.internal = true }
 }
@@ -983,6 +1067,8 @@ func AsInternal() ServiceOption {
 //
 // Currently a no-op for AddProto / AddProtoBytes — gRPC dispatch
 // uses ctx propagation, not HTTP headers.
+//
+// Stability: stable
 func ForwardHeaders(headers ...string) ServiceOption {
 	return func(c *serviceConfig) {
 		c.forwardHeaders = append([]string(nil), headers...)
@@ -998,6 +1084,8 @@ func ForwardHeaders(headers ...string) ServiceOption {
 // Applies to AddProto / AddProtoBytes (per-pool sem) and
 // AddOpenAPI / AddOpenAPIBytes (per-source sem). No-op for
 // AddGraphQL (downstream-GraphQL stitching has no per-source sem).
+//
+// Stability: stable
 func MaxConcurrency(n int) ServiceOption {
 	return func(c *serviceConfig) { c.maxConcurrency = n }
 }
@@ -1011,6 +1099,8 @@ func MaxConcurrency(n int) ServiceOption {
 // higher. 0 → unbounded per replica (only the service cap applies).
 //
 // Same applicability as MaxConcurrency.
+//
+// Stability: stable
 func MaxConcurrencyPerInstance(n int) ServiceOption {
 	return func(c *serviceConfig) { c.maxConcurrencyPerInstance = n }
 }
@@ -1023,6 +1113,8 @@ func MaxConcurrencyPerInstance(n int) ServiceOption {
 // specific service, a per-source RoundTripper that injects a
 // service-account token, etc.). No-op for AddProto /
 // AddProtoDescriptor.
+//
+// Stability: stable
 func OpenAPIClient(c *http.Client) ServiceOption {
 	return func(sc *serviceConfig) { sc.httpClient = c }
 }
@@ -1042,6 +1134,8 @@ func OpenAPIClient(c *http.Client) ServiceOption {
 // Namespace defaults to the entry filename stem; override with As().
 //
 // Required ServiceOption: gateway.To(grpc.ClientConnInterface).
+//
+// Stability: stable
 func (g *Gateway) AddProtoBytes(entry string, body []byte, opts ...ServiceOption) error {
 	sc := &serviceConfig{}
 	for _, o := range opts {
@@ -1111,6 +1205,8 @@ func resolveProtoFSBytes(fsys fs.FS, entry string) ([]byte, map[string][]byte, e
 //
 // Mirrors controlclient.Service{ProtoFS, ProtoEntry} on the
 // SelfRegister side. Same compile pipeline as AddProtoBytes.
+//
+// Stability: stable
 func (g *Gateway) AddProtoFS(fsys fs.FS, entry string, opts ...ServiceOption) error {
 	src, imports, err := resolveProtoFSBytes(fsys, entry)
 	if err != nil {
@@ -1168,6 +1264,8 @@ func (g *Gateway) addProtoFromDescriptor(fd protoreflect.FileDescriptor, sc *ser
 // Safe to call after Handler() — the schema rebuilds and atomically
 // replaces the live one, so dynamic add at runtime works the same way
 // boot-time registration does.
+//
+// Stability: stable
 func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	sc := &serviceConfig{}
 	for _, o := range opts {
@@ -1385,6 +1483,8 @@ func (g *Gateway) removeReplicasByOwnerLocked(owner string) (removed int, err er
 // middleware and header injectors are captured into dispatcher
 // closures at the next schema rebuild — those track via the same
 // path they did before.
+//
+// Stability: stable
 func (g *Gateway) Use(transforms ...Transform) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -1410,6 +1510,8 @@ func (g *Gateway) Use(transforms ...Transform) {
 //
 // Mount it directly on the GraphQL path (e.g. "/graphql"); pair with
 // SchemaHandler at "/schema" if you want a codegen-friendly export.
+//
+// Stability: stable
 func (g *Gateway) Handler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
@@ -1573,6 +1675,8 @@ var graphqlBufPool = sync.Pool{
 // Filtered requests build a fresh schema per call (cached g.schema is
 // the unfiltered one). Codegen pipelines that always want the whole
 // thing pay no extra cost.
+//
+// Stability: stable
 func (g *Gateway) SchemaHandler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
@@ -1633,6 +1737,8 @@ func withHTTPRequest(ctx context.Context, r *http.Request) context.Context {
 
 // HTTPRequestFromContext returns the HTTP request that originated this
 // gateway call, or nil if ctx wasn't created by the gateway handler.
+//
+// Stability: stable
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(httpRequestCtxKey{}).(*http.Request)
 	return r
@@ -1648,7 +1754,18 @@ func errorHandler(err error) http.Handler {
 // Middleware primitives
 // ---------------------------------------------------------------------
 
+// Handler is the dispatch function type used in runtime middleware chains.
+// A Handler receives the inbound proto message and returns the outbound one.
+// Middleware wraps a Handler to intercept, modify, or short-circuit the call.
+//
+// Stability: stable
 type Handler func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error)
+
+// Middleware wraps a Handler to build a chain of interceptors.
+// The canonical pattern: func(next Handler) Handler { return func(...) { ... } }
+// Set on Transform.Runtime and passed to Use.
+//
+// Stability: stable
 type Middleware func(next Handler) Handler
 
 // Transform bundles every reshaping concern that lands per gateway-Use
@@ -1660,6 +1777,8 @@ type Middleware func(next Handler) Handler
 // represents, captured at construction so the admin inventory endpoint
 // can surface what the operator registered without re-deriving it from
 // the SchemaRewrite / Headers shapes.
+//
+// Stability: stable
 type Transform struct {
 	Schema    []SchemaRewrite
 	Runtime   Middleware
@@ -1687,6 +1806,8 @@ type headerInjector struct {
 // constructed via HideType and friends; renderers that need rewrite-
 // specific data (e.g. the proto FDS exporter pulling out hidden type
 // names) type-assert to the concrete struct.
+//
+// Stability: stable
 type SchemaRewrite interface {
 	apply(svcs []*ir.Service)
 }
@@ -1695,12 +1816,24 @@ type SchemaRewrite interface {
 // Reject — short-circuit error
 // ---------------------------------------------------------------------
 
+// Reject constructs a short-circuit error for use in resolvers.
+// The code is mapped to a gRPC / HTTP status by the gateway ingress.
+//
+// Stability: stable
 func Reject(code Code, msg string) error {
 	return &rejection{Code: code, Msg: msg}
 }
 
+// Code is the numeric error code passed to Reject.
+// Resolver middleware uses these to express well-known failure modes
+// (auth, quota, not-found) without importing gRPC status codes.
+//
+// Stability: stable
 type Code int
 
+// Error codes for use with Reject.
+//
+// Stability: stable
 const (
 	CodeUnauthenticated Code = iota + 1
 	CodePermissionDenied
@@ -1728,6 +1861,9 @@ func (r *rejection) Extensions() map[string]any {
 	return ext
 }
 
+// String is a method on Code.
+//
+// Stability: stable
 func (c Code) String() string {
 	switch c {
 	case CodeUnauthenticated:

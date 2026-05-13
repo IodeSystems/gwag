@@ -16,6 +16,8 @@ import (
 // depend back on the gw package; gw/graphql_introspect.go has its
 // own copy for the runtime path. The two converge on the same
 // wire format.
+//
+// Stability: stable
 func IngestGraphQL(data json.RawMessage) (*Service, error) {
 	var wire struct {
 		Schema struct {

@@ -13,6 +13,8 @@ import (
 // IntrospectionQuery is the canonical GraphQL introspection query —
 // what every codegen tool sends to learn a server's schema. Mirrors
 // graphql-js' getIntrospectionQuery (without descriptions for brevity).
+//
+// Stability: stable
 const IntrospectionQuery = `query IntrospectionQuery {
   __schema {
     queryType { name }
@@ -78,6 +80,8 @@ fragment TypeRef on __Type {
 }`
 
 // WriteJSON encodes v as indented JSON to w.
+//
+// Stability: stable
 func WriteJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -88,6 +92,8 @@ func WriteJSON(w io.Writer, v any) error {
 // representing it. Covers what this gateway emits: object types, input
 // objects, enums, scalars, and field deprecation. Runtime concerns
 // (resolvers, defaults beyond String/Int/Bool/Enum) are not reflected.
+//
+// Stability: stable
 func PrintSchemaSDL(s *graphql.Schema) string {
 	var b strings.Builder
 	tm := s.TypeMap()

@@ -26,6 +26,8 @@ import (
 // in-process. The huma route is a thin REST shape on top, which the
 // gateway's OpenAPI ingestion lifts into the GraphQL surface — same
 // path any external service-defined OpenAPI takes.
+//
+// Stability: stable
 func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	mux := http.NewServeMux()
 	cfg := huma.DefaultConfig("Admin", "1.0.0")

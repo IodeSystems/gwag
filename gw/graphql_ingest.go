@@ -33,6 +33,8 @@ import (
 // `ForwardHeaders(...)`. `WithOpenAPIClient(*http.Client)` /
 // `OpenAPIClient(c)` set the HTTP client used for both introspection
 // and dispatch.
+//
+// Stability: stable
 func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	sc := &serviceConfig{}
 	for _, o := range opts {

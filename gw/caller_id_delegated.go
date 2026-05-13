@@ -42,6 +42,8 @@ const (
 // hit rate target is >99.9 % under steady-state traffic; misses are
 // collapsed via singleflight so a token-rotation thundering herd
 // produces one delegate RPC per (gateway, token), not one per request.
+//
+// Stability: stable
 type CallerIDDelegatedOptions struct {
 	// TTL is the default cache lifetime for resolved tokens. Zero →
 	// 60 s. The delegate can override per-token via
@@ -87,6 +89,8 @@ type CallerIDDelegatedOptions struct {
 // WithCallerIDEnforce surface.
 //
 // Plan §Caller-ID delegated mode.
+//
+// Stability: stable
 func WithCallerIDDelegated(opts CallerIDDelegatedOptions) Option {
 	return func(cfg *config) { cfg.callerIDDelegated = &opts }
 }
@@ -332,6 +336,8 @@ func readDelegatedCallerToken(ctx context.Context) (token, remoteAddr string) {
 //
 // Standalone (non-cluster) gateways have no cross-node fanout — this
 // helper returns nil and the local TTL is the only invalidation path.
+//
+// Stability: stable
 func PublishCallerRevoked(conn *nats.Conn, token string) error {
 	if conn == nil || token == "" {
 		return nil

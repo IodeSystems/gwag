@@ -26,6 +26,8 @@ import (
 // For svcs that mix origin kinds, each is rendered independently:
 // proto-origin services emit one .proto file (the original);
 // non-proto services emit one synthesized file each.
+//
+// Stability: stable
 func RenderProtoFiles(svcs []*Service) (*descriptorpb.FileDescriptorSet, error) {
 	fds := &descriptorpb.FileDescriptorSet{}
 	seen := map[string]bool{} // dedupe by file path

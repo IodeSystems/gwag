@@ -22,6 +22,8 @@ import (
 // `/api/mcp` (see plan §2). Operators should gate the mount behind
 // the admin bearer (or whichever auth posture they prefer); the
 // underlying gateway methods don't authenticate.
+//
+// Stability: experimental
 func (g *Gateway) MCPHandler() http.Handler {
 	srv := server.NewMCPServer(
 		"go-api-gateway",

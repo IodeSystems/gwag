@@ -24,14 +24,22 @@ import (
 //
 // The default tier when no WithChannelAuth pattern matches is
 // ChannelAuthHMAC.
+//
+// Stability: stable
 type ChannelAuthTier int
 
+// ChannelAuth tier constants, ordered from least to most restrictive.
+//
+// Stability: stable
 const (
 	ChannelAuthOpen ChannelAuthTier = iota
 	ChannelAuthHMAC
 	ChannelAuthDelegate
 )
 
+// String returns the human-readable name of the tier (open / hmac / delegate+hmac).
+//
+// Stability: stable
 func (t ChannelAuthTier) String() string {
 	switch t {
 	case ChannelAuthOpen:
@@ -80,6 +88,8 @@ type channelAuthRule struct {
 // operator who hands out tokens controls the pattern surface.
 //
 // Multiple WithChannelAuth calls compose; declaration order matters.
+//
+// Stability: stable
 func WithChannelAuth(pattern string, tier ChannelAuthTier) Option {
 	return func(cfg *config) {
 		cfg.channelAuth = append(cfg.channelAuth, channelAuthRule{Pattern: pattern, Tier: tier})

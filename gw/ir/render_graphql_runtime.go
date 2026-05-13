@@ -10,6 +10,8 @@ import (
 )
 
 // RuntimeOptions configures RenderGraphQLRuntime.
+//
+// Stability: stable
 type RuntimeOptions struct {
 	JSONType           *graphql.Scalar
 	LongType           *graphql.Scalar
@@ -18,6 +20,8 @@ type RuntimeOptions struct {
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
+//
+// Stability: stable
 func RenderGraphQLRuntime(svcs []*Service, registry *DispatchRegistry, opts RuntimeOptions) (*graphql.Schema, error) {
 	queries, mutations, subs, err := RenderGraphQLRuntimeFields(svcs, registry, opts)
 	if err != nil {
@@ -51,6 +55,8 @@ func RenderGraphQLRuntime(svcs []*Service, registry *DispatchRegistry, opts Runt
 
 // RenderGraphQLRuntimeFields returns the Query / Mutation /
 // Subscription field maps.
+//
+// Stability: stable
 func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opts RuntimeOptions) (graphql.Fields, graphql.Fields, graphql.Fields, error) {
 	if registry == nil {
 		return nil, nil, nil, fmt.Errorf("runtime: nil DispatchRegistry")
@@ -135,6 +141,8 @@ func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opt
 }
 
 // CombineDepReason returns the @deprecated reason: manual wins, auto is fallback.
+//
+// Stability: stable
 func CombineDepReason(manual, auto string) string {
 	if manual != "" {
 		return manual
@@ -372,6 +380,8 @@ type graphqlResolveInfoKey struct{}
 
 // GraphQLResolveInfoFrom extracts the ResolveInfo from context, set by
 // buildRuntimeOperation for KindGraphQL operations. Returns nil if absent.
+//
+// Stability: stable
 func GraphQLResolveInfoFrom(ctx context.Context) *graphql.ResolveInfo {
 	v, _ := ctx.Value(graphqlResolveInfoKey{}).(*graphql.ResolveInfo)
 	return v
@@ -513,6 +523,8 @@ func pickStableSvc(services []*Service, vN int) *Service {
 
 // ParseRuntimeVersionN extracts a numeric version index from a
 // "vN" / "N" / "" string. Empty / unparseable inputs return 0.
+//
+// Stability: stable
 func ParseRuntimeVersionN(s string) int {
 	if s == "" {
 		return 0

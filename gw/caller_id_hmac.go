@@ -20,6 +20,8 @@ import (
 // "<caller_id>\n<timestamp_unix>"; non-empty kid signs
 // "<kid>\n<caller_id>\n<timestamp_unix>" so swapping kid can't replay
 // a token across keys.
+//
+// Stability: stable
 type CallerIDHMACOptions struct {
 	// Secret is the legacy single shared HMAC key. Tokens minted with
 	// no kid (or kid=="") verify against this. Either Secret, Secrets,
@@ -41,6 +43,8 @@ type CallerIDHMACOptions struct {
 // HMAC caller-id HTTP / gRPC field names. X-Caller-Id / caller-id is
 // reused from the Public flavor so dashboards and labels stay stable
 // when an operator upgrades Public → HMAC.
+//
+// Stability: stable
 const (
 	HMACCallerIDTimestampHeader = "X-Caller-Timestamp"
 	HMACCallerIDKidHeader       = "X-Caller-Kid"
@@ -83,6 +87,8 @@ var (
 // Pair with SignCallerIDToken / SignCallerIDTokenWithKid on the signer
 // side so callers holding the shared secret mint compatible tokens
 // locally. Plan §Caller-ID.
+//
+// Stability: stable
 func WithCallerIDHMAC(o CallerIDHMACOptions) Option {
 	return WithCallerIDExtractor(o.extractor())
 }
@@ -212,6 +218,8 @@ func computeCallerIDHMAC(secret []byte, kid, callerID string, timestampUnix int6
 // ttlSeconds is currently informational; the gateway's SkewWindow
 // bounds replay regardless. A future version may pin tokens to an
 // explicit expiry rather than a wall-clock window.
+//
+// Stability: stable
 func SignCallerIDToken(secret []byte, callerID string, ttlSeconds int64) (sigB64 string, timestampUnix int64) {
 	sigB64, _, timestampUnix = SignCallerIDTokenWithKid(secret, "", callerID, ttlSeconds)
 	return sigB64, timestampUnix
@@ -222,6 +230,8 @@ func SignCallerIDToken(secret []byte, callerID string, ttlSeconds int64) (sigB64
 // `kid` alongside `caller_id` / `timestamp` / `signature` in the
 // request headers (or gRPC metadata). Empty kid produces a legacy
 // token that verifies against `Secret`.
+//
+// Stability: stable
 func SignCallerIDTokenWithKid(secret []byte, kid, callerID string, ttlSeconds int64) (sigB64, kidOut string, timestampUnix int64) {
 	_ = ttlSeconds
 	timestampUnix = time.Now().Unix()

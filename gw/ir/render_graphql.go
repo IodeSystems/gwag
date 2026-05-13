@@ -34,6 +34,8 @@ import (
 // Subscription groups flatten to path-joined names because
 // graphql-go's executor doesn't support nested objects under
 // Subscription.
+//
+// Stability: stable
 func RenderGraphQL(svcs []*Service) string {
 	var b strings.Builder
 

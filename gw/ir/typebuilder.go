@@ -52,6 +52,8 @@ func exportedName(s string) string {
 }
 
 // IdentityName returns the input unchanged.
+//
+// Stability: stable
 func IdentityName(s string) string { return s }
 
 func identityName(s string) string { return s }
@@ -75,6 +77,8 @@ func isValidGraphQLIdent(s string) bool {
 }
 
 // IRTypeNaming controls how IR names project to graphql display names.
+//
+// Stability: stable
 type IRTypeNaming struct {
 	ObjectName    func(irName string) string
 	InputName     func(irName string) string
@@ -92,6 +96,8 @@ type IRTypeNaming struct {
 }
 
 // IRTypeBuilderOptions tweaks scalar projection.
+//
+// Stability: stable
 type IRTypeBuilderOptions struct {
 	Int64Type  graphql.Output
 	UInt64Type graphql.Output
@@ -103,6 +109,8 @@ type IRTypeBuilderOptions struct {
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
 // values from one Service. Construct one per service+kind tuple;
 // the builder caches by IR type name.
+//
+// Stability: stable
 type IRTypeBuilder struct {
 	svc       *Service
 	naming    IRTypeNaming
@@ -118,6 +126,8 @@ type IRTypeBuilder struct {
 
 // NewIRTypeBuilder constructs a builder over svc with the supplied
 // naming + scalar options.
+//
+// Stability: stable
 func NewIRTypeBuilder(svc *Service, naming IRTypeNaming, opts IRTypeBuilderOptions) *IRTypeBuilder {
 	b := &IRTypeBuilder{
 		svc:     svc,
@@ -192,6 +202,8 @@ func (b *IRTypeBuilder) jsonScalar() *graphql.Scalar {
 }
 
 // LongScalar returns a Long-named decimal-string scalar.
+//
+// Stability: stable
 func (b *IRTypeBuilder) LongScalar() *graphql.Scalar {
 	if s, ok := b.scalars["__Long"]; ok {
 		return s
@@ -234,6 +246,8 @@ func (b *IRTypeBuilder) LongScalar() *graphql.Scalar {
 }
 
 // Output resolves an IR TypeRef to a graphql.Output.
+//
+// Stability: stable
 func (b *IRTypeBuilder) Output(ref TypeRef, repeated, required, itemRequired bool) (graphql.Output, error) {
 	t, err := b.outputBase(ref)
 	if err != nil {
@@ -243,6 +257,8 @@ func (b *IRTypeBuilder) Output(ref TypeRef, repeated, required, itemRequired boo
 }
 
 // Input is the input-side counterpart of Output.
+//
+// Stability: stable
 func (b *IRTypeBuilder) Input(ref TypeRef, repeated, required, itemRequired bool) (graphql.Input, error) {
 	t, err := b.inputBase(ref)
 	if err != nil {

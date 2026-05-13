@@ -32,6 +32,8 @@ import (
 // runtime injection runs only for proto-message T on the proto
 // dispatcher path. OpenAPI and downstream-GraphQL dispatchers don't
 // yet execute the runtime middleware chain.
+//
+// Stability: stable
 func InjectType[T any](resolve func(ctx context.Context, current *T) (T, error), opts ...InjectOption) Transform {
 	cfg := injectConfig{hide: true}
 	for _, o := range opts {
@@ -243,6 +245,8 @@ func withInjectCache(ctx context.Context) context.Context {
 }
 
 // InjectOption tunes an InjectType registration.
+//
+// Stability: stable
 type InjectOption interface {
 	applyInject(*injectConfig)
 }
@@ -260,6 +264,8 @@ func (h hideOption) applyInject(c *injectConfig) { c.hide = bool(h) }
 // external schema. Default true: arg is gone from the schema, resolver
 // always sees current=nil, gateway fills it. Pass Hide(false) to keep
 // the arg on the wire and have the resolver inspect-and-decide.
+//
+// Stability: stable
 func Hide(hide bool) InjectOption { return hideOption(hide) }
 
 type nullableOption bool
@@ -273,6 +279,8 @@ func (n nullableOption) applyInject(c *injectConfig) { c.nullable = bool(n) }
 // Hide(true) + Nullable(true) is rejected at registration (the arg is
 // gone from the schema; nullability is moot) — the panic surfaces at
 // the user's call site, not at schema rebuild.
+//
+// Stability: stable
 func Nullable(nullable bool) InjectOption { return nullableOption(nullable) }
 
 // InjectPath returns a Transform targeting one specific schema
@@ -300,6 +308,8 @@ func Nullable(nullable bool) InjectOption { return nullableOption(nullable) }
 // the live state alongside Hide/Nullable/RegisteredAt. Resolver
 // return-type validation is still deferred — runtime errors today
 // surface via Reject when `argsToMessage` fails.
+//
+// Stability: stable
 func InjectPath(path string, resolve func(ctx context.Context, current any) (any, error), opts ...InjectOption) Transform {
 	cfg := injectConfig{hide: true}
 	for _, o := range opts {
@@ -421,6 +431,8 @@ type cachedPathResult struct {
 // Coverage: every outbound dispatch (proto + OpenAPI). gRPC ingress
 // (a service calling the gateway's gRPC ingress to reach another
 // proto pool) also fires the injectors on its outbound leg.
+//
+// Stability: stable
 func InjectHeader(name string, resolve func(ctx context.Context, current *string) (string, error), opts ...InjectOption) Transform {
 	if name == "" {
 		panic("gateway: InjectHeader: empty header name")

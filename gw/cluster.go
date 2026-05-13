@@ -19,6 +19,8 @@ import (
 // Cluster wraps an embedded NATS server, a JetStream context, and a
 // connection back to the local server. Multiple gateways form a cluster
 // by pointing their ClusterOptions.Peers at one another's cluster routes.
+//
+// Stability: stable
 type Cluster struct {
 	Server *natsd.Server
 	Conn   *nats.Conn
@@ -39,6 +41,8 @@ type Cluster struct {
 // auto-suffix on the NATS cluster name — operators who need physical
 // isolation between deployments pick distinct cluster names directly
 // (NATS already enforces non-federation across mismatched names).
+//
+// Stability: stable
 type ClusterOptions struct {
 	NodeName      string
 	ClientListen  string // e.g. ":14222"; default ":14222"
@@ -93,6 +97,8 @@ type ClusterOptions struct {
 
 // StartCluster boots an embedded NATS server with JetStream enabled and
 // returns a Cluster bound to it. Callers are responsible for Close().
+//
+// Stability: stable
 func StartCluster(opts ClusterOptions) (*Cluster, error) {
 	if opts.ClientListen == "" {
 		opts.ClientListen = ":14222"
@@ -248,6 +254,8 @@ func (*warnNATSLogger) Debugf(string, ...any) {}
 func (*warnNATSLogger) Tracef(string, ...any) {}
 
 // Close drains the connection and shuts the server down.
+//
+// Stability: stable
 func (c *Cluster) Close() {
 	if c == nil {
 		return
@@ -263,6 +271,8 @@ func (c *Cluster) Close() {
 
 // WaitForJetStream blocks until JetStream reports ready (relevant in
 // freshly-formed clusters where stream meta needs to settle).
+//
+// Stability: stable
 func (c *Cluster) WaitForJetStream(ctx context.Context) error {
 	deadline, _ := ctx.Deadline()
 	for {
@@ -288,6 +298,8 @@ func (c *Cluster) WaitForJetStream(ctx context.Context) error {
 // per node.
 //
 // Pass nil paths to bail out — callers convert "" flags to nil.
+//
+// Stability: stable
 func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	if certFile == "" || keyFile == "" || caFile == "" {
 		return nil, errors.New("LoadMTLSConfig: certFile, keyFile, caFile all required")

@@ -32,6 +32,8 @@ const quotaAuthorizerNamespace = "_quota_auth"
 // grants a small emergency block (EmergencyPermits) so a degraded
 // quota service doesn't brick the gateway. WithQuotaEnforce (planned
 // followup) flips this to fail-closed.
+//
+// Stability: stable
 type QuotaOptions struct {
 	// BlockSize is the permit count the gateway asks the delegate for
 	// on each refill. Zero → 100. The delegate may grant fewer.
@@ -67,6 +69,8 @@ type QuotaOptions struct {
 // registered under _quota_auth/v1.
 //
 // Plan §Caller-ID + quota ladder.
+//
+// Stability: stable
 func WithQuota(opts QuotaOptions) Option {
 	return func(cfg *config) { cfg.quota = &opts }
 }
@@ -83,6 +87,8 @@ func WithQuota(opts QuotaOptions) Option {
 // it must be combined with WithQuota.
 //
 // Plan §Caller-ID + quota ladder.
+//
+// Stability: stable
 func WithQuotaEnforce() Option {
 	return func(cfg *config) { cfg.quotaEnforce = true }
 }

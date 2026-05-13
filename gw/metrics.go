@@ -15,6 +15,8 @@ import (
 // implementation (newPrometheusMetrics) records to a histogram exposed
 // at MetricsHandler. Plug in a custom impl via WithMetrics for
 // integrating with other backends.
+//
+// Stability: stable
 type Metrics interface {
 	// RecordDispatch is called once per dispatch (gRPC pool, OpenAPI
 	// source, or downstream-GraphQL source) with the (namespace,
@@ -319,6 +321,8 @@ func classifyError(err error) string {
 // Unwraps statsRecordingMetrics — cfg.metrics is wrapped at New() so
 // every RecordDispatch also feeds the in-process stats registry; the
 // Prometheus registry itself sits on the underlying impl.
+//
+// Stability: stable
 func (g *Gateway) MetricsHandler() http.Handler {
 	if g.cfg.metrics == nil {
 		return http.NotFoundHandler()

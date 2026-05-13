@@ -19,6 +19,8 @@ import (
 
 // HandleMux is the minimal mux surface RegisterGRPC writes to. Stdlib
 // *http.ServeMux satisfies it; chi/gorilla/etc. do too.
+//
+// Stability: experimental
 type HandleMux interface {
 	Handle(pattern string, handler http.Handler)
 }
@@ -40,6 +42,8 @@ type HandleMux interface {
 // Must be called AFTER RegisterHuma — RegisterGRPC reads the
 // FileDescriptorSet projection of g.services, which only exists
 // once the schema is built.
+//
+// Stability: experimental
 func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 	if !g.built {
 		return fmt.Errorf("gat: RegisterHuma must be called before RegisterGRPC")

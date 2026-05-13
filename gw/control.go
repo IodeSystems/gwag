@@ -38,6 +38,8 @@ const (
 //
 // The first call to ControlPlane starts the heartbeat janitor; safe to
 // call multiple times — the same impl is returned.
+//
+// Stability: stable
 func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 	g.mu.Lock()
 	if g.cp == nil {

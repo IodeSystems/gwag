@@ -25,10 +25,14 @@ const adminTokenFilename = "admin-token"
 // The token is the unconditional fallback — independent of any
 // pluggable admin authorizer. It does NOT authenticate services
 // calling each other through the gateway; that's a separate concern.
+//
+// Stability: stable
 func (g *Gateway) AdminToken() []byte { return g.cfg.adminToken }
 
 // AdminTokenHex is AdminToken hex-encoded — the form a client presents
 // in `Authorization: Bearer <hex>` and what we persist on disk.
+//
+// Stability: stable
 func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.adminToken) }
 
 // AdminMiddleware wraps next in admin-auth verification intended for
@@ -47,6 +51,8 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 //
 // Authenticated requests carry isAdminAuth(ctx) == true on the way
 // through.
+//
+// Stability: stable
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	tok := g.cfg.adminToken
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +174,8 @@ func generateAdminToken() ([]byte, error) {
 // AdminTokenPath returns the on-disk path the gateway will persist its
 // boot token to (or "" if no data dir was configured). Useful for the
 // boot log.
+//
+// Stability: stable
 func (g *Gateway) AdminTokenPath() string {
 	if g.cfg.adminDataDir == "" {
 		return ""

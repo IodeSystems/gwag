@@ -16,6 +16,8 @@ import (
 // The format is opaque to the registry — the convention exists so
 // renderers can reconstruct the id from a Service tree without
 // needing the original Operation pointer.
+//
+// Stability: stable
 type SchemaID string
 
 // Dispatcher executes one operation. Args are the IR-canonical
@@ -24,13 +26,20 @@ type SchemaID string
 // shape: map[string]any for objects, []any for lists, primitives
 // otherwise. Errors propagate to the caller — middleware decides
 // classification (resource-exhausted vs internal vs upstream).
+//
+// Stability: stable
 type Dispatcher interface {
 	Dispatch(ctx context.Context, args map[string]any) (any, error)
 }
 
 // DispatcherFunc adapts a plain function to Dispatcher.
+//
+// Stability: stable
 type DispatcherFunc func(ctx context.Context, args map[string]any) (any, error)
 
+// Dispatch implements Dispatcher by calling f directly.
+//
+// Stability: stable
 func (f DispatcherFunc) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	return f(ctx, args)
 }
@@ -38,23 +47,31 @@ func (f DispatcherFunc) Dispatch(ctx context.Context, args map[string]any) (any,
 // DispatcherMiddleware wraps a Dispatcher in another Dispatcher.
 // Used for cross-cutting concerns (backpressure, metrics, auth)
 // that today live inline in each format's resolver closure.
+//
+// Stability: stable
 type DispatcherMiddleware func(next Dispatcher) Dispatcher
 
 // DispatchRegistry maps SchemaID → Dispatcher. The runtime renderer
 // builds resolvers that look up Dispatchers via SchemaID at call
 // time, so the schema graph can be rebuilt independently of pool /
 // source lifecycle. Lookups are read-mostly and concurrent.
+//
+// Stability: stable
 type DispatchRegistry struct {
 	mu          sync.RWMutex
 	dispatchers map[SchemaID]Dispatcher
 }
 
 // NewDispatchRegistry returns an empty registry.
+//
+// Stability: stable
 func NewDispatchRegistry() *DispatchRegistry {
 	return &DispatchRegistry{dispatchers: map[SchemaID]Dispatcher{}}
 }
 
 // Set installs `d` under `id`. Replaces any existing entry.
+//
+// Stability: stable
 func (r *DispatchRegistry) Set(id SchemaID, d Dispatcher) {
 	r.mu.Lock()
 	r.dispatchers[id] = d
@@ -65,6 +82,8 @@ func (r *DispatchRegistry) Set(id SchemaID, d Dispatcher) {
 // nothing is registered. Resolvers that call Get at dispatch time
 // (rather than build time) tolerate pool / source churn between
 // schema rebuilds.
+//
+// Stability: stable
 func (r *DispatchRegistry) Get(id SchemaID) Dispatcher {
 	r.mu.RLock()
 	d := r.dispatchers[id]
@@ -74,6 +93,8 @@ func (r *DispatchRegistry) Get(id SchemaID) Dispatcher {
 
 // Delete removes the dispatcher registered under `id`. No-op when
 // nothing is registered.
+//
+// Stability: stable
 func (r *DispatchRegistry) Delete(id SchemaID) {
 	r.mu.Lock()
 	delete(r.dispatchers, id)
@@ -82,6 +103,8 @@ func (r *DispatchRegistry) Delete(id SchemaID) {
 
 // Len returns the number of registered dispatchers. Cheap; useful
 // for tests and admin views.
+//
+// Stability: stable
 func (r *DispatchRegistry) Len() int {
 	r.mu.RLock()
 	n := len(r.dispatchers)
@@ -94,6 +117,8 @@ func (r *DispatchRegistry) Len() int {
 // a SchemaID needs to be reconstructed from a Service tree without
 // the original Operation pointer (e.g. registrars wiring Dispatchers
 // keyed by flat name).
+//
+// Stability: stable
 func MakeSchemaID(namespace, version, flatName string) SchemaID {
 	return SchemaID(namespace + "/" + version + "/" + flatName)
 }
@@ -102,6 +127,8 @@ func MakeSchemaID(namespace, version, flatName string) SchemaID {
 // (top-level + every Group descendant) and stamps SchemaID using
 // MakeSchemaID with the flat path-joined name. Idempotent — call
 // after Service.Namespace / Service.Version are set.
+//
+// Stability: stable
 func PopulateSchemaIDs(svc *Service) {
 	for _, op := range svc.Operations {
 		op.SchemaID = MakeSchemaID(svc.Namespace, svc.Version, op.Name)

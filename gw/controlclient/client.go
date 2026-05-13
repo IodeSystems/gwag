@@ -38,6 +38,12 @@ import (
 	cpv1 "github.com/iodesystems/gwag/gw/proto/controlplane/v1"
 )
 
+// Service describes one service binding to register with the gateway.
+// At least one of ProtoSource/ProtoFS, OpenAPISpec, or GraphQLEndpoint
+// must be set. Multiple Services can be passed in a single SelfRegister
+// call to bind multiple namespaces in one go.
+//
+// Stability: stable
 type Service struct {
 	// Namespace under which to mount this service in the gateway's
 	// GraphQL surface. Empty falls back to the proto's filename stem
@@ -113,6 +119,10 @@ type Service struct {
 	MaxConcurrencyPerInstance uint32
 }
 
+// Options configures a SelfRegister call. GatewayAddr, ServiceAddr,
+// and at least one Service entry are required.
+//
+// Stability: stable
 type Options struct {
 	// GatewayAddr is the gRPC host:port where the gateway's control
 	// plane is listening (the WithControlPlane addr).
@@ -161,6 +171,8 @@ type Options struct {
 
 // Registration is the live handle returned by SelfRegister. Close
 // stops the heartbeat goroutine and gracefully deregisters.
+//
+// Stability: stable
 type Registration struct {
 	conn   *grpc.ClientConn
 	client cpv1.ControlPlaneClient
@@ -174,6 +186,12 @@ type Registration struct {
 	opts   Options
 }
 
+// SelfRegister registers with the gateway control plane and starts a
+// background heartbeat goroutine. Returns a Registration; call
+// Close when the service shuts down to deregister and stop the goroutine.
+// Blocks until the initial Register RPC succeeds or ctx is cancelled.
+//
+// Stability: stable
 func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 	if opts.GatewayAddr == "" {
 		return nil, errors.New("controlclient: GatewayAddr required")
@@ -347,6 +365,8 @@ func (r *Registration) heartbeatLoop(interval time.Duration) {
 
 // Close stops the heartbeat and gracefully deregisters. Safe to call
 // once. ctx is used only for the Deregister call.
+//
+// Stability: stable
 func (r *Registration) Close(ctx context.Context) error {
 	select {
 	case <-r.stop:

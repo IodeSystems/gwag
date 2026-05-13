@@ -23,6 +23,8 @@ import (
 // as AddOpenAPI but skips the file/HTTP fetch — useful when the
 // gateway hosts its own huma-defined routes and self-ingests the
 // generated spec at boot.
+//
+// Stability: stable
 func (g *Gateway) AddOpenAPIBytes(specBytes []byte, opts ...ServiceOption) error {
 	return g.addOpenAPIFromBytes(specBytes, "<inline>", opts...)
 }
@@ -41,6 +43,8 @@ func (g *Gateway) AddOpenAPIBytes(specBytes []byte, opts ...ServiceOption) error
 // Required ServiceOption: gateway.To("http://addr"). Optional As(ns)
 // sets the GraphQL namespace prefix; default is the spec's title or
 // the URL host.
+//
+// Stability: stable
 func (g *Gateway) AddOpenAPI(specSource string, opts ...ServiceOption) error {
 	specBytes, err := readOpenAPISpec(specSource)
 	if err != nil {

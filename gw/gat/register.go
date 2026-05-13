@@ -45,6 +45,8 @@ type capturedOp struct {
 // registration still succeeds; the capture is dropped) — a hard
 // panic was rejected because tests sometimes register more after
 // inspecting the schema. Order matters in production code.
+//
+// Stability: experimental
 func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler func(context.Context, *I) (*O, error)) {
 	huma.Register(api, op, handler)
 	if g.built {
@@ -79,6 +81,8 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 //
 // Pass an empty prefix to mount at root. The prefix should not have
 // a trailing slash; "/api" → "/api/graphql".
+//
+// Stability: experimental
 func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 	if g.built {
 		return fmt.Errorf("gat: gateway already finalized")

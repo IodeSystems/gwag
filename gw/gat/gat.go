@@ -33,6 +33,8 @@ import (
 //     api.OpenAPI(), ingests it into IR, wires the captured handlers
 //     as dispatchers, builds the schema, and mounts the GraphQL +
 //     schema-view endpoints onto the adopter's huma router.
+//
+// Stability: experimental
 type Gateway struct {
 	schema   *graphql.Schema
 	registry *ir.DispatchRegistry
@@ -49,6 +51,8 @@ type Gateway struct {
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.
+//
+// Stability: experimental
 type ServiceRegistration struct {
 	Service   *ir.Service
 	BaseURL   string // upstream HTTP base URL for OpenAPI dispatch
@@ -76,6 +80,8 @@ type ServiceRegistration struct {
 //	    BaseURL: "http://localhost:8081",
 //	})
 //	http.Handle("/graphql", gw.Handler())
+//
+// Stability: experimental
 func New(regs ...ServiceRegistration) (*Gateway, error) {
 	g := &Gateway{
 		registry: ir.NewDispatchRegistry(),
@@ -142,6 +148,8 @@ func (g *Gateway) build() error {
 // Handler returns an http.Handler that serves GraphQL queries and
 // mutations. POST /graphql with JSON body; GET with ?query= param.
 // WebSocket subscriptions are not supported in gat mode.
+//
+// Stability: experimental
 func (g *Gateway) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
@@ -196,11 +204,15 @@ func (g *Gateway) Handler() http.Handler {
 }
 
 // Schema returns the assembled graphql.Schema for introspection.
+//
+// Stability: experimental
 func (g *Gateway) Schema() *graphql.Schema {
 	return g.schema
 }
 
 // Services returns the registered IR services.
+//
+// Stability: experimental
 func (g *Gateway) Services() []*ir.Service {
 	return g.services
 }
@@ -219,11 +231,15 @@ type contextKey int
 const httpRequestKey contextKey = iota
 
 // WithHTTPRequest attaches the inbound *http.Request to ctx.
+//
+// Stability: experimental
 func WithHTTPRequest(ctx context.Context, r *http.Request) context.Context {
 	return context.WithValue(ctx, httpRequestKey, r)
 }
 
 // HTTPRequestFromContext extracts the *http.Request from ctx.
+//
+// Stability: experimental
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(httpRequestKey).(*http.Request)
 	return r

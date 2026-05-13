@@ -21,6 +21,8 @@ import (
 //     become object schemas; Enum Types become string-enum schemas.
 //   - oneOf / interface / map render lossy when not natively
 //     representable.
+//
+// Stability: stable
 func RenderOpenAPI(svc *Service) (*openapi3.T, error) {
 	if svc.OriginKind == KindOpenAPI {
 		if doc, ok := svc.Origin.(*openapi3.T); ok && doc != nil {

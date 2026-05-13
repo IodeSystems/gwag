@@ -39,6 +39,8 @@ const (
 )
 
 // MCPConfig is the wire/JSON shape of the MCP surface allowlist.
+//
+// Stability: experimental
 type MCPConfig struct {
 	AutoInclude bool     `json:"auto_include"`
 	Include     []string `json:"include,omitempty"`

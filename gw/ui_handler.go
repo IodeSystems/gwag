@@ -20,6 +20,8 @@ import (
 // Caller passes either an embed.FS subtree (via fs.Sub) or an
 // os.DirFS for dev. Empty filesystems are accepted; requests get a
 // plain 404 until something is embedded.
+//
+// Stability: stable
 func UIHandler(uiFS fs.FS) http.Handler {
 	if uiFS == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

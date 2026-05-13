@@ -152,6 +152,8 @@ func computeSubscribeHMAC(secret []byte, kid, channel string, timestampUnix int6
 // ttlSeconds is currently informational; the gateway's SkewWindow
 // bounds replay regardless. A future version may pin tokens to an
 // explicit expiry rather than a wall-clock window.
+//
+// Stability: stable
 func SignSubscribeToken(secret []byte, channel string, ttlSeconds int64) (hmacB64 string, timestampUnix int64) {
 	hmacB64, _, timestampUnix = SignSubscribeTokenWithKid(secret, "", channel, ttlSeconds)
 	return hmacB64, timestampUnix
@@ -161,6 +163,8 @@ func SignSubscribeToken(secret []byte, channel string, ttlSeconds int64) (hmacB6
 // `SubscriptionAuthOptions.Secrets[kid]` on the verifier side and pass
 // `kid` alongside `hmac` / `timestamp` in the subscribe args. Empty
 // kid produces a legacy token (verifies against `Secret`).
+//
+// Stability: stable
 func SignSubscribeTokenWithKid(secret []byte, kid, channel string, ttlSeconds int64) (hmacB64, kidOut string, timestampUnix int64) {
 	timestampUnix = time.Now().Unix()
 	mac := computeSubscribeHMAC(secret, kid, channel, timestampUnix)

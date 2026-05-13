@@ -19,6 +19,8 @@ import (
 // The returned mux owns the path layout — wire it under any prefix and
 // behind whatever auth fits the deployment. pprof leaks goroutine and
 // heap state, so never expose it publicly.
+//
+// Stability: stable
 func (g *Gateway) PprofMux() *http.ServeMux {
 	if !g.cfg.pprof {
 		return nil

@@ -41,6 +41,8 @@ import (
 //     remains in the descriptor — callers may see dangling type
 //     references. (Acceptable for v1; refine when concrete cases
 //     appear.)
+//
+// Stability: stable
 func (g *Gateway) SchemaProtoHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -266,6 +268,8 @@ func transformFileDescriptor(
 // Response: application/json, an object
 // `{"<ns>": {"<vN>": <spec>, ...}, ...}`. Single-version namespaces
 // surface as `{"<ns>": {"v1": <spec>}}`.
+//
+// Stability: stable
 func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

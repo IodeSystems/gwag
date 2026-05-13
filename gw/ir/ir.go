@@ -27,8 +27,13 @@ package ir
 
 // Kind classifies an entity's source format. Used to decide whether
 // the same-kind renderer's Origin shortcut applies.
+//
+// Stability: stable
 type Kind int
 
+// Kind constants for source format classification.
+//
+// Stability: stable
 const (
 	KindUnset Kind = iota
 	KindProto
@@ -40,6 +45,8 @@ const (
 // surface — what `?service=ns:vN` filters on, what hides/internal
 // transforms scope to, and what the gateway's pool / openapi-source
 // / graphql-source structures correspond to one-for-one.
+//
+// Stability: stable
 type Service struct {
 	Namespace   string
 	Version     string
@@ -111,6 +118,8 @@ type Service struct {
 // rest), identical to the grammar `WithChannelAuth` uses. MessageFQN
 // is the proto fully-qualified message name (`"<package>.<Name>"`,
 // matching the keys in Service.Types for proto-origin services).
+//
+// Stability: stable
 type ChannelBinding struct {
 	Pattern    string
 	MessageFQN string
@@ -133,6 +142,8 @@ type ChannelBinding struct {
 // namespace that needs both queries and mutations (e.g. admin)
 // emits as two sibling Groups under Service: one with Kind=OpQuery,
 // one with Kind=OpMutation.
+//
+// Stability: stable
 type OperationGroup struct {
 	Name        string
 	Description string
@@ -144,8 +155,13 @@ type OperationGroup struct {
 // OpKind groups operations by invocation shape so cross-kind
 // renderers can pick their target field-root (Query / Mutation /
 // Subscription) or HTTP verb without re-classifying every time.
+//
+// Stability: stable
 type OpKind int
 
+// OpKind constants for operation classification.
+//
+// Stability: stable
 const (
 	OpQuery        OpKind = iota // GET / unary read
 	OpMutation                   // POST/PUT/PATCH/DELETE / unary write
@@ -159,6 +175,8 @@ const (
 // path/query/body params → flat; GraphQL's args → flat). Output
 // is a single type ref; subscription operations stream Output
 // payloads.
+//
+// Stability: stable
 type Operation struct {
 	Name        string
 	Kind        OpKind
@@ -205,6 +223,8 @@ type Operation struct {
 // request body into named GraphQL args / OpenAPI params); the
 // proto renderer reverses this by re-synthesizing a request message
 // from Args when the Origin isn't present.
+//
+// Stability: stable
 type Arg struct {
 	Name         string
 	Type         TypeRef
@@ -223,8 +243,13 @@ type Arg struct {
 }
 
 // TypeKind is the structural shape of a Type entry.
+//
+// Stability: stable
 type TypeKind int
 
+// TypeKind constants for the structural shape of a Type entry.
+//
+// Stability: stable
 const (
 	TypeObject TypeKind = iota // proto message / openapi object / graphql object
 	TypeEnum
@@ -235,6 +260,8 @@ const (
 )
 
 // Type is one named structural definition.
+//
+// Stability: stable
 type Type struct {
 	Name        string
 	TypeKind    TypeKind
@@ -276,6 +303,8 @@ type Type struct {
 }
 
 // EnumValue is one entry in TypeKind=Enum.
+//
+// Stability: stable
 type EnumValue struct {
 	Name        string
 	Description string
@@ -285,6 +314,8 @@ type EnumValue struct {
 
 // Field is one property on an Object/Input type. The same struct
 // also represents one element of a oneof (with OneofIndex set).
+//
+// Stability: stable
 type Field struct {
 	Name         string
 	JSONName     string // proto json_name override; equal to Name elsewhere
@@ -316,6 +347,8 @@ type Field struct {
 // TypeRef points at a primitive scalar, a named Type, or a map.
 // Exactly one of Builtin / Named / Map is populated; Repeated is
 // orthogonal and lives on Field.
+//
+// Stability: stable
 type TypeRef struct {
 	Builtin ScalarKind
 	Named   string
@@ -326,6 +359,8 @@ type TypeRef struct {
 // `type:object, additionalProperties:V`. GraphQL has no native
 // map; renderers project to a JSON-shaped scalar or list of
 // {key,value} pairs.
+//
+// Stability: stable
 type MapType struct {
 	KeyType   TypeRef
 	ValueType TypeRef
@@ -335,8 +370,13 @@ type MapType struct {
 // Custom scalars (proto wrappers, GraphQL custom scalars, OpenAPI
 // strings with rare formats) register as TypeKind=TypeScalar in
 // Service.Types and TypeRef.Named points at them.
+//
+// Stability: stable
 type ScalarKind int
 
+// ScalarKind constants for primitive types shared across all formats.
+//
+// Stability: stable
 const (
 	ScalarUnknown ScalarKind = iota
 	ScalarString
@@ -363,6 +403,8 @@ const (
 // Operations from Groups are deep-copied; top-level Operations are
 // returned by reference. Callers that mutate the slice should not
 // rely on the top-level pointers being unique.
+//
+// Stability: stable
 func (s *Service) FlatOperations() []*Operation {
 	out := append([]*Operation(nil), s.Operations...)
 	for _, g := range s.Groups {
@@ -385,10 +427,16 @@ func flattenGroupOps(g *OperationGroup, prefix string, out *[]*Operation) {
 
 // IsBuiltin reports whether the ref points at a primitive scalar
 // (no Service.Types lookup needed).
+//
+// Stability: stable
 func (r TypeRef) IsBuiltin() bool { return r.Builtin != ScalarUnknown && r.Named == "" && r.Map == nil }
 
 // IsMap reports whether this is a map ref.
+//
+// Stability: stable
 func (r TypeRef) IsMap() bool { return r.Map != nil }
 
 // IsNamed reports whether this is a ref into Service.Types.
+//
+// Stability: stable
 func (r TypeRef) IsNamed() bool { return r.Named != "" }

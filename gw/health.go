@@ -13,6 +13,8 @@ import (
 //
 // Mount alongside the GraphQL handler; load balancers poll this to
 // take the gateway out of rotation when it goes 503.
+//
+// Stability: stable
 func (g *Gateway) HealthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		status := "serving"
@@ -35,6 +37,8 @@ func (g *Gateway) HealthHandler() http.Handler {
 }
 
 // IsDraining reports whether Drain has been called.
+//
+// Stability: stable
 func (g *Gateway) IsDraining() bool {
 	return g.draining.Load()
 }
@@ -56,6 +60,8 @@ func (g *Gateway) IsDraining() bool {
 // HTTP unary queries (GraphQL queries/mutations) are NOT actively
 // drained — they're sub-second and finish on their own once the LB
 // stops sending new traffic.
+//
+// Stability: stable
 func (g *Gateway) Drain(ctx context.Context) error {
 	if !g.draining.CompareAndSwap(false, true) {
 		return nil // already draining

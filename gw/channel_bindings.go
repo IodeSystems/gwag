@@ -234,6 +234,8 @@ func bindingPatternOnMessage(md protoreflect.MessageDescriptor) string {
 // `(gwag.ps.binding)` message option at slot bake time), this API
 // accepts the FQN string directly, avoiding the need for the caller
 // to have the proto message type available at gateway construction.
+//
+// Stability: stable
 func WithChannelBinding(pattern, messageFQN string) Option {
 	return func(cfg *config) {
 		cfg.channelBindings = append(cfg.channelBindings, ir.ChannelBinding{
@@ -272,6 +274,8 @@ func (g *Gateway) applyRuntimeBindingsLocked(bindings []ir.ChannelBinding) error
 // message and rejected with InvalidArgument if it doesn't match.
 // Default false (permissive). See WithStrictPayloadTypes for coverage
 // strictness. Both can be enabled together.
+//
+// Stability: stable
 func WithChannelBindingEnforce() Option {
 	return func(cfg *config) { cfg.psBindingEnforce = true }
 }
@@ -282,6 +286,8 @@ func WithChannelBindingEnforce() Option {
 // false (permissive) so the open tier stays usable for ad-hoc / dev
 // channels. See WithChannelBindingEnforce for shape strictness. Both
 // can be enabled together.
+//
+// Stability: stable
 func WithStrictPayloadTypes() Option {
 	return func(cfg *config) { cfg.psStrictPayloadTypes = true }
 }

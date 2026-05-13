@@ -346,6 +346,8 @@ func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool)
 //
 // Unmatched paths return JSON 404. The handler is safe to call
 // before Handler() — schema assembly triggers the same way.
+//
+// Stability: stable
 func (g *Gateway) IngressHandler() http.Handler {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
