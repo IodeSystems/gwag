@@ -978,3 +978,430 @@ func TestGraphQLIngest_NestedNamespaceForwarding(t *testing.T) {
 		t.Fatalf("expected hello + echo in a single query, got: %s", *last)
 	}
 }
+
+// deepNestedIntrospection: three levels of namespace containers above
+// the leaf operation. Pins that emitGroupContainer's recursion + the
+// group dispatcher's whole-subtree capture reach arbitrarily deep
+// upstreams.
+//
+//	type Query              { user: UserNamespace! }
+//	type UserNamespace      { profile: ProfileNamespace! }
+//	type ProfileNamespace   { get(id: ID!): ProfileData! }
+//	type ProfileData        { name: String! }
+const deepNestedIntrospection = `{
+  "data": {
+    "__schema": {
+      "queryType": {"name": "Query"},
+      "mutationType": null,
+      "subscriptionType": null,
+      "types": [
+        {
+          "kind": "OBJECT", "name": "Query", "fields": [
+            {"name": "user", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "UserNamespace"}}}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "UserNamespace", "fields": [
+            {"name": "profile", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "ProfileNamespace"}}}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "ProfileNamespace", "fields": [
+            {
+              "name": "get",
+              "args": [{"name": "id", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "ID"}}}],
+              "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "ProfileData"}}
+            }
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "ProfileData", "fields": [
+            {"name": "name", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}
+          ]
+        }
+      ]
+    }
+  }
+}`
+
+// TestGraphQLIngest_DeepNestedNamespaceForwarding ensures the group
+// dispatcher's whole-subtree capture works through 3+ levels of
+// container types. Single upstream call, response demuxes through
+// every container level.
+func TestGraphQLIngest_DeepNestedNamespaceForwarding(t *testing.T) {
+	rf := &remoteFixture{t: t}
+	rf.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(deepNestedIntrospection))
+			return
+		}
+		rf.lastQuery.Store(&req.Query)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"user": map[string]any{
+					"profile": map[string]any{
+						"get": map[string]any{"name": "Alice"},
+					},
+				},
+			},
+		})
+	}))
+	t.Cleanup(rf.server.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("svc")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Post(srv.URL+"/graphql", "application/json",
+		strings.NewReader(`{"query":"{ svc { user { profile { get(id: \"u_1\") { name } } } } }"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "errors") {
+		t.Fatalf("response had errors: %s", body)
+	}
+	if !strings.Contains(string(body), `"name":"Alice"`) {
+		t.Fatalf("response missing name: %s", body)
+	}
+
+	last := rf.lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received the query")
+	}
+	// Upstream must see all three container levels.
+	for _, want := range []string{"user", "profile", "get"} {
+		if !strings.Contains(*last, want) {
+			t.Fatalf("forwarded query missing %q: %s", want, *last)
+		}
+	}
+	if strings.Contains(*last, "svc {") || strings.Contains(*last, "svc_user") {
+		t.Fatalf("forwarded query leaked local namespace wrapper: %s", *last)
+	}
+}
+
+// fragmentNestedIntrospection: a nested-namespace upstream whose leaf
+// returns a union, so inline fragments are the natural projection
+// shape. Exercises mirror.rewriteSelectionSet's type-condition
+// unprefixing through the new group dispatcher.
+//
+//	type Query              { greeter: GreeterNamespace! }
+//	type GreeterNamespace   { next: Message }
+//	union Message           = TextMessage | EmojiMessage
+//	type TextMessage        { id: ID!, text: String! }
+//	type EmojiMessage       { id: ID!, emoji: String! }
+const fragmentNestedIntrospection = `{
+  "data": {
+    "__schema": {
+      "queryType": {"name": "Query"},
+      "mutationType": null,
+      "subscriptionType": null,
+      "types": [
+        {
+          "kind": "OBJECT", "name": "Query", "fields": [
+            {"name": "greeter", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "GreeterNamespace"}}}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "GreeterNamespace", "fields": [
+            {"name": "next", "args": [], "type": {"kind": "UNION", "name": "Message"}}
+          ]
+        },
+        {
+          "kind": "UNION", "name": "Message",
+          "possibleTypes": [
+            {"kind": "OBJECT", "name": "TextMessage"},
+            {"kind": "OBJECT", "name": "EmojiMessage"}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "TextMessage",
+          "fields": [
+            {"name": "id", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "ID"}}},
+            {"name": "text", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}
+          ]
+        },
+        {
+          "kind": "OBJECT", "name": "EmojiMessage",
+          "fields": [
+            {"name": "id", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "ID"}}},
+            {"name": "emoji", "args": [], "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}}
+          ]
+        }
+      ]
+    }
+  }
+}`
+
+// TestGraphQLIngest_InlineFragmentInGroup pins inline-fragment
+// type-condition unprefixing through the new group dispatcher path.
+// The local query uses the namespace-prefixed type name
+// (`svc_TextMessage`); the forwarded query must use the upstream's
+// un-prefixed name (`TextMessage`). mirror.rewriteSelectionSet does
+// the strip; this test makes sure the new path still calls into it.
+func TestGraphQLIngest_InlineFragmentInGroup(t *testing.T) {
+	rf := &remoteFixture{t: t}
+	rf.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fragmentNestedIntrospection))
+			return
+		}
+		rf.lastQuery.Store(&req.Query)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"greeter": map[string]any{
+					"next": map[string]any{
+						"__typename": "TextMessage",
+						"id":         "m_1",
+						"text":       "hi",
+					},
+				},
+			},
+		})
+	}))
+	t.Cleanup(rf.server.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("svc")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	// Local query uses the gateway-prefixed type names for inline
+	// fragment conditions. Union return → fields must live inside
+	// inline fragments.
+	q := `{"query":"{ svc { greeter { next { ... on svc_TextMessage { id text } ... on svc_EmojiMessage { id emoji } } } } }"}`
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(q))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "errors") {
+		t.Fatalf("response had errors: %s", body)
+	}
+
+	last := rf.lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received the query")
+	}
+	// Upstream must see the UN-PREFIXED type names in fragments.
+	for _, want := range []string{"on TextMessage", "on EmojiMessage"} {
+		if !strings.Contains(*last, want) {
+			t.Fatalf("forwarded query missing un-prefixed fragment %q: %s", want, *last)
+		}
+	}
+	if strings.Contains(*last, "on svc_") {
+		t.Fatalf("forwarded query leaked prefixed type condition: %s", *last)
+	}
+}
+
+// TestGraphQLIngest_GroupDispatcherIsolatedAcrossVersions pins that
+// two services registered at the same namespace but different
+// versions get their own graphqlGroupDispatcher — each at its own
+// `_group_<path>` SchemaID — so a request against `v1` fires the
+// v1 upstream and `v2` fires the v2 upstream.
+func TestGraphQLIngest_GroupDispatcherIsolatedAcrossVersions(t *testing.T) {
+	// Two upstreams with the same shape so the same query parses
+	// against either local version-tier; each returns its own marker
+	// so the test can prove which one fired.
+	makeFixture := func(marker string) *remoteFixture {
+		rf := &remoteFixture{t: t}
+		rf.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			_ = json.Unmarshal(body, &req)
+			if strings.Contains(req.Query, "IntrospectionQuery") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(nestedGreeterIntrospection))
+				return
+			}
+			rf.lastQuery.Store(&req.Query)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"greeter": map[string]any{
+						"hello": map[string]any{"greeting": marker},
+					},
+				},
+			})
+		}))
+		t.Cleanup(rf.server.Close)
+		return rf
+	}
+	rfV1 := makeFixture("from-v1")
+	rfV2 := makeFixture("from-v2")
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rfV1.server.URL, As("svc"), Version("v1")); err != nil {
+		t.Fatalf("AddGraphQL v1: %v", err)
+	}
+	if err := gw.AddGraphQL(rfV2.server.URL, As("svc"), Version("v2")); err != nil {
+		t.Fatalf("AddGraphQL v2: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	post := func(query string) string {
+		resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(query))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(b), "errors") {
+			t.Fatalf("response had errors: %s", b)
+		}
+		return string(b)
+	}
+
+	// Latest is v2 (highest verN). The bare `svc.greeter` path
+	// resolves to it.
+	body := post(`{"query":"{ svc { greeter { hello(name: \"x\") { greeting } } } }"}`)
+	if !strings.Contains(body, "from-v2") {
+		t.Errorf("latest (bare svc) should hit v2, got: %s", body)
+	}
+	// Explicit v1 must hit v1.
+	body = post(`{"query":"{ svc { v1 { greeter { hello(name: \"x\") { greeting } } } } }"}`)
+	if !strings.Contains(body, "from-v1") {
+		t.Errorf("svc.v1 should hit v1, got: %s", body)
+	}
+	// Explicit v2 must hit v2.
+	body = post(`{"query":"{ svc { v2 { greeter { hello(name: \"x\") { greeting } } } } }"}`)
+	if !strings.Contains(body, "from-v2") {
+		t.Errorf("svc.v2 should hit v2, got: %s", body)
+	}
+}
+
+// TestGraphQLIngest_AliasInGroupSelection pins alias support inside
+// a graphql-origin group. graphql-go's DefaultResolveFn keys by
+// FieldName (not Alias), so the upstream response — keyed by alias —
+// needs to be re-keyed before it reaches the leaf resolvers, or the
+// inner lookups return nil.
+//
+// Two flavors:
+//
+//   - simple alias: { greeter { sayHi: hello(name: "x") { greeting } } }
+//   - same-field-different-args: { greeter { a: hello(name:"a") b: hello(name:"b") }
+//     — the case where aliasing is structurally required (graphql
+//     rejects two unaliased fields with conflicting args).
+func TestGraphQLIngest_AliasInGroupSelection(t *testing.T) {
+	rf := &remoteFixture{t: t}
+	rf.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if strings.Contains(req.Query, "IntrospectionQuery") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(nestedGreeterIntrospection))
+			return
+		}
+		rf.lastQuery.Store(&req.Query)
+		w.Header().Set("Content-Type", "application/json")
+		// Construct a response that *honors the alias keys upstream*
+		// — that's what a real upstream would do. The dispatcher
+		// must re-key on the way back so the leaf resolvers find
+		// their values.
+		switch {
+		case strings.Contains(req.Query, "sayHi"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"greeter": map[string]any{
+						"sayHi": map[string]any{"greeting": "Hello, alice!"},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "a:") && strings.Contains(req.Query, "b:"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"greeter": map[string]any{
+						"a": map[string]any{"greeting": "Hello, a!"},
+						"b": map[string]any{"greeting": "Hello, b!"},
+					},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil})
+		}
+	}))
+	t.Cleanup(rf.server.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddGraphQL(rf.server.URL, As("svc")); err != nil {
+		t.Fatalf("AddGraphQL: %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+	post := func(query string) string {
+		resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(query))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	// Simple alias.
+	body := post(`{"query":"{ svc { greeter { sayHi: hello(name: \"alice\") { greeting } } } }"}`)
+	if strings.Contains(body, "errors") {
+		t.Fatalf("simple alias errored: %s", body)
+	}
+	// The local response should key by the alias.
+	if !strings.Contains(body, `"sayHi"`) {
+		t.Errorf("simple alias missing in response: %s", body)
+	}
+	if !strings.Contains(body, "Hello, alice!") {
+		t.Errorf("simple alias missing payload: %s", body)
+	}
+
+	// Same-field-different-args — aliasing is structurally required.
+	body = post(`{"query":"{ svc { greeter { a: hello(name: \"a\") { greeting } b: hello(name: \"b\") { greeting } } } }"}`)
+	if strings.Contains(body, "errors") {
+		t.Fatalf("multi-alias errored: %s", body)
+	}
+	if !strings.Contains(body, "Hello, a!") || !strings.Contains(body, "Hello, b!") {
+		t.Errorf("multi-alias missing one of the payloads: %s", body)
+	}
+
+	last := rf.lastQuery.Load()
+	if last == nil {
+		t.Fatal("upstream never received the query")
+	}
+	// Upstream MUST see the aliases preserved — otherwise the
+	// upstream would reject the two hello fields as conflicting.
+	if !strings.Contains(*last, "a:") || !strings.Contains(*last, "b:") {
+		t.Fatalf("forwarded query stripped aliases (would conflict at upstream): %s", *last)
+	}
+}

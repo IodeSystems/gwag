@@ -326,8 +326,11 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 			return d.Dispatch(ctx, rp.Args)
 		}
 	case inGraphQLGroup:
-		// Sub-group inside an outer graphql group: leave Resolve nil
-		// so DefaultResolveFn dereferences from the parent map.
+		// Sub-group inside an outer graphql group: dereference from
+		// the parent map by the response key (alias-or-name) so
+		// aliases at the group boundary round-trip correctly.
+		// DefaultResolveFn keys by FieldName, which loses aliases.
+		field.Resolve = graphqlGroupChildResolver
 	default:
 		// Proto/OpenAPI passthrough: each leaf op owns its own
 		// dispatcher; this container just yields a sentinel so
@@ -418,14 +421,19 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 	}
 	if inGraphQLGroup {
 		// Parent graphql group dispatcher already forwarded the whole
-		// sub-selection upstream and returned a map[string]any. Leave
-		// Resolve nil so graphql-go's DefaultResolveFn dereferences
-		// this leaf out of the map by field name.
+		// sub-selection upstream and returned a map[string]any
+		// keyed by alias-or-name (the response keys the upstream
+		// emitted, which we preserved by not stripping aliases on
+		// the way out). graphqlGroupChildResolver keys by
+		// rp.Info.Path.Key (alias-or-name) so aliases round-trip;
+		// graphql-go's DefaultResolveFn keys by FieldName and would
+		// miss them.
 		return &graphql.Field{
 			Type:              out,
 			Args:              args,
 			Description:       op.Description,
 			DeprecationReason: op.Deprecated,
+			Resolve:           graphqlGroupChildResolver,
 		}, nil
 	}
 	return &graphql.Field{
@@ -435,6 +443,38 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		DeprecationReason: op.Deprecated,
 		Resolve:           dispatch,
 	}, nil
+}
+
+// graphqlGroupChildResolver dereferences a field's value from the
+// parent map[string]any source by the response key
+// (alias-or-name, available on rp.Info.Path.Key). Wired by
+// emitGroupContainer + buildRuntimeOperation when rendering descendants
+// of a graphql-origin group whose top-level resolver already
+// forwarded the whole sub-selection upstream and returned the
+// response map. The upstream's response keys mirror the local query's
+// aliases (we forward the FieldAST verbatim with aliases preserved),
+// so keying by Path.Key — which graphql-go computes as alias-or-name
+// per `getFieldEntryKey` — finds the right value. DefaultResolveFn
+// would key by FieldName and drop aliased entries.
+func graphqlGroupChildResolver(rp graphql.ResolveParams) (any, error) {
+	src, ok := rp.Source.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	// Prefer FieldASTs[0].Alias.Value over FieldName — the gateway
+	// dispatches via the fork's ExecutePlanAppend walker, which keeps
+	// ResolveInfo.Path nil for performance (path tracking lives in a
+	// flat byte buffer on the execution context). The AST nodes are
+	// always populated, and Alias.Value matches the upstream's
+	// response key (we forward the FieldAST verbatim with aliases
+	// preserved). Falls back to FieldName for unaliased fields.
+	key := rp.Info.FieldName
+	if len(rp.Info.FieldASTs) > 0 {
+		if alias := rp.Info.FieldASTs[0].Alias; alias != nil && alias.Value != "" {
+			key = alias.Value
+		}
+	}
+	return src[key], nil
 }
 
 // graphqlResolveInfoKey is a context key for passing graphql.ResolveInfo

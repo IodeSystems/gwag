@@ -155,14 +155,20 @@ changes on MINOR, drops on MAJOR.
   query field 'hello' on type 'Query'"). Now a single
   `graphqlGroupDispatcher` registers at each top-level graphql
   group; it captures the local sub-selection, forwards once with
-  the container path intact (`{ greeter { hello(...) } }`), and
-  graphql-go's DefaultResolveFn demuxes the response map back into
-  per-leaf field positions. Sibling leaves under one group ride a
-  single upstream round trip — preserves GraphQL's batching across
-  fields, no longer N round-trips. Affected schemas:
-  gwag-fronting-gwag, Hot Chocolate's grouped operations, some
-  Apollo subgraph layouts. Pinned by
-  `TestGraphQLIngest_NestedNamespaceForwarding`.
+  the container path intact (`{ greeter { hello(...) } }`), and a
+  new `graphqlGroupChildResolver` demuxes the response map back
+  into per-leaf field positions keyed by alias-or-name. Sibling
+  leaves under one group ride a single upstream round trip —
+  preserves GraphQL's batching across fields, no longer
+  N round-trips. Aliases (including same-field-different-args, the
+  case where aliasing is structurally required) round-trip
+  correctly. Affected schemas: gwag-fronting-gwag, Hot Chocolate's
+  grouped operations, some Apollo subgraph layouts. Pinned by
+  `TestGraphQLIngest_NestedNamespaceForwarding`,
+  `TestGraphQLIngest_DeepNestedNamespaceForwarding`,
+  `TestGraphQLIngest_InlineFragmentInGroup`,
+  `TestGraphQLIngest_GroupDispatcherIsolatedAcrossVersions`, and
+  `TestGraphQLIngest_AliasInGroupSelection`.
 
 ### Changed
 - `gw.MCPConfig` and `gw.MCPHandler` promoted from `Stability:
