@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -22,18 +23,119 @@ func TestUploadScalar_RejectsLiteral(t *testing.T) {
 }
 
 // TestUploadScalar_ParseValueIdentityForUpload pins the multipart →
-// resolver hand-off: ParseValue is identity for *Upload, error for
-// anything else.
+// resolver hand-off: ParseValue is identity for *Upload (inline
+// uploads). Non-string non-*Upload values are a hard error so a
+// misconfigured client doesn't silently drop the file.
 func TestUploadScalar_ParseValueIdentityForUpload(t *testing.T) {
 	s := UploadScalar()
 	up := &Upload{Filename: "f.txt"}
 	if got := s.ParseValue(up); got != up {
 		t.Fatalf("ParseValue(*Upload) = %v; want identity", got)
 	}
-	if err, ok := s.ParseValue("not-an-upload").(error); !ok || err == nil {
-		t.Fatalf("ParseValue(non-Upload) should error, got %v", s.ParseValue("not-an-upload"))
+	if err, ok := s.ParseValue(42).(error); !ok || err == nil {
+		t.Fatalf("ParseValue(int) should error, got %v", s.ParseValue(42))
 	}
 }
+
+// TestUploadScalar_ParseValueAcceptsTusID — a string variable value is
+// the tus upload-id form: client uploaded via the tus endpoint, then
+// references the id in a GraphQL mutation variable. ParseValue wraps
+// it in a *Upload{TusID:…}; the dispatcher opens the body at dispatch
+// time via Open(ctx, store).
+func TestUploadScalar_ParseValueAcceptsTusID(t *testing.T) {
+	s := UploadScalar()
+	got, ok := s.ParseValue("abc123").(*Upload)
+	if !ok {
+		t.Fatalf("ParseValue(string) = %T; want *Upload", s.ParseValue("abc123"))
+	}
+	if got.TusID != "abc123" {
+		t.Errorf("TusID = %q; want abc123", got.TusID)
+	}
+	if got.File != nil {
+		t.Errorf("File set unexpectedly on tus form (lazy-open should defer)")
+	}
+	// Empty string is rejected so misconfigured clients don't slip
+	// through with an effectively-null reference.
+	if _, ok := s.ParseValue("").(error); !ok {
+		t.Errorf("ParseValue(\"\") should error")
+	}
+}
+
+// TestUpload_OpenInline returns the captured File without consulting
+// the store.
+func TestUpload_OpenInline(t *testing.T) {
+	rc := &nopReadCloser{Reader: strings.NewReader("hello")}
+	up := &Upload{File: rc}
+	got, err := up.Open(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got != rc {
+		t.Errorf("Open returned %v; want the captured File", got)
+	}
+}
+
+// TestUpload_OpenTusBackfillsMeta — the *Upload from ParseValue has
+// only TusID. Open(ctx, store) materialises File and backfills
+// Filename / ContentType / Size from the staged record so the
+// dispatcher sees full metadata.
+func TestUpload_OpenTusBackfillsMeta(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	id, err := store.Create(ctx, UploadMeta{
+		Filename:    "doc.pdf",
+		ContentType: "application/pdf",
+		Length:      5,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Append(ctx, id, 0, strings.NewReader("hello"), true); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	up := &Upload{TusID: id}
+	rc, err := up.Open(ctx, store)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	body, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(body) != "hello" {
+		t.Errorf("body = %q; want hello", body)
+	}
+	if up.Filename != "doc.pdf" {
+		t.Errorf("Filename = %q; want doc.pdf", up.Filename)
+	}
+	if up.ContentType != "application/pdf" {
+		t.Errorf("ContentType = %q; want application/pdf", up.ContentType)
+	}
+	if up.Size != 5 {
+		t.Errorf("Size = %d; want 5", up.Size)
+	}
+}
+
+// TestUpload_OpenTusNoStoreErrors — opening a tus-staged Upload with
+// no store configured is a clear configuration error, not a panic or
+// silent nil reader.
+func TestUpload_OpenTusNoStoreErrors(t *testing.T) {
+	up := &Upload{TusID: "abc"}
+	_, err := up.Open(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("Open with nil store: err = nil; want config error")
+	}
+	if !strings.Contains(err.Error(), "no UploadStore configured") {
+		t.Errorf("err = %v; want mention of missing UploadStore", err)
+	}
+}
+
+// nopReadCloser turns an io.Reader into an io.ReadCloser whose Close
+// is a no-op. Used only by Upload tests where the body is an in-memory
+// string.
+type nopReadCloser struct{ io.Reader }
+
+func (nopReadCloser) Close() error { return nil }
 
 // TestSchemaSDL_ContainsUploadScalar pins that the Upload scalar is
 // discoverable in SDL even when no ingested field references it yet
