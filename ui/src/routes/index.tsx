@@ -17,7 +17,8 @@ import {
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import { DashboardQuery } from '@/api/operations';
 
 export const Route = createFileRoute('/')({
   component: Dashboard,
@@ -44,7 +45,7 @@ function Dashboard() {
   const [windowVal, setWindow] = useState<Window>('1h');
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard', windowVal],
-    queryFn: () => sdk.Dashboard({ window: windowVal }),
+    queryFn: () => client.request(DashboardQuery, { window: windowVal }),
     refetchInterval: 5_000,
   });
 

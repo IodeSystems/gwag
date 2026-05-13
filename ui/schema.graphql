@@ -1,19 +1,22 @@
 schema {
   query: Query
   mutation: Mutation
+  subscription: Subscription
 }
 
 type AdminMutationNamespace {
-  deprecate(namespace: String!, version: String!, body: admin_DeprecateInBodyInput!): admin_DeprecateOutBody
+  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpIncludeRemove(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
   mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
-  retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
+  retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -41,14 +44,16 @@ type AdminStableMutationNamespace {
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpIncludeRemove(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
   mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
   retractStable(namespace: String!, body: admin_RetractStableInBodyInput!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
-  undeprecate(version: String!, namespace: String!): admin_UndeprecateOutBody
+  undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
 
 type AdminStableQueryNamespace {
@@ -66,11 +71,13 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
-  deprecate(version: String!, body: admin_DeprecateInBodyInput!, namespace: String!): admin_DeprecateOutBody
+  deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
+  mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
+  mcpIncludeRemove(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
   mcpQuery(body: admin_McpQueryInBodyInput!): admin_McpQueryOutBody
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
@@ -89,9 +96,29 @@ type AdminV1QueryNamespace {
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
-  serviceStats(version: String!, window: String, namespace: String!): admin_ServiceStatsOutBody
+  serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
+}
+
+type Gateway_Adminevents_V1_ServiceChange {
+  action: Gateway_Adminevents_V1_ServiceChange_Action
+  addr: String
+  namespace: String
+  """
+   Pool replica count after the change (0 when the pool was
+   destroyed entirely).
+  """
+  replicaCount: Int
+  """ Wall-clock timestamp the gateway applied the change."""
+  timestampUnixMs: String
+  version: String
+}
+
+enum Gateway_Adminevents_V1_ServiceChange_Action {
+  ACTION_DEREGISTERED
+  ACTION_REGISTERED
+  ACTION_UNSPECIFIED
 }
 
 """Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly)."""
@@ -107,6 +134,38 @@ type Mutation {
 type Query {
   admin: AdminQueryNamespace!
 }
+
+type Subscription {
+  """
+   WatchServices yields a ServiceChange every time a registry
+   entry is added, removed, or replaced. Optional namespace
+   filter selects a single namespace; empty matches all.
+  """
+  admin_events_stable_watchServices(
+    """
+     Filter to a single namespace; empty / unset → all namespaces.
+     Translates into NATS subject component (so client-side wildcard
+     matching is just NATS subject hierarchy).
+    """
+    namespace: String
+  ): Gateway_Adminevents_V1_ServiceChange
+  """
+   WatchServices yields a ServiceChange every time a registry
+   entry is added, removed, or replaced. Optional namespace
+   filter selects a single namespace; empty matches all.
+  """
+  admin_events_watchServices(
+    """
+     Filter to a single namespace; empty / unset → all namespaces.
+     Translates into NATS subject component (so client-side wildcard
+     matching is just NATS subject hierarchy).
+    """
+    namespace: String
+  ): Gateway_Adminevents_V1_ServiceChange
+}
+
+"""The `Upload` scalar represents a file streamed in via the graphql-multipart-request-spec wire format (https://github.com/jaydenseric/graphql-multipart-request-spec). Input-only: serialization back to JSON returns null."""
+scalar Upload
 
 type admin_BindingInfo {
   messageFQN: String!
@@ -224,20 +283,15 @@ type admin_InjectorsOutBody {
   injectors: [admin_InjectorInfo]!
 }
 
-type admin_MCPChannelEvent {
+type admin_McpChannelEvent {
   channel: String!
   count: Long!
   preview: JSON
 }
 
-type admin_MCPEventsBundle {
-  channels: [admin_MCPChannelEvent]!
+type admin_McpEventsBundle {
+  channels: [admin_McpChannelEvent]!
   level: String!
-}
-
-type admin_MCPResponseWithEvents {
-  events: admin_MCPEventsBundle!
-  response: JSON!
 }
 
 input admin_McpExcludeInBodyInput {
@@ -261,7 +315,12 @@ input admin_McpQueryInBodyInput {
 }
 
 type admin_McpQueryOutBody {
-  result: admin_MCPResponseWithEvents!
+  result: admin_McpResponseWithEvents!
+}
+
+type admin_McpResponseWithEvents {
+  events: admin_McpEventsBundle!
+  response: JSON!
 }
 
 input admin_McpSchemaExpandInBodyInput {

@@ -19,7 +19,9 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useQuery } from '@tanstack/react-query';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import { DeprecatedStatsQuery } from '@/api/operations';
+import type { ResultOf } from '@graphql-typed-document-node/core';
 
 export const Route = createFileRoute('/deprecated')({
   component: Deprecated,
@@ -34,7 +36,7 @@ export const Route = createFileRoute('/deprecated')({
 function Deprecated() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['deprecatedStats'],
-    queryFn: () => sdk.DeprecatedStats(),
+    queryFn: () => client.request(DeprecatedStatsQuery),
     refetchInterval: 10_000,
   });
 
@@ -133,9 +135,7 @@ function Deprecated() {
 
 type ServiceRow = NonNullable<
   NonNullable<
-    NonNullable<
-      Awaited<ReturnType<typeof sdk.DeprecatedStats>>['admin']
-    >['deprecatedStats']
+    NonNullable<ResultOf<typeof DeprecatedStatsQuery>['admin']>['deprecatedStats']
   >['services'][number]
 >;
 

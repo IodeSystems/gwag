@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SchemaRouteImport } from './routes/schema'
 import { Route as PeersRouteImport } from './routes/peers'
+import { Route as McpRouteImport } from './routes/mcp'
 import { Route as InjectorsRouteImport } from './routes/injectors'
 import { Route as DeprecatedRouteImport } from './routes/deprecated'
 import { Route as IndexRouteImport } from './routes/index'
@@ -29,6 +30,11 @@ const SchemaRoute = SchemaRouteImport.update({
 const PeersRoute = PeersRouteImport.update({
   id: '/peers',
   path: '/peers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const McpRoute = McpRouteImport.update({
+  id: '/mcp',
+  path: '/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InjectorsRoute = InjectorsRouteImport.update({
@@ -51,6 +57,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
+  '/mcp': typeof McpRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -59,6 +66,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
+  '/mcp': typeof McpRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -68,6 +76,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
+  '/mcp': typeof McpRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -78,16 +87,25 @@ export interface FileRouteTypes {
     | '/'
     | '/deprecated'
     | '/injectors'
+    | '/mcp'
     | '/peers'
     | '/schema'
     | '/services'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/deprecated' | '/injectors' | '/peers' | '/schema' | '/services'
+  to:
+    | '/'
+    | '/deprecated'
+    | '/injectors'
+    | '/mcp'
+    | '/peers'
+    | '/schema'
+    | '/services'
   id:
     | '__root__'
     | '/'
     | '/deprecated'
     | '/injectors'
+    | '/mcp'
     | '/peers'
     | '/schema'
     | '/services'
@@ -97,6 +115,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DeprecatedRoute: typeof DeprecatedRoute
   InjectorsRoute: typeof InjectorsRoute
+  McpRoute: typeof McpRoute
   PeersRoute: typeof PeersRoute
   SchemaRoute: typeof SchemaRoute
   ServicesRoute: typeof ServicesRoute
@@ -123,6 +142,13 @@ declare module '@tanstack/react-router' {
       path: '/peers'
       fullPath: '/peers'
       preLoaderRoute: typeof PeersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mcp': {
+      id: '/mcp'
+      path: '/mcp'
+      fullPath: '/mcp'
+      preLoaderRoute: typeof McpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/injectors': {
@@ -153,6 +179,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DeprecatedRoute: DeprecatedRoute,
   InjectorsRoute: InjectorsRoute,
+  McpRoute: McpRoute,
   PeersRoute: PeersRoute,
   SchemaRoute: SchemaRoute,
   ServicesRoute: ServicesRoute,

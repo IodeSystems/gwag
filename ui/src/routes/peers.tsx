@@ -13,7 +13,8 @@ import {
 } from '@mui/material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import { PeersQuery, ForgetPeerMutation } from '@/api/operations';
 
 export const Route = createFileRoute('/peers')({
   component: Peers,
@@ -25,12 +26,12 @@ function Peers() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['peers'],
-    queryFn: () => sdk.Peers(),
+    queryFn: () => client.request(PeersQuery),
     refetchInterval: 5_000,
   });
 
   const forget = useMutation({
-    mutationFn: (nodeId: string) => sdk.ForgetPeer({ nodeId }),
+    mutationFn: (nodeId: string) => client.request(ForgetPeerMutation, { nodeId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['peers'] });
       setToast('peer forgotten');

@@ -22,6 +22,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HistoryToggleOffIcon from '@mui/icons-material/HistoryToggleOff';
 import SchemaIcon from '@mui/icons-material/Schema';
 import InputIcon from '@mui/icons-material/Input';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 import SettingsIcon from '@mui/icons-material/Settings';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
@@ -38,6 +39,7 @@ const nav = [
   { to: '/injectors', label: 'Injectors', icon: <InputIcon /> },
   { to: '/peers', label: 'Peers', icon: <HubIcon /> },
   { to: '/schema', label: 'Schema', icon: <SchemaIcon /> },
+  { to: '/mcp', label: 'MCP', icon: <SmartToyIcon /> },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

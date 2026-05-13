@@ -26,7 +26,14 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import {
+  ServicesQuery,
+  ServiceStatsQuery,
+  DeprecateMutation,
+  UndeprecateMutation,
+  RetractStableMutation,
+} from '@/api/operations';
 
 export const Route = createFileRoute('/services')({
   component: Services,
@@ -79,13 +86,13 @@ function Services() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['services'],
-    queryFn: () => sdk.Services(),
+    queryFn: () => client.request(ServicesQuery),
     refetchInterval: 10_000,
   });
 
   const retract = useMutation({
     mutationFn: (vars: { namespace: string; targetVN: number }) =>
-      sdk.RetractStable(vars),
+      client.request(RetractStableMutation, vars),
     onSuccess: (resp) => {
       qc.invalidateQueries({ queryKey: ['services'] });
       const r = resp.admin.retractStable;
@@ -100,7 +107,7 @@ function Services() {
       namespace: string;
       version: string;
       reason: string;
-    }) => sdk.Deprecate(vars),
+    }) => client.request(DeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
       qc.invalidateQueries({ queryKey: ['services'] });
       setToast(`deprecated ${vars.namespace} ${vars.version}`);
@@ -112,7 +119,7 @@ function Services() {
 
   const undeprecate = useMutation({
     mutationFn: (vars: { namespace: string; version: string }) =>
-      sdk.Undeprecate(vars),
+      client.request(UndeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
       qc.invalidateQueries({ queryKey: ['services'] });
       setToast(`undeprecated ${vars.namespace} ${vars.version}`);
@@ -521,7 +528,7 @@ function ServiceDrawer({
     queryKey: ['serviceStats', target?.namespace, target?.version],
     queryFn: () =>
       target
-        ? sdk.ServiceStats({
+        ? client.request(ServiceStatsQuery, {
             namespace: target.namespace,
             version: target.version,
           })

@@ -33,8 +33,11 @@ import {
   type ReactNode,
 } from 'react';
 import { Alert, Snackbar } from '@mui/material';
+import { print } from 'graphql';
 import type { Client } from 'graphql-ws';
+import type { ResultOf } from '@graphql-typed-document-node/core';
 import { wsClient } from '@/api/events';
+import { AdminEventsSubscription } from '@/api/operations';
 
 const BUFFER_LIMIT = 50;
 
@@ -49,19 +52,12 @@ export interface EventEntry {
   error?: boolean;
 }
 
-/**
- * ServiceChange mirrors the shape of admin_events_watchServices in
- * the GraphQL schema. Action values come from the proto enum
- * (REGISTERED / DEREGISTERED).
- */
-export interface ServiceChange {
-  action: string;
-  namespace: string;
-  version: string;
-  addr: string;
-  timestampUnixMs: string | number;
-  replicaCount: number;
-}
+// ServiceChange is inferred from the AdminEventsSubscription document.
+// Action values come from the proto enum (REGISTERED / DEREGISTERED);
+// other fields track the schema.
+export type ServiceChange = NonNullable<
+  ResultOf<typeof AdminEventsSubscription>['admin_events_watchServices']
+>;
 
 interface ToastEntry {
   key: number;
@@ -115,14 +111,11 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   // field doesn't spam the UI buffer on every retry.
   useEffect(() => {
     let disposed = false;
-    const dispose = wsClient.subscribe<{ admin_events_watchServices: ServiceChange }>(
+    const dispose = wsClient.subscribe<ResultOf<typeof AdminEventsSubscription>>(
       {
-        query: ADMIN_EVENTS_WATCH_QUERY,
+        query: print(AdminEventsSubscription),
         // namespace="" → NATS wildcard match (all namespaces).
-        // hmac/timestamp placeholders work in --insecure-subscribe
-        // mode; production deployments should mint via
-        // admin_signSubscriptionToken first.
-        variables: { namespace: '', hmac: 'x', timestamp: 0 },
+        variables: { namespace: '' },
       },
       {
         next: (msg) => {
@@ -184,19 +177,6 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     </EventsContext.Provider>
   );
 }
-
-const ADMIN_EVENTS_WATCH_QUERY = `
-  subscription AdminEvents($namespace: String, $hmac: String!, $timestamp: Int!) {
-    admin_events_watchServices(namespace: $namespace, hmac: $hmac, timestamp: $timestamp) {
-      action
-      namespace
-      version
-      addr
-      timestampUnixMs
-      replicaCount
-    }
-  }
-`;
 
 function toastForServiceChange(c: ServiceChange): Omit<ToastEntry, 'key'> {
   const what = `${c.namespace}/${c.version}`;

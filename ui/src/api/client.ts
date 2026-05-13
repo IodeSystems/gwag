@@ -1,6 +1,8 @@
 // Thin wrapper around graphql-request that points at the gateway's
-// GraphQL endpoint. Used by every page through the generated SDK
-// (src/api/gateway.ts, produced by `pnpm run codegen`).
+// GraphQL endpoint. Each page imports the typed operation documents
+// from `./operations` and dispatches via `client.request(doc, vars)`
+// — graphql-request 7.x consumes TypedDocumentNode directly, so the
+// variables and result types flow through automatically.
 //
 // All gateway routes live under `/api/*` so the UI bundle owns the
 // SPA root. In dev, the Vite proxy forwards `/api` to GATEWAY_URL
@@ -8,7 +10,6 @@
 // served by the gateway itself so `/api/graphql` is same-origin.
 
 import { GraphQLClient } from 'graphql-request';
-import { getSdk } from './gateway';
 import { getAdminToken } from './auth';
 
 // graphql-request 7.x calls `new URL(endpoint)` per request — that
@@ -33,5 +34,3 @@ export const client = new GraphQLClient(endpoint, {
     return h;
   },
 });
-
-export const sdk = getSdk(client);

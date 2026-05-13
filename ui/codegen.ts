@@ -3,11 +3,18 @@ import type { CodegenConfig } from '@graphql-codegen/cli';
 const config: CodegenConfig = {
   // Schema is the on-disk cache populated by `pnpm run schema`.
   schema: './schema.graphql',
-  // *.graphql files alongside React components hold typed operations.
-  documents: ['src/**/*.graphql', 'src/**/*.tsx'],
+  // Inline operations are written as graphql(`...`) calls; the
+  // client preset scans .ts/.tsx for them.
+  documents: ['src/**/*.{ts,tsx}'],
+  ignoreNoDocuments: true,
   generates: {
-    'src/api/gateway.ts': {
-      plugins: ['typescript', 'typescript-operations', 'typescript-graphql-request'],
+    'src/gql/': {
+      preset: 'client',
+      presetConfig: {
+        // Keep fragment masking off — call sites read fields directly
+        // off TypedDocumentNode results, no masking gymnastics needed.
+        fragmentMasking: false,
+      },
       config: {
         avoidOptionals: true,
         useTypeImports: true,
@@ -16,7 +23,7 @@ const config: CodegenConfig = {
     },
   },
   hooks: {
-    afterAllFileWrite: ['echo "wrote src/api/gateway.ts"'],
+    afterAllFileWrite: ['echo "wrote src/gql/"'],
   },
 };
 

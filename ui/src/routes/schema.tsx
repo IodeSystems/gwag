@@ -18,7 +18,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import { ServicesQuery } from '@/api/operations';
 
 export const Route = createFileRoute('/schema')({
   component: Schema,
@@ -233,7 +234,7 @@ function FilterDialog({
   // would silently drop "new" services from the selector.
   const { data, isLoading, error } = useQuery({
     queryKey: ['filter-services'],
-    queryFn: () => sdk.Services(),
+    queryFn: () => client.request(ServicesQuery),
     enabled: open,
   });
 

@@ -14,7 +14,9 @@ import {
   Typography,
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { sdk } from '@/api/client';
+import { client } from '@/api/client';
+import { InjectorsQuery } from '@/api/operations';
+import type { ResultOf } from '@graphql-typed-document-node/core';
 
 export const Route = createFileRoute('/injectors')({
   component: Injectors,
@@ -22,7 +24,7 @@ export const Route = createFileRoute('/injectors')({
 
 type Injector = NonNullable<
   NonNullable<
-    Awaited<ReturnType<typeof sdk.Injectors>>['admin']['listInjectors']
+    NonNullable<ResultOf<typeof InjectorsQuery>['admin']>['listInjectors']
   >['injectors'][number]
 >;
 
@@ -64,7 +66,7 @@ function modeLabel(inj: Injector): string {
 function Injectors() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['injectors'],
-    queryFn: () => sdk.Injectors(),
+    queryFn: () => client.request(InjectorsQuery),
     refetchInterval: 10_000,
   });
 
