@@ -172,9 +172,39 @@ When `WithTracer` is unset, the gateway wires a no-op tracer at
 construction and the per-request hot path stays branch-free
 (`tr.enabled` short-circuits the propagator extract + inject calls).
 The cost is one extra interface call per ingress + per dispatch — too
-small to measure on the existing `BenchmarkProtoSchemaExec`. With
-`WithTracer` set, the cost depends on the chosen sampler + exporter;
-see `docs/perf.md` for the overhead row.
+small to measure outside microbench noise.
+
+Measured overhead from `BenchmarkTracing_GraphQLIngress_*` (Ryzen 9
+3900X, 24 logical cores, loopback gRPC backend, `-benchtime=3s
+-count=3`):
+
+| Config | ns/op (range) | B/op | allocs/op |
+|---|---|---|---|
+| `WithTracer` unset (noop) | 386k–424k | ~37.7 KB | 359 |
+| `WithTracer` on, sync exporter | 373k–391k | ~44.4 KB | 380 |
+| `WithTracer` on, batching exporter | 377k–382k | ~44.5 KB | 376 |
+
+Read the table for **+21 allocs and +6.7 KB per request when tracing
+is enabled** — the two spans (ingress + dispatch), attribute marshal,
+and propagator carrier work. Wall-time delta is below the
+HTTP-loopback noise floor on this host (the sync exporter run
+overlaps the noop baseline). The batching exporter is the production
+shape: spans land in a queue, the exporter drains async, so the wire
+time stays off the request path.
+
+These numbers do **not** include the operator-side cost of the
+sampler + exporter you choose. The SDK's batch processor adds one
+mutex acquire + one slice append per span; OTLP/gRPC exporters take
+~1 KB/span over the wire. Use `TraceIDRatioBased(0.01)` (or your
+sampling rate) on the `TracerProvider` for production volumes — the
+sampler runs before the propagator extract so unsampled requests skip
+the per-span allocs.
+
+Reproduce:
+
+```
+go test ./gw/ -bench=BenchmarkTracing_GraphQLIngress -benchmem -run=^$ -benchtime=3s -count=3
+```
 
 ## Common questions
 

@@ -42,20 +42,6 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **Followups.** Launch announcement / blog post / HN-shaped writeup are downstream of these — write them once the doc above exists and we know what to point at.
 
-### Distributed tracing (OpenTelemetry)
-
-**The push.** "Do you support OpenTelemetry?" is one of the first questions any enterprise evaluator asks. Metrics ship; tracing doesn't. Shape: `WithTracer(tp trace.TracerProvider)` option that spans ingress → dispatch → upstream call, propagates `traceparent` headers downstream, joins inbound traces when the request carries `traceparent`. Implementation stays shallow — one span per request, one per upstream call. Optional dep (`go.opentelemetry.io/otel`) gated by the option so default builds don't pull it.
-
-**Done.** `WithTracer(trace.TracerProvider)` (gw/gateway.go) wires an OTel TracerProvider plus a W3C `traceparent` propagator (gw/tracing.go). GraphQL / HTTP / gRPC ingresses each open a server-kind span (`gateway.graphql` / `gateway.http` / `gateway.grpc`, plus `.subscription` variants for SSE and server-streaming) annotated with `gateway.ingress` / `gateway.namespace` / `gateway.method` / `gateway.version` and ingress-specific `http.*` / `rpc.*` attrs; inbound `traceparent` joins the caller's trace. Tracer is always non-nil (noop when unset) so call sites stay branch-free. Tests cover all three ingress shapes + inbound-traceparent continuation + the noop default. Per-dispatch client-kind spans (`gateway.dispatch.proto` / `.openapi` / `.graphql` / `.internal` / `.proto.subscription`) nest under the ingress span; outbound `traceparent` rides HTTP headers (OpenAPI + GraphQL forwarder) and gRPC metadata (proto unary + server-streaming subscription) so downstream services join the same trace.
-
-**Todo.**
-- [x] **`WithTracer` option + per-request span at ingress.** GraphQL / HTTP / gRPC each wrap in a span with `gateway.ingress`, `gateway.namespace`, `gateway.method` attrs. Honor inbound `traceparent`. ~1d.
-- [x] **Span-per-dispatch + `traceparent` propagation downstream.** Proto / OpenAPI / GraphQL dispatchers each open a child span + inject the header. ~1d.
-- [x] **`docs/tracing.md`** — wiring to Jaeger / Honeycomb / OTel collector; emitted span / attribute reference. ~0.5d.
-- [ ] **Tracing-overhead bench row in `docs/perf.md`.** Honest p95 delta with tracing on. ~0.25d.
-
-**Followups.** Cluster reconciler / control-plane spans — pull when an operator surfaces "I can't tell where a registration is stuck."
-
 ### File uploads (multipart/form-data passthrough)
 
 **The push.** "Can I upload a file?" is a recurring question for any GraphQL system. The current answer ("base64 into a `bytes` field, ≤ N MiB") is a workaround that makes the project read as toy. Surface: GraphQL `Upload` scalar (graphql-multipart-request-spec) on inbound; HTTP ingress detects multipart and decodes; outbound forwards to OpenAPI services that accept multipart, or proto `bytes` field for proto services with a size cap. Touches inbound parsers, canonical-args shape, two dispatcher branches.

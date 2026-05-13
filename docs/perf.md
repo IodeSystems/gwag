@@ -241,6 +241,37 @@ Dropped 787 nodes (cum <= 1312.65MB)
 Raw pprof files: `profile-proto.cpu.pprof` + `profile-proto.allocs.pprof` under the sweep out-dir; inspect interactively with `go tool pprof`.
 
 
+## Tracing overhead
+
+`WithTracer` is opt-in. When unset, the gateway wires a no-op
+tracer and the per-request hot path stays branch-free. When set, the
+gateway opens one server-kind span per ingress + one client-kind span
+per dispatch, extracts inbound `traceparent`, and injects on
+outbound HTTP / gRPC.
+
+Microbench delta from `BenchmarkTracing_GraphQLIngress_*` —
+GraphQL ingress over loopback gRPC, `-benchtime=3s -count=3`:
+
+| Config | ns/op (range) | B/op | allocs/op |
+|---|---|---|---|
+| Tracing off (noop) | ~386k–424k | ~37.7 KB | 359 |
+| Tracing on, sync exporter | ~373k–391k | ~44.4 KB | 380 |
+| Tracing on, batching exporter | ~377k–382k | ~44.5 KB | 376 |
+
+**+21 allocs and ~6.7 KB per request when tracing is enabled.** The
+wall-time delta is below the HTTP-loopback noise floor on this host —
+the sync exporter run overlaps the noop baseline. Sampling and
+exporter wire time are separate operator concerns; use
+`TraceIDRatioBased` for production volumes.
+
+Reproduce:
+
+```bash
+go test ./gw/ -bench=BenchmarkTracing_GraphQLIngress -benchmem -run=^$ -benchtime=3s -count=3
+```
+
+Wiring + span reference: [`docs/tracing.md`](./tracing.md).
+
 ## How to read this
 
 Three numbers tell most of the story per scenario:

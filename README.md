@@ -237,11 +237,12 @@ order — see [`docs/plan.md`](./docs/plan.md) for the punch list:
 1. **The pitch** — this file + worked walkthrough + federation positioning doc.
 2. **Public API audit + SemVer commitment** — lock the surface before v1 advertises stability.
 3. **Wire-level identifier rename to `gwag-*`** — pre-1.0 freebie.
-4. **OpenTelemetry tracing** — the missing observability primitive. See [`docs/tracing.md`](./docs/tracing.md).
-5. **File uploads** — graphql-multipart-request-spec + tus.io chunked uploads. See [`docs/uploads.md`](./docs/uploads.md).
-6. **WebSocket connection-rate / per-IP caps** — DoS surface today.
-7. **CHANGELOG + release versioning** — first stable tag.
-8. **Competitor performance matrix** — ships *with* v1, doesn't gate it.
+4. **File uploads** — graphql-multipart-request-spec + tus.io chunked uploads. See [`docs/uploads.md`](./docs/uploads.md).
+5. **WebSocket connection-rate / per-IP caps** — DoS surface today.
+6. **CHANGELOG + release versioning** — first stable tag.
+7. **Competitor performance matrix** — ships *with* v1, doesn't gate it.
+
+Shipped: **OpenTelemetry tracing** ([`docs/tracing.md`](./docs/tracing.md)).
 
 Open to (pulled in by a real use case): WSDL / SOAP ingest as a
 fourth kind; static `--openapi` / `--graphql` CLI flags;
