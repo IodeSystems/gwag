@@ -83,7 +83,7 @@ func (g *Gateway) AddAdminEvents() error {
 		fd,
 		admineventsProtoSource,
 		nil,
-		map[string]InternalProtoSubscriptionHandler{
+		map[string]internalProtoSubscriptionHandler{
 			"WatchServices": g.adminEventsWatchServicesHandler,
 		},
 	)

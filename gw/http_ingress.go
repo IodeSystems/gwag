@@ -385,14 +385,14 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		// SSE subscription lifetime is open-ended; request_*_seconds is
 		// not meaningful here. Skip the accumulator + recording.
 		ctx := withInjectCache(r.Context())
-		ctx = WithHTTPRequest(ctx, r)
+		ctx = withHTTPRequest(ctx, r)
 		streamSSE(ctx, w, route, args)
 		return
 	}
 
 	ctx, accum := withDispatchAccumulator(r.Context())
 	ctx = withInjectCache(ctx)
-	ctx = WithHTTPRequest(ctx, r)
+	ctx = withHTTPRequest(ctx, r)
 	start := time.Now()
 	defer func() {
 		total := time.Since(start)

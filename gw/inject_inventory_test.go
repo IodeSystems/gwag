@@ -30,7 +30,7 @@ func TestInjectorInventory_TypeKeyedActiveLandings(t *testing.T) {
 		return &authv1.Context{}, nil
 	}))
 
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -38,8 +38,8 @@ func TestInjectorInventory_TypeKeyedActiveLandings(t *testing.T) {
 		t.Fatalf("len(entries)=%d, want %d", got, want)
 	}
 	e := entries[0]
-	if e.Kind != InjectorKindType {
-		t.Fatalf("Kind=%q want %q", e.Kind, InjectorKindType)
+	if e.Kind != injectorKindType {
+		t.Fatalf("Kind=%q want %q", e.Kind, injectorKindType)
 	}
 	if e.TypeName != "auth.v1.Context" {
 		t.Fatalf("TypeName=%q want auth.v1.Context", e.TypeName)
@@ -47,8 +47,8 @@ func TestInjectorInventory_TypeKeyedActiveLandings(t *testing.T) {
 	if !e.Hide {
 		t.Fatal("Hide=false; want default true")
 	}
-	if e.State != InjectorStateActive {
-		t.Fatalf("State=%q want %q", e.State, InjectorStateActive)
+	if e.State != injectorStateActive {
+		t.Fatalf("State=%q want %q", e.State, injectorStateActive)
 	}
 	if len(e.Landings) == 0 {
 		t.Fatal("no landings; want at least the user.GetMe.auth arg")
@@ -85,7 +85,7 @@ func TestInjectorInventory_PathKeyedActive(t *testing.T) {
 		return nil, nil
 	}))
 
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -93,10 +93,10 @@ func TestInjectorInventory_PathKeyedActive(t *testing.T) {
 		t.Fatalf("len(entries)=%d, want %d", got, want)
 	}
 	e := entries[0]
-	if e.Kind != InjectorKindPath || e.Path != "user.GetMe.auth" {
+	if e.Kind != injectorKindPath || e.Path != "user.GetMe.auth" {
 		t.Fatalf("Kind=%q Path=%q want path/user.GetMe.auth", e.Kind, e.Path)
 	}
-	if e.State != InjectorStateActive {
+	if e.State != injectorStateActive {
 		t.Fatalf("State=%q want active; landings=%+v", e.State, e.Landings)
 	}
 	if len(e.Landings) != 1 {
@@ -114,7 +114,7 @@ func TestInjectorInventory_PathKeyedDormant(t *testing.T) {
 		return nil, nil
 	}))
 
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestInjectorInventory_PathKeyedDormant(t *testing.T) {
 		t.Fatalf("len(entries)=%d, want %d", got, want)
 	}
 	e := entries[0]
-	if e.State != InjectorStateDormant {
+	if e.State != injectorStateDormant {
 		t.Fatalf("State=%q want dormant", e.State)
 	}
 	if len(e.Landings) != 0 {
@@ -136,7 +136,7 @@ func TestInjectorInventory_HeaderActive(t *testing.T) {
 		return "t1", nil
 	}))
 
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -144,10 +144,10 @@ func TestInjectorInventory_HeaderActive(t *testing.T) {
 		t.Fatalf("len(entries)=%d, want %d", got, want)
 	}
 	e := entries[0]
-	if e.Kind != InjectorKindHeader || e.HeaderName != "X-Tenant-ID" {
+	if e.Kind != injectorKindHeader || e.HeaderName != "X-Tenant-ID" {
 		t.Fatalf("Kind=%q HeaderName=%q want header/X-Tenant-ID", e.Kind, e.HeaderName)
 	}
-	if e.State != InjectorStateActive {
+	if e.State != injectorStateActive {
 		t.Fatalf("State=%q want active", e.State)
 	}
 	if len(e.Landings) != 1 || e.Landings[0].Kind != "header" || e.Landings[0].HeaderName != "X-Tenant-ID" {
@@ -161,7 +161,7 @@ func TestInjectorInventory_HideFalseSurfacesNullable(t *testing.T) {
 		return nil, nil
 	}, Hide(false), Nullable(true)))
 
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestInjectorInventory_HideFalseSurfacesNullable(t *testing.T) {
 
 func TestInjectorInventory_Empty(t *testing.T) {
 	g := inventoryTestGateway(t)
-	entries, err := g.InjectorInventory()
+	entries, err := g.injectorInventory()
 	if err != nil {
 		t.Fatalf("InjectorInventory: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestEvalInjectPathStates_RegisterDormant(t *testing.T) {
 	transitions := g.evalInjectPathStatesLocked()
 	g.mu.Unlock()
 
-	if state != InjectorStateDormant {
+	if state != injectorStateDormant {
 		t.Fatalf("post-Use state=%q want dormant", state)
 	}
 	if len(transitions) != 0 {
@@ -225,7 +225,7 @@ func TestEvalInjectPathStates_DormantToActive(t *testing.T) {
 	g.mu.Lock()
 	pre := g.injectPathStates["user.GetMe.auth"]
 	g.mu.Unlock()
-	if pre != InjectorStateDormant {
+	if pre != injectorStateDormant {
 		t.Fatalf("pre-register state=%q want dormant (no slots yet)", pre)
 	}
 
@@ -238,14 +238,14 @@ func TestEvalInjectPathStates_DormantToActive(t *testing.T) {
 	post := g.injectPathStates["user.GetMe.auth"]
 	g.mu.Unlock()
 
-	if post != InjectorStateActive {
+	if post != injectorStateActive {
 		t.Fatalf("post-register state=%q want active", post)
 	}
 	if len(transitions) != 1 {
 		t.Fatalf("transitions=%+v want exactly 1 dormant→active", transitions)
 	}
 	tr := transitions[0]
-	if tr.Path != "user.GetMe.auth" || tr.Previous != InjectorStateDormant || tr.Current != InjectorStateActive || tr.Initial {
+	if tr.Path != "user.GetMe.auth" || tr.Previous != injectorStateDormant || tr.Current != injectorStateActive || tr.Initial {
 		t.Fatalf("transition=%+v want {path:user.GetMe.auth dormant→active}", tr)
 	}
 
@@ -276,7 +276,7 @@ func TestEvalInjectPathStates_RegisterActiveSilent(t *testing.T) {
 	transitions := g.evalInjectPathStatesLocked()
 	g.mu.Unlock()
 
-	if state != InjectorStateActive {
+	if state != injectorStateActive {
 		t.Fatalf("state=%q want active", state)
 	}
 	if len(transitions) != 0 {

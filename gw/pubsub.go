@@ -35,10 +35,10 @@ const (
 func (g *Gateway) installPubSubSlot() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Pub": g.psPub,
 	}
-	subHandlers := map[string]InternalProtoSubscriptionHandler{
+	subHandlers := map[string]internalProtoSubscriptionHandler{
 		"Sub": g.psSub,
 	}
 	return g.addInternalProtoSlotLocked(

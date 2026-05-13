@@ -139,7 +139,7 @@ func normaliseInternalProtoResponse(resp protoreflect.ProtoMessage, outputDesc p
 // in play). For ps.sub, the handler joins the gateway's subBroker and
 // arms a goroutine on ctx.Done() that releases the per-subject fanout.
 type internalProtoSubscriptionDispatcher struct {
-	handler   InternalProtoSubscriptionHandler
+	handler   internalProtoSubscriptionHandler
 	namespace string
 	version   string
 	op        string

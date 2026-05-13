@@ -53,8 +53,8 @@ type mcpConfigState struct {
 	cfg MCPConfig
 }
 
-// MCPConfigSnapshot returns a copy of the gateway-local allowlist.
-func (g *Gateway) MCPConfigSnapshot() MCPConfig {
+// mcpConfigSnapshot returns a copy of the gateway-local allowlist.
+func (g *Gateway) mcpConfigSnapshot() MCPConfig {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.mcpConfigSnapshotLocked()
@@ -78,11 +78,11 @@ func (g *Gateway) mcpConfigSnapshotLocked() MCPConfig {
 	return out
 }
 
-// MCPAllows reports whether the dotted path `p` (e.g.
+// mcpAllows reports whether the dotted path `p` (e.g.
 // "admin.peers.list") should appear on the MCP surface. Internal
 // `_*` namespaces are filtered first; then the AutoInclude flag
 // chooses between Include-only (default) and exclude-from-all modes.
-func (g *Gateway) MCPAllows(p string) bool {
+func (g *Gateway) mcpAllows(p string) bool {
 	if p == "" {
 		return false
 	}
@@ -112,13 +112,13 @@ func (g *Gateway) MCPAllows(p string) bool {
 	return false
 }
 
-// SetMCPConfig persists the new MCPConfig. In cluster mode it Puts to
+// setMCPConfig persists the new MCPConfig. In cluster mode it Puts to
 // the mcp_config bucket — the watch loop on every node (including
 // this one) reflects it back into g.mcpConfig. In standalone mode it
 // updates the in-process state directly. Either way, MCPAllows on
 // the local gateway reflects the change by the time the next call
 // returns (cluster path: best-effort short await on the watch).
-func (g *Gateway) SetMCPConfig(ctx context.Context, cfg MCPConfig) error {
+func (g *Gateway) setMCPConfig(ctx context.Context, cfg MCPConfig) error {
 	if t := g.peers; t != nil && t.mcpConfig != nil {
 		raw, err := json.Marshal(cfg)
 		if err != nil {

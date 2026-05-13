@@ -25,7 +25,7 @@ func TestInjectType_PointerProtoTRewrite(t *testing.T) {
 	if got, want := len(tx.Schema), 1; got != want {
 		t.Fatalf("len(Schema)=%d, want %d", got, want)
 	}
-	h, ok := tx.Schema[0].(HideTypeRewrite)
+	h, ok := tx.Schema[0].(hideTypeRewrite)
 	if !ok {
 		t.Fatalf("Schema[0] is %T, want HideTypeRewrite", tx.Schema[0])
 	}
@@ -47,7 +47,7 @@ func TestInjectType_ValueProtoTRewrite(t *testing.T) {
 	if got, want := len(tx.Schema), 1; got != want {
 		t.Fatalf("len(Schema)=%d, want %d", got, want)
 	}
-	h := tx.Schema[0].(HideTypeRewrite)
+	h := tx.Schema[0].(hideTypeRewrite)
 	if h.Name != "auth.v1.Context" {
 		t.Fatalf("HideTypeRewrite.Name=%q, want %q", h.Name, "auth.v1.Context")
 	}
@@ -96,7 +96,7 @@ func TestInjectPath_SchemaRewriteHideTrue(t *testing.T) {
 	if got := len(tx.Schema); got != 1 {
 		t.Fatalf("len(Schema)=%d, want 1", got)
 	}
-	h, ok := tx.Schema[0].(HidePathRewrite)
+	h, ok := tx.Schema[0].(hidePathRewrite)
 	if !ok {
 		t.Fatalf("Schema[0] is %T, want HidePathRewrite", tx.Schema[0])
 	}
@@ -271,7 +271,7 @@ func TestHidePathRewrite_StripsTargetedArg(t *testing.T) {
 		},
 	}
 
-	HidePathRewrite{Path: "user.GetMe.auth"}.apply(svcs)
+	hidePathRewrite{Path: "user.GetMe.auth"}.apply(svcs)
 
 	if got := len(svcs[0].Operations[0].Args); got != 1 {
 		t.Fatalf("user.GetMe.Args len=%d, want 1 after strip", got)
@@ -343,7 +343,7 @@ func TestNullable_TypeRewriteFlipsRequired(t *testing.T) {
 			},
 		},
 	}
-	NullableTypeRewrite{Name: "auth.v1.Context"}.apply(svcs)
+	nullableTypeRewrite{Name: "auth.v1.Context"}.apply(svcs)
 
 	t0 := svcs[0].Types["user.v1.GetMeRequest"]
 	if t0.Fields[0].Required {
@@ -385,7 +385,7 @@ func TestNullable_PathRewriteFlipsRequired(t *testing.T) {
 			},
 		},
 	}
-	NullablePathRewrite{Path: "user.GetMe.auth"}.apply(svcs)
+	nullablePathRewrite{Path: "user.GetMe.auth"}.apply(svcs)
 
 	if svcs[0].Operations[0].Args[0].Required {
 		t.Fatal("user.GetMe.auth should be Required=false")
@@ -408,7 +408,7 @@ func TestInjectType_NullableHideFalseEmitsBothRewrites(t *testing.T) {
 	if got := len(tx.Schema); got != 1 {
 		t.Fatalf("len(Schema)=%d, want 1 (just the Nullable)", got)
 	}
-	n, ok := tx.Schema[0].(NullableTypeRewrite)
+	n, ok := tx.Schema[0].(nullableTypeRewrite)
 	if !ok {
 		t.Fatalf("Schema[0] is %T, want NullableTypeRewrite", tx.Schema[0])
 	}
@@ -451,7 +451,7 @@ func TestInjectPath_NullableHideFalseEmitsBothRewrites(t *testing.T) {
 	if got := len(tx.Schema); got != 1 {
 		t.Fatalf("len(Schema)=%d, want 1", got)
 	}
-	n, ok := tx.Schema[0].(NullablePathRewrite)
+	n, ok := tx.Schema[0].(nullablePathRewrite)
 	if !ok {
 		t.Fatalf("Schema[0] is %T, want NullablePathRewrite", tx.Schema[0])
 	}
@@ -528,10 +528,10 @@ func TestInjectHeader_DefaultsToHideTrue(t *testing.T) {
 	if tx.Runtime != nil {
 		t.Fatal("Runtime non-nil; want nil for InjectHeader")
 	}
-	if got := len(tx.Headers); got != 1 {
+	if got := len(tx.headers); got != 1 {
 		t.Fatalf("len(Headers)=%d, want 1", got)
 	}
-	h := tx.Headers[0]
+	h := tx.headers[0]
 	if h.Name != "X-Source-IP" {
 		t.Fatalf("Name=%q, want X-Source-IP", h.Name)
 	}
@@ -549,7 +549,7 @@ func TestInjectHeader_HideFalsePropagates(t *testing.T) {
 	tx := InjectHeader("X-Caller", func(_ context.Context, _ *string) (string, error) {
 		return "", nil
 	}, Hide(false))
-	if tx.Headers[0].Hide {
+	if tx.headers[0].Hide {
 		t.Fatal("Hide=true; want false")
 	}
 }
@@ -582,7 +582,7 @@ func TestInjectHeader_NullableRejected(t *testing.T) {
 // from the resolver opts out of writing the header, mirroring the
 // "skip" intent (HTTP gives empty headers no useful semantics).
 func TestApplyHeaderInjectors_SkipsEmptyResolverResults(t *testing.T) {
-	injectors := []HeaderInjector{
+	injectors := []headerInjector{
 		{Name: "X-Keep", Hide: true, Fn: func(_ context.Context, _ *string) (string, error) { return "yes", nil }},
 		{Name: "X-Skip", Hide: true, Fn: func(_ context.Context, _ *string) (string, error) { return "", nil }},
 	}
@@ -603,7 +603,7 @@ func TestApplyHeaderInjectors_SkipsEmptyResolverResults(t *testing.T) {
 // inbound HTTP request's header value (when present).
 func TestApplyHeaderInjectors_HideFalseSeesInboundHeader(t *testing.T) {
 	var seen *string
-	injectors := []HeaderInjector{{
+	injectors := []headerInjector{{
 		Name: "X-Caller",
 		Hide: false,
 		Fn: func(_ context.Context, current *string) (string, error) {
@@ -617,7 +617,7 @@ func TestApplyHeaderInjectors_HideFalseSeesInboundHeader(t *testing.T) {
 
 	r, _ := http.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Caller", "alice")
-	ctx := WithHTTPRequest(withInjectCache(context.Background()), r)
+	ctx := withHTTPRequest(withInjectCache(context.Background()), r)
 
 	out, err := applyHeaderInjectors(ctx, injectors)
 	if err != nil {

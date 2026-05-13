@@ -20,7 +20,7 @@ import (
 
 func TestPublicCallerIDExtractor_HTTPHeader(t *testing.T) {
 	r, _ := newRequestWithHeader(PublicCallerIDHeader, "billing")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	got, err := publicCallerIDExtractor(ctx)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -57,7 +57,7 @@ func TestPublicCallerIDExtractor_HTTPHeaderTakesPrecedenceOverGRPC(t *testing.T)
 	// resolver order is observable contract — HTTP wins so future
 	// hybrids stay deterministic).
 	r, _ := newRequestWithHeader(PublicCallerIDHeader, "from-http")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	md := metadata.Pairs(PublicCallerIDMetadata, "from-grpc")
 	ctx = metadata.NewIncomingContext(ctx, md)
 	got, _ := publicCallerIDExtractor(ctx)
@@ -71,7 +71,7 @@ func TestResolveCallerID_ExtractorWins(t *testing.T) {
 	// configured, the extractor result takes precedence.
 	r, _ := newRequestWithHeader("X-Caller-Service", "legacy-billing")
 	r.Header.Set(PublicCallerIDHeader, "seam-billing")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	got := resolveCallerID(ctx, publicCallerIDExtractor, []string{"X-Caller-Service"})
 	if got != "seam-billing" {
 		t.Errorf("got %q, want seam-billing", got)
@@ -81,7 +81,7 @@ func TestResolveCallerID_ExtractorWins(t *testing.T) {
 func TestResolveCallerID_FallsBackToHeaders(t *testing.T) {
 	// No extractor → legacy header allowlist still applies.
 	r, _ := newRequestWithHeader("X-Caller-Service", "legacy-users")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	got := resolveCallerID(ctx, nil, []string{"X-Caller-Service"})
 	if got != "legacy-users" {
 		t.Errorf("got %q, want legacy-users", got)
@@ -125,13 +125,13 @@ func TestSnapshot_CallerDimension_PublicExtractor(t *testing.T) {
 
 	rA, _ := newRequestWithHeader(PublicCallerIDHeader, "billing")
 	rB, _ := newRequestWithHeader(PublicCallerIDHeader, "users")
-	ctxA := WithHTTPRequest(context.Background(), rA)
-	ctxB := WithHTTPRequest(context.Background(), rB)
+	ctxA := withHTTPRequest(context.Background(), rA)
+	ctxB := withHTTPRequest(context.Background(), rB)
 	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 7*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(ctxB, "greeter", "v1", "Hello", 9*time.Millisecond, nil)
 
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows (one per caller), got %d: %+v", len(rows), rows)
 	}
@@ -239,11 +239,11 @@ func TestSnapshot_CallerLimiter_OtherRollup(t *testing.T) {
 
 	for _, name := range []string{"billing", "billing", "users", "payments", "users"} {
 		r, _ := newRequestWithHeader(PublicCallerIDHeader, name)
-		ctx := WithHTTPRequest(context.Background(), r)
+		ctx := withHTTPRequest(context.Background(), r)
 		g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 	}
 
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows (billing + __other__), got %d: %+v", len(rows), rows)
 	}
@@ -273,7 +273,7 @@ func TestPrometheusScrape_CallerLimiter_OtherLabel(t *testing.T) {
 
 	for _, name := range []string{"billing", "users", "payments"} {
 		r, _ := newRequestWithHeader(PublicCallerIDHeader, name)
-		ctx := WithHTTPRequest(context.Background(), r)
+		ctx := withHTTPRequest(context.Background(), r)
 		g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 3*time.Millisecond, nil)
 	}
 
@@ -312,7 +312,7 @@ func TestSnapshot_CallerDimension_PublicExtractor_GRPC(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 3*time.Millisecond, nil)
 
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 1 {
 		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
 	}
@@ -384,7 +384,7 @@ func TestEnforceCallerID_LegacyHeadersFallback(t *testing.T) {
 	// Without an extractor, the legacy WithCallerHeaders allowlist
 	// still satisfies enforce when a header matches.
 	r, _ := newRequestWithHeader("X-Caller-Service", "billing")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if err := enforceCallerID(ctx, nil, []string{"X-Caller-Service"}); err != nil {
 		t.Errorf("expected no rejection with legacy header present, got %v", err)
 	}
@@ -394,7 +394,7 @@ func TestEnforceCallerID_LegacyHeadersMissingRejects(t *testing.T) {
 	// Header allowlist configured but no matching header → "unknown"
 	// from callerFromContext → enforce rejects.
 	r, _ := newRequestWithHeader("X-Other", "irrelevant")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if err := enforceCallerID(ctx, nil, []string{"X-Caller-Service"}); err == nil {
 		t.Errorf("expected rejection when configured header is missing")
 	}
@@ -402,7 +402,7 @@ func TestEnforceCallerID_LegacyHeadersMissingRejects(t *testing.T) {
 
 func TestEnforceCallerID_ExtractorAccepts(t *testing.T) {
 	r, _ := newRequestWithHeader(PublicCallerIDHeader, "alice")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if err := enforceCallerID(ctx, publicCallerIDExtractor, nil); err != nil {
 		t.Errorf("expected accept with extractor returning a value, got %v", err)
 	}

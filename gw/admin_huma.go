@@ -158,7 +158,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out := &channelsOut{}
 		// Always emit a non-nil slice so JSON Subscription[] is never null.
 		out.Body.Channels = []channelInfo{}
-		for _, s := range g.ActiveSubjects() {
+		for _, s := range g.activeSubjects() {
 			out.Body.Channels = append(out.Body.Channels, channelInfo{
 				Subject:   s.Subject,
 				Consumers: s.Consumers,
@@ -192,7 +192,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/injectors",
 		Summary:     "List every InjectType / InjectPath / InjectHeader registration with its current schema landings.",
 	}, func(ctx context.Context, _ *struct{}) (*injectorsOut, error) {
-		entries, err := g.InjectorInventory()
+		entries, err := g.injectorInventory()
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +295,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rows := g.Snapshot(window, nowFunc())
+		rows := g.snapshot(window, nowFunc())
 		out := &serviceStatsOut{}
 		out.Body.Window = in.Window
 		out.Body.Methods = []methodStatsOut{}
@@ -327,7 +327,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rows := g.Snapshot(window, nowFunc())
+		rows := g.snapshot(window, nowFunc())
 		// Aggregate: collapse per-(method, caller) rows into a single
 		// per-(namespace, version) record. Counts sum, throughput sums,
 		// and the percentile fields take the max — a worst-case readout
@@ -404,7 +404,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		rows := g.History(window, nowFunc())
+		rows := g.history(window, nowFunc())
 		out := &servicesHistoryOut{}
 		out.Body.Window = in.Window
 		out.Body.Services = []serviceHistoryRow{}
@@ -495,7 +495,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			deprecated[depKey{ns, ver}] = depReasons{manual, auto}
 		}
 
-		rows := g.Snapshot(window, nowFunc())
+		rows := g.snapshot(window, nowFunc())
 
 		// Group: service → methods → callers. Total counts roll up so
 		// the operator panel can sort either level by call volume.
@@ -625,7 +625,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/mcp",
 		Summary:     "Read the MCP surface allowlist (auto_include flag + include / exclude path lists). Plan §2 MCP integration.",
 	}, func(_ context.Context, _ *struct{}) (*mcpListOut, error) {
-		return mcpListOutFrom(g.MCPConfigSnapshot()), nil
+		return mcpListOutFrom(g.mcpConfigSnapshot()), nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -696,11 +696,11 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/mcp/schema/list",
 		Summary:     "List every operation the MCPConfig allowlist exposes, grouped by Query / Mutation / Subscription. Plan §2.",
 	}, func(_ context.Context, _ *struct{}) (*mcpSchemaListOut, error) {
-		rows := g.MCPSchemaList()
+		rows := g.mcpSchemaList()
 		out := &mcpSchemaListOut{}
 		out.Body.Entries = rows
 		if out.Body.Entries == nil {
-			out.Body.Entries = []SchemaListEntry{}
+			out.Body.Entries = []schemaListEntry{}
 		}
 		return out, nil
 	})
@@ -711,7 +711,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/mcp/schema/search",
 		Summary:     "Search the MCP-allowed operation surface by dot-segmented path glob AND/OR regex (over op name, arg names, description body). Empty body returns every allowed op.",
 	}, func(_ context.Context, in *mcpSchemaSearchIn) (*mcpSchemaSearchOut, error) {
-		rows, err := g.MCPSchemaSearch(SchemaSearchInput{
+		rows, err := g.mcpSchemaSearch(schemaSearchInput{
 			PathGlob: in.Body.PathGlob,
 			Regex:    in.Body.Regex,
 		})
@@ -721,7 +721,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out := &mcpSchemaSearchOut{}
 		out.Body.Entries = rows
 		if out.Body.Entries == nil {
-			out.Body.Entries = []SchemaSearchEntry{}
+			out.Body.Entries = []schemaSearchEntry{}
 		}
 		return out, nil
 	})
@@ -732,7 +732,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/mcp/schema/expand",
 		Summary:     "Return the structured definition of one MCP-allowed op path or type name, plus the transitive type closure (args + return types for ops; fields + variants for types).",
 	}, func(_ context.Context, in *mcpSchemaExpandIn) (*mcpSchemaExpandOut, error) {
-		res, err := g.MCPSchemaExpand(in.Body.Name)
+		res, err := g.mcpSchemaExpand(in.Body.Name)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
@@ -747,7 +747,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Path:        "/admin/mcp/query",
 		Summary:     "Execute a GraphQL operation in-process and wrap the result in ResponseWithEvents (events always empty in v1). Bearer auth (not the allowlist) is the security boundary — the allowlist is operator-curated discovery guidance.",
 	}, func(ctx context.Context, in *mcpQueryIn) (*mcpQueryOut, error) {
-		res, err := g.MCPQuery(ctx, MCPQueryInput{
+		res, err := g.mcpQuery(ctx, mcpQueryInput{
 			Query:         in.Body.Query,
 			Variables:     in.Body.Variables,
 			OperationName: in.Body.OperationName,
@@ -1164,7 +1164,7 @@ func containsString(xs []string, v string) bool {
 
 type mcpSchemaListOut struct {
 	Body struct {
-		Entries []SchemaListEntry `json:"entries"`
+		Entries []schemaListEntry `json:"entries"`
 	}
 }
 
@@ -1177,7 +1177,7 @@ type mcpSchemaSearchIn struct {
 
 type mcpSchemaSearchOut struct {
 	Body struct {
-		Entries []SchemaSearchEntry `json:"entries"`
+		Entries []schemaSearchEntry `json:"entries"`
 	}
 }
 
@@ -1189,7 +1189,7 @@ type mcpSchemaExpandIn struct {
 
 type mcpSchemaExpandOut struct {
 	Body struct {
-		Result *SchemaExpandResult `json:"result"`
+		Result *schemaExpandResult `json:"result"`
 	}
 }
 
@@ -1203,7 +1203,7 @@ type mcpQueryIn struct {
 
 type mcpQueryOut struct {
 	Body struct {
-		Result *MCPResponseWithEvents `json:"result"`
+		Result *mcpResponseWithEvents `json:"result"`
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 // openAPIDispatcher implements ir.Dispatcher for one OpenAPI source
 // + one operation. Inner work mirrors the inline body in
 // gw/openapi.go (pre-cutover): pickReplica → dispatchOpenAPI →
-// RecordDispatch. BackpressureMiddleware wraps the outside.
+// RecordDispatch. backpressureMiddleware wraps the outside.
 //
 // One per (source, operation) at schema build time. The captured
 // op pointer / method / pathTemplate / forwardHeaders / metrics
@@ -25,7 +25,7 @@ type openAPIDispatcher struct {
 	method          string
 	pathTemplate    string
 	forwardHeaders  []string
-	headerInjectors []HeaderInjector
+	headerInjectors []headerInjector
 	metrics         Metrics
 	bp              BackpressureOptions
 	ns              string
@@ -33,7 +33,7 @@ type openAPIDispatcher struct {
 	label           string // "<METHOD> <pathTemplate>" — proto-side metric parity
 }
 
-func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []HeaderInjector, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
+func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []headerInjector, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
 	return &openAPIDispatcher{
 		src:             src,
 		op:              op,
@@ -88,7 +88,7 @@ func acquireOpenAPIReplicaSlot(ctx context.Context, r *openAPIReplica, src *open
 	if r.sem == nil {
 		return func() {}, nil
 	}
-	cfg := BackpressureConfig{
+	cfg := backpressureConfig{
 		Sem:         r.sem,
 		Queueing:    &r.queueing,
 		MaxWaitTime: bp.MaxWaitTime,
@@ -103,11 +103,11 @@ func acquireOpenAPIReplicaSlot(ctx context.Context, r *openAPIReplica, src *open
 }
 
 // openAPIBackpressureConfig bundles a source's per-dispatch knobs
-// for BackpressureMiddleware. Sibling of poolBackpressureConfig in
+// for backpressureMiddleware. Sibling of poolBackpressureConfig in
 // gw/proto_dispatcher.go — kept separate because openAPISource and
 // pool are separate types with separate sem / queueing fields.
-func openAPIBackpressureConfig(src *openAPISource, label string, metrics Metrics, bp BackpressureOptions) BackpressureConfig {
-	return BackpressureConfig{
+func openAPIBackpressureConfig(src *openAPISource, label string, metrics Metrics, bp BackpressureOptions) backpressureConfig {
+	return backpressureConfig{
 		Sem:         src.sem,
 		Queueing:    &src.queueing,
 		MaxWaitTime: bp.MaxWaitTime,

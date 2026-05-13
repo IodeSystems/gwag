@@ -146,14 +146,14 @@ func (b *subBroker) activeSubjectCount() int {
 // activeSubjects returns one entry per subject the broker is fanning
 // out, sorted by subject name. Order is stable so the admin UI shows
 // the same listing across polls.
-func (b *subBroker) activeSubjects() []SubjectInfo {
+func (b *subBroker) activeSubjects() []subjectInfo {
 	b.mu.Lock()
-	out := make([]SubjectInfo, 0, len(b.subs))
+	out := make([]subjectInfo, 0, len(b.subs))
 	for _, f := range b.subs {
 		f.mu.Lock()
 		consumers := len(f.targets)
 		f.mu.Unlock()
-		out = append(out, SubjectInfo{
+		out = append(out, subjectInfo{
 			Subject:   f.subject,
 			Consumers: consumers,
 		})
@@ -163,17 +163,17 @@ func (b *subBroker) activeSubjects() []SubjectInfo {
 	return out
 }
 
-// SubjectInfo describes one active subscription subject and how many
+// subjectInfo describes one active subscription subject and how many
 // in-process WebSocket consumers are listening on it.
-type SubjectInfo struct {
+type subjectInfo struct {
 	Subject   string `json:"subject"`
 	Consumers int    `json:"consumers"`
 }
 
-// ActiveSubjects returns a snapshot of currently-fanned-out
+// activeSubjects returns a snapshot of currently-fanned-out
 // subscription subjects. Empty when the broker hasn't been
 // initialised yet (no cluster, or no subscribe has happened).
-func (g *Gateway) ActiveSubjects() []SubjectInfo {
+func (g *Gateway) activeSubjects() []subjectInfo {
 	g.mu.Lock()
 	br := g.broker
 	g.mu.Unlock()

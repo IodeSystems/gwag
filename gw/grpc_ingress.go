@@ -38,7 +38,7 @@ type grpcIngressRoute struct {
 
 	// Unary path: chain(inner) with the matching backpressure config.
 	handler Handler
-	bp      BackpressureConfig
+	bp      backpressureConfig
 
 	// Streaming path: ir.Dispatcher whose Dispatch returns a chan any
 	// of decoded event maps from the upstream gRPC stream.
@@ -52,7 +52,7 @@ type grpcIngressTable struct {
 // rebuildGRPCIngressLocked walks every proto pool's RPCs and emits
 // one route per method. Unary routes capture the same chained
 // Handler the canonical protoDispatcher uses (so transforms apply
-// identically) alongside the per-pool BackpressureConfig. Server-
+// identically) alongside the per-pool backpressureConfig. Server-
 // streaming routes capture the protoDirectSubscriptionDispatcher
 // already registered in g.dispatchers — it opens a direct gRPC
 // stream to the upstream per subscriber.
@@ -159,7 +159,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() {
 
 	// Cross-kind second pass: synthesize routes for openapi /
 	// graphql slots via ir.RenderProtoFiles. The dispatcher
-	// already includes BackpressureMiddleware (see
+	// already includes backpressureMiddleware (see
 	// openapi_register / graphql_register) so the route's bp
 	// config is intentionally left zero — acquireBackpressureSlot
 	// short-circuits on a nil Sem.
@@ -485,14 +485,14 @@ func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grp
 }
 
 // acquireBackpressureSlot is the slot-acquisition prologue shared by
-// gRPC ingress and the canonical-args BackpressureMiddleware.
+// gRPC ingress and the canonical-args backpressureMiddleware.
 // Returns a release func (always non-nil when err == nil; defer it
 // to release the slot) and a Reject when the wait budget expires.
 //
 // Safe to call with cfg.Sem == nil — returns a no-op release and no
 // error. Two dispatch paths through one helper means they can't
 // drift on backpressure semantics.
-func acquireBackpressureSlot(ctx context.Context, cfg BackpressureConfig) (release func(), err error) {
+func acquireBackpressureSlot(ctx context.Context, cfg backpressureConfig) (release func(), err error) {
 	if cfg.Sem == nil {
 		return func() {}, nil
 	}

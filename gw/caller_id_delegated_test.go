@@ -78,7 +78,7 @@ func newDelegatedGateway(t *testing.T, opts CallerIDDelegatedOptions) *Gateway {
 func ctxWithCallerToken(token string) context.Context {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set(DelegatedCallerIDTokenHeader, token)
-	return WithHTTPRequest(context.Background(), r)
+	return withHTTPRequest(context.Background(), r)
 }
 
 func TestDelegatedCallerID_OK_ResolvesAndCaches(t *testing.T) {
@@ -336,7 +336,7 @@ func TestDelegatedCallerID_HTTPHeaderWinsOverGRPCMetadata(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set(DelegatedCallerIDTokenHeader, "from-http")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	md := metadata.Pairs(DelegatedCallerIDTokenMetadata, "from-grpc")
 	ctx = metadata.NewIncomingContext(ctx, md)
 

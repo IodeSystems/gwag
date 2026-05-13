@@ -15,10 +15,12 @@ External consumers checked:
 
 | Classification | Count |
 |---|---|
-| Public | 92 |
-| Internal | 27 |
+| Public | 94 |
+| Internal | 25 |
 | Keep-Public-Pending-Review | 8 |
 | Deprecated | 0 |
+
+*Counts revised on review: `Handler` + `Middleware` moved Public → Internal call was wrong (docs/middleware.md shows them in adopter-visible signatures).*
 
 **Top 10 highest-confidence Internal candidates ("easy wins"):**
 
@@ -26,7 +28,7 @@ External consumers checked:
 2. `HideTypeRewrite` / `HidePathRewrite` / `NullableTypeRewrite` / `NullablePathRewrite` — concrete rewrite structs; type-asserted inside `gw/` only; adopters use `HideType[T]()`, `InjectType`, `InjectPath`.
 3. `HeaderInjector` — internal dispatch struct embedded in `Transform.Headers`; type-asserted inside `gw/` only.
 4. `WithAdminAuth` / `IsAdminAuth` — internal middleware helpers used only inside `gw/auth_admin.go`.
-5. `Handler` / `Middleware` (the function types) — internal dispatch chain; zero external callers.
+5. ~~`Handler` / `Middleware`~~ — re-classified Public on review: `docs/middleware.md` documents the manual `Transform{Runtime: mw}` pattern that requires both types.
 6. `StatsSnapshot` / `MethodStatsSnapshot` / `HistoryBucket` / `ServiceHistory` — return types of admin-only methods; wire types for the admin HTTP surface.
 7. `SubjectInfo` — return type of `ActiveSubjects()`; only used inside `admin_huma.go`.
 8. `SchemaExpand*` / `SchemaList*` / `SchemaSearch*` types (8 structs) — huma wire types for admin MCP endpoints; exposed via methods but not useful standalone.
@@ -167,7 +169,7 @@ Methods are grouped under their type. Relative file paths from repo root.
 | `ClusterOptions` | type | `gw/cluster.go` | `examples/multi`, `gw/cmd/gwag` | Public | Config struct for `StartCluster`. |
 | `Code` | type | `gw/gateway.go` | `examples/auth` | Public | Error code enum used with `Reject`. |
 | `Gateway` | type | `gw/gateway.go` | all examples, `gw/cmd/gwag` | Public | Primary library type. |
-| `Handler` | type | `gw/gateway.go` | — | Internal | Internal dispatch chain type; zero external callers. |
+| `Handler` | type | `gw/gateway.go` | docs/middleware.md | Public | Function-type for `Transform.Runtime` middleware chain; `docs/middleware.md` shows adopters typing `func(next gateway.Handler) gateway.Handler {...}` directly. |
 | `HeaderInjector` | type | `gw/gateway.go` | — | Internal | Internal dispatch struct; type-asserted inside `gw/` only; in `Transform.Headers` but adopters never construct it directly. |
 | `HidePathRewrite` | type | `gw/transforms.go` | — | Internal | Concrete rewrite returned by `InjectPath`; type-asserted inside `gw/`; adopters use `InjectPath`. |
 | `HideTypeRewrite` | type | `gw/transforms.go` | — | Internal | Concrete rewrite returned by `HideType[T]`; same pattern. |
@@ -191,7 +193,7 @@ Methods are grouped under their type. Relative file paths from repo root.
 | `MCPResponseWithEvents` | type | `gw/mcp_tools.go` | — | Internal | Response type for `MCPQuery`; only consumed by admin handler. |
 | `MethodStatsSnapshot` | type | `gw/stats.go` | — | Internal | Return type of `Snapshot()`; only consumed by `admin_huma.go`. |
 | `Metrics` | type | `gw/metrics.go` | — | Public | Interface for `WithMetrics`; adopters implement it. |
-| `Middleware` | type | `gw/gateway.go` | — | Internal | Internal dispatch chain type; `Transform.Runtime` is typed as this but adopters get it via `InjectType`/`InjectPath`, never construct it manually. |
+| `Middleware` | type | `gw/gateway.go` | docs/middleware.md | Public | Type of `Transform.Runtime`; `docs/middleware.md` documents the manual `Transform{Runtime: mw}` pattern as canonical for custom middleware. Lock for v1. |
 | `NullablePathRewrite` | type | `gw/transforms.go` | — | Internal | Concrete rewrite returned by `InjectPath(Nullable(true))`; type-asserted inside `gw/` only. |
 | `NullableTypeRewrite` | type | `gw/transforms.go` | — | Internal | Concrete rewrite returned by `InjectType(Nullable(true))`. |
 | `Option` | type | `gw/gateway.go` | all examples, `gw/cmd/gwag` | Public | Primary config function type. |

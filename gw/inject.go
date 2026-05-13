@@ -46,21 +46,21 @@ func InjectType[T any](resolve func(ctx context.Context, current *T) (T, error),
 
 	var schema []SchemaRewrite
 	if cfg.hide {
-		schema = append(schema, HideTypeRewrite{Name: irName})
+		schema = append(schema, hideTypeRewrite{Name: irName})
 	}
 	if cfg.nullable {
-		schema = append(schema, NullableTypeRewrite{Name: irName})
+		schema = append(schema, nullableTypeRewrite{Name: irName})
 	}
 
 	rt := protoInjectMiddlewareFor[T](cfg.hide, resolve)
-	rec := InjectorRecord{
-		Kind:         InjectorKindType,
+	rec := injectorRecord{
+		Kind:         injectorKindType,
 		TypeName:     irName,
 		Hide:         cfg.hide,
 		Nullable:     cfg.nullable,
 		RegisteredAt: captureInjectorFrame(1),
 	}
-	return Transform{Schema: schema, Runtime: rt, Inventory: []InjectorRecord{rec}}
+	return Transform{Schema: schema, Runtime: rt, inventory: []injectorRecord{rec}}
 }
 
 // protoInjectMiddlewareFor wires the runtime half of an InjectType
@@ -312,20 +312,20 @@ func InjectPath(path string, resolve func(ctx context.Context, current any) (any
 
 	var schema []SchemaRewrite
 	if cfg.hide {
-		schema = append(schema, HidePathRewrite{Path: path})
+		schema = append(schema, hidePathRewrite{Path: path})
 	}
 	if cfg.nullable {
-		schema = append(schema, NullablePathRewrite{Path: path})
+		schema = append(schema, nullablePathRewrite{Path: path})
 	}
 	rt := injectPathMiddleware(path, cfg.hide, resolve)
-	rec := InjectorRecord{
-		Kind:         InjectorKindPath,
+	rec := injectorRecord{
+		Kind:         injectorKindPath,
 		Path:         path,
 		Hide:         cfg.hide,
 		Nullable:     cfg.nullable,
 		RegisteredAt: captureInjectorFrame(1),
 	}
-	return Transform{Schema: schema, Runtime: rt, Inventory: []InjectorRecord{rec}}
+	return Transform{Schema: schema, Runtime: rt, inventory: []injectorRecord{rec}}
 }
 
 // injectPathMiddleware wires the runtime half of InjectPath. Returns
@@ -432,15 +432,15 @@ func InjectHeader(name string, resolve func(ctx context.Context, current *string
 	if cfg.nullable {
 		panic(fmt.Sprintf("gateway: InjectHeader(%q): Nullable(true) is rejected — headers aren't in the GraphQL schema", name))
 	}
-	rec := InjectorRecord{
-		Kind:         InjectorKindHeader,
+	rec := injectorRecord{
+		Kind:         injectorKindHeader,
 		HeaderName:   name,
 		Hide:         cfg.hide,
 		RegisteredAt: captureInjectorFrame(1),
 	}
 	return Transform{
-		Headers:   []HeaderInjector{{Name: name, Hide: cfg.hide, Fn: resolve}},
-		Inventory: []InjectorRecord{rec},
+		headers:   []headerInjector{{Name: name, Hide: cfg.hide, Fn: resolve}},
+		inventory: []injectorRecord{rec},
 	}
 }
 
@@ -451,7 +451,7 @@ func InjectHeader(name string, resolve func(ctx context.Context, current *string
 // the cache because `current` varies per call site (though for
 // headers it's the same inbound HTTP request — kept symmetric with
 // InjectType / InjectPath for one mental model).
-func applyHeaderInjectors(ctx context.Context, injectors []HeaderInjector) (map[string]string, error) {
+func applyHeaderInjectors(ctx context.Context, injectors []headerInjector) (map[string]string, error) {
 	if len(injectors) == 0 {
 		return nil, nil
 	}

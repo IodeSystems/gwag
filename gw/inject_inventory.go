@@ -7,36 +7,36 @@ import (
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
-// InjectorKind identifies which constructor produced an InjectorRecord.
-type InjectorKind string
+// injectorKind identifies which constructor produced an InjectorRecord.
+type injectorKind string
 
 const (
-	InjectorKindType   InjectorKind = "type"
-	InjectorKindPath   InjectorKind = "path"
-	InjectorKindHeader InjectorKind = "header"
+	injectorKindType   injectorKind = "type"
+	injectorKindPath   injectorKind = "path"
+	injectorKindHeader injectorKind = "header"
 )
 
-// InjectorState captures the inventory entry's resolution against the
+// injectorState captures the inventory entry's resolution against the
 // live schema at the moment InjectorInventory() was called.
-type InjectorState string
+type injectorState string
 
 const (
-	// InjectorStateActive: at least one schema landing matches (for
+	// injectorStateActive: at least one schema landing matches (for
 	// type-keyed and path-keyed) or — for header injectors — registration
 	// is well-formed.
-	InjectorStateActive InjectorState = "active"
+	injectorStateActive injectorState = "active"
 
-	// InjectorStateDormant: no schema landing currently resolves. The
+	// injectorStateDormant: no schema landing currently resolves. The
 	// rule activates if a future schema rebuild brings the target into
 	// existence; harmless otherwise.
-	InjectorStateDormant InjectorState = "dormant"
+	injectorStateDormant injectorState = "dormant"
 )
 
-// InjectorRecord is the registration-time view of one InjectType /
+// injectorRecord is the registration-time view of one InjectType /
 // InjectPath / InjectHeader call. Captured by the Inject* constructors
 // and surfaced through Transform.Inventory + Gateway.InjectorInventory.
-type InjectorRecord struct {
-	Kind InjectorKind
+type injectorRecord struct {
+	Kind injectorKind
 
 	// Exactly one of the following identifies the rule, depending on
 	// Kind:
@@ -58,17 +58,17 @@ type InjectorRecord struct {
 
 	// RegisteredAt is the user's call site (file:line + function name)
 	// captured via runtime.Caller at construction time.
-	RegisteredAt InjectorFrame
+	RegisteredAt injectorFrame
 }
 
-// InjectorFrame is one captured stack frame.
-type InjectorFrame struct {
+// injectorFrame is one captured stack frame.
+type injectorFrame struct {
 	File     string
 	Line     int
 	Function string
 }
 
-func (f InjectorFrame) String() string {
+func (f injectorFrame) String() string {
 	if f.File == "" {
 		return ""
 	}
@@ -80,21 +80,21 @@ func (f InjectorFrame) String() string {
 
 // captureInjectorFrame walks `skip` frames above the caller to find the
 // user's registration site. Returns a zeroed frame on lookup failure.
-func captureInjectorFrame(skip int) InjectorFrame {
+func captureInjectorFrame(skip int) injectorFrame {
 	pc, file, line, ok := runtime.Caller(skip + 1)
 	if !ok {
-		return InjectorFrame{}
+		return injectorFrame{}
 	}
 	fn := ""
 	if f := runtime.FuncForPC(pc); f != nil {
 		fn = f.Name()
 	}
-	return InjectorFrame{File: file, Line: line, Function: fn}
+	return injectorFrame{File: file, Line: line, Function: fn}
 }
 
-// InjectorLanding is one concrete arg/field/header that an inventory
+// injectorLanding is one concrete arg/field/header that an inventory
 // entry currently affects. Renderable as a row in the admin UI.
-type InjectorLanding struct {
+type injectorLanding struct {
 	// Kind is "arg", "field", or "header".
 	Kind string
 
@@ -110,15 +110,15 @@ type InjectorLanding struct {
 	HeaderName string
 }
 
-// InjectorEntry is one row of the admin inventory: an InjectorRecord
+// injectorEntry is one row of the admin inventory: an InjectorRecord
 // plus its current schema landings + state.
-type InjectorEntry struct {
-	InjectorRecord
-	State    InjectorState
-	Landings []InjectorLanding
+type injectorEntry struct {
+	injectorRecord
+	State    injectorState
+	Landings []injectorLanding
 }
 
-// InjectorInventory enumerates every Inject* registration on this
+// injectorInventory enumerates every Inject* registration on this
 // gateway, paired with where it currently lands in the live (un-rewritten)
 // IR. Powers the admin inventory endpoint + UI tab.
 //
@@ -126,7 +126,7 @@ type InjectorEntry struct {
 // pre-rewrite IR (so HidePath/HideType "landings" are visible — once
 // rewrites apply, hidden args are gone and the inventory would lose its
 // answer to "what got hidden, where?"). Caller need not hold g.mu.
-func (g *Gateway) InjectorInventory() ([]InjectorEntry, error) {
+func (g *Gateway) injectorInventory() ([]injectorEntry, error) {
 	g.mu.Lock()
 	svcs, err := g.collectIRRawLocked()
 	records := collectInjectorRecords(g.transforms)
@@ -135,20 +135,20 @@ func (g *Gateway) InjectorInventory() ([]InjectorEntry, error) {
 		return nil, err
 	}
 
-	entries := make([]InjectorEntry, 0, len(records))
+	entries := make([]injectorEntry, 0, len(records))
 	for _, rec := range records {
-		entry := InjectorEntry{InjectorRecord: rec}
+		entry := injectorEntry{injectorRecord: rec}
 		switch rec.Kind {
-		case InjectorKindType:
+		case injectorKindType:
 			entry.Landings = landingsForType(svcs, rec.TypeName)
-		case InjectorKindPath:
+		case injectorKindPath:
 			entry.Landings = landingsForPath(svcs, rec.Path)
-		case InjectorKindHeader:
-			entry.Landings = []InjectorLanding{{Kind: "header", HeaderName: rec.HeaderName}}
+		case injectorKindHeader:
+			entry.Landings = []injectorLanding{{Kind: "header", HeaderName: rec.HeaderName}}
 		}
-		entry.State = InjectorStateDormant
+		entry.State = injectorStateDormant
 		if len(entry.Landings) > 0 {
-			entry.State = InjectorStateActive
+			entry.State = injectorStateActive
 		}
 		entries = append(entries, entry)
 	}
@@ -157,10 +157,10 @@ func (g *Gateway) InjectorInventory() ([]InjectorEntry, error) {
 
 // collectInjectorRecords flattens every Transform.Inventory entry in
 // registration order. Caller holds g.mu.
-func collectInjectorRecords(transforms []Transform) []InjectorRecord {
-	var out []InjectorRecord
+func collectInjectorRecords(transforms []Transform) []injectorRecord {
+	var out []injectorRecord
 	for _, tx := range transforms {
-		out = append(out, tx.Inventory...)
+		out = append(out, tx.inventory...)
 	}
 	return out
 }
@@ -226,17 +226,17 @@ func (g *Gateway) collectIRRawLocked() ([]*ir.Service, error) {
 // landingsForType returns every (svc, op, arg) and (svc, type, field)
 // in svcs whose IR-named type matches name. Walks the same shapes
 // NullableTypeRewrite walks; sibling logic.
-func landingsForType(svcs []*ir.Service, name string) []InjectorLanding {
+func landingsForType(svcs []*ir.Service, name string) []injectorLanding {
 	if name == "" {
 		return nil
 	}
-	var out []InjectorLanding
+	var out []injectorLanding
 	for _, svc := range svcs {
 		// Args on top-level operations.
 		for _, op := range svc.Operations {
 			for _, a := range op.Args {
 				if a.Type.IsNamed() && a.Type.Named == name {
-					out = append(out, InjectorLanding{
+					out = append(out, injectorLanding{
 						Kind: "arg", Namespace: svc.Namespace, Version: svc.Version,
 						Op: op.Name, ArgName: a.Name,
 					})
@@ -254,7 +254,7 @@ func landingsForType(svcs []*ir.Service, name string) []InjectorLanding {
 			}
 			for _, f := range t.Fields {
 				if f.Type.IsNamed() && f.Type.Named == name {
-					out = append(out, InjectorLanding{
+					out = append(out, injectorLanding{
 						Kind: "field", Namespace: svc.Namespace, Version: svc.Version,
 						TypeName: t.Name, FieldName: f.Name,
 					})
@@ -265,11 +265,11 @@ func landingsForType(svcs []*ir.Service, name string) []InjectorLanding {
 	return out
 }
 
-func collectTypeArgsInGroup(grp *ir.OperationGroup, svc *ir.Service, name string, out *[]InjectorLanding) {
+func collectTypeArgsInGroup(grp *ir.OperationGroup, svc *ir.Service, name string, out *[]injectorLanding) {
 	for _, op := range grp.Operations {
 		for _, a := range op.Args {
 			if a.Type.IsNamed() && a.Type.Named == name {
-				*out = append(*out, InjectorLanding{
+				*out = append(*out, injectorLanding{
 					Kind: "arg", Namespace: svc.Namespace, Version: svc.Version,
 					Op: op.Name, ArgName: a.Name,
 				})
@@ -283,12 +283,12 @@ func collectTypeArgsInGroup(grp *ir.OperationGroup, svc *ir.Service, name string
 
 // landingsForPath returns the (svc, op, arg) triples that "ns.op.arg"
 // resolves to today, across every version of the namespace.
-func landingsForPath(svcs []*ir.Service, path string) []InjectorLanding {
+func landingsForPath(svcs []*ir.Service, path string) []injectorLanding {
 	ns, opName, arg, ok := splitInjectPath(path)
 	if !ok {
 		return nil
 	}
-	var out []InjectorLanding
+	var out []injectorLanding
 	for _, svc := range svcs {
 		if svc.Namespace != ns {
 			continue
@@ -301,14 +301,14 @@ func landingsForPath(svcs []*ir.Service, path string) []InjectorLanding {
 	return out
 }
 
-func collectPathArgInOps(ops []*ir.Operation, svc *ir.Service, opName, arg string, out *[]InjectorLanding) {
+func collectPathArgInOps(ops []*ir.Operation, svc *ir.Service, opName, arg string, out *[]injectorLanding) {
 	for _, op := range ops {
 		if op.Name != opName {
 			continue
 		}
 		for _, a := range op.Args {
 			if a.Name == arg {
-				*out = append(*out, InjectorLanding{
+				*out = append(*out, injectorLanding{
 					Kind: "arg", Namespace: svc.Namespace, Version: svc.Version,
 					Op: op.Name, ArgName: a.Name,
 				})
@@ -317,7 +317,7 @@ func collectPathArgInOps(ops []*ir.Operation, svc *ir.Service, opName, arg strin
 	}
 }
 
-func collectPathArgInGroup(grp *ir.OperationGroup, svc *ir.Service, opName, arg string, out *[]InjectorLanding) {
+func collectPathArgInGroup(grp *ir.OperationGroup, svc *ir.Service, opName, arg string, out *[]injectorLanding) {
 	collectPathArgInOps(grp.Operations, svc, opName, arg, out)
 	for _, sub := range grp.Groups {
 		collectPathArgInGroup(sub, svc, opName, arg, out)
@@ -330,8 +330,8 @@ func collectPathArgInGroup(grp *ir.OperationGroup, svc *ir.Service, opName, arg 
 // tests inspect transitions without capturing stdout.
 type injectPathTransition struct {
 	Path     string
-	Previous InjectorState // zero value when Initial=true
-	Current  InjectorState
+	Previous injectorState // zero value when Initial=true
+	Current  injectorState
 	Initial  bool // true on the first evaluation for Path
 }
 
@@ -353,13 +353,13 @@ func (g *Gateway) evalInjectPathStatesLocked() []injectPathTransition {
 		return nil
 	}
 	if g.injectPathStates == nil {
-		g.injectPathStates = map[string]InjectorState{}
+		g.injectPathStates = map[string]injectorState{}
 	}
 	var transitions []injectPathTransition
 	seen := map[string]bool{}
 	for _, tx := range g.transforms {
-		for _, rec := range tx.Inventory {
-			if rec.Kind != InjectorKindPath || rec.Path == "" {
+		for _, rec := range tx.inventory {
+			if rec.Kind != injectorKindPath || rec.Path == "" {
 				continue
 			}
 			if seen[rec.Path] {
@@ -367,14 +367,14 @@ func (g *Gateway) evalInjectPathStatesLocked() []injectPathTransition {
 			}
 			seen[rec.Path] = true
 
-			current := InjectorStateDormant
+			current := injectorStateDormant
 			if len(landingsForPath(svcs, rec.Path)) > 0 {
-				current = InjectorStateActive
+				current = injectorStateActive
 			}
 			previous, known := g.injectPathStates[rec.Path]
 			switch {
 			case !known:
-				if current == InjectorStateDormant {
+				if current == injectorStateDormant {
 					transitions = append(transitions, injectPathTransition{
 						Path: rec.Path, Current: current, Initial: true,
 					})
@@ -398,11 +398,11 @@ func (g *Gateway) logInjectPathTransitions(transitions []injectPathTransition) {
 	for _, t := range transitions {
 		var msg string
 		switch {
-		case t.Initial && t.Current == InjectorStateDormant:
+		case t.Initial && t.Current == injectorStateDormant:
 			msg = fmt.Sprintf("gateway: InjectPath(%q) registered dormant — no schema landing matches; rule activates if a future schema rebuild brings the path into existence.", t.Path)
-		case t.Current == InjectorStateActive:
+		case t.Current == injectorStateActive:
 			msg = fmt.Sprintf("gateway: InjectPath(%q) activated — schema rebuild brought the path into existence.", t.Path)
-		case t.Current == InjectorStateDormant:
+		case t.Current == injectorStateDormant:
 			msg = fmt.Sprintf("gateway: InjectPath(%q) deactivated — schema rebuild removed the path; rule no-ops until it returns.", t.Path)
 		default:
 			continue

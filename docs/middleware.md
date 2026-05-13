@@ -3,12 +3,12 @@
 One `Transform` declaration carries up to four reshaping concerns
 that fire at different layers, in lockstep:
 
-| Field | Layer | Effect |
-|---|---|---|
-| `Schema` (`[]SchemaRewrite`) | once at boot | Rewrites the external schema (hide types, hide fields, flip nullability) |
-| `Runtime` (`Middleware`) | per request | Wraps the dispatch handler — read or mutate request and response |
-| `Headers` (`[]HeaderInjector`) | per dispatch | Stamps outbound HTTP headers / gRPC metadata |
-| `Inventory` (`[]InjectorRecord`) | registration time | Surfaces what an operator declared at `/admin/injectors` |
+| Field | Layer | Effect | Construction |
+|---|---|---|---|
+| `Schema` (`[]SchemaRewrite`) | once at boot | Rewrites the external schema (hide types, hide fields, flip nullability) | `HideType[T]()` and friends, or pass `Transform{Schema: ...}` directly |
+| `Runtime` (`Middleware`) | per request | Wraps the dispatch handler — read or mutate request and response | Function value passed to `Transform{Runtime: ...}` |
+| outbound headers | per dispatch | Stamps outbound HTTP headers / gRPC metadata | **Constructed via `InjectHeader`; the field is opaque.** |
+| injector inventory | registration time | Surfaces what an operator declared at `/admin/injectors` | **Populated by `InjectType` / `InjectPath` / `InjectHeader`; the field is opaque.** |
 
 `Runtime` is the same `next()` chain you've seen in every Go
 middleware library:

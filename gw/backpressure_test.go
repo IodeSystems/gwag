@@ -11,7 +11,7 @@ import (
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
-// recMetrics records the four metric calls BackpressureMiddleware
+// recMetrics records the four metric calls backpressureMiddleware
 // makes. Embeds noopMetrics so the rest of the Metrics interface is
 // satisfied without per-test fixture noise.
 type recMetrics struct {
@@ -77,7 +77,7 @@ func TestBackpressureMiddleware_NoSemPassthrough(t *testing.T) {
 	m := &recMetrics{}
 	wantErr := errors.New("inner")
 	calls := 0
-	wrapped := BackpressureMiddleware(BackpressureConfig{
+	wrapped := backpressureMiddleware(backpressureConfig{
 		Sem:     nil,
 		Metrics: m,
 	})(ir.DispatcherFunc(func(_ context.Context, _ map[string]any) (any, error) {
@@ -102,7 +102,7 @@ func TestBackpressureMiddleware_FastPath(t *testing.T) {
 	m := &recMetrics{}
 	sem := make(chan struct{}, 1)
 	q := &atomic.Int32{}
-	wrapped := BackpressureMiddleware(BackpressureConfig{
+	wrapped := backpressureMiddleware(backpressureConfig{
 		Sem:       sem,
 		Queueing:  q,
 		Metrics:   m,
@@ -139,7 +139,7 @@ func TestBackpressureMiddleware_QueuedThenAcquires(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{} // hold the slot
 	q := &atomic.Int32{}
-	wrapped := BackpressureMiddleware(BackpressureConfig{
+	wrapped := backpressureMiddleware(backpressureConfig{
 		Sem:         sem,
 		Queueing:    q,
 		MaxWaitTime: time.Second,
@@ -183,7 +183,7 @@ func TestBackpressureMiddleware_TimeoutRejects(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{} // permanently hold
 	q := &atomic.Int32{}
-	wrapped := BackpressureMiddleware(BackpressureConfig{
+	wrapped := backpressureMiddleware(backpressureConfig{
 		Sem:         sem,
 		Queueing:    q,
 		MaxWaitTime: 30 * time.Millisecond,
@@ -224,7 +224,7 @@ func codeOf(err error) Code {
 }
 
 // TestBackpressureMiddleware_ReplicaSplitsQueueDepth pins the
-// per-replica gauge label: a BackpressureConfig with Replica set
+// per-replica gauge label: a backpressureConfig with Replica set
 // routes queue-depth updates through SetReplicaQueueDepth (replica
 // label captured) instead of SetQueueDepth, so two saturated
 // replicas in the same pool show up as separate rows when
@@ -234,7 +234,7 @@ func TestBackpressureMiddleware_ReplicaSplitsQueueDepth(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{} // hold
 	q := &atomic.Int32{}
-	wrapped := BackpressureMiddleware(BackpressureConfig{
+	wrapped := backpressureMiddleware(backpressureConfig{
 		Sem:         sem,
 		Queueing:    q,
 		MaxWaitTime: time.Second,

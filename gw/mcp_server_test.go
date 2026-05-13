@@ -35,7 +35,7 @@ func TestMCPHandler_RoundTrip(t *testing.T) {
 		t.Fatalf("assembleLocked: %v", err)
 	}
 	gw.mu.Unlock()
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{Include: []string{"**"}}); err != nil {
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{Include: []string{"**"}}); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestMCPHandler_RoundTrip(t *testing.T) {
 	if listRes.IsError {
 		t.Fatalf("schema_list returned IsError: %+v", listRes.Content)
 	}
-	var listEntries []SchemaListEntry
+	var listEntries []schemaListEntry
 	if err := decodeToolJSON(listRes, &listEntries); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestMCPHandler_RoundTrip(t *testing.T) {
 	if qRes.IsError {
 		t.Fatalf("query returned IsError: %+v", qRes.Content)
 	}
-	var wrapped MCPResponseWithEvents
+	var wrapped mcpResponseWithEvents
 	if err := decodeToolJSON(qRes, &wrapped); err != nil {
 		t.Fatalf("decode query: %v", err)
 	}

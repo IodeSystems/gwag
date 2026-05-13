@@ -54,7 +54,7 @@ func withoutGraphQLForwardInfo(ctx context.Context) context.Context {
 // GraphQL source + one mirrored field. Everything inside the
 // pre-cutover forwardingResolver closure (AST rewrite, doc print,
 // pickReplica, dispatchGraphQL, response decode) lives here;
-// BackpressureMiddleware wraps the outside.
+// backpressureMiddleware wraps the outside.
 //
 // canonicalQuery + canonicalArgNames are populated at construction
 // for top-level (non-grouped, non-subscription) ops. They drive the
@@ -359,7 +359,7 @@ func isLeafIntrospectionType(r *introspectionTypeRef) bool {
 // Backpressure middleware is intentionally not wrapped around the
 // subscribe path — src.sem is per-source unary capacity, not stream
 // lifetime. The pre-cutover subscribingResolver bypassed
-// BackpressureMiddleware for the same reason; the multiplexer broker
+// backpressureMiddleware for the same reason; the multiplexer broker
 // is the rate-control story for streams.
 func (d *graphQLDispatcher) dispatchSubscribe(ctx context.Context) (any, error) {
 	info := graphQLForwardInfoFrom(ctx)
@@ -439,10 +439,10 @@ func (d *graphQLDispatcher) dispatchSubscribe(ctx context.Context) (any, error) 
 }
 
 // graphQLBackpressureConfig bundles a graphql source's per-dispatch
-// knobs for BackpressureMiddleware. Sibling of pool / openAPI
+// knobs for backpressureMiddleware. Sibling of pool / openAPI
 // equivalents.
-func graphQLBackpressureConfig(src *graphQLSource, label string, metrics Metrics, bp BackpressureOptions) BackpressureConfig {
-	return BackpressureConfig{
+func graphQLBackpressureConfig(src *graphQLSource, label string, metrics Metrics, bp BackpressureOptions) backpressureConfig {
+	return backpressureConfig{
 		Sem:         src.sem,
 		Queueing:    &src.queueing,
 		MaxWaitTime: bp.MaxWaitTime,

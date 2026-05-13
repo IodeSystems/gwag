@@ -90,14 +90,14 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 	for _, op := range ops {
 		opLabel := graphQLOpLabel(op.Kind)
 		core := newGraphQLDispatcher(mirror, op, opLabel, metrics, isGrouped)
-		// Subscriptions skip BackpressureMiddleware: src.sem is the
+		// Subscriptions skip backpressureMiddleware: src.sem is the
 		// per-source unary slot count, not a stream lifetime gauge,
 		// and the pre-cutover subscribingResolver bypassed it for the
 		// same reason. Stream rate-control rides on the subscription
 		// broker / per-replica inflight instead.
 		var dispatcher ir.Dispatcher = core
 		if op.Kind != ir.OpSubscription {
-			dispatcher = BackpressureMiddleware(graphQLBackpressureConfig(src, core.label, metrics, bp))(core)
+			dispatcher = backpressureMiddleware(graphQLBackpressureConfig(src, core.label, metrics, bp))(core)
 		}
 		if chain != nil && op.Kind != ir.OpSubscription {
 			if md, ok := inputDescs[op.SchemaID]; ok {
@@ -105,9 +105,9 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 			}
 		}
 		// Quota gate runs outermost so over-quota callers reject
-		// before paying the BackpressureMiddleware queue cost.
+		// before paying the backpressureMiddleware queue cost.
 		// Subscriptions skip the gate (matches their
-		// BackpressureMiddleware skip — stream lifetime is gauged
+		// backpressureMiddleware skip — stream lifetime is gauged
 		// elsewhere). Caller-id enforce wraps quota so the cheaper
 		// unauth rejection short-circuits in front of the per-caller
 		// bucket lookup.

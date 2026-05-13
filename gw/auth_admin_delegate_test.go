@@ -65,7 +65,7 @@ func newAdminAuthGateway(t *testing.T, tok []byte) *Gateway {
 func runAdminWrite(t *testing.T, gw *Gateway, header string) (status int, sawAuth bool) {
 	t.Helper()
 	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawAuth = IsAdminAuth(r.Context())
+		sawAuth = isAdminAuth(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodPost, "/admin/peers/x/forget", nil)

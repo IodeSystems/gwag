@@ -7,7 +7,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// InternalProtoHandler is the in-process dispatch entry point for one
+// internalProtoHandler is the in-process dispatch entry point for one
 // unary method on an internal-proto service. The dispatcher hands the
 // handler a *dynamicpb.Message populated from canonical args (or from
 // the gRPC ingress' wire-decoded request) and expects a
@@ -18,9 +18,9 @@ import (
 // Plain Go function, no I/O assumed. The gateway runs the user
 // runtime middleware chain around it but no backpressure (there's no
 // upstream replica to gate against).
-type InternalProtoHandler func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error)
+type internalProtoHandler func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error)
 
-// InternalProtoSubscriptionHandler is the in-process dispatch entry
+// internalProtoSubscriptionHandler is the in-process dispatch entry
 // point for one server-streaming method on an internal-proto service.
 // The handler receives the GraphQL-canonical args map (same shape the
 // unary side would see post-argsToMessage round-trip would produce on
@@ -32,7 +32,7 @@ type InternalProtoHandler func(ctx context.Context, req protoreflect.ProtoMessag
 //
 // The handler owns its release lifetime: typically a goroutine
 // listening on ctx.Done() that closes the broker handle.
-type InternalProtoSubscriptionHandler func(ctx context.Context, args map[string]any) (any, error)
+type internalProtoSubscriptionHandler func(ctx context.Context, args map[string]any) (any, error)
 
 // internalProtoSource is the per-slot dispatch handle for the
 // internal-proto kind — the in-process analogue of `*pool`. Shape
@@ -53,14 +53,14 @@ type internalProtoSource struct {
 	// Services() walk: "Pub", ...) to their in-process Go callbacks.
 	// Keyed by wire-level PascalCase method name so the slot's IR-
 	// ingested op names line up with the lookup site.
-	handlers map[string]InternalProtoHandler
+	handlers map[string]internalProtoHandler
 
 	// subscriptionHandlers map server-streaming RPC method names
 	// (e.g. "Sub") to their subscription-flavored Go callbacks. A
 	// streaming method without an entry here registers no Subscription
 	// dispatcher and resolves to "no dispatcher for ..." at request
 	// time — same posture as a missing unary handler.
-	subscriptionHandlers map[string]InternalProtoSubscriptionHandler
+	subscriptionHandlers map[string]internalProtoSubscriptionHandler
 }
 
 // addInternalProtoSlotLocked installs the in-process proto service at
@@ -75,7 +75,7 @@ type internalProtoSource struct {
 // internal-proto add as cap-compatible.
 //
 // Caller holds g.mu.
-func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.FileDescriptor, rawSource []byte, handlers map[string]InternalProtoHandler, subscriptionHandlers map[string]InternalProtoSubscriptionHandler) error {
+func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.FileDescriptor, rawSource []byte, handlers map[string]internalProtoHandler, subscriptionHandlers map[string]internalProtoSubscriptionHandler) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("internalproto: %w", err)
 	}
@@ -124,16 +124,16 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 	return nil
 }
 
-func copyInternalProtoHandlers(in map[string]InternalProtoHandler) map[string]InternalProtoHandler {
-	out := make(map[string]InternalProtoHandler, len(in))
+func copyInternalProtoHandlers(in map[string]internalProtoHandler) map[string]internalProtoHandler {
+	out := make(map[string]internalProtoHandler, len(in))
 	for k, v := range in {
 		out[k] = v
 	}
 	return out
 }
 
-func copyInternalProtoSubscriptionHandlers(in map[string]InternalProtoSubscriptionHandler) map[string]InternalProtoSubscriptionHandler {
-	out := make(map[string]InternalProtoSubscriptionHandler, len(in))
+func copyInternalProtoSubscriptionHandlers(in map[string]internalProtoSubscriptionHandler) map[string]internalProtoSubscriptionHandler {
+	out := make(map[string]internalProtoSubscriptionHandler, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

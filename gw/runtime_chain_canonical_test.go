@@ -139,7 +139,7 @@ func TestRuntimeChain_NoMiddlewareSkipsWrap(t *testing.T) {
 
 	// A Schema-only Transform (no Runtime half) shouldn't trigger
 	// the wrap either.
-	gw.Use(Transform{Schema: []SchemaRewrite{HideTypeRewrite{Name: "auth.v1.Context"}}})
+	gw.Use(Transform{Schema: []SchemaRewrite{hideTypeRewrite{Name: "auth.v1.Context"}}})
 	if gw.hasRuntimeMiddleware() {
 		t.Fatal("schema-only Transform falsely flagged as runtime-bearing")
 	}

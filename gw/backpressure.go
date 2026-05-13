@@ -8,8 +8,8 @@ import (
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
-// BackpressureConfig is the per-dispatcher knob bag for
-// BackpressureMiddleware. One BackpressureConfig describes one
+// backpressureConfig is the per-dispatcher knob bag for
+// backpressureMiddleware. One backpressureConfig describes one
 // (pool / source, operation) coordinate: Sem and Queueing live on
 // the pool / source struct (so least-loaded picks across replicas
 // share state); Namespace/Version/Label go into metric labels.
@@ -17,7 +17,7 @@ import (
 // Sem == nil means unbounded (MaxInflight=0) → the middleware is a
 // no-op pass-through. When Sem != nil, Queueing must be non-nil
 // and Metrics must be set (use noopMetrics if needed).
-type BackpressureConfig struct {
+type backpressureConfig struct {
 	Sem         chan struct{}
 	Queueing    *atomic.Int32
 	MaxWaitTime time.Duration
@@ -38,7 +38,7 @@ type BackpressureConfig struct {
 	Replica string
 }
 
-// BackpressureMiddleware returns the middleware that wraps an
+// backpressureMiddleware returns the middleware that wraps an
 // ir.Dispatcher with the slot-acquisition + queue-depth + dwell-
 // metric prologue currently duplicated inline in three places
 // (gw/schema.go buildPoolMethodField, gw/openapi.go field resolver,
@@ -54,7 +54,7 @@ type BackpressureConfig struct {
 // operators can triage which specific replica is saturated; service-
 // level configs use SetQueueDepth (one row per pool, kind="unary"
 // or "stream").
-func setQueueDepthForCfg(cfg BackpressureConfig, depth int) {
+func setQueueDepthForCfg(cfg backpressureConfig, depth int) {
 	if cfg.Replica != "" {
 		cfg.Metrics.SetReplicaQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, cfg.Replica, depth)
 		return
@@ -62,7 +62,7 @@ func setQueueDepthForCfg(cfg BackpressureConfig, depth int) {
 	cfg.Metrics.SetQueueDepth(cfg.Namespace, cfg.Version, cfg.Kind, depth)
 }
 
-func BackpressureMiddleware(cfg BackpressureConfig) ir.DispatcherMiddleware {
+func backpressureMiddleware(cfg backpressureConfig) ir.DispatcherMiddleware {
 	return func(next ir.Dispatcher) ir.Dispatcher {
 		if cfg.Sem == nil {
 			return next

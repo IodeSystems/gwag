@@ -24,7 +24,7 @@ func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 		gotChannel string
 		gotPayload string
 	)
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Pub": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			m := req.ProtoReflect()
 			gotChannel = m.Get(m.Descriptor().Fields().ByName("channel")).String()
@@ -108,7 +108,7 @@ func TestInternalProto_RegisterAndDispatch(t *testing.T) {
 // listing parity.
 func TestInternalProto_AppearsInPublicSDL(t *testing.T) {
 	g := New()
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Pub": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return &psv1.PubResponse{}, nil
 		},

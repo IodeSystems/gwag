@@ -163,7 +163,7 @@ type Gateway struct {
 	// evalInjectPathStatesLocked. Populated on Use(...) and refreshed
 	// on every assembleLocked so dormant→active and active→dormant
 	// transitions log exactly once. Caller holds g.mu.
-	injectPathStates map[string]InjectorState
+	injectPathStates map[string]injectorState
 
 	// callerAuth is the per-gateway state for WithCallerIDDelegated —
 	// TTL cache + singleflight + the revoke-listener subscription. nil
@@ -1431,7 +1431,7 @@ func (g *Gateway) Handler() http.Handler {
 		schema := g.schema.Load()
 		ctx, accum := withDispatchAccumulator(r.Context())
 		ctx = withInjectCache(ctx)
-		ctx = WithHTTPRequest(ctx, r)
+		ctx = withHTTPRequest(ctx, r)
 		start := time.Now()
 		// Browser UI render — rare, never on the hot path. The cached
 		// graphql-go/handler is built once per assembleLocked so this
@@ -1624,10 +1624,10 @@ func (g *Gateway) SchemaHandler() http.Handler {
 
 type httpRequestCtxKey struct{}
 
-// WithHTTPRequest stores r on ctx so middleware and resolvers can read
+// withHTTPRequest stores r on ctx so middleware and resolvers can read
 // the inbound HTTP request (headers, cookies, remote addr) without
 // having to plumb it as a separate argument.
-func WithHTTPRequest(ctx context.Context, r *http.Request) context.Context {
+func withHTTPRequest(ctx context.Context, r *http.Request) context.Context {
 	return context.WithValue(ctx, httpRequestCtxKey{}, r)
 }
 
@@ -1663,11 +1663,11 @@ type Middleware func(next Handler) Handler
 type Transform struct {
 	Schema    []SchemaRewrite
 	Runtime   Middleware
-	Headers   []HeaderInjector
-	Inventory []InjectorRecord
+	headers   []headerInjector
+	inventory []injectorRecord
 }
 
-// HeaderInjector stamps one outbound header (HTTP, OpenAPI dispatch)
+// headerInjector stamps one outbound header (HTTP, OpenAPI dispatch)
 // or gRPC metadata key (proto dispatch) on every dispatch the gateway
 // sends. Constructed via InjectHeader. ForwardHeaders' inbound
 // allowlist is unaffected — header injection writes through directly.
@@ -1676,7 +1676,7 @@ type Transform struct {
 // inbound HTTP request's value for Name (nil when absent or when the
 // request isn't HTTP). Returning "" skips the header for this
 // dispatch.
-type HeaderInjector struct {
+type headerInjector struct {
 	Name string
 	Hide bool
 	Fn   func(ctx context.Context, current *string) (string, error)

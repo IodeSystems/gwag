@@ -23,18 +23,18 @@ var protoMessageType = reflect.TypeOf((*proto.Message)(nil)).Elem()
 //     Won't match anything in IR until a non-proto path registers a
 //     binding for the same name.
 func HideType[T any]() SchemaRewrite {
-	return HideTypeRewrite{Name: irNameForGoType[T]()}
+	return hideTypeRewrite{Name: irNameForGoType[T]()}
 }
 
-// HideTypeRewrite is the concrete SchemaRewrite returned by HideType.
+// hideTypeRewrite is the concrete SchemaRewrite returned by HideType.
 // Exported so renderers operating below the IR (e.g. the proto FDS
 // exporter post-processing the same-kind shortcut) can recover the
 // hidden type name.
-type HideTypeRewrite struct {
+type hideTypeRewrite struct {
 	Name string
 }
 
-func (h HideTypeRewrite) apply(svcs []*ir.Service) {
+func (h hideTypeRewrite) apply(svcs []*ir.Service) {
 	if h.Name == "" {
 		return
 	}
@@ -79,7 +79,7 @@ func (g *Gateway) hiddenTypeNames() []string {
 	var out []string
 	for _, tx := range g.transforms {
 		for _, rw := range tx.Schema {
-			if h, ok := rw.(HideTypeRewrite); ok && h.Name != "" {
+			if h, ok := rw.(hideTypeRewrite); ok && h.Name != "" {
 				out = append(out, h.Name)
 			}
 		}
@@ -87,15 +87,15 @@ func (g *Gateway) hiddenTypeNames() []string {
 	return out
 }
 
-// HidePathRewrite is the concrete SchemaRewrite returned by InjectPath
+// hidePathRewrite is the concrete SchemaRewrite returned by InjectPath
 // under Hide(true). It strips a single named arg from one specific
 // operation, identified by the namespace.op.arg path. The match
 // applies to every version of the namespace.
-type HidePathRewrite struct {
+type hidePathRewrite struct {
 	Path string // "namespace.op.arg"
 }
 
-func (h HidePathRewrite) apply(svcs []*ir.Service) {
+func (h hidePathRewrite) apply(svcs []*ir.Service) {
 	ns, op, arg, ok := splitInjectPath(h.Path)
 	if !ok {
 		return
@@ -148,15 +148,15 @@ func splitInjectPath(path string) (ns, op, arg string, ok bool) {
 	return parts[0], parts[1], parts[2], true
 }
 
-// NullableTypeRewrite is the concrete SchemaRewrite emitted by
+// nullableTypeRewrite is the concrete SchemaRewrite emitted by
 // InjectType[T] under Nullable(true). It flips the Required flag on
 // every arg/field whose IR-named type matches Name, leaving the type
 // otherwise intact.
-type NullableTypeRewrite struct {
+type nullableTypeRewrite struct {
 	Name string
 }
 
-func (n NullableTypeRewrite) apply(svcs []*ir.Service) {
+func (n nullableTypeRewrite) apply(svcs []*ir.Service) {
 	if n.Name == "" {
 		return
 	}
@@ -195,15 +195,15 @@ func nullableArgsOfTypeInGroup(grp *ir.OperationGroup, name string) {
 	}
 }
 
-// NullablePathRewrite is the concrete SchemaRewrite emitted by
+// nullablePathRewrite is the concrete SchemaRewrite emitted by
 // InjectPath under Nullable(true). It flips the Required flag on the
 // one named arg in the matching op across every version of the
 // namespace.
-type NullablePathRewrite struct {
+type nullablePathRewrite struct {
 	Path string
 }
 
-func (n NullablePathRewrite) apply(svcs []*ir.Service) {
+func (n nullablePathRewrite) apply(svcs []*ir.Service) {
 	ns, opName, arg, ok := splitInjectPath(n.Path)
 	if !ok {
 		return

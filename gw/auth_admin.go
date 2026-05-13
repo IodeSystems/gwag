@@ -45,7 +45,7 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 // stay public for the UI; mutations require auth end-to-end. Future
 // destructive reads will need explicit opt-in once they exist.
 //
-// Authenticated requests carry IsAdminAuth(ctx) == true on the way
+// Authenticated requests carry isAdminAuth(ctx) == true on the way
 // through.
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	tok := g.cfg.adminToken
@@ -57,7 +57,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 		switch outcome, _ := g.consultAdminDelegate(r.Context(), r); outcome {
 		case adminDelegateAccept:
 			g.cfg.metrics.RecordAdminAuth(r.Method, "ok_delegate")
-			next.ServeHTTP(w, r.WithContext(WithAdminAuth(r.Context())))
+			next.ServeHTTP(w, r.WithContext(withAdminAuth(r.Context())))
 			return
 		case adminDelegateReject:
 			g.cfg.metrics.RecordAdminAuth(r.Method, "denied_delegate")
@@ -78,7 +78,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		g.cfg.metrics.RecordAdminAuth(r.Method, "ok_bearer")
-		next.ServeHTTP(w, r.WithContext(WithAdminAuth(r.Context())))
+		next.ServeHTTP(w, r.WithContext(withAdminAuth(r.Context())))
 	})
 }
 
@@ -177,15 +177,15 @@ func (g *Gateway) AdminTokenPath() string {
 
 type adminAuthCtxKey struct{}
 
-// WithAdminAuth marks ctx as having passed AdminMiddleware bearer
+// withAdminAuth marks ctx as having passed AdminMiddleware bearer
 // verification. Used by handlers that want to short-circuit additional
 // checks once the middleware has approved.
-func WithAdminAuth(ctx context.Context) context.Context {
+func withAdminAuth(ctx context.Context) context.Context {
 	return context.WithValue(ctx, adminAuthCtxKey{}, true)
 }
 
-// IsAdminAuth reports whether ctx was authenticated by AdminMiddleware.
-func IsAdminAuth(ctx context.Context) bool {
+// isAdminAuth reports whether ctx was authenticated by AdminMiddleware.
+func isAdminAuth(ctx context.Context) bool {
 	v, _ := ctx.Value(adminAuthCtxKey{}).(bool)
 	return v
 }

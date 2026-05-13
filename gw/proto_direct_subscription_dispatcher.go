@@ -25,7 +25,7 @@ import (
 // rather than queuing with a dwell timer. A client waiting for a
 // lazy upstream message is not the same urgency as a req/rsp cycle —
 // no queue-depth, no dwell metrics, no MaxWaitTime timeout.
-// BackpressureMiddleware is intentionally NOT wrapped around this
+// backpressureMiddleware is intentionally NOT wrapped around this
 // dispatcher.
 type protoDirectSubscriptionDispatcher struct {
 	g          *Gateway

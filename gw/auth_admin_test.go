@@ -71,7 +71,7 @@ func TestAdminMiddleware_PublicReads(t *testing.T) {
 	saw := false
 	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		saw = true
-		if IsAdminAuth(r.Context()) {
+		if isAdminAuth(r.Context()) {
 			t.Errorf("public GET should not mark ctx authenticated")
 		}
 		w.WriteHeader(http.StatusOK)
@@ -97,7 +97,7 @@ func TestAdminMiddleware_GatesWrites(t *testing.T) {
 	gw := New(WithAdminToken(tok))
 	authed := false
 	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authed = IsAdminAuth(r.Context())
+		authed = isAdminAuth(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -126,7 +126,7 @@ func TestAdminMiddleware_GatesWrites(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body=%q)", rr.Code, tc.wantStatus, rr.Body.String())
 			}
 			if authed != tc.wantAuthed {
-				t.Fatalf("IsAdminAuth(ctx) = %v, want %v", authed, tc.wantAuthed)
+				t.Fatalf("isAdminAuth(ctx) = %v, want %v", authed, tc.wantAuthed)
 			}
 		})
 	}
@@ -222,7 +222,7 @@ func TestForwardOpenAPIHeaders_DefaultsToAuth(t *testing.T) {
 	in.Header.Set("X-Other", "ignored")
 
 	out, _ := http.NewRequest(http.MethodPost, "http://upstream/op", nil)
-	ctx := WithHTTPRequest(context.Background(), in)
+	ctx := withHTTPRequest(context.Background(), in)
 	forwardOpenAPIHeaders(ctx, out, nil)
 
 	if got := out.Header.Get("Authorization"); got != "Bearer abc" {
@@ -238,7 +238,7 @@ func TestForwardOpenAPIHeaders_EmptyAllowlistForwardsNothing(t *testing.T) {
 	in.Header.Set("Authorization", "Bearer abc")
 
 	out, _ := http.NewRequest(http.MethodPost, "http://upstream/op", nil)
-	ctx := WithHTTPRequest(context.Background(), in)
+	ctx := withHTTPRequest(context.Background(), in)
 	forwardOpenAPIHeaders(ctx, out, []string{})
 
 	if got := out.Header.Get("Authorization"); got != "" {
@@ -253,7 +253,7 @@ func TestForwardOpenAPIHeaders_CustomAllowlist(t *testing.T) {
 	in.Header.Set("X-Other", "ignored")
 
 	out, _ := http.NewRequest(http.MethodPost, "http://upstream/op", nil)
-	ctx := WithHTTPRequest(context.Background(), in)
+	ctx := withHTTPRequest(context.Background(), in)
 	forwardOpenAPIHeaders(ctx, out, []string{"X-Api-Key"})
 
 	if got := out.Header.Get("X-Api-Key"); got != "k1" {

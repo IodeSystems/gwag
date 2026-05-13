@@ -22,7 +22,7 @@ func TestCallerIDHMAC_LegacyTokenVerifies(t *testing.T) {
 	sig, ts := SignCallerIDToken(secret, "billing", 60)
 
 	r := callerHMACRequest("billing", "", sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secret: secret}
 	got, err := o.resolve(ctx, time.Unix(ts, 0))
@@ -40,7 +40,7 @@ func TestCallerIDHMAC_RotatedKidVerifies(t *testing.T) {
 	sig, _, ts := SignCallerIDTokenWithKid(secret, kid, "users", 60)
 
 	r := callerHMACRequest("users", kid, sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secrets: map[string][]byte{kid: secret}}
 	got, err := o.resolve(ctx, time.Unix(ts, 0))
@@ -60,7 +60,7 @@ func TestCallerIDHMAC_TokenBoundToKid(t *testing.T) {
 	sig, _, ts := SignCallerIDTokenWithKid(secret, "v1", "alice", 60)
 
 	r := callerHMACRequest("alice", "v2", sig, ts) // wrong kid
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secrets: map[string][]byte{"v1": secret, "v2": secret}}
 	_, err := o.resolve(ctx, time.Unix(ts, 0))
@@ -74,7 +74,7 @@ func TestCallerIDHMAC_UnknownKidErrors(t *testing.T) {
 	sig, _, ts := SignCallerIDTokenWithKid(secret, "v1", "alice", 60)
 
 	r := callerHMACRequest("alice", "v1", sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secrets: map[string][]byte{"v9": []byte("other")}}
 	_, err := o.resolve(ctx, time.Unix(ts, 0))
@@ -88,7 +88,7 @@ func TestCallerIDHMAC_TooOld(t *testing.T) {
 	sig, ts := SignCallerIDToken(secret, "alice", 60)
 
 	r := callerHMACRequest("alice", "", sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secret: secret, SkewWindow: 30 * time.Second}
 	// Advance now by 5 minutes — outside the 30s skew window.
@@ -103,7 +103,7 @@ func TestCallerIDHMAC_TooNew(t *testing.T) {
 	sig, ts := SignCallerIDToken(secret, "alice", 60)
 
 	r := callerHMACRequest("alice", "", sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secret: secret, SkewWindow: 30 * time.Second}
 	// Rewind now by 5 minutes — token's ts is in the future from
@@ -120,7 +120,7 @@ func TestCallerIDHMAC_BadSignature(t *testing.T) {
 	forged := base64.StdEncoding.EncodeToString([]byte("forged-sig-bytes"))
 
 	r := callerHMACRequest("alice", "", forged, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secret: secret}
 	_, err := o.resolve(ctx, time.Unix(ts, 0))
@@ -134,7 +134,7 @@ func TestCallerIDHMAC_MalformedMissingCallerID(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.Header.Set(HMACCallerIDTimestampHeader, "1")
 	r.Header.Set(HMACCallerIDSignatureHeader, "anysig")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if _, err := o.resolve(ctx, time.Now()); !errors.Is(err, errCallerIDHMACMalformed) {
 		t.Errorf("missing caller-id: got %v, want errCallerIDHMACMalformed", err)
 	}
@@ -144,7 +144,7 @@ func TestCallerIDHMAC_MalformedMissingTimestamp(t *testing.T) {
 	o := CallerIDHMACOptions{Secret: []byte("k")}
 	r, _ := newRequestWithHeader(PublicCallerIDHeader, "alice")
 	r.Header.Set(HMACCallerIDSignatureHeader, "anysig")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if _, err := o.resolve(ctx, time.Now()); !errors.Is(err, errCallerIDHMACMalformed) {
 		t.Errorf("missing ts: got %v, want errCallerIDHMACMalformed", err)
 	}
@@ -155,7 +155,7 @@ func TestCallerIDHMAC_MalformedNonNumericTimestamp(t *testing.T) {
 	r, _ := newRequestWithHeader(PublicCallerIDHeader, "alice")
 	r.Header.Set(HMACCallerIDTimestampHeader, "not-a-number")
 	r.Header.Set(HMACCallerIDSignatureHeader, "anysig")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if _, err := o.resolve(ctx, time.Now()); !errors.Is(err, errCallerIDHMACMalformed) {
 		t.Errorf("non-numeric ts: got %v, want errCallerIDHMACMalformed", err)
 	}
@@ -166,7 +166,7 @@ func TestCallerIDHMAC_AnonymousNoHeaders(t *testing.T) {
 	// surfaces "unknown" on the seam; enforce-mode is the layer that
 	// turns this into a 401 later.
 	r := httptest.NewRequest("GET", "/", nil)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{Secret: []byte("k")}
 	got, err := o.resolve(ctx, time.Now())
@@ -184,7 +184,7 @@ func TestCallerIDHMAC_NotConfiguredError(t *testing.T) {
 	// visible (vs the silent "anonymous" path when the caller didn't
 	// sign at all).
 	r := callerHMACRequest("alice", "", "sig", 1)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	o := CallerIDHMACOptions{}
 	_, err := o.resolve(ctx, time.Now())
@@ -221,7 +221,7 @@ func TestCallerIDHMAC_HTTPWinsOverGRPC(t *testing.T) {
 	sigHTTP, ts := SignCallerIDToken(secret, "http-alice", 60)
 
 	r := callerHMACRequest("http-alice", "", sigHTTP, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 
 	sigGRPC, _ := SignCallerIDToken(secret, "grpc-bob", 60)
 	md := metadata.Pairs(
@@ -263,10 +263,10 @@ func TestSnapshot_CallerDimension_HMACExtractor(t *testing.T) {
 
 	sig, ts := SignCallerIDToken(secret, "billing", 60)
 	r := callerHMACRequest("billing", "", sig, ts)
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	g.cfg.metrics.RecordDispatch(ctx, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 1 {
 		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
 	}

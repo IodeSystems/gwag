@@ -129,7 +129,7 @@ func TestGateway_SnapshotReadsRegistry(t *testing.T) {
 	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 0 {
 		// stats.record uses nowFunc(); without a deterministic stub,
 		// observations land at real wall-clock and Snapshot at our
@@ -144,7 +144,7 @@ func TestGateway_SnapshotReadsRegistry(t *testing.T) {
 	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Hello", 7*time.Millisecond, nil)
 	g2.cfg.metrics.RecordDispatch(context.Background(), "greeter", "v1", "Bye", 9*time.Millisecond, nil)
-	rows = g2.Snapshot(time.Minute, now)
+	rows = g2.snapshot(time.Minute, now)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows, got %d: %+v", len(rows), rows)
 	}
@@ -167,7 +167,7 @@ func TestCallerFromContext_NoHeadersConfigured(t *testing.T) {
 
 func TestCallerFromContext_HeaderMatch(t *testing.T) {
 	r, _ := newRequestWithHeader("X-Caller-Service", "billing")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	if got := callerFromContext(ctx, []string{"X-Caller-Service", "User-Agent"}); got != "billing" {
 		t.Errorf("got %q, want billing", got)
 	}
@@ -175,7 +175,7 @@ func TestCallerFromContext_HeaderMatch(t *testing.T) {
 
 func TestCallerFromContext_FallsThroughOnAbsent(t *testing.T) {
 	r, _ := newRequestWithHeader("User-Agent", "curl/7.88")
-	ctx := WithHTTPRequest(context.Background(), r)
+	ctx := withHTTPRequest(context.Background(), r)
 	// First header missing → falls through to second.
 	if got := callerFromContext(ctx, []string{"X-Caller-Service", "User-Agent"}); got != "curl/7.88" {
 		t.Errorf("got %q, want curl/7.88", got)
@@ -206,13 +206,13 @@ func TestSnapshot_CallerDimension(t *testing.T) {
 
 	rA, _ := newRequestWithHeader("X-Caller-Service", "billing")
 	rB, _ := newRequestWithHeader("X-Caller-Service", "users")
-	ctxA := WithHTTPRequest(context.Background(), rA)
-	ctxB := WithHTTPRequest(context.Background(), rB)
+	ctxA := withHTTPRequest(context.Background(), rA)
+	ctxB := withHTTPRequest(context.Background(), rB)
 	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 5*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(ctxA, "greeter", "v1", "Hello", 7*time.Millisecond, nil)
 	g.cfg.metrics.RecordDispatch(ctxB, "greeter", "v1", "Hello", 9*time.Millisecond, nil)
 
-	rows := g.Snapshot(time.Minute, now)
+	rows := g.snapshot(time.Minute, now)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows (one per caller), got %d: %+v", len(rows), rows)
 	}

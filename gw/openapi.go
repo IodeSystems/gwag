@@ -639,7 +639,7 @@ func dispatchOpenAPI(
 	op *openapi3.Operation,
 	gqlArgs map[string]any,
 	forwardHeaders []string,
-	headerInjectors []HeaderInjector,
+	headerInjectors []headerInjector,
 	httpClient *http.Client,
 ) (any, error) {
 	resolvedPath := pathTemplate

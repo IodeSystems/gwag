@@ -32,55 +32,55 @@ import (
 // `**` as zero-or-more segments — see mcp_config.go for the glob
 // rules.
 
-// SchemaOpKind is the MCP-surface name for an operation's GraphQL
+// schemaOpKind is the MCP-surface name for an operation's GraphQL
 // root. Stable string identifiers ("Query" / "Mutation" /
 // "Subscription") that the MCP client / agent reads back; the
 // gateway-internal ir.OpKind is an int enum so this exists to give
 // the wire shape a documented contract.
-type SchemaOpKind string
+type schemaOpKind string
 
 const (
-	SchemaOpQuery        SchemaOpKind = "Query"
-	SchemaOpMutation     SchemaOpKind = "Mutation"
-	SchemaOpSubscription SchemaOpKind = "Subscription"
+	schemaOpQuery        schemaOpKind = "Query"
+	schemaOpMutation     schemaOpKind = "Mutation"
+	schemaOpSubscription schemaOpKind = "Subscription"
 )
 
-func schemaOpKindFromIR(k ir.OpKind) SchemaOpKind {
+func schemaOpKindFromIR(k ir.OpKind) schemaOpKind {
 	switch k {
 	case ir.OpMutation:
-		return SchemaOpMutation
+		return schemaOpMutation
 	case ir.OpSubscription:
-		return SchemaOpSubscription
+		return schemaOpSubscription
 	default:
-		return SchemaOpQuery
+		return schemaOpQuery
 	}
 }
 
-// SchemaListEntry is one operation row from MCPSchemaList. The
+// schemaListEntry is one operation row from MCPSchemaList. The
 // description is the first line of the IR Description; the full doc
 // is reachable via MCPSchemaExpand.
-type SchemaListEntry struct {
+type schemaListEntry struct {
 	Path        string       `json:"path"`
-	Kind        SchemaOpKind `json:"kind"`
+	Kind        schemaOpKind `json:"kind"`
 	Namespace   string       `json:"namespace"`
 	Version     string       `json:"version"`
 	Description string       `json:"description,omitempty"`
 }
 
-// MCPSchemaList returns every allowed operation across the gateway's
+// mcpSchemaList returns every allowed operation across the gateway's
 // registered services, grouped by root kind. The result is sorted
 // alphabetically by path within each group for stable output.
-func (g *Gateway) MCPSchemaList() []SchemaListEntry {
+func (g *Gateway) mcpSchemaList() []schemaListEntry {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	svcs := g.collectSlotIRLocked(schemaFilter{})
-	out := make([]SchemaListEntry, 0, 16)
+	out := make([]schemaListEntry, 0, 16)
 	for _, s := range svcs {
 		walkServiceOps(s, "", func(path string, op *ir.Operation) {
 			if !g.mcpAllowsLocked(path) {
 				return
 			}
-			out = append(out, SchemaListEntry{
+			out = append(out, schemaListEntry{
 				Path:        path,
 				Kind:        schemaOpKindFromIR(op.Kind),
 				Namespace:   s.Namespace,
@@ -98,10 +98,10 @@ func (g *Gateway) MCPSchemaList() []SchemaListEntry {
 	return out
 }
 
-// SchemaSearchInput is the query envelope for MCPSchemaSearch. Both
+// schemaSearchInput is the query envelope for MCPSchemaSearch. Both
 // fields are optional; an empty input matches every allowed op (i.e.
 // behaves like MCPSchemaList but with the richer entry shape).
-type SchemaSearchInput struct {
+type schemaSearchInput struct {
 	// PathGlob is a dot-segmented glob applied to each op's path
 	// (`admin.*`, `*.list*`, `**`). Empty → no path filter.
 	PathGlob string `json:"pathGlob,omitempty"`
@@ -111,34 +111,34 @@ type SchemaSearchInput struct {
 	Regex string `json:"regex,omitempty"`
 }
 
-// SchemaSearchEntry is one result row. Args / Description / Output
+// schemaSearchEntry is one result row. Args / Description / Output
 // come from the IR so they reflect the post-transform truth the
 // gateway will actually expose.
-type SchemaSearchEntry struct {
+type schemaSearchEntry struct {
 	Path        string             `json:"path"`
-	Kind        SchemaOpKind       `json:"kind"`
+	Kind        schemaOpKind       `json:"kind"`
 	Namespace   string             `json:"namespace"`
 	Version     string             `json:"version"`
 	Description string             `json:"description,omitempty"`
-	Args        []SchemaSearchArg  `json:"args"`
+	Args        []schemaSearchArg  `json:"args"`
 	OutputType  string             `json:"outputType,omitempty"`
 }
 
-// SchemaSearchArg projects ir.Arg onto the MCP wire shape. Type is a
+// schemaSearchArg projects ir.Arg onto the MCP wire shape. Type is a
 // human-readable summary (GraphQL-style: `String!`, `[User!]!`, etc.)
 // rather than the structured TypeRef so the agent can consume it
 // without re-implementing the IR type system.
-type SchemaSearchArg struct {
+type schemaSearchArg struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Required    bool   `json:"required"`
 	Description string `json:"description,omitempty"`
 }
 
-// MCPSchemaSearch returns every allowed op matching the input
+// mcpSchemaSearch returns every allowed op matching the input
 // filters. Path glob and regex are AND-combined; a missing filter is
 // treated as "match all".
-func (g *Gateway) MCPSchemaSearch(in SchemaSearchInput) ([]SchemaSearchEntry, error) {
+func (g *Gateway) mcpSchemaSearch(in schemaSearchInput) ([]schemaSearchEntry, error) {
 	var re *regexp.Regexp
 	if in.Regex != "" {
 		var err error
@@ -150,7 +150,7 @@ func (g *Gateway) MCPSchemaSearch(in SchemaSearchInput) ([]SchemaSearchEntry, er
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	svcs := g.collectSlotIRLocked(schemaFilter{})
-	out := make([]SchemaSearchEntry, 0, 16)
+	out := make([]schemaSearchEntry, 0, 16)
 	for _, s := range svcs {
 		walkServiceOps(s, "", func(path string, op *ir.Operation) {
 			if !g.mcpAllowsLocked(path) {
@@ -162,7 +162,7 @@ func (g *Gateway) MCPSchemaSearch(in SchemaSearchInput) ([]SchemaSearchEntry, er
 			if re != nil && !opMatchesRegex(re, op) {
 				return
 			}
-			out = append(out, SchemaSearchEntry{
+			out = append(out, schemaSearchEntry{
 				Path:        path,
 				Kind:        schemaOpKindFromIR(op.Kind),
 				Namespace:   s.Namespace,
@@ -280,10 +280,10 @@ func opMatchesRegex(re *regexp.Regexp, op *ir.Operation) bool {
 // argsToSearch projects ir.Arg list onto the search-result shape.
 // Nil-safe; returns a non-nil empty slice so JSON serialization
 // surfaces `"args": []` rather than `"args": null`.
-func argsToSearch(args []*ir.Arg) []SchemaSearchArg {
-	out := make([]SchemaSearchArg, 0, len(args))
+func argsToSearch(args []*ir.Arg) []schemaSearchArg {
+	out := make([]schemaSearchArg, 0, len(args))
 	for _, a := range args {
-		out = append(out, SchemaSearchArg{
+		out = append(out, schemaSearchArg{
 			Name:        a.Name,
 			Type:        typeRefSummary(a.Type, a.Repeated, a.Required, a.ItemRequired),
 			Required:    a.Required,
@@ -360,41 +360,41 @@ func scalarKindName(k ir.ScalarKind) string {
 	}
 }
 
-// SchemaExpandResult is the structured "drill in to this op or type"
+// schemaExpandResult is the structured "drill in to this op or type"
 // response. Exactly one of Op / Type is populated; the other is nil.
 // Types holds every type transitively reachable from the focused
 // entity (args + return for an op; fields + variants for a type),
 // keyed by IR name, so the agent can resolve nested references
 // without round-tripping. The closure walk is bounded by the IR's
 // natural cycle-breaking (Types is keyed by name; we mark visited).
-type SchemaExpandResult struct {
+type schemaExpandResult struct {
 	Path  string            `json:"path,omitempty"`
-	Op    *SchemaExpandOp   `json:"op,omitempty"`
-	Type  *SchemaExpandType `json:"type,omitempty"`
-	Types []SchemaExpandType `json:"types"`
+	Op    *schemaExpandOp   `json:"op,omitempty"`
+	Type  *schemaExpandType `json:"type,omitempty"`
+	Types []schemaExpandType `json:"types"`
 }
 
-type SchemaExpandOp struct {
+type schemaExpandOp struct {
 	Path        string             `json:"path"`
-	Kind        SchemaOpKind       `json:"kind"`
+	Kind        schemaOpKind       `json:"kind"`
 	Namespace   string             `json:"namespace"`
 	Version     string             `json:"version"`
 	Description string             `json:"description,omitempty"`
-	Args        []SchemaSearchArg  `json:"args"`
+	Args        []schemaSearchArg  `json:"args"`
 	OutputType  string             `json:"outputType,omitempty"`
 	Deprecated  string             `json:"deprecated,omitempty"`
 }
 
-type SchemaExpandType struct {
+type schemaExpandType struct {
 	Name        string                 `json:"name"`
 	Kind        string                 `json:"kind"` // "object" / "enum" / "union" / "interface" / "scalar" / "input"
 	Description string                 `json:"description,omitempty"`
-	Fields      []SchemaExpandField    `json:"fields,omitempty"`
-	EnumValues  []SchemaExpandEnumValue `json:"enumValues,omitempty"`
+	Fields      []schemaExpandField    `json:"fields,omitempty"`
+	EnumValues  []schemaExpandEnumValue `json:"enumValues,omitempty"`
 	Variants    []string               `json:"variants,omitempty"`
 }
 
-type SchemaExpandField struct {
+type schemaExpandField struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Required    bool   `json:"required"`
@@ -402,13 +402,13 @@ type SchemaExpandField struct {
 	Deprecated  string `json:"deprecated,omitempty"`
 }
 
-type SchemaExpandEnumValue struct {
+type schemaExpandEnumValue struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Deprecated  string `json:"deprecated,omitempty"`
 }
 
-// MCPSchemaExpand returns the structured definition of one entity. The
+// mcpSchemaExpand returns the structured definition of one entity. The
 // caller's `nameOrPath` is matched first as a dotted op path (e.g.
 // "things.getThing"), then as a type name (e.g. "ThingResponse").
 // Returns an error when nothing matches or when the focus is filtered
@@ -417,7 +417,7 @@ type SchemaExpandEnumValue struct {
 // The Types slice carries every type transitively reachable from the
 // focus (args + output for ops; fields + variants for types). The
 // closure walk is cycle-safe — each Type is emitted at most once.
-func (g *Gateway) MCPSchemaExpand(nameOrPath string) (*SchemaExpandResult, error) {
+func (g *Gateway) mcpSchemaExpand(nameOrPath string) (*schemaExpandResult, error) {
 	if nameOrPath == "" {
 		return nil, fmt.Errorf("mcp: name is required")
 	}
@@ -441,8 +441,8 @@ func (g *Gateway) MCPSchemaExpand(nameOrPath string) (*SchemaExpandResult, error
 		if !g.mcpAllowsLocked(foundPath) {
 			return nil, fmt.Errorf("mcp: %q is not on the MCP surface (allowlist denies)", foundPath)
 		}
-		res := &SchemaExpandResult{Path: foundPath}
-		res.Op = &SchemaExpandOp{
+		res := &schemaExpandResult{Path: foundPath}
+		res.Op = &schemaExpandOp{
 			Path:        foundPath,
 			Kind:        schemaOpKindFromIR(found.Kind),
 			Namespace:   s.Namespace,
@@ -476,7 +476,7 @@ func (g *Gateway) MCPSchemaExpand(nameOrPath string) (*SchemaExpandResult, error
 		if !ok {
 			continue
 		}
-		res := &SchemaExpandResult{}
+		res := &schemaExpandResult{}
 		res.Type = expandTypePtr(t)
 		res.Types = collectTypeClosureFromType(s, t)
 		return res, nil
@@ -487,9 +487,9 @@ func (g *Gateway) MCPSchemaExpand(nameOrPath string) (*SchemaExpandResult, error
 // collectTypeClosureForOp walks every TypeRef on the op's Args and
 // Output and emits the transitive type closure. Built-in scalars and
 // map types don't enter the closure (they have no Type entry).
-func collectTypeClosureForOp(s *ir.Service, op *ir.Operation) []SchemaExpandType {
+func collectTypeClosureForOp(s *ir.Service, op *ir.Operation) []schemaExpandType {
 	visited := map[string]bool{}
-	out := []SchemaExpandType{}
+	out := []schemaExpandType{}
 	for _, a := range op.Args {
 		walkTypeRefClosure(s, a.Type, visited, &out)
 	}
@@ -499,14 +499,14 @@ func collectTypeClosureForOp(s *ir.Service, op *ir.Operation) []SchemaExpandType
 	return out
 }
 
-func collectTypeClosureFromType(s *ir.Service, root *ir.Type) []SchemaExpandType {
+func collectTypeClosureFromType(s *ir.Service, root *ir.Type) []schemaExpandType {
 	visited := map[string]bool{root.Name: true}
-	out := []SchemaExpandType{}
+	out := []schemaExpandType{}
 	walkTypeClosure(s, root, visited, &out)
 	return out
 }
 
-func walkTypeRefClosure(s *ir.Service, ref ir.TypeRef, visited map[string]bool, out *[]SchemaExpandType) {
+func walkTypeRefClosure(s *ir.Service, ref ir.TypeRef, visited map[string]bool, out *[]schemaExpandType) {
 	switch {
 	case ref.IsBuiltin():
 		return
@@ -527,7 +527,7 @@ func walkTypeRefClosure(s *ir.Service, ref ir.TypeRef, visited map[string]bool, 
 	}
 }
 
-func walkTypeClosure(s *ir.Service, t *ir.Type, visited map[string]bool, out *[]SchemaExpandType) {
+func walkTypeClosure(s *ir.Service, t *ir.Type, visited map[string]bool, out *[]schemaExpandType) {
 	*out = append(*out, *expandTypePtr(t))
 	for _, f := range t.Fields {
 		walkTypeRefClosure(s, f.Type, visited, out)
@@ -545,14 +545,14 @@ func walkTypeClosure(s *ir.Service, t *ir.Type, visited map[string]bool, out *[]
 	}
 }
 
-func expandTypePtr(t *ir.Type) *SchemaExpandType {
-	out := &SchemaExpandType{
+func expandTypePtr(t *ir.Type) *schemaExpandType {
+	out := &schemaExpandType{
 		Name:        t.Name,
 		Kind:        typeKindName(t.TypeKind),
 		Description: t.Description,
 	}
 	for _, f := range t.Fields {
-		out.Fields = append(out.Fields, SchemaExpandField{
+		out.Fields = append(out.Fields, schemaExpandField{
 			Name:        f.Name,
 			Type:        typeRefSummary(f.Type, f.Repeated, f.Required, f.ItemRequired),
 			Required:    f.Required,
@@ -561,7 +561,7 @@ func expandTypePtr(t *ir.Type) *SchemaExpandType {
 		})
 	}
 	for _, e := range t.Enum {
-		out.EnumValues = append(out.EnumValues, SchemaExpandEnumValue{
+		out.EnumValues = append(out.EnumValues, schemaExpandEnumValue{
 			Name:        e.Name,
 			Description: e.Description,
 			Deprecated:  e.Deprecated,
@@ -590,41 +590,41 @@ func typeKindName(k ir.TypeKind) string {
 	}
 }
 
-// MCPQueryInput is the payload for the MCP `query` tool.
-type MCPQueryInput struct {
+// mcpQueryInput is the payload for the MCP `query` tool.
+type mcpQueryInput struct {
 	Query         string         `json:"query"`
 	Variables     map[string]any `json:"variables,omitempty"`
 	OperationName string         `json:"operationName,omitempty"`
 }
 
-// MCPResponseWithEvents is the uniform wrapper plan §2 mandates from
+// mcpResponseWithEvents is the uniform wrapper plan §2 mandates from
 // v1 onward so v2 subscription stitching can land additively without
 // breaking the wire shape. v1 Events.Level is always "none" and
 // Channels is always empty.
-type MCPResponseWithEvents struct {
+type mcpResponseWithEvents struct {
 	Response any             `json:"response"`
-	Events   MCPEventsBundle `json:"events"`
+	Events   mcpEventsBundle `json:"events"`
 }
 
-type MCPEventsBundle struct {
+type mcpEventsBundle struct {
 	// Level is one of: "none" (v1), "by_channel" (v2 default), "all"
 	// (v2 with byte threshold tripped or operator opt-in). The agent
 	// reads this to know whether the channels slice is summary or
 	// full payload.
 	Level    string            `json:"level"`
-	Channels []MCPChannelEvent `json:"channels"`
+	Channels []mcpChannelEvent `json:"channels"`
 }
 
-// MCPChannelEvent is one entry in the v2 events bundle. Always
+// mcpChannelEvent is one entry in the v2 events bundle. Always
 // empty in v1 (the slice is empty); the type is defined now so the
 // JSON Channels[] field has a stable shape from the start.
-type MCPChannelEvent struct {
+type mcpChannelEvent struct {
 	Channel string `json:"channel"`
 	Count   int    `json:"count"`
 	Preview any    `json:"preview,omitempty"`
 }
 
-// MCPQuery executes a GraphQL operation against the gateway's
+// mcpQuery executes a GraphQL operation against the gateway's
 // runtime schema in-process. Bearer auth on the MCP transport is the
 // security boundary (per plan §2: "same auth posture as admin
 // writes"); the MCPConfig allowlist is operator-curated discovery
@@ -634,7 +634,7 @@ type MCPChannelEvent struct {
 // without making the gateway pay per-call AST validation cost.
 // Per-op execution gating may layer on in v1.x if adopters pull on
 // it.
-func (g *Gateway) MCPQuery(ctx context.Context, in MCPQueryInput) (*MCPResponseWithEvents, error) {
+func (g *Gateway) mcpQuery(ctx context.Context, in mcpQueryInput) (*mcpResponseWithEvents, error) {
 	if in.Query == "" {
 		return nil, fmt.Errorf("mcp: query is required")
 	}
@@ -649,11 +649,11 @@ func (g *Gateway) MCPQuery(ctx context.Context, in MCPQueryInput) (*MCPResponseW
 		OperationName:  in.OperationName,
 		Context:        ctx,
 	})
-	return &MCPResponseWithEvents{
+	return &mcpResponseWithEvents{
 		Response: result,
-		Events: MCPEventsBundle{
+		Events: mcpEventsBundle{
 			Level:    "none",
-			Channels: []MCPChannelEvent{},
+			Channels: []mcpChannelEvent{},
 		},
 	}, nil
 }

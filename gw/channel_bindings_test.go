@@ -129,7 +129,7 @@ service Heartbeat {
 	}
 
 	g := &Gateway{}
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Beat": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return req, nil
 		},
@@ -189,7 +189,7 @@ service S {
 	if err != nil {
 		t.Fatalf("compile %s/%s: %v", ns, ver, err)
 	}
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return req, nil
 		},
@@ -233,7 +233,7 @@ service S { rpc Echo(Update) returns (Update); }
 	if err != nil {
 		t.Fatalf("compile conflict: %v", err)
 	}
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return req, nil
 		},
@@ -624,7 +624,7 @@ service S { rpc Echo(OrderUpdate) returns (OrderUpdate); }
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	handlers := map[string]InternalProtoHandler{
+	handlers := map[string]internalProtoHandler{
 		"Echo": func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 			return req, nil
 		},

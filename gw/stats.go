@@ -108,8 +108,8 @@ func (w *statsWindow) observe(nowUnix int64, latency time.Duration, ok bool) {
 // Stale buckets (whose start fell outside the window) are skipped —
 // they belong to an earlier wrap of the ring. Percentiles are derived
 // from the aggregate latency histogram via histPercentile.
-func (w *statsWindow) snapshot(nowUnix, spanSec int64) StatsSnapshot {
-	var snap StatsSnapshot
+func (w *statsWindow) snapshot(nowUnix, spanSec int64) statsSnapshot {
+	var snap statsSnapshot
 	floor := nowUnix - spanSec
 	var hist [numLatencyBuckets]uint64
 	for i := range w.buckets {
@@ -260,18 +260,18 @@ func (s *statsRegistry) record(k statsKey, latency time.Duration, ok bool, now t
 // snapshot reads one (ns, ver, method) at the given window and
 // wall-clock. Returns the zero StatsSnapshot when the key has no
 // recorded observations.
-func (s *statsRegistry) snapshot(k statsKey, window time.Duration, now time.Time) StatsSnapshot {
+func (s *statsRegistry) snapshot(k statsKey, window time.Duration, now time.Time) statsSnapshot {
 	s.mu.RLock()
 	m, ok := s.methods[k]
 	s.mu.RUnlock()
 	if !ok {
-		return StatsSnapshot{}
+		return statsSnapshot{}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w := m.windowFor(window)
 	if w == nil {
-		return StatsSnapshot{}
+		return statsSnapshot{}
 	}
 	return w.snapshot(now.Unix(), int64(window/time.Second))
 }
@@ -288,14 +288,14 @@ func (m *methodStats) windowFor(window time.Duration) *statsWindow {
 	return nil
 }
 
-// HistoryBucket is one ring-bucket: a fixed-width slice of time with
+// historyBucket is one ring-bucket: a fixed-width slice of time with
 // its dispatch count, ok-count, and percentile estimates. The public
 // status page uses these to render a strip of dots per service —
 // width = window-bucket-duration, color = error ratio. Buckets are
 // emitted oldest-first; gaps in the ring (no observations yet) are
 // surfaced as zero-count entries pinned to their wall-clock start so
 // the UI can render a continuous timeline.
-type HistoryBucket struct {
+type historyBucket struct {
 	StartUnixSec int64
 	DurationSec  int64
 	Count        uint64
@@ -310,8 +310,8 @@ type HistoryBucket struct {
 // outside the window) are zeroed and re-pinned to the wall-clock slot
 // they would belong to, so the caller always gets a fixed-length
 // timeline regardless of how recently the ring saw traffic.
-func (w *statsWindow) historyBuckets(nowUnix int64) []HistoryBucket {
-	out := make([]HistoryBucket, len(w.buckets))
+func (w *statsWindow) historyBuckets(nowUnix int64) []historyBucket {
+	out := make([]historyBucket, len(w.buckets))
 	bucketStart := (nowUnix / w.bucketDurSec) * w.bucketDurSec
 	// The current bucket is the youngest; walk backward in wall time
 	// so out[0] is the oldest.
@@ -324,7 +324,7 @@ func (w *statsWindow) historyBuckets(nowUnix int64) []HistoryBucket {
 			idx += len(w.buckets)
 		}
 		b := &w.buckets[idx]
-		hb := HistoryBucket{
+		hb := historyBucket{
 			StartUnixSec: slotStart,
 			DurationSec:  w.bucketDurSec,
 		}
@@ -341,7 +341,7 @@ func (w *statsWindow) historyBuckets(nowUnix int64) []HistoryBucket {
 	return out
 }
 
-// History returns one row per (namespace, version) over the chosen
+// history returns one row per (namespace, version) over the chosen
 // window, with bucket-level granularity. method+caller dimensions
 // collapse into the (ns, ver) total — the public status page is
 // service-level, not method-level. window must be one of:
@@ -350,13 +350,13 @@ func (w *statsWindow) historyBuckets(nowUnix int64) []HistoryBucket {
 // Bucket widths track the underlying ring (1s / 1m / 10m
 // respectively); the UI aggregates dots if it wants a different slice
 // width.
-func (g *Gateway) History(window time.Duration, now time.Time) []ServiceHistory {
+func (g *Gateway) history(window time.Duration, now time.Time) []serviceHistory {
 	if g.stats == nil {
 		return nil
 	}
 	g.stats.mu.RLock()
 	keys := make([]statsKey, 0, len(g.stats.methods))
-	type ring struct{ buckets []HistoryBucket }
+	type ring struct{ buckets []historyBucket }
 	merged := map[serviceKey]*ring{}
 	for k, m := range g.stats.methods {
 		keys = append(keys, k)
@@ -371,9 +371,9 @@ func (g *Gateway) History(window time.Duration, now time.Time) []ServiceHistory 
 		m.mu.Unlock()
 		dst, ok := merged[sk]
 		if !ok {
-			dst = &ring{buckets: make([]HistoryBucket, len(row))}
+			dst = &ring{buckets: make([]historyBucket, len(row))}
 			for i, b := range row {
-				dst.buckets[i] = HistoryBucket{
+				dst.buckets[i] = historyBucket{
 					StartUnixSec: b.StartUnixSec,
 					DurationSec:  b.DurationSec,
 				}
@@ -399,9 +399,9 @@ func (g *Gateway) History(window time.Duration, now time.Time) []ServiceHistory 
 		}
 	}
 	g.stats.mu.RUnlock()
-	out := make([]ServiceHistory, 0, len(merged))
+	out := make([]serviceHistory, 0, len(merged))
 	for sk, r := range merged {
-		out = append(out, ServiceHistory{
+		out = append(out, serviceHistory{
 			Namespace: sk.namespace,
 			Version:   sk.version,
 			Buckets:   r.buckets,
@@ -420,33 +420,33 @@ func (g *Gateway) History(window time.Duration, now time.Time) []ServiceHistory 
 // the public status surface is one row per registered (ns, ver).
 type serviceKey struct{ namespace, version string }
 
-// ServiceHistory is one row of the public status page: a time-series
+// serviceHistory is one row of the public status page: a time-series
 // of HistoryBuckets covering the window. The dot-strip UI renders one
 // dot per bucket, colored by error ratio (Count - OkCount) / Count.
-type ServiceHistory struct {
+type serviceHistory struct {
 	Namespace string
 	Version   string
-	Buckets   []HistoryBucket
+	Buckets   []historyBucket
 }
 
-// MethodStatsSnapshot is one row of the operator panel: a single
+// methodStatsSnapshot is one row of the operator panel: a single
 // (namespace, version, method, caller) measured over a named window.
 // Caller is "unknown" when no caller-header allowlist is configured
 // or no allowed header was present on the inbound request. Public so
 // admin endpoints / UI codegen can consume it directly.
-type MethodStatsSnapshot struct {
+type methodStatsSnapshot struct {
 	Namespace string
 	Version   string
 	Method    string
 	Caller    string
-	StatsSnapshot
+	statsSnapshot
 }
 
-// StatsSnapshot is the per-window aggregate. Percentiles are bucket
+// statsSnapshot is the per-window aggregate. Percentiles are bucket
 // upper-bound estimates — sufficient for "is anything pathologically
 // slow" without dragging in t-digest. Throughput is calls/second
 // across the window span (count / span_seconds).
-type StatsSnapshot struct {
+type statsSnapshot struct {
 	Count      uint64
 	OkCount    uint64
 	Throughput float64
@@ -455,11 +455,11 @@ type StatsSnapshot struct {
 	P99        time.Duration
 }
 
-// Snapshot returns one row per (namespace, version, method) that has
+// snapshot returns one row per (namespace, version, method) that has
 // recorded observations within the window. window must be one of:
 // time.Minute, time.Hour, 24*time.Hour. Result is sorted by
 // namespace/version/method for stable UI output.
-func (g *Gateway) Snapshot(window time.Duration, now time.Time) []MethodStatsSnapshot {
+func (g *Gateway) snapshot(window time.Duration, now time.Time) []methodStatsSnapshot {
 	if g.stats == nil {
 		return nil
 	}
@@ -482,18 +482,18 @@ func (g *Gateway) Snapshot(window time.Duration, now time.Time) []MethodStatsSna
 		}
 		return a.caller < b.caller
 	})
-	out := make([]MethodStatsSnapshot, 0, len(keys))
+	out := make([]methodStatsSnapshot, 0, len(keys))
 	for _, k := range keys {
 		snap := g.stats.snapshot(k, window, now)
 		if snap.Count == 0 {
 			continue
 		}
-		out = append(out, MethodStatsSnapshot{
+		out = append(out, methodStatsSnapshot{
 			Namespace:     k.namespace,
 			Version:       k.version,
 			Method:        k.method,
 			Caller:        k.caller,
-			StatsSnapshot: snap,
+			statsSnapshot: snap,
 		})
 	}
 	return out

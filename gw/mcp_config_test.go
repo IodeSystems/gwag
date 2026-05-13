@@ -40,11 +40,11 @@ func TestMCPConfig_StandaloneAllowsDefaultDeny(t *testing.T) {
 	defer gw.Close()
 
 	// Empty config: nothing on the surface.
-	if gw.MCPAllows("admin.peers.list") {
+	if gw.mcpAllows("admin.peers.list") {
 		t.Fatal("empty config should default-deny")
 	}
 
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{
 		Include: []string{"admin.peers.*", "users.list"},
 	}); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
@@ -62,7 +62,7 @@ func TestMCPConfig_StandaloneAllowsDefaultDeny(t *testing.T) {
 		{"users.create", false},
 	}
 	for _, c := range cases {
-		if got := gw.MCPAllows(c.path); got != c.want {
+		if got := gw.mcpAllows(c.path); got != c.want {
 			t.Errorf("MCPAllows(%q) = %v, want %v", c.path, got, c.want)
 		}
 	}
@@ -72,7 +72,7 @@ func TestMCPConfig_AutoIncludeWithExclude(t *testing.T) {
 	gw := New(WithoutMetrics(), WithoutBackpressure())
 	defer gw.Close()
 
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{
 		AutoInclude: true,
 		Exclude:     []string{"admin.**", "*.delete"},
 	}); err != nil {
@@ -89,7 +89,7 @@ func TestMCPConfig_AutoIncludeWithExclude(t *testing.T) {
 		{"admin.users.list", false},
 	}
 	for _, c := range cases {
-		if got := gw.MCPAllows(c.path); got != c.want {
+		if got := gw.mcpAllows(c.path); got != c.want {
 			t.Errorf("MCPAllows(%q) = %v, want %v", c.path, got, c.want)
 		}
 	}
@@ -101,23 +101,23 @@ func TestMCPConfig_InternalNSFilteredFirst(t *testing.T) {
 
 	// Even in AutoInclude=true mode with `**` not explicitly excluded,
 	// `_*` namespaces stay hidden.
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{
 		AutoInclude: true,
 	}); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
-	if gw.MCPAllows("_admin_auth.foo") {
+	if gw.mcpAllows("_admin_auth.foo") {
 		t.Error("internal _admin_auth should be filtered first")
 	}
 
 	// And in Include mode, an Include pattern can't override the
 	// internal filter.
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{
 		Include: []string{"_admin_events.**"},
 	}); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
-	if gw.MCPAllows("_admin_events.publish") {
+	if gw.mcpAllows("_admin_events.publish") {
 		t.Error("Include should not override internal-NS filter")
 	}
 }
@@ -126,7 +126,7 @@ func TestMCPConfig_Snapshot(t *testing.T) {
 	gw := New(WithoutMetrics(), WithoutBackpressure())
 	defer gw.Close()
 
-	if snap := gw.MCPConfigSnapshot(); snap.AutoInclude || len(snap.Include) != 0 || len(snap.Exclude) != 0 {
+	if snap := gw.mcpConfigSnapshot(); snap.AutoInclude || len(snap.Include) != 0 || len(snap.Exclude) != 0 {
 		t.Fatalf("default snapshot non-empty: %+v", snap)
 	}
 
@@ -135,17 +135,17 @@ func TestMCPConfig_Snapshot(t *testing.T) {
 		Include:     []string{"a.b"},
 		Exclude:     []string{"c.d"},
 	}
-	if err := gw.SetMCPConfig(context.Background(), in); err != nil {
+	if err := gw.setMCPConfig(context.Background(), in); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
-	snap := gw.MCPConfigSnapshot()
+	snap := gw.mcpConfigSnapshot()
 	if !snap.AutoInclude || len(snap.Include) != 1 || snap.Include[0] != "a.b" || len(snap.Exclude) != 1 || snap.Exclude[0] != "c.d" {
 		t.Fatalf("snapshot mismatch: %+v", snap)
 	}
 
 	// Mutating the snapshot must not mutate the gateway's state.
 	snap.Include[0] = "MUTATED"
-	snap2 := gw.MCPConfigSnapshot()
+	snap2 := gw.mcpConfigSnapshot()
 	if snap2.Include[0] != "a.b" {
 		t.Fatalf("snapshot is not a deep copy: got %q", snap2.Include[0])
 	}
@@ -172,7 +172,7 @@ func TestMCPConfig_ClusterConverges(t *testing.T) {
 	var seedErr error
 	for seedCtx.Err() == nil {
 		ctx, cancel := context.WithTimeout(seedCtx, 2*time.Second)
-		seedErr = a.gw.SetMCPConfig(ctx, cfg)
+		seedErr = a.gw.setMCPConfig(ctx, cfg)
 		cancel()
 		if seedErr == nil {
 			break
@@ -190,12 +190,12 @@ func TestMCPConfig_ClusterConverges(t *testing.T) {
 	convergeCtx, convergeCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer convergeCancel()
 	for convergeCtx.Err() == nil {
-		snap := b.gw.MCPConfigSnapshot()
+		snap := b.gw.mcpConfigSnapshot()
 		if len(snap.Include) == 2 && snap.Include[0] == "admin.peers.*" && snap.Include[1] == "library.book.list" {
-			if !b.gw.MCPAllows("admin.peers.list") {
+			if !b.gw.mcpAllows("admin.peers.list") {
 				t.Fatalf("B.MCPAllows(admin.peers.list) should be true after convergence: %+v", snap)
 			}
-			if b.gw.MCPAllows("admin.services.list") {
+			if b.gw.mcpAllows("admin.services.list") {
 				t.Fatalf("B.MCPAllows(admin.services.list) should be false")
 			}
 			return
@@ -206,5 +206,5 @@ func TestMCPConfig_ClusterConverges(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	t.Fatalf("B did not converge on A's MCPConfig: B snapshot=%+v", b.gw.MCPConfigSnapshot())
+	t.Fatalf("B did not converge on A's MCPConfig: B snapshot=%+v", b.gw.mcpConfigSnapshot())
 }

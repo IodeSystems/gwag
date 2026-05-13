@@ -16,7 +16,7 @@ import (
 // It owns the marshal (canonical args → dynamicpb request) /
 // unmarshal (dynamicpb response → map) bridge and runs the pool's
 // pre-built proto-shaped Handler chain (user runtime middleware +
-// inner pickReplica/Invoke). BackpressureMiddleware wraps the
+// inner pickReplica/Invoke). backpressureMiddleware wraps the
 // outside; the backpressure prologue is no longer inline here.
 //
 // Build once per (pool, RPC) at schema build time and reuse for
@@ -45,7 +45,7 @@ type protoDispatcher struct {
 // to the wire (stream.SendMsg). On Invoke error the handler returns
 // the message to the pool itself — `nil, err` doesn't dangle a
 // pooled allocation.
-func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, headers []HeaderInjector, metrics Metrics, bpOpts BackpressureOptions) Handler {
+func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, headers []headerInjector, metrics Metrics, bpOpts BackpressureOptions) Handler {
 	method := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 	outputDesc := md.Output()
 	ns, ver := p.key.namespace, p.key.version
@@ -62,7 +62,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		// Per-instance cap: acquired AFTER pickReplica because the
 		// per-instance sem is keyed on a specific replica. Service-
 		// level backpressure already gated entry above (in
-		// BackpressureMiddleware on the canonical-args path; in the
+		// backpressureMiddleware on the canonical-args path; in the
 		// gRPC ingress prologue otherwise).
 		releaseInstance, err := acquireReplicaSlot(ctx, r, p, method, metrics, bpOpts)
 		if err != nil {
@@ -111,10 +111,10 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 //
 // RecordDispatch fires from the inner Handler with the per-Invoke
 // duration. Pre-cutover the same metric covered queue+invoke wall
-// time; with BackpressureMiddleware now the outer layer the dwell
+// time; with backpressureMiddleware now the outer layer the dwell
 // metric carries the queue portion separately. No test asserts on
 // the prior shape.
-func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, headers []HeaderInjector, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
+func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, headers []headerInjector, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
 	inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
 	return &protoDispatcher{
 		inputDesc: md.Input(),
@@ -151,7 +151,7 @@ func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 }
 
 // methodLabel returns the proto wire path for an RPC, used as the
-// metric label and the BackpressureMiddleware Label slot. Mirrors
+// metric label and the backpressureMiddleware Label slot. Mirrors
 // what the inner Handler computes for RecordDispatch so the two
 // metrics share their per-method label space.
 func methodLabel(sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor) string {
@@ -159,10 +159,10 @@ func methodLabel(sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescri
 }
 
 // poolBackpressureConfig bundles a pool's per-dispatch knobs into a
-// BackpressureConfig once per (pool, RPC). Callers pass it to
-// BackpressureMiddleware to wrap the protoDispatcher.
-func poolBackpressureConfig(p *pool, label string, metrics Metrics, bp BackpressureOptions) BackpressureConfig {
-	return BackpressureConfig{
+// backpressureConfig once per (pool, RPC). Callers pass it to
+// backpressureMiddleware to wrap the protoDispatcher.
+func poolBackpressureConfig(p *pool, label string, metrics Metrics, bp BackpressureOptions) backpressureConfig {
+	return backpressureConfig{
 		Sem:         p.sem,
 		Queueing:    &p.queueing,
 		MaxWaitTime: bp.MaxWaitTime,
@@ -186,7 +186,7 @@ func acquireReplicaSlot(ctx context.Context, r *replica, p *pool, label string, 
 	if r.sem == nil {
 		return func() {}, nil
 	}
-	cfg := BackpressureConfig{
+	cfg := backpressureConfig{
 		Sem:         r.sem,
 		Queueing:    &r.queueing,
 		MaxWaitTime: bp.MaxWaitTime,

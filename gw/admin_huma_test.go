@@ -600,7 +600,7 @@ func TestAdminHuma_DeprecatedStats_ManualAndAuto(t *testing.T) {
 		if caller != "" {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Header.Set("X-Caller-Service", caller)
-			ctx = WithHTTPRequest(ctx, req)
+			ctx = withHTTPRequest(ctx, req)
 		}
 		gw.cfg.metrics.RecordDispatch(ctx, ns, ver, method, time.Duration(ms)*time.Millisecond, nil)
 	}
@@ -797,7 +797,7 @@ func TestAdminHuma_MCP_RoundTrip(t *testing.T) {
 	}
 
 	// Sanity: gateway in-process state matches.
-	snap := gw.MCPConfigSnapshot()
+	snap := gw.mcpConfigSnapshot()
 	if !snap.AutoInclude || len(snap.Include) != 2 || len(snap.Exclude) != 1 {
 		t.Errorf("gateway snapshot=%+v drifted from admin list=%+v", snap, final)
 	}
@@ -825,7 +825,7 @@ func TestAdminHuma_MCP_WritesRequireBearer(t *testing.T) {
 			t.Errorf("POST %s without bearer: status=%d, want 401", c.path, rr.Code)
 		}
 	}
-	if snap := gw.MCPConfigSnapshot(); snap.AutoInclude || len(snap.Include) != 0 || len(snap.Exclude) != 0 {
+	if snap := gw.mcpConfigSnapshot(); snap.AutoInclude || len(snap.Include) != 0 || len(snap.Exclude) != 0 {
 		t.Errorf("state drifted after rejected writes: %+v", snap)
 	}
 }
@@ -862,7 +862,7 @@ func TestAdminHuma_MCPSchema_AdminRoutesRoundTrip(t *testing.T) {
 	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(be.URL), As("things")); err != nil {
 		t.Fatalf("AddOpenAPIBytes: %v", err)
 	}
-	if err := gw.SetMCPConfig(context.Background(), MCPConfig{Include: []string{"**"}}); err != nil {
+	if err := gw.setMCPConfig(context.Background(), MCPConfig{Include: []string{"**"}}); err != nil {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
 

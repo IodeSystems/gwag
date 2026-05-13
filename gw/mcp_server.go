@@ -43,7 +43,7 @@ func (g *Gateway) registerMCPTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("schema_list",
 		mcp.WithDescription("List every operation exposed via the MCP surface, grouped by Query / Mutation / Subscription. Returns entries with the dot-segmented path, kind, namespace, version, and a short description. Use this for orientation; pair with schema_search and schema_expand to drill in."),
 	), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		entries := g.MCPSchemaList()
+		entries := g.mcpSchemaList()
 		return mcpResultJSON(entries)
 	})
 
@@ -56,7 +56,7 @@ func (g *Gateway) registerMCPTools(srv *server.MCPServer) {
 			mcp.Description("Regular expression matched against op name, every arg name, and the description body. Invalid regex surfaces as a tool error."),
 		),
 	), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		entries, err := g.MCPSchemaSearch(SchemaSearchInput{
+		entries, err := g.mcpSchemaSearch(schemaSearchInput{
 			PathGlob: req.GetString("pathGlob", ""),
 			Regex:    req.GetString("regex", ""),
 		})
@@ -77,7 +77,7 @@ func (g *Gateway) registerMCPTools(srv *server.MCPServer) {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		res, err := g.MCPSchemaExpand(name)
+		res, err := g.mcpSchemaExpand(name)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -106,7 +106,7 @@ func (g *Gateway) registerMCPTools(srv *server.MCPServer) {
 		if v, ok := args["variables"].(map[string]any); ok {
 			variables = v
 		}
-		res, err := g.MCPQuery(ctx, MCPQueryInput{
+		res, err := g.mcpQuery(ctx, mcpQueryInput{
 			Query:         query,
 			Variables:     variables,
 			OperationName: req.GetString("operationName", ""),
