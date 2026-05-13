@@ -12,7 +12,7 @@ import (
 //
 // Hides is applied to the merged service in-place so the type-builder
 // emits Object/Input types without hidden fields.
-func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *IRTypeBuilder {
+func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *ir.IRTypeBuilder {
 	merged := &ir.Service{Types: map[string]*ir.Type{}}
 	for _, slot := range slots {
 		var svcs []*ir.Service
@@ -41,11 +41,11 @@ func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *IRTy
 	if len(hides) > 0 {
 		ir.Hides([]*ir.Service{merged}, hides)
 	}
-	return NewIRTypeBuilder(merged, IRTypeNaming{
+	return ir.NewIRTypeBuilder(merged, ir.IRTypeNaming{
 		ObjectName: exportedName,
 		EnumName:   exportedName,
 		UnionName:  exportedName,
 		InputName:  func(s string) string { return exportedName(s) + "_Input" },
 		FieldName:  lowerCamel,
-	}, IRTypeBuilderOptions{})
+	}, ir.IRTypeBuilderOptions{})
 }

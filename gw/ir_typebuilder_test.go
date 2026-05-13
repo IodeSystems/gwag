@@ -16,7 +16,7 @@ import (
 // [T!]! order.
 func TestIRTypeBuilder_BuiltinScalars(t *testing.T) {
 	svc := &ir.Service{Types: map[string]*ir.Type{}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 
 	cases := []struct {
 		name     string
@@ -64,7 +64,7 @@ func TestIRTypeBuilder_Object(t *testing.T) {
 		},
 		"Empty": {Name: "Empty", TypeKind: ir.TypeObject},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 
 	out, err := b.Output(ir.TypeRef{Named: "User"}, false, true, false)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestIRTypeBuilder_RecursiveRef(t *testing.T) {
 			},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	out, err := b.Output(ir.TypeRef{Named: "Node"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -144,9 +144,9 @@ func TestIRTypeBuilder_Enum(t *testing.T) {
 			},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{
 		EnumName: func(s string) string { return "Test_" + s },
-	}, IRTypeBuilderOptions{})
+	}, ir.IRTypeBuilderOptions{})
 	out, err := b.Output(ir.TypeRef{Named: "Color"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestIRTypeBuilder_Input(t *testing.T) {
 			},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	in, err := b.Input(ir.TypeRef{Named: "NewUser"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestIRTypeBuilder_OpenAPIOneOf(t *testing.T) {
 	}
 	svc := ir.IngestOpenAPI(doc)
 
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	out, err := b.Output(ir.TypeRef{Named: "Animal"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestIRTypeBuilder_Union(t *testing.T) {
 			Variants: []string{"Cat", "Dog"},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	out, err := b.Output(ir.TypeRef{Named: "Pet"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +317,7 @@ func TestIRTypeBuilder_UnionDiscriminator(t *testing.T) {
 			DiscriminatorMapping:  map[string]string{"feline": "Cat", "canine": "Dog"},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	out, err := b.Output(ir.TypeRef{Named: "Animal"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -355,12 +355,12 @@ func TestIRTypeBuilder_NamingPolicy(t *testing.T) {
 			Fields:   []*ir.Field{{Name: "name", Type: ir.TypeRef{Builtin: ir.ScalarString}}},
 		},
 	}}
-	b1 := NewIRTypeBuilder(svc, IRTypeNaming{
+	b1 := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{
 		ObjectName: func(s string) string { return "petstore_" + s },
-	}, IRTypeBuilderOptions{})
-	b2 := NewIRTypeBuilder(svc, IRTypeNaming{
+	}, ir.IRTypeBuilderOptions{})
+	b2 := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{
 		ObjectName: func(s string) string { return "petstore_v1_" + s },
-	}, IRTypeBuilderOptions{})
+	}, ir.IRTypeBuilderOptions{})
 
 	o1, _ := b1.Output(ir.TypeRef{Named: "Pet"}, false, false, false)
 	o2, _ := b2.Output(ir.TypeRef{Named: "Pet"}, false, false, false)
@@ -377,9 +377,9 @@ func TestIRTypeBuilder_NamingPolicy(t *testing.T) {
 // IRTypeBuilderOptions.Int64Type, ScalarInt64 refs render through it.
 func TestIRTypeBuilder_LongScalar(t *testing.T) {
 	svc := &ir.Service{Types: map[string]*ir.Type{}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	long := b.LongScalar()
-	b2 := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{
+	b2 := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{
 		Int64Type:  long,
 		UInt64Type: long,
 	})
@@ -415,7 +415,7 @@ func TestIRTypeBuilder_ValidatesAsSchema(t *testing.T) {
 			},
 		},
 	}}
-	b := NewIRTypeBuilder(svc, IRTypeNaming{}, IRTypeBuilderOptions{})
+	b := ir.NewIRTypeBuilder(svc, ir.IRTypeNaming{}, ir.IRTypeBuilderOptions{})
 	pet, err := b.Output(ir.TypeRef{Named: "Pet"}, false, false, false)
 	if err != nil {
 		t.Fatal(err)

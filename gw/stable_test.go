@@ -42,7 +42,7 @@ func TestRuntime_StableAliasMatchesLatest(t *testing.T) {
 		return map[string]any{"id": args["id"]}, nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{
 		StableVN: map[string]int{"pets": 1},
 	})
 	if err != nil {
@@ -115,7 +115,7 @@ func TestRuntime_StableAliasOlderVersion(t *testing.T) {
 		return map[string]any{"id": "v2-" + args["id"].(string), "tag": "current"}, nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, ir.RuntimeOptions{
 		StableVN: map[string]int{"pets": 1},
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func TestRuntime_StableAliasMissingTarget(t *testing.T) {
 	}))
 
 	// stable_vN = 5 but no v5 in build (only v1 lives).
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{
 		StableVN: map[string]int{"pets": 5},
 	})
 	if err != nil {
@@ -213,7 +213,7 @@ func TestRuntime_StableSubscriptionFlat(t *testing.T) {
 	registry.Set(v1.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v1tick", nil }))
 	registry.Set(v2.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v2tick", nil }))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, ir.RuntimeOptions{
 		StableVN: map[string]int{"events": 1},
 	})
 	if err != nil {
@@ -363,7 +363,7 @@ func TestStableSDLContainsAlias(t *testing.T) {
 		return "ok", nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{
 		StableVN: map[string]int{"pets": 1},
 	})
 	if err != nil {

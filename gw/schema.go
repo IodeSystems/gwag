@@ -89,7 +89,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	if g.effectiveAllowedTiers().Stable {
 		stableSnap = g.stableSnapshotLocked()
 	}
-	queries, mutations, runtimeSubs, err := RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, RuntimeOptions{
+	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, ir.RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,
@@ -188,20 +188,20 @@ func (g *Gateway) runtimeChain() Middleware {
 // build time and baked into each dispatcher; rebuilds on Use.
 //
 // Caller holds g.mu.
-func (g *Gateway) headerInjectorSnapshot() []HeaderInjector {
+func (g *Gateway) headerInjectorSnapshot() []headerInjector {
 	if len(g.transforms) == 0 {
 		return nil
 	}
 	var n int
 	for _, t := range g.transforms {
-		n += len(t.Headers)
+		n += len(t.headers)
 	}
 	if n == 0 {
 		return nil
 	}
-	out := make([]HeaderInjector, 0, n)
+	out := make([]headerInjector, 0, n)
 	for _, t := range g.transforms {
-		out = append(out, t.Headers...)
+		out = append(out, t.headers...)
 	}
 	return out
 }

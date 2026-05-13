@@ -46,7 +46,7 @@ func TestRuntime_ProtoFlatAndVersioned(t *testing.T) {
 		return map[string]any{"message": "hello, " + args["name"].(string)}, nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestRuntime_OpenAPIQueryAndMutation(t *testing.T) {
 		return map[string]any{"id": "new", "name": args["name"]}, nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestRuntime_MultiVersionFold(t *testing.T) {
 
 	// Order intentionally reversed to confirm version sort, not
 	// input order, picks latest.
-	schema, err := RenderGraphQLRuntime([]*ir.Service{v2, v1}, registry, RuntimeOptions{
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{v2, v1}, registry, ir.RuntimeOptions{
 		LongType: nil,
 		JSONType: nil,
 	})
@@ -318,7 +318,7 @@ func TestRuntime_GraphQLNestedGroup(t *testing.T) {
 		return []any{map[string]any{"id": "p1"}}, nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestRuntime_QueryAndMutationSiblingGroups(t *testing.T) {
 		return "forgot-" + args["id"].(string), nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestRuntime_SubscriptionFlattenAcrossVersions(t *testing.T) {
 	registry.Set(v1.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v1tick", nil }))
 	registry.Set(v2.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) { return "v2tick", nil }))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{v1, v2}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestRuntime_DispatchAtCallTime(t *testing.T) {
 		return "v1", nil
 	}))
 
-	schema, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestRuntime_OpVersionCollision(t *testing.T) {
 	registry.Set(svc.Operations[0].SchemaID, ir.DispatcherFunc(func(ctx context.Context, args map[string]any) (any, error) {
 		return "ok", nil
 	}))
-	_, err := RenderGraphQLRuntime([]*ir.Service{svc}, registry, RuntimeOptions{})
+	_, err := ir.RenderGraphQLRuntime([]*ir.Service{svc}, registry, ir.RuntimeOptions{})
 	if err == nil {
 		t.Fatal("expected collision error, got nil")
 	}
@@ -525,7 +525,7 @@ func TestRuntime_OpVersionCollision(t *testing.T) {
 // matches the buildSchemaLocked posture when no services register.
 func TestRuntime_EmptyServices(t *testing.T) {
 	registry := ir.NewDispatchRegistry()
-	schema, err := RenderGraphQLRuntime(nil, registry, RuntimeOptions{})
+	schema, err := ir.RenderGraphQLRuntime(nil, registry, ir.RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}
