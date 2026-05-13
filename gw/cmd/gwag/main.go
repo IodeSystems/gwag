@@ -7,6 +7,10 @@
 //	# Zero-config local gateway: NATS + admin + UI + auto-login.
 //	gwag up
 //
+//	# Single-upstream embedded translator (no NATS, no admin, no cluster):
+//	gwag serve --openapi spec.yaml --to http://localhost:8081
+//	gwag serve --proto greeter.proto --to localhost:50051
+//
 //	# Static configuration from .proto files (no NATS, no admin):
 //	gwag --proto path/to/foo.proto=foo-svc:50051 \
 //	     --proto path/to/bar.proto=billing@bar-svc:50051 \
@@ -115,6 +119,8 @@ func main() {
 		switch os.Args[1] {
 		case "up":
 			os.Exit(upCmd(os.Args[2:]))
+		case "serve":
+			os.Exit(serveCmd(os.Args[2:]))
 		case "login":
 			os.Exit(loginCmd(os.Args[2:]))
 		case "logout":

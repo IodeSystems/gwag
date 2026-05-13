@@ -10,6 +10,20 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gwag serve` subcommand (gw/cmd/gwag/serve.go) boots the embedded
+  gat translator against one upstream service described by an OpenAPI
+  spec or `.proto` file. `gwag serve --openapi spec.yaml --to
+  http://localhost:8081` or `gwag serve --proto greeter.proto --to
+  localhost:50051`. No NATS, no admin, no cluster — for those use
+  `gwag up`. `--addr`, `--prefix`, `--namespace`, `--version`
+  overrides. Mounts `/graphql` + `/schema/{graphql,proto,openapi}`
+  on a plain `http.ServeMux`. Doc: `docs/gat.md` "gwag serve — CLI
+  shortcut".
+- `gat.RegisterHTTP(mux, g, prefix)` (gw/gat/http_register.go) — the
+  huma-free counterpart of `RegisterHuma`. Mounts gat's four HTTP
+  endpoints (`/graphql` + three schema views) on any `HandleMux` after
+  `gat.New(regs...)` has built the gateway. `gwag serve` uses this
+  path internally.
 - `gat.ProtoFile(path, target)` and `gat.ProtoSource(entry, body, imports, target)`
   (gw/gat/proto.go) compile a `.proto` via `protocompile`, ingest via
   `ir.IngestProto`, dial the target gRPC server, and return

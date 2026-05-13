@@ -111,6 +111,49 @@ gat.Register(api, g, projectsOp, listProjectsHandler)
 huma.Register(api, healthOp, healthHandler)
 ```
 
+## `gwag serve` — CLI shortcut
+
+For the single-upstream case (one OpenAPI spec or one `.proto`, one
+backend), the `gwag` CLI ships a `serve` subcommand that wires this
+package without any Go scaffolding:
+
+```bash
+# Front an OpenAPI spec.
+gwag serve --openapi spec.yaml --to http://localhost:8081
+
+# Front a remote gRPC service.
+gwag serve --proto greeter.proto --to localhost:50051
+
+# Mount under a prefix, override the GraphQL namespace, change listen addr.
+gwag serve --openapi spec.yaml --to http://localhost:8081 \
+           --addr :9090 --prefix /api --namespace pets
+```
+
+The serve command boots gat (no NATS, no admin, no cluster) and
+mounts `/graphql` plus `/schema/{graphql,proto,openapi}` on a plain
+`http.ServeMux`. For richer needs (auth, metrics, multiple sources)
+write Go directly against this package — `gwag serve` is just the
+zero-friction entry point.
+
+## Mounting on a plain mux
+
+`gat.RegisterHTTP(mux, g, prefix)` is the huma-free counterpart of
+`RegisterHuma`. Mount on any `*http.ServeMux` (or anything satisfying
+`gat.HandleMux`) after `gat.New(regs...)` has built the gateway:
+
+```go
+g, _ := gat.New(regs...)
+mux := http.NewServeMux()
+if err := gat.RegisterHTTP(mux, g, "/api"); err != nil {
+    log.Fatal(err)
+}
+http.ListenAndServe(":8080", mux)
+```
+
+Endpoints: `POST /api/graphql`, `GET /api/schema/graphql` (SDL or
+`?format=json` introspection), `GET /api/schema/proto` (FDS),
+`GET /api/schema/openapi`. `gwag serve` uses exactly this path.
+
 ## Front a remote gRPC service from a .proto
 
 The huma-paired flow above hosts handlers in the same Go binary as
