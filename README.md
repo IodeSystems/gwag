@@ -204,6 +204,7 @@ matrix.
 
 - [`docs/lifecycle.md`](./docs/lifecycle.md) — register / version / deprecate / retire; tier model; CI gate
 - [`docs/operations.md`](./docs/operations.md) — health, drain, backpressure, metrics
+- [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring + span reference
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — admin boot token + AdminAuthorizer delegate + outbound HTTP transport
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID extractor + quota
 - [`docs/cluster.md`](./docs/cluster.md) — embedded NATS + JetStream KV
@@ -236,7 +237,7 @@ order — see [`docs/plan.md`](./docs/plan.md) for the punch list:
 1. **The pitch** — this file + worked walkthrough + federation positioning doc.
 2. **Public API audit + SemVer commitment** — lock the surface before v1 advertises stability.
 3. **Wire-level identifier rename to `gwag-*`** — pre-1.0 freebie.
-4. **OpenTelemetry tracing** — the missing observability primitive.
+4. **OpenTelemetry tracing** — the missing observability primitive. See [`docs/tracing.md`](./docs/tracing.md).
 5. **File uploads** — graphql-multipart-request-spec + tus.io chunked uploads. See [`docs/uploads.md`](./docs/uploads.md).
 6. **WebSocket connection-rate / per-IP caps** — DoS surface today.
 7. **CHANGELOG + release versioning** — first stable tag.

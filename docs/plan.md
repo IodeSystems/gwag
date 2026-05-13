@@ -51,7 +51,7 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 **Todo.**
 - [x] **`WithTracer` option + per-request span at ingress.** GraphQL / HTTP / gRPC each wrap in a span with `gateway.ingress`, `gateway.namespace`, `gateway.method` attrs. Honor inbound `traceparent`. ~1d.
 - [x] **Span-per-dispatch + `traceparent` propagation downstream.** Proto / OpenAPI / GraphQL dispatchers each open a child span + inject the header. ~1d.
-- [ ] **`docs/tracing.md`** — wiring to Jaeger / Honeycomb / OTel collector; emitted span / attribute reference. ~0.5d.
+- [x] **`docs/tracing.md`** — wiring to Jaeger / Honeycomb / OTel collector; emitted span / attribute reference. ~0.5d.
 - [ ] **Tracing-overhead bench row in `docs/perf.md`.** Honest p95 delta with tracing on. ~0.25d.
 
 **Followups.** Cluster reconciler / control-plane spans — pull when an operator surfaces "I can't tell where a registration is stuck."
