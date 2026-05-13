@@ -308,6 +308,20 @@ Open to (pulled in by a real use case):
 Not planned: Apollo Federation entity-merging (stitching covers
 the common case); AsyncAPI export.
 
+Known limitations:
+
+- **`AddGraphQL` against nested-namespace upstreams.** Works for
+  flat upstream schemas (`Query.users(limit)`, `Query.user(id)` —
+  the common pattern: GitHub-style APIs, Apollo Server defaults,
+  graphql-yoga, Hasura's default). Breaks for shapes that nest
+  operations under container types (`Query.user { profile(id) }`),
+  which is what gwag itself emits, Hot Chocolate's grouped
+  operations, and some Apollo subgraph layouts. The forwarder
+  drops the container path from the upstream query. Fix is
+  contained (~120 lines threading a `groupPath` through
+  `registerGraphQLGroupOps` → `graphQLDispatcher` → response
+  unwrap); pulled in by an adopter wrapping a nested upstream.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
