@@ -50,8 +50,8 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **Todo.**
 - [x] **Audit `gw/` exports; classify Public / Internal / Deprecated.** Walk `go doc github.com/iodesystems/gwag/gw` output, decide per symbol. Move internal helpers to `gw/internal/...` or unexport; nothing breaks at the import boundary. ~1.5d.
-- [ ] **Same pass for `gw/gat`.** Smaller surface — lock before gat's proto-ingest todo (Tier 2) lands. ~0.5d.
-- [ ] **Same pass for `gw/ir`.** Public-by-design (gat consumes it); quick sanity audit. ~0.25d.
+- [x] **Same pass for `gw/gat`.** Smaller surface — lock before gat's proto-ingest todo (Tier 2) lands. ~0.5d. *(a469423: dropped six dead exports — `Option`, `config`, `As`, `Version`, `ServiceOption`, `ServiceConfig` — none had a single caller in or out of the package.)*
+- [x] **Same pass for `gw/ir`.** Public-by-design (gat consumes it); quick sanity audit. ~0.25d. *(No moves needed; `docs/api-audit.md` records the result.)*
 - [ ] **`docs/stability.md`.** SemVer promise spelled out: what counts as a breaking `Option` change vs additive; wire-format guarantees on `proto_source` / `openapi_spec`; when the IR is allowed to evolve. ~0.5d.
 - [ ] **Stability annotations on exported symbols.** Godoc convention — `// Stability: stable` / `// Stability: experimental`. `gat`, codegen, plugin paths are experimental; the canonical reflection path is stable. ~0.5d.
 

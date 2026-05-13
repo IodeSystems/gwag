@@ -335,3 +335,48 @@ These were exported but never referenced inside or outside `gw/gat`. Removed pre
 - `ServiceConfig` — target of the dead `ServiceOption`; all fields were unexported, so adopters couldn't author their own `ServiceOption` anyway.
 
 If gat needs per-registration knobs in the future, add them on `ServiceRegistration` directly (fields, not an options chain).
+
+---
+
+## gw/ir surface
+
+Public-by-design. Both `gw` (the main library) and `gw/gat` (the
+embedded translator) consume `ir` as the format-agnostic IR contract.
+The package's 60 exported symbols (types, funcs, methods, consts)
+correspond either to the IR data shape (`Service`, `Operation`,
+`Type`, `Field`, `Arg`, `TypeRef`, `MapType`, `ChannelBinding`,
+`EnumValue`, etc.) or to the format-bridging APIs (`IngestProto`,
+`IngestOpenAPI`, `IngestGraphQL`, `RenderProtoFiles`, `RenderOpenAPI`,
+`RenderGraphQL`, `RenderGraphQLRuntime`, `RenderGraphQLRuntimeFields`,
+`PrintSchemaSDL`).
+
+### Audit result
+
+No internal-escapees found. Sanity check covered:
+
+- Every exported type appears either as a field of another exported
+  type (so unexporting is impossible without breaking a public field),
+  or as a parameter / return type of a function whose name is in the
+  external usage set (`grep -rE 'ir\.[A-Z]'`).
+- Every method on every exported type is either externally consumed
+  (e.g. `(*Service).FlatOperations` by gw / gat / tests,
+  `(*IRTypeBuilder).LongScalar` by `gw_test`) or part of the
+  shape contract (e.g. `(TypeRef).IsBuiltin`/`IsMap`/`IsNamed`).
+- Utility helpers (`Hides`, `Filter`, `HideInternal`,
+  `ParseSelectors`, `CombineDepReason`, `IdentityName`,
+  `ParseRuntimeVersionN`, `MakeSchemaID`, `WriteJSON`,
+  `GraphQLResolveInfoFrom`, `IntrospectionQuery`,
+  `StandardScalars`) are all referenced by `gw/` or `gw/gat/`
+  consumers; none qualify as "leaked" internal helpers.
+- Two methods (`(*IRTypeBuilder).Input` and `.Output`) are not
+  currently externally referenced — but they're the documented
+  builder API and codegen-style consumers would need them. Keep
+  Public; flag only if a downstream review surfaces a reason to
+  shrink.
+
+### No moves
+
+The ir surface ships as-is for v1. The `// Stability: stable`
+annotation pass (separate todo) is where the IR's evolution policy
+gets spelled out — adding fields to existing structs is additive,
+renaming or removing breaks the contract and bumps a major.
