@@ -110,20 +110,11 @@ gw := gateway.New(gateway.WithWSLimit(gateway.WSLimitOptions{
 Rejected upgrades return HTTP 429 and increment
 `go_api_gateway_ws_rejected_total{reason="max_per_ip"|"rate_limit"}`.
 
-**When this is load-bearing:** the gateway is the outermost
-TLS / WebSocket terminator — the public IP listens directly on the
-gwag process, or sits behind a pass-through LB (NLB, k8s LoadBalancer
-without HTTPS termination). The handshake protection has nowhere else
-to live.
-
-**When this is redundant:** an upstream reverse proxy (nginx, HAProxy,
-Cloudflare, ALB with WS support) already enforces per-IP connection
-caps and upgrade rate limits. In that posture the *peer IP* the gateway
-sees is the proxy address, not the originator — so `MaxPerIP` would
-trip first on the proxy itself, not on abusers. Either leave
-`WithWSLimit` unset or add the proxy address to `TrustedIPs`.
+Set this when the gateway is the outermost TLS / WebSocket
+terminator. If an upstream reverse proxy (nginx, HAProxy, Cloudflare,
+ALB) already enforces per-IP caps, `MaxPerIP` would key on the proxy
+address — leave it unset or add the proxy to `TrustedIPs`.
 
 Peer IP comes from `r.RemoteAddr` (port stripped). The limiter does
 not honour `X-Forwarded-For` — spoofable headers are not a useful
-rate-limit key. Operators terminating TLS upstream pin the trusted
-proxy in `TrustedIPs` and rely on the proxy for per-origin limits.
+rate-limit key.

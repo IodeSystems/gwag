@@ -76,9 +76,9 @@ locked. `proto_source` ships raw `.proto` bytes; `openapi_spec`
 ships raw OpenAPI JSON/YAML bytes; both are parsed on the gateway
 side using the same toolchain (`bufbuild/protocompile` with
 `SourceInfoStandard`; `getkin/kin-openapi`). The earlier "ship a
-compiled FileDescriptorSet" path was retired pre-1.0 — see the
-decisions log in `docs/plan.md`. A future kind (e.g. WSDL) would
-land as a new oneof variant alongside, not as a replacement.
+compiled FileDescriptorSet" path was retired pre-1.0. A future kind
+(e.g. WSDL) would land as a new oneof variant alongside, not as a
+replacement.
 
 **IR data shape.** Every type in `gw/ir` that represents the
 intermediate representation (`Service`, `Operation`, `OperationGroup`,
@@ -143,24 +143,17 @@ instead.
 
 ## What's experimental
 
-**`gw/gat`** — the embedded GraphQL translator. Tier 2 of
-`docs/plan.md` lists outstanding work (proto ingest path,
-`gwag serve` subcommand, channel signer). The current API shape
-captures the huma + GraphQL + connect-go-gRPC paired pattern, and
-that pattern *should* survive into 1.x — but the path to a full
-proto wiring inside a single huma app may require additive `gat.*`
-functions or one structurally-incompatible rename. We'll either
-ship a `v2` of `gat` as a separate submodule or evolve the existing
-package with a deprecation marker; either way, treat gat as the
-unstable testbed for "what if gwag were embedded?" until the Tier 2
-items land.
+**`gw/gat`** — the embedded GraphQL translator. The current API
+captures the huma + GraphQL + connect-go-gRPC paired pattern, plus
+the `gwag serve` / `RegisterHTTP` / proto-ingest paths. Treat gat
+as the unstable testbed for "what if gwag were embedded?" — the
+shape may shift on a minor.
 
-**Codegen + plugin dispatch paths** (Tier 2.5 of `docs/plan.md`).
-Neither has shipped. When they do, they ride on the existing
-`DispatchRegistry` surface in `gw/ir` plus a thin
-`gw.RegisterCodegen` / `gw.RegisterPlugin` entry. Expected to land
-as `experimental` and graduate to `stable` after one minor of
-shake-out.
+**Codegen + plugin dispatch paths.** Not shipped. When they do,
+they'll ride on the existing `DispatchRegistry` surface in `gw/ir`
+plus a thin `gw.RegisterCodegen` / `gw.RegisterPlugin` entry.
+Expected to land as `experimental` and graduate to `stable` after
+one minor of shake-out.
 
 **MCP tool naming and prompt shapes.** The `mcp__gwag__*` tool
 names and the prompt patterns embedded in the MCP corpus depend on
@@ -212,13 +205,11 @@ func WithBackpressure(b BackpressureOptions) Option { … }
 ```
 
 Two valid values: `stable` and `experimental`. No other text on
-that line. The convention is enforced by godoc-search and the
-upcoming pre-1.0 audit hook; don't get creative.
+that line.
 
 If you're adding a new exported symbol in a PR that touches the
 canonical reflection path, mark it `stable`. Otherwise (gat,
-codegen, plugin, new MCP shapes) mark it `experimental` until the
-next round of audit promotes it.
+codegen, plugin, new MCP shapes) mark it `experimental`.
 
 ## Versioning policy
 
@@ -237,7 +228,3 @@ Experimental → stable promotion happens on a MINOR. Removing an
 experimental symbol is also a MINOR (it was never under the SemVer
 contract). Both should be noted in `CHANGELOG.md` under the
 release's `Changed` section.
-
-See [`docs/plan.md`](./plan.md) §Tier 1 for the open work that
-gates 1.0; see [`docs/api-audit.md`](./api-audit.md) for the
-per-symbol classification this contract is built on.

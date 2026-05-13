@@ -15,3 +15,5 @@
 # Maintainer working documents; not adopter-facing material.
 /docs/plan.md
 /docs/todo.md
+/docs/api-audit.md
+/docs/codegen-spike.md

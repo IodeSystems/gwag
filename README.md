@@ -2,15 +2,18 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-**Register every service once, in the protocol it already speaks.
-Get typed clients in *all three* — proto, OpenAPI, *and* GraphQL —
-simultaneously, hot-reloading as services redeploy.**
+GraphQL as it was meant to be — multi-dispatch API composition,
+fewer client round trips, less egress.
 
-`.proto` / OpenAPI 3.x / downstream GraphQL → one consolidated
-GraphQL surface for browser & mobile, **plus** the same registry
-re-emitted as proto FileDescriptorSet / OpenAPI 3.x / GraphQL SDL
-for typed service-to-service clients in any language. Same auth,
-same backpressure, same metrics across all three.
+Register a service once in the protocol it already speaks. Get
+typed clients in proto, OpenAPI, and GraphQL off the same registry,
+hot-reloading as services redeploy.
+
+`.proto` / OpenAPI 3.x / downstream GraphQL in. One consolidated
+GraphQL surface for browser and mobile; the same registry re-emitted
+as proto FileDescriptorSet / OpenAPI 3.x / GraphQL SDL for typed
+service-to-service clients. Same auth, backpressure, metrics across
+all three.
 
 ```
 TS / mobile ─┐                              ┌── auth-svc      (.proto)
@@ -24,10 +27,38 @@ service B ──▶│  /api/ingress/...      ─┘    ├── legacy-svc    
                 └───────────────────┘
 ```
 
-## The magic moment
+## Why
 
-One registration → three typed-client surfaces, simultaneously, off
-the same live registry. Clone and run the multi-service example:
+- **One service, three typed-client surfaces.** TS uses
+  graphql-codegen, Go uses `buf`, Python uses `openapi-generator` —
+  all off one live registry.
+- **Compose across services in one round trip.** Query auth + billing
+  + inventory in a single GraphQL document; the gateway dispatches
+  each part to the right backend and shapes one response.
+- **Hot reload, no restart.** Services self-register over the
+  control plane; the schema rebuilds. The next codegen run picks
+  up the change.
+- **Same auth, backpressure, and metrics across every protocol.**
+  One declaration, applies to proto + OpenAPI + GraphQL traffic.
+
+## How to use it
+
+Two shapes, same wire surface:
+
+- **Standalone gwag** — one binary fronting many services. Runtime
+  registration over the gRPC control plane; HA via embedded NATS;
+  admin UI; subscriptions. Start here if you have a fleet. Jump to
+  [Quickstart](#unified-cross-format-apis) below.
+- **Embedded gat** — one Go binary serving its own
+  [huma](https://huma.rocks/) operations as REST + GraphQL + gRPC
+  on one port. No NATS, no cluster, no admin endpoints. Start here
+  if you have one binary and want typed clients without standing
+  up a separate gateway process. Jump to [Embedded mode (`gat`)](#embedded-mode-gat).
+
+## Unified cross-format APIs
+
+One registration, three typed-client surfaces, off one live registry.
+Clone and run the multi-service example:
 
 ```bash
 git clone https://github.com/iodesystems/gwag && cd gwag
@@ -42,9 +73,9 @@ curl -s -X POST localhost:8080/api/graphql \
 # → {"data":{"greeter":{"hello":{"greeting":"Hello, world!"}}}}
 ```
 
-Now the wedge: the **same** `greeter` service — registered once, as
-a `.proto` — re-emitted simultaneously as three typed-client surfaces.
-Pick whichever codegen tool your client team already uses:
+Same `greeter` service, registered once as a `.proto`, re-emitted
+as three typed-client surfaces. Pick whichever codegen tool your
+client team already uses:
 
 ```bash
 # GraphQL SDL → graphql-codegen (TS / React / Apollo Client / urql / …)
@@ -54,22 +85,18 @@ curl 'localhost:8080/api/schema/graphql?service=greeter' > greeter.graphql
 curl 'localhost:8080/api/schema/proto?service=greeter' > greeter.fds
 buf generate greeter.fds
 
-# OpenAPI 3.x JSON → openapi-generator (40+ language targets)
-# (Synthesized for proto-origin services; the gateway round-trips the IR through
-# all three formats, so OpenAPI consumers get a valid spec even when the upstream
-# service speaks gRPC.)
+# OpenAPI 3.x JSON → openapi-generator (40+ language targets).
+# Synthesized for proto-origin services: the gateway round-trips the
+# IR through all three formats, so OpenAPI consumers get a valid spec
+# even when the upstream speaks gRPC.
 curl 'localhost:8080/api/schema/openapi?service=greeter' > greeter.json
 openapi-generator-cli generate -i greeter.json -g typescript-axios -o ./gen
 ```
 
-That's the wedge: **one** upstream registration, **three** client
-ecosystems, **zero** schema duplication. Same story for OpenAPI- or
-downstream-GraphQL-origin services — register in any of the three
-formats, codegen in any (or all) of the three.
-
-Edit a service or add a new one — the gateway's schema updates over
-the control plane without a gateway restart. The next `pnpm run gen`
-/ `buf generate` picks it up.
+One registration; three client ecosystems; no duplicated schema.
+Edit or add a service — the gateway updates over the control plane
+without a restart. The next `pnpm run gen` / `buf generate` picks it
+up.
 
 Worked walk-through (three services, three client languages,
 edit-redeploy-codegen cycle): [`docs/walkthrough.md`](./docs/walkthrough.md).
@@ -98,6 +125,7 @@ endpoints reflect it immediately.
 - **Backpressure that respects ownership** — per-pool + per-replica caps; slow service X can't gate calls to service Y.
 - **Per-caller identity + quotas** — one extractor seam (Public / HMAC / Delegated / mTLS-via-proxy) feeds per-caller metrics; opt into block-permit quotas via a delegate.
 - **Auth / logging as middleware** — one declaration applies across every protocol. `InjectType[T]` / `InjectPath` / `InjectHeader` for the "fill from context, hide from external schema" pattern.
+- **MCP for LLM agents** — `gw.MCPHandler()` exposes four tools (`schema_list` / `schema_search` / `schema_expand` / `query`) over MCP Streamable HTTP. Mark which operations agents see with `WithMCPInclude("greeter.**", "library.**")`.
 - **Health / drain / metrics** — `/api/health` (200/503), `gw.Drain(ctx)` for rolling deploys, `/api/metrics` Prometheus.
 
 ## Cost
@@ -148,58 +176,49 @@ ports.
 Concept doc: [`docs/gat.md`](./docs/gat.md). Runnable end-to-end
 demo with React + Vite + graphql-codegen: [`examples/gat/`](./examples/gat/README.md).
 
+## MCP — agents query the gateway directly
+
+LLM agents speak Model Context Protocol. `gw.MountMCP(mux)` exposes
+the gateway as four tools (`schema_list` / `schema_search` /
+`schema_expand` / `query`) on `/mcp`, bearer-gated, backed by the
+same in-process executor every other ingress hits. Seed which
+operations agents see at construction:
+
+```go
+gw := gateway.New(gateway.WithMCPInclude("greeter.**", "library.**"))
+gw.MountMCP(mux)
+```
+
+Full surface — tool shapes, allowlist semantics, cluster behavior,
+runtime control: [`docs/mcp.md`](./docs/mcp.md). Worked example
+with a client driver: [`examples/multi/cmd/mcp-demo`](./examples/multi/cmd/mcp-demo/main.go).
+
 ## Compared to similar tools
 
-Pick the framing that matches what you actually need:
+- **Apollo Federation** — entity-merging across services that share
+  entity identity. gwag stitches by namespace; if you actually need
+  entity-merging, use Federation. See [`docs/federation.md`](./docs/federation.md).
+- **Hasura** — wraps databases. gwag wraps services. Same shape,
+  opposite end of the stack.
+- **Kong / Envoy / service meshes** — route bytes; don't read
+  schemas or emit clients.
+- **graphql-mesh / Apollo Router (single-subgraph mode)** — closest
+  peers on multi-format ingest. Head-to-head numbers:
+  [`perf/comparison.md`](./perf/comparison.md).
 
-**Apollo Federation** is for entity-merging across services that
-share entity identity — `User` defined in two services with
-cross-references that resolve as one entity. If you have that
-problem, use Federation; gwag doesn't replicate it. If you don't
-(and most teams don't), federation's setup cost buys you nothing,
-and `.proto` / OpenAPI are first-class ingest formats in gwag, not
-something you bridge into a GraphQL-only world.
-See [`docs/federation.md`](./docs/federation.md) for an honest
-"do you need federation?" walkthrough.
+Deeper breakdown: [`docs/comparison.md`](./docs/comparison.md).
 
-**Hasura** wraps databases — point it at Postgres and get a GraphQL
-surface auto-derived from your schema. gwag wraps services — point
-it at a `.proto` / OpenAPI / GraphQL service and get a typed
-surface over the wire protocol the service already speaks. Same
-shape ("auto-generate clients"), opposite end of the stack.
+## Performance
 
-**Kong / Envoy / service meshes** route bytes — they don't read
-your schema and they don't generate clients. gwag reads the schema
-and re-emits it in three formats. If your problem is "route HTTP
-between pods" you want the mesh; if it's "give my browser /
-mobile / service-to-service teams typed clients off one registry"
-you want gwag.
+Throughput ceiling is the GraphQL executor itself. The gateway uses
+a [graphql-go fork](https://github.com/iodesystems/graphql) with
+plan-cache and subscription primitives; an append-mode executor that
+emits JSON straight to a buffer is the next perf lever (in flight,
+not gating any release).
 
-**graphql-mesh / Apollo Router (single-subgraph mode)** are the
-closest peers on the multi-format-ingest dimension. Head-to-head
-performance comparison: [`perf/comparison.md`](./perf/comparison.md)
-(harness: [`perf/`](./perf)).
-
-Deeper breakdown vs service discovery, service meshes, and individual
-gateways: [`docs/comparison.md`](./docs/comparison.md).
-
-## Performance & the graphql-go fork
-
-Throughput ceiling is the GraphQL executor itself. The gateway depends
-on a [graphql-go fork](https://github.com/iodesystems/graphql) (currently
-`v1.0.0`) — a hardened cut of `graphql-go/graphql` with extra plan-cache
-+ subscription primitives plus an `ExecutePlanAppend` walker that emits
-the response straight to a JSON byte buffer. Projected wedge once the
-gateway swaps onto the append walker: **~3-4× end-to-end**
-(`~430 µs / ~970 allocs → ~120 µs / ~200 allocs` on
-`BenchmarkProtoSchemaExec`). Default gateway code path today calls the
-older `ExecutePlan` + JSON-encoder pair; the swap is a follow-on perf
-step, not a release gate.
-
-Self-measurement (your hardware): [`docs/perf.md`](./docs/perf.md) —
-escalating-target-RPS sweep with knee detection. Head-to-head vs peers
-(graphql-mesh, Apollo Router): [`perf/comparison.md`](./perf/comparison.md) —
-results from the Docker-hermetic matrix at [`perf/`](./perf).
+Self-measurement: [`docs/perf.md`](./docs/perf.md). Head-to-head vs
+peers: [`perf/comparison.md`](./perf/comparison.md) (harness:
+[`perf/`](./perf)).
 
 ## Documentation
 
@@ -212,6 +231,7 @@ results from the Docker-hermetic matrix at [`perf/`](./perf).
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID extractor + quota
 - [`docs/cluster.md`](./docs/cluster.md) — embedded NATS + JetStream KV
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
+- [`docs/mcp.md`](./docs/mcp.md) — exposing the gateway to LLM agents (tools, allowlist, mounting, cluster semantics)
 
 **Performance**:
 
@@ -220,42 +240,49 @@ results from the Docker-hermetic matrix at [`perf/`](./perf).
 - [`perf/comparison.md`](./perf/comparison.md) — head-to-head numbers vs graphql-mesh + Apollo Router
 - [`perf/`](./perf) — competitor matrix harness (Dockerfile + orchestrator)
 
+**Pub/Sub & subscriptions** — `ps.pub` / `ps.sub` primitives with
+per-pattern auth (`ChannelAuthOpen` / `HMAC` / `Delegate`) and a
+channel→type binding registry. Service-declared `stream Resp`
+methods stay as per-subscriber gRPC streams. See
+[`docs/pubsub.md`](./docs/pubsub.md).
+
+**Stability + release**:
+
+- [`docs/stability.md`](./docs/stability.md) — SemVer contract
+- [`CHANGELOG.md`](./CHANGELOG.md) — public-surface delta
+- [`RELEASE.md`](./RELEASE.md) — cut a release
+
 **Maintainer**:
 
 - [`docs/architecture.md`](./docs/architecture.md) — codebase layout, design notes, HTTP routing surface
-- [`docs/plan.md`](./docs/plan.md) — roadmap + decisions log
-
-**Pub/Sub & subscriptions** — gateway-provided `ps.pub` / `ps.sub`
-primitives with per-pattern auth tiers (`ChannelAuthOpen` / `HMAC` /
-`Delegate`), a channel→type binding registry (proto-declarative *and*
-runtime), and opt-in shape/coverage strictness knobs. Service-declared
-`stream Resp` methods stay as honest per-subscriber gRPC streams.
-Full surface, migration from the pre-1.0 implicit-channel transform,
-and design notes: [`docs/pubsub.md`](./docs/pubsub.md).
 
 ## Roadmap
 
-v1 release prep is the active focus. Tier 1 workstreams in priority
-order — see [`docs/plan.md`](./docs/plan.md) for the punch list:
+v1 surface is locked in. SemVer contract:
+[`docs/stability.md`](./docs/stability.md). Public-surface delta:
+[`CHANGELOG.md`](./CHANGELOG.md).
 
-1. **The pitch** — this file + worked walkthrough + federation positioning doc.
-2. **Public API audit + SemVer commitment** — lock the surface before v1 advertises stability.
-3. **Wire-level identifier rename to `gwag-*`** — pre-1.0 freebie.
-4. **File uploads** — graphql-multipart-request-spec + tus.io chunked uploads. See [`docs/uploads.md`](./docs/uploads.md).
-5. **WebSocket connection-rate / per-IP caps** — DoS surface today.
-6. **CHANGELOG + release versioning** — first stable tag.
-7. **Competitor performance matrix** — ships *with* v1, doesn't gate it.
+Before the 1.0 tag:
 
-Shipped: **OpenTelemetry tracing** ([`docs/tracing.md`](./docs/tracing.md)).
+- **Wire-level identifier rename.** Prometheus metrics still prefixed
+  `go_api_gateway_*`; proto packages still `gateway.*` (except
+  `gwag.ps.v1`). Renaming is a SemVer break post-1.0, so it happens
+  before the tag.
 
-Open to (pulled in by a real use case): WSDL / SOAP ingest as a
-fourth kind; static `--openapi` / `--graphql` CLI flags;
-service-account / OAuth-JWT outbound auth helpers; opt-in static
-codegen + plugin supervisor for native-speed dispatch.
+After 1.0:
 
-Not planned: Apollo Federation entity-merging (stitching covers the
-common case); AsyncAPI export (GraphQL Subscription types already
-cover TS codegen).
+- **Append-mode executor wiring.** The [graphql-go fork](https://github.com/iodesystems/graphql)
+  exposes `ExecutePlanAppend`; gateway-side swap is a single-function
+  change projected at ~3-4× end-to-end on the hot path.
+- **Static codegen + plugin supervisor.** Opt-in native-speed
+  dispatch on top of reflection. Layers on; default stays reflection.
+
+Open to: WSDL / SOAP ingest; service-account / OAuth-JWT outbound
+auth helpers; static `--openapi` / `--graphql` flags on the full
+gateway (gat already covers single-upstream via `gwag serve`).
+
+Not planned: Apollo Federation entity-merging (stitching covers
+the common case); AsyncAPI export.
 
 ## License
 

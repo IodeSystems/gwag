@@ -152,9 +152,9 @@ gateway opens a fresh root span.
 
 - **Background reconcilers / cluster watch loops / NATS housekeeping.**
   Background work uses `noopTracer` so trace volume tracks request
-  volume rather than cluster size. The plan calls out
-  cluster-reconciler spans as a followup if "I can't tell where a
-  registration is stuck" surfaces from an operator.
+  volume rather than cluster size. Cluster-reconciler spans are a
+  followup if "I can't tell where a registration is stuck" surfaces
+  from an operator.
 - **Per-event subscription frames.** A subscription's open-side gets a
   dispatch span; per-frame spans would balloon trace cardinality
   without payoff. Operators who need per-frame visibility add their
@@ -166,7 +166,7 @@ gateway opens a fresh root span.
 - **Plan-cache / schema-rebuild internals.** These are gateway-state
   transitions, not per-request work; they don't take a span.
 
-## Honest perf disclosure
+## Perf overhead
 
 When `WithTracer` is unset, the gateway wires a no-op tracer at
 construction and the per-request hot path stays branch-free
@@ -206,26 +206,19 @@ Reproduce:
 go test ./gw/ -bench=BenchmarkTracing_GraphQLIngress -benchmem -run=^$ -benchtime=3s -count=3
 ```
 
-## Common questions
+## Notes
 
-**"Can I plug an existing OpenTelemetry interceptor in instead?"**
-Yes — the gateway opens its own spans, but it doesn't fight an
-upstream interceptor. If you wrap `gw.GRPCUnknownHandler()` in
-`grpc.UnaryServerInterceptor(otelgrpc.UnaryServerInterceptor())`, both
-spans land in the same trace; the interceptor's span is the parent of
-the gateway's `gateway.grpc` span because extraction runs against the
-metadata the interceptor has already populated.
-
-**"Why is `gateway.namespace` empty on `gateway.graphql`?"** Because
-the GraphQL parser hasn't run yet when the ingress span opens — a
-single query can touch multiple namespaces. The per-dispatch span has
-the namespace.
-
-**"Can I add custom attributes to the per-request span?"** Not via a
-gwag-side hook today. Fish the span out of the request context with
-`trace.SpanFromContext(ctx)` from any middleware mounted around
-`gw.Handler()`; that span is the ingress span.
-
-**"Does the gateway sample?"** No — sampling is the `TracerProvider`'s
-job. Use `sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.01))` on
-the provider you pass to `WithTracer` for production rates.
+- **Co-existing with an upstream OpenTelemetry interceptor.** Wrap
+  `gw.GRPCUnknownHandler()` in
+  `grpc.UnaryServerInterceptor(otelgrpc.UnaryServerInterceptor())`;
+  the interceptor's span becomes the parent of the gateway's
+  `gateway.grpc` span via propagator extract.
+- **`gateway.namespace` is empty on `gateway.graphql`.** The GraphQL
+  parser hasn't run when the ingress span opens; the per-dispatch
+  span carries the namespace.
+- **Custom span attributes.** Fish the ingress span with
+  `trace.SpanFromContext(ctx)` from middleware mounted around
+  `gw.Handler()`. No gwag-side hook today.
+- **Sampling.** Owned by the `TracerProvider`. Use
+  `sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.01))` for
+  production rates.

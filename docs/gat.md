@@ -17,24 +17,13 @@ A runnable end-to-end demo with React/TypeScript codegen lives at
 
 ## When to reach for gat (vs full gwag)
 
-Pick gat when:
+gat fits one Go binary serving its own huma operations — single
+process, no NATS, no cluster, no runtime control-plane registration,
+no admin UI. ~250 deps vs ~498.
 
-- You have one Go binary, not a fleet of microservices.
-- Your "current/next rolling deploy" model means you don't need NATS
-  clustering, multi-gateway slot sync, or runtime control-plane
-  registration.
-- You want typed clients off your huma service without standing up a
-  separate gateway process.
-- You'd rather pay ~250 deps than ~498.
-
-Pick full gwag when:
-
-- Multiple service binaries register at runtime with one or more
-  gateway processes.
-- You need NATS-backed subscriptions / pub/sub fanout.
-- You need the admin UI, MCP tools, or self-introspecting OpenAPI of
-  the gateway's own admin operations.
-- You need cluster KV / reconcilers across N gateway peers.
+Use full gwag when multiple service binaries register at runtime,
+when you need NATS-backed pub/sub or cluster KV, or when the admin
+UI / MCP tools / self-introspecting admin OpenAPI is load-bearing.
 
 ## Mental model
 
@@ -94,22 +83,9 @@ default `/openapi.json` for huma's spec.
 
 ## Incremental adoption
 
-`gat.Register` is opt-in per operation. Operations registered with
-plain `huma.Register` continue to serve REST exactly as before; gat
-has no view into them, so they don't appear in the GraphQL schema or
-the proto descriptor set.
-
-This means a service migrating from "huma + openapi-typescript on
-the UI" to "huma + gat + graphql-codegen on the UI" can move one
-handler at a time:
-
-```go
-// Migrated:
-gat.Register(api, g, projectsOp, listProjectsHandler)
-
-// Not migrated yet (REST clients only — fine):
-huma.Register(api, healthOp, healthHandler)
-```
+`gat.Register` is opt-in per operation. Plain `huma.Register`
+operations keep serving REST and don't appear in the GraphQL schema
+or proto descriptor set, so you can migrate handler-by-handler.
 
 ## `gwag serve` — CLI shortcut
 
@@ -220,19 +196,13 @@ and gRPC boundaries.
 
 ## Schema endpoints
 
-The three schema views over the **same** IR projection mean
-different codegen pipelines can consume the same source of truth:
+Three views over the same IR projection:
 
-- `graphql-codegen` (TanStack Query / typed-document-node / gql.tada)
-  → `/api/schema/graphql`
-- `ts-proto`, `protobuf-es`, `buf` → `/api/schema/proto`
-- `openapi-typescript`, `openapi-fetch`, `kubb`, `orval` → huma's
-  `/openapi.json` (or gat's re-emitted `/api/schema/openapi`)
-
-The point is **you don't have to pick one**. SPA UI on GraphQL for
-field selection, mobile/CLI/service-to-service clients on proto for
-strict types and cross-language reuse, external webhook integrations
-on OpenAPI.
+- `/api/schema/graphql` → `graphql-codegen`, typed-document-node,
+  gql.tada
+- `/api/schema/proto` → `buf`, `ts-proto`, `protobuf-es`
+- `/api/schema/openapi` (or huma's `/openapi.json`) →
+  `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
 ## Constraints (current shape)
 

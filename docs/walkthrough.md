@@ -1,9 +1,9 @@
 # Walkthrough: one registry, three client ecosystems
 
-This is the deep version of the README's "magic moment" — clone the
-repo, run the example, and generate typed clients in TS, Go, and
-Python off the same live registry. Then edit a service, re-codegen,
-and watch the change propagate without restarting the gateway.
+Clone the repo, run the example, and generate typed clients in TS,
+Go, and Python off the same live registry. Then edit a service,
+re-codegen, and watch the change propagate without restarting the
+gateway.
 
 Time: 10-15 minutes if you have the codegen tools already installed.
 
@@ -54,8 +54,8 @@ written to `/tmp/gwag-multi/admin-token`; paste it when prompted.)
 
 ### GraphQL → TypeScript (graphql-codegen)
 
-The browser / mobile team's path. One SDL → typed React hooks,
-Apollo Client wrappers, urql bindings — pick your TS-GraphQL flavor.
+Browser / mobile path. One SDL, typed React hooks (or Apollo Client
+or urql — pick the flavor).
 
 ```bash
 mkdir -p /tmp/walkthrough/ts && cd /tmp/walkthrough/ts
@@ -148,10 +148,9 @@ tag, with methods named after each `operationId`. The synthesized
 spec's `servers` entry points at the gateway's HTTP ingress
 (`http://localhost:8080/api/ingress/...`).
 
-The point: the gateway *synthesizes* OpenAPI for proto-origin
-services — same IR round-tripped through a different renderer.
-The Python team doesn't know (or care) that the upstream speaks
-gRPC. They just got a REST client they can pip-install.
+The gateway synthesizes OpenAPI for proto-origin services — same
+IR, different renderer. The Python team gets a pip-installable REST
+client regardless of the upstream wire format.
 
 ## Step 3: Edit a service, re-codegen
 
@@ -183,8 +182,7 @@ curl -s 'http://localhost:8080/api/schema/proto?service=greeter' | \
   protoc --decode_raw 2>&1 | grep -A1 'locale'
 ```
 
-This is the unit gwag amortizes across every client ecosystem.
-Edit once → every typed client picks it up.
+Edit once; every typed client picks it up on the next codegen.
 
 ## Step 4: Add a new service
 
@@ -257,20 +255,6 @@ Control-plane (self-register) variants exist for both — see
 `ServiceBinding.openapi_spec` and `ServiceBinding.graphql_endpoint`
 in `gw/proto/controlplane/v1/control.proto`.
 
-## Where to go from here
-
-- **Operational concerns** — health, drain, backpressure, metrics:
-  [`operations.md`](./operations.md).
-- **Auth** — admin boot token, per-caller identity extraction,
-  outbound header forwarding: [`admin-auth.md`](./admin-auth.md),
-  [`caller-identity.md`](./caller-identity.md).
-- **Versioning / deprecation** — the `unstable` / `stable` / `vN`
-  tier model: [`lifecycle.md`](./lifecycle.md).
-- **Cluster** — multi-node HA with embedded NATS + JetStream:
-  [`cluster.md`](./cluster.md).
-- **Pub/Sub** — `ps.pub` / `ps.sub` for multi-listener channels:
-  [`pubsub.md`](./pubsub.md).
-- **Embedded mode** (single huma binary, no NATS):
-  [`gat.md`](./gat.md).
-- **"Do I need federation?"** — honest positioning:
-  [`federation.md`](./federation.md).
+Other docs cover operational concerns, auth, versioning, cluster,
+pub/sub, embedded mode, and Federation positioning — see
+[`../README.md`](../README.md) for the index.

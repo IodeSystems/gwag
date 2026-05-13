@@ -114,7 +114,7 @@ gw/
   proto/                   Generated proto bindings:
     controlplane/v1/       Control plane proto + generated bindings
     eventsauth/v1/         SubscriptionAuthorizer delegate proto
-                           (parked — runtime path removed plan §2.3,
+                           (parked — runtime path removed pre-1.0;
                            generated code kept one release for
                            importers)
     adminauth/v1/          AdminAuthorizer delegate proto

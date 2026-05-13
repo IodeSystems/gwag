@@ -64,18 +64,26 @@ type UserQuery {
 }
 ```
 
-The flow that makes this earn its keep:
+Flow:
 
-1. **Trunk publishes to `unstable`.** Every CI green re-registers the service at `unstable`. Schema rebuilds, but the slot is mutable — no `vN` churn, no deprecated noise. Backend teams *building against* a dep can opt into its `unstable` for fast iteration.
-2. **Cut a release → freeze the current `unstable` into a new `vN` and `stable` rolls forward.** The team that owns the service decides when to cut. Existing numbered cuts stay callable but `vN-1` and earlier get `@deprecated` automatically.
-3. **Caller-side lint forces dependency negotiation.** Set `controlclient.Options.BuildTag` and the client refuses to register `unstable` from a release-tagged binary. So a service that cuts a release *can't* depend on its dependencies' `unstable` — it must pin `stable` or a numbered `vN`. If a dep's `unstable` has diverged from its `stable` with breaking changes, you can't cut your release until that dep cuts theirs (or you adopt their breakage). The schema becomes a forcing function for upstream/downstream cut coordination, not just an artifact of past decisions.
+1. **Trunk publishes to `unstable`.** Every CI green re-registers
+   the service at `unstable`. The slot is mutable — no `vN` churn,
+   no deprecated noise. Teams building against a dep can opt into
+   its `unstable` for fast iteration.
+2. **Cut a release.** Freeze `unstable` into a new `vN` and roll
+   `stable` forward. Older `vN-1` and earlier flip to
+   `@deprecated` automatically.
+3. **Caller-side lint forces dependency negotiation.** Set
+   `controlclient.Options.BuildTag` and the client refuses to
+   register `unstable` from a release-tagged binary. A service that
+   cuts a release must pin `stable` or a numbered `vN` on its deps
+   — if a dep's `unstable` has diverged with breaking changes, you
+   can't cut until that dep cuts (or you adopt the break).
 
-Generated clients propagate `@deprecated` through their normal
-codegen channels: `protoc-gen-go` emits `// Deprecated: ...` from
-`option deprecated = true;`; graphql-codegen emits JSDoc
-`@deprecated` on TS hooks; openapi-generator marks operations
-deprecated. So consumers see the warning in their IDE / linter
-without anyone telling them.
+Generated clients propagate `@deprecated` through normal codegen
+channels: `protoc-gen-go` emits `// Deprecated: ...`,
+graphql-codegen emits JSDoc `@deprecated` on TS hooks,
+openapi-generator marks operations deprecated.
 
 ## Per-tier policy
 
@@ -130,10 +138,9 @@ The rules:
 
 The conservative "any removal is breaking" policy will relax once
 caller-side usage tracking can answer "is anyone passing this
-optional arg?" directly (see [the roadmap](./plan.md)). Until then,
-the relaxation matches the asymmetric reality that *adding* fields
-is always safe but *removing* fields is mostly safe for the optional
-ones.
+optional arg?" directly. Until then, the relaxation matches the
+asymmetric reality that *adding* fields is always safe but
+*removing* fields is mostly safe for the optional ones.
 
 ## Retire
 

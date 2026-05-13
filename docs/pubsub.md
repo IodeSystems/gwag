@@ -200,99 +200,16 @@ the embedder, not the wire.
 
 ## Migration from the pre-1.0 implicit-channel transform
 
-Earlier versions auto-transformed every `rpc Method(...) returns
-(stream Resp)` on every registered proto into a NATS-backed
-subscription, deriving a channel from the method's fully-qualified
-name and auto-injecting `hmac` / `timestamp` / `kid` args into the
-SDL. That transform is gone (`subjectFor`, `subscribeNATS`,
-`protoSubscriptionDispatcher`, `injectProtoSubscriptionAuthArgs/Doc`,
-`RecordSubscribeAuth` metric all deleted), and `stream Resp` methods
-now resolve to honest per-subscriber gRPC streams without auth
-injection. Two situations need migration:
+Earlier versions auto-transformed `rpc Method(...) returns (stream
+Resp)` into a NATS-backed subscription with auto-injected
+`hmac`/`timestamp`/`kid` args. That transform is gone. `stream Resp`
+now opens a per-subscriber gRPC stream upstream — no auth injection,
+no implicit fan-out.
 
-**1. You relied on the implicit fan-out semantics.** Multiple clients
-were subscribing to the same `stream Resp` method and you wanted them
-to share a single producer side. Make it explicit:
-
-- Service side: instead of returning frames from `stream Resp`, call
-  `ps.pub` from the handler with a channel name you pick (e.g.
-  `events.orders.42.update`).
-- Client side: call `ps.sub(channel: "events.orders.42.update", ...)`
-  instead of subscribing to the method's auto-derived field.
-- SDL changes: the method's `Subscription` field still exists but now
-  opens a real upstream stream per subscriber (no fan-out). Drop it
-  from the schema if nobody uses it, or keep it as a per-subscriber
-  honest stream.
-
-The canonical multi-listener / single-producer pattern is preserved
-— it's just no longer implicit.
-
-**2. You relied on auto-injected auth args.** The gateway no longer
-prepends `hmac` / `timestamp` / `kid` to your method's argument list.
-If your upstream wanted auth context, plumb it through your own
-metadata (the gateway forwards the request's `Authorization` header
-to gRPC server-streaming RPCs unless you override). The HMAC subscribe
-gate now belongs to `ps.sub` via `WithChannelAuth` — not to arbitrary
-method subscriptions.
-
-If you weren't using either implicit behavior, the only adopter-
-visible change is that `stream Resp` methods now actually open the
-upstream stream on subscribe, instead of being filtered with a
-warning.
-
-## Why custom options for channel bindings?
-
-The proto-declarative path attaches the channel binding to a message
-type via a custom option (`option (gwag.ps.v1.binding) = { pattern:
-"events.orders.*.update" }`). That's deliberately non-obvious — three
-alternatives were considered and rejected:
-
-**Alternative 1: a separate `channel_bindings.yaml` manifest, shipped
-alongside the .proto.** Rejected. Bindings would drift away from the
-message they describe — a rename or move in the .proto needs a
-matching edit in a sibling file; CI would have to enforce parity.
-Two-source-of-truth problems are exactly what the proto file already
-solves for fields and methods. Cluster propagation also gets worse:
-manifest bytes would need their own field on `ServiceBinding`
-alongside `proto_source`, breaking the "every kind ships raw source
-as bytes" symmetry the decisions log calls out.
-
-**Alternative 2: runtime-only registration via `WithChannelBinding`.**
-We kept this as an escape hatch but rejected it as the *only* path.
-Runtime registration moves the contract out of the .proto and into
-Go code at the embedding site, which is fine for the gateway's own
-`gwag.ps.v1.*` namespace defaults but bad for downstream services
-that want their `.proto` to be the full contract — non-Go adopters
-have no place to declare bindings at all, and version skew becomes a
-Go-deploy concern instead of a proto-version concern.
-
-**Alternative 3: a dedicated `service ChannelBindings { ... }` shape
-with one method per binding.** Rejected. Services in proto describe
-*operations* (request → response). A channel binding isn't an
-operation, it's a relationship between a *message type* and a
-*subject namespace*. Forcing it into a service shape would require
-synthesizing fake methods and would conflate the binding registry
-with the dispatch surface.
-
-The custom-option approach attaches the metadata where it logically
-lives (on the message type) and reuses two pieces of existing
-machinery: the `proto_source` cluster channel carries the bytes
-end-to-end, and the IR bake step (`extractChannelBindings` in
-`gw/channel_bindings.go`) walks `FileDescriptor.MessageOptions` once
-per registration. The cost is the non-standard option number
-(`51234`, in the internal-use range) — operators reading a .proto
-have to know `gwag.ps.v1.binding` is a thing, but they also have to
-know `gwag.ps.v1.PubSub` is a thing, so the discovery surface is
-unchanged.
-
-The extraction code works whether the option resolves as
-`*dynamicpb.Message` (protocompile-resolved imports, common path) or
-the generated concrete `*psv1.ChannelBinding` (Go-registered
-extension, in-process boot) — it ranges over `MessageOptions` by
-field name rather than calling `proto.GetExtension`, which would
-panic on the dynamicpb case. That uniformity is why the option
-approach is structurally simpler than the alternatives even though
-it looks weirder at first read.
+If you relied on the implicit fan-out, switch to explicit `ps.pub`
+on the service side and `ps.sub(channel: ..., ...)` on the client
+side. If you relied on the auto-injected auth args, the HMAC gate
+now belongs to `ps.sub` via `WithChannelAuth`.
 
 ## See also
 

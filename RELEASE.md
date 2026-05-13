@@ -10,9 +10,6 @@ under SemVer. Drop renames, signature changes, and behavioural
 breaks need to land **before** the 1.0 tag — after the tag they
 become 2.0 work with a deprecation cycle.
 
-Read [`docs/plan.md`](./docs/plan.md) Tier 1 before cutting. If
-Tier 1 has any open todos, the release is not ready.
-
 ## Cutting a release
 
 1. **Working tree clean, main up-to-date.**

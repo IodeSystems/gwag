@@ -175,8 +175,9 @@ When the gateway dispatches an Upload-typed argument upstream:
   client's `Filename` + `Content-Type` preserved on the part. The
   dispatcher streams from the `UploadStore` so memory stays bounded
   even on large uploads.
-- **Proto services**: deferred (see the Tier-1 file uploads entry in
-  `docs/plan.md` for the current state).
+- **Proto services**: deferred. A `[(gwag.upload) = true]` field
+  extension on a `bytes` field with dispatcher-side `Upload.Open`
+  is the sketched shape; pulled in by adopter demand.
 
 ## Error shapes
 
