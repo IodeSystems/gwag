@@ -314,13 +314,17 @@ Known limitations:
   flat upstream schemas (`Query.users(limit)`, `Query.user(id)` —
   the common pattern: GitHub-style APIs, Apollo Server defaults,
   graphql-yoga, Hasura's default). Breaks for shapes that nest
-  operations under container types (`Query.user { profile(id) }`),
-  which is what gwag itself emits, Hot Chocolate's grouped
-  operations, and some Apollo subgraph layouts. The forwarder
-  drops the container path from the upstream query. Fix is
-  contained (~120 lines threading a `groupPath` through
-  `registerGraphQLGroupOps` → `graphQLDispatcher` → response
-  unwrap); pulled in by an adopter wrapping a nested upstream.
+  operations under container types (`Query.user { profile(id) }`)
+  — what gwag itself emits, Hot Chocolate's grouped operations,
+  some Apollo subgraph layouts. The forwarder drops the container
+  path from the upstream query because IR dispatchers register at
+  leaves and lose the parent group chain. Pulled in by an adopter
+  wrapping a nested upstream; two fix directions on the table
+  (per-leaf dispatchers carrying their group path, or a
+  per-group dispatcher that captures the whole sub-selection and
+  forwards once). Both preserve the IR-as-trust-boundary
+  posture — local validation still gates the request shape
+  before dispatch.
 
 ## License
 
