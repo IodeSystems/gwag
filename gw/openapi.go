@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
@@ -129,6 +131,8 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		rawSpec:                   append([]byte(nil), specBytes...),
 		maxConcurrency:            sc.maxConcurrency,
 		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
+		uploadStore:               g.cfg.uploadStore,
+		uploadLimit:               g.cfg.uploadLimit,
 	}
 	semSize := sc.maxConcurrency
 	if semSize == 0 {
@@ -188,6 +192,13 @@ type openAPISource struct {
 	doc            *openapi3.T
 	hash           [32]byte
 	forwardHeaders []string // nil → use defaultForwardedHeaders; empty → forward nothing
+
+	// uploadStore + uploadLimit are snapshots of gw.cfg at source-build
+	// time. Captured here so multipart-out dispatchers can resolve
+	// *Upload{TusID} values and cap forwarded payload sizes without
+	// reaching back to the gateway each call.
+	uploadStore UploadStore
+	uploadLimit int64
 
 	// maxConcurrency / maxConcurrencyPerInstance frozen at first
 	// registration; later joins must agree.
@@ -427,6 +438,8 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		rawSpec:                   append([]byte(nil), specBytes...),
 		maxConcurrency:            maxConcurrency,
 		maxConcurrencyPerInstance: maxConcurrencyPerInstance,
+		uploadStore:               g.cfg.uploadStore,
+		uploadLimit:               g.cfg.uploadLimit,
 	}
 	semSize := maxConcurrency
 	if semSize == 0 {
@@ -637,6 +650,15 @@ func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
 // dispatchOpenAPI substitutes path params, encodes query + body, sends
 // the HTTP request, and decodes the JSON response. httpClient nil
 // means http.DefaultClient.
+//
+// When op.RequestBody declares multipart/form-data (or any arg in
+// gqlArgs is *Upload), the dispatcher builds a multipart/form-data
+// body upstream: declared form properties go in as form fields,
+// Upload-typed props as file parts with the captured Filename +
+// ContentType. The store argument resolves tus-staged *Upload values
+// (those carrying TusID but no inline File) at dispatch time; nil
+// store + a tus-staged *Upload is a clear "no store configured"
+// error from (*Upload).Open.
 func dispatchOpenAPI(
 	ctx context.Context,
 	method, baseURL, pathTemplate string,
@@ -645,6 +667,7 @@ func dispatchOpenAPI(
 	forwardHeaders []string,
 	headerInjectors []headerInjector,
 	httpClient *http.Client,
+	store UploadStore,
 ) (any, error) {
 	resolvedPath := pathTemplate
 	queryArgs := url.Values{}
@@ -671,26 +694,42 @@ func dispatchOpenAPI(
 		full += "?" + queryArgs.Encode()
 	}
 
-	var body io.Reader
-	if bv, ok := gqlArgs["body"]; ok && bv != nil {
+	var (
+		body        io.Reader
+		contentType string
+		multipartCloseups []*Upload // *Upload readers we own and must close after request finishes
+	)
+	if isMultipartOp(op) || hasUploadArg(gqlArgs) {
+		mpBody, mpType, ups, err := buildMultipartBody(ctx, op, gqlArgs, store)
+		if err != nil {
+			closeUploads(ups)
+			return nil, err
+		}
+		body = mpBody
+		contentType = mpType
+		multipartCloseups = ups
+	} else if bv, ok := gqlArgs["body"]; ok && bv != nil {
 		b, err := json.Marshal(bv)
 		if err != nil {
 			return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: marshal body: %s", err.Error()))
 		}
 		body = bytes.NewReader(b)
+		contentType = "application/json"
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
+		closeUploads(multipartCloseups)
 		return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: build request: %s", err.Error()))
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("Accept", "application/json")
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
 	injected, err := applyHeaderInjectors(ctx, headerInjectors)
 	if err != nil {
+		closeUploads(multipartCloseups)
 		return nil, err
 	}
 	for k, v := range injected {
@@ -702,6 +741,9 @@ func dispatchOpenAPI(
 		client = http.DefaultClient
 	}
 	resp, err := client.Do(req)
+	// Whatever the outcome, multipart Upload readers we opened for
+	// this dispatch are ours to close.
+	closeUploads(multipartCloseups)
 	if err != nil {
 		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
 	}
@@ -722,6 +764,159 @@ func dispatchOpenAPI(
 		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", err.Error()))
 	}
 	return out, nil
+}
+
+// isMultipartOp reports whether the OpenAPI op declares its request
+// body as multipart/form-data, the wire-level signal that file
+// uploads flow on this method.
+func isMultipartOp(op *openapi3.Operation) bool {
+	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil {
+		return false
+	}
+	_, ok := op.RequestBody.Value.Content["multipart/form-data"]
+	return ok
+}
+
+// hasUploadArg checks the canonical args map for any *Upload values.
+// The op-shape check above is enough for spec-declared multipart ops;
+// hasUploadArg covers the case where an upstream service accepts
+// multipart but the spec is missing the declaration (so an
+// adopter-supplied Upload arg still triggers the right encoding).
+func hasUploadArg(args map[string]any) bool {
+	for _, v := range args {
+		switch x := v.(type) {
+		case *Upload:
+			if x != nil {
+				return true
+			}
+		case []any:
+			for _, e := range x {
+				if u, ok := e.(*Upload); ok && u != nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// buildMultipartBody writes a multipart/form-data body holding every
+// arg in gqlArgs. *Upload values become file parts (Filename +
+// Content-Type preserved); other args become form fields stringified
+// the same way query params are. Returns the assembled body, the
+// Content-Type with the boundary baked in, and the list of opened
+// *Upload readers so the caller can Close them after the HTTP round-
+// trip completes.
+//
+// Path / query / header params do not appear in the body (the URL
+// already carries them); the loop filters by OpenAPI parameter
+// location before emission.
+func buildMultipartBody(ctx context.Context, op *openapi3.Operation, gqlArgs map[string]any, store UploadStore) (io.Reader, string, []*Upload, error) {
+	urlParams := map[string]bool{}
+	for _, paramRef := range op.Parameters {
+		if paramRef == nil || paramRef.Value == nil {
+			continue
+		}
+		switch paramRef.Value.In {
+		case "path", "query", "header", "cookie":
+			urlParams[paramRef.Value.Name] = true
+		}
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	var opened []*Upload
+
+	writeUploadPart := func(name string, up *Upload) error {
+		r, err := up.Open(ctx, store)
+		if err != nil {
+			return Reject(CodeInvalidArgument, fmt.Sprintf("openapi multipart: open %q: %s", name, err.Error()))
+		}
+		// Preserve content-type when the client supplied one;
+		// otherwise multipart.CreateFormFile picks
+		// application/octet-stream which loses semantic info.
+		h := textproto.MIMEHeader{}
+		fn := up.Filename
+		if fn == "" {
+			fn = name
+		}
+		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, name, fn))
+		if up.ContentType != "" {
+			h.Set("Content-Type", up.ContentType)
+		} else {
+			h.Set("Content-Type", "application/octet-stream")
+		}
+		pw, err := mw.CreatePart(h)
+		if err != nil {
+			return Reject(CodeInternal, fmt.Sprintf("openapi multipart: create part %q: %s", name, err.Error()))
+		}
+		if _, err := io.Copy(pw, r); err != nil {
+			return Reject(CodeInternal, fmt.Sprintf("openapi multipart: write part %q: %s", name, err.Error()))
+		}
+		return nil
+	}
+
+	// Iterate in declared-parameter / requestBody-property order if
+	// possible — multipart bodies are field-keyed not position-keyed,
+	// but order helps debugging on the wire.
+	for name, v := range gqlArgs {
+		if urlParams[name] {
+			continue
+		}
+		if v == nil {
+			continue
+		}
+		switch x := v.(type) {
+		case *Upload:
+			if x == nil {
+				continue
+			}
+			opened = append(opened, x)
+			if err := writeUploadPart(name, x); err != nil {
+				return nil, "", opened, err
+			}
+		case []any:
+			// Array of files OR array of strings. Iterate, branching per
+			// element so a mixed array (unlikely in practice but legal in
+			// the IR) still emits correctly.
+			for _, e := range x {
+				switch ev := e.(type) {
+				case *Upload:
+					if ev == nil {
+						continue
+					}
+					opened = append(opened, ev)
+					if err := writeUploadPart(name, ev); err != nil {
+						return nil, "", opened, err
+					}
+				default:
+					if err := mw.WriteField(name, fmt.Sprintf("%v", ev)); err != nil {
+						return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: write field %q: %s", name, err.Error()))
+					}
+				}
+			}
+		default:
+			if err := mw.WriteField(name, fmt.Sprintf("%v", x)); err != nil {
+				return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: write field %q: %s", name, err.Error()))
+			}
+		}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: close writer: %s", err.Error()))
+	}
+	return &buf, mw.FormDataContentType(), opened, nil
+}
+
+// closeUploads is a tiny helper for the deferred clean-up paths in
+// dispatchOpenAPI. Each *Upload owns either a File reader (from the
+// multipart-spec parser) or one opened from the store; in either
+// case the dispatch path is responsible for releasing it.
+func closeUploads(ups []*Upload) {
+	for _, u := range ups {
+		if u != nil && u.File != nil {
+			_ = u.File.Close()
+		}
+	}
 }
 
 // httpStatusToCode maps HTTP status codes onto the gateway's Code enum

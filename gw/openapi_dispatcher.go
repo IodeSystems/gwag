@@ -70,7 +70,7 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 
 	r.inflight.Add(1)
 	defer r.inflight.Add(-1)
-	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient)
+	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, d.src.uploadStore)
 	elapsed := time.Since(start)
 	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
 	addDispatchTime(ctx, elapsed)

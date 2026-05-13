@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -49,9 +51,14 @@ type ingressRoute struct {
 	// param names so single-valued matches land as strings (multi-
 	// valued land as []string). hasBody is true when the op declares
 	// a JSON request body — set args["body"] from the decoded payload.
+	// multipartBody is true when the op's requestBody is
+	// multipart/form-data; the ingress decodes form parts (Upload-typed
+	// → *Upload, others → string) instead of JSON.
 	segs            []routeSeg
 	queryParamNames []string
 	hasBody         bool
+	multipartBody   bool
+	formdataArgs    map[string]bool // arg name → true for OpenAPILocation="formdata" Upload-typed slots
 }
 
 type routeSeg struct {
@@ -240,7 +247,7 @@ func (g *Gateway) addOpenAPIDocRoutes(t *ingressTable, doc *openapi3.T, key pool
 				shape:      ingressShapeOpenAPI,
 			}
 			route.segs = parseRouteTemplate(path)
-			route.queryParamNames, route.hasBody = openAPIArgPlan(mop.op)
+			route.queryParamNames, route.hasBody, route.multipartBody, route.formdataArgs = openAPIArgPlan(mop.op)
 			if hasParamSeg(route.segs) {
 				t.templated[route.method] = append(t.templated[route.method], route)
 			} else {
@@ -307,12 +314,18 @@ func hasParamSeg(segs []routeSeg) bool {
 
 // openAPIArgPlan summarises the bits of an OpenAPI operation the
 // ingress arg extractor needs at request time: declared query param
-// names (so single-valued matches land as strings) and whether the
-// op accepts a JSON request body. Header / cookie params are out of
-// scope today — clients send the values, the egress dispatcher
-// doesn't yet read them off canonical args, and adding the round-
-// trip can wait for a real use case.
-func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool) {
+// names, whether the op accepts a JSON or multipart request body, and
+// which multipart properties land as Upload-typed *Upload values
+// (string/format:binary). Header / cookie params are out of scope
+// today — clients send the values, the egress dispatcher doesn't yet
+// read them off canonical args, and adding the round-trip can wait
+// for a real use case.
+//
+// multipart/form-data is checked before application/json: when both
+// are declared the ingress prefers the multipart shape (matching IR
+// ingestOpenAPIFormDataBody, so the wire format stays consistent
+// across schema + dispatch + ingress).
+func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody, multipartBody bool, formdataUploads map[string]bool) {
 	for _, paramRef := range op.Parameters {
 		if paramRef == nil || paramRef.Value == nil {
 			continue
@@ -322,11 +335,42 @@ func openAPIArgPlan(op *openapi3.Operation) (queryParams []string, hasBody bool)
 		}
 	}
 	if op.RequestBody != nil && op.RequestBody.Value != nil {
-		if mt, ok := op.RequestBody.Value.Content["application/json"]; ok && mt != nil {
+		body := op.RequestBody.Value
+		if mt, ok := body.Content["multipart/form-data"]; ok && mt != nil && mt.Schema != nil && mt.Schema.Value != nil {
+			multipartBody = true
+			formdataUploads = map[string]bool{}
+			for name, propRef := range mt.Schema.Value.Properties {
+				if propRef == nil || propRef.Value == nil {
+					continue
+				}
+				if isOpenAPIBinaryProp(propRef.Value) {
+					formdataUploads[name] = true
+				}
+			}
+			return queryParams, false, true, formdataUploads
+		}
+		if mt, ok := body.Content["application/json"]; ok && mt != nil {
 			hasBody = true
 		}
 	}
-	return queryParams, hasBody
+	return queryParams, hasBody, false, nil
+}
+
+// isOpenAPIBinaryProp reports whether a schema property describes an
+// uploaded file (type:string + format:binary or :byte), matching the
+// IR ingest's mapping to ScalarUpload. Array-of-binary returns true
+// too — the parser substitutes []any of *Upload at that path.
+func isOpenAPIBinaryProp(s *openapi3.Schema) bool {
+	if s == nil {
+		return false
+	}
+	if s.Type != nil && s.Type.Includes("string") && (s.Format == "binary" || s.Format == "byte") {
+		return true
+	}
+	if s.Type != nil && s.Type.Includes("array") && s.Items != nil && s.Items.Value != nil {
+		return isOpenAPIBinaryProp(s.Items.Value)
+	}
+	return false
 }
 
 // IngressHandler returns an http.Handler that accepts inbound
@@ -377,7 +421,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args, err := buildIngressArgs(r, route, pathParams)
+	args, err := g.buildIngressArgs(r, route, pathParams)
 	if err != nil {
 		writeIngressError(w, http.StatusBadRequest, err.Error())
 		return
@@ -525,7 +569,11 @@ func matchSegs(segs []routeSeg, parts []string) (map[string]string, bool) {
 // dispatch. Proto-style routes pull the body in verbatim; OpenAPI
 // routes mix path / query / body; subscription routes (SSE) take
 // every query param as-is — input fields plus hmac/timestamp/kid.
-func buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[string]string) (map[string]any, error) {
+//
+// The gateway receiver gives the parser access to upload-related
+// config (WithUploadLimit caps the multipart body read at the
+// network layer) — proto / subscription paths ignore it.
+func (g *Gateway) buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[string]string) (map[string]any, error) {
 	switch route.shape {
 	case ingressShapeProtoPost:
 		return decodeJSONObject(r.Body)
@@ -572,7 +620,17 @@ func buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[strin
 			}
 		}
 
-		if route.hasBody && r.ContentLength != 0 {
+		switch {
+		case route.multipartBody:
+			// Multipart/form-data ingress: each declared form property
+			// becomes a top-level canonical arg; binary properties land
+			// as *Upload (single) or []any of *Upload (array). Other
+			// properties pass through as strings; non-declared parts are
+			// dropped silently — same approach as queryParamNames above.
+			if err := decodeMultipartFormArgs(r, route, args, g.cfg.uploadLimit); err != nil {
+				return nil, err
+			}
+		case route.hasBody && r.ContentLength != 0:
 			body, err := decodeJSONAny(r.Body)
 			if err != nil {
 				return nil, err
@@ -584,6 +642,92 @@ func buildIngressArgs(r *http.Request, route *ingressRoute, pathParams map[strin
 		return args, nil
 	}
 	return nil, fmt.Errorf("unsupported ingress shape %d", route.shape)
+}
+
+// decodeMultipartFormArgs parses an inbound multipart/form-data POST
+// at the HTTP ingress (gateway's re-exposed REST surface for ingested
+// OpenAPI services). Binary parts substitute into args as *Upload;
+// non-binary parts pass through as strings (or []any for repeated
+// keys). Arrays of binary parts (e.g. `files[]`) substitute as
+// []any of *Upload at the same arg name.
+//
+// uploadLimit > 0 caps the total parsed body at that many bytes via
+// http.MaxBytesReader; the response on overshoot is the multipart
+// reader's natural error, surfaced as 400. The dispatcher closes any
+// captured File readers when done.
+func decodeMultipartFormArgs(r *http.Request, route *ingressRoute, args map[string]any, uploadLimit int64) error {
+	contentType, ctParams, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if contentType != "multipart/form-data" {
+		return fmt.Errorf("multipart: expected multipart/form-data, got %q", contentType)
+	}
+	boundary := ctParams["boundary"]
+	if boundary == "" {
+		return fmt.Errorf("multipart: missing boundary")
+	}
+
+	body := io.Reader(r.Body)
+	if uploadLimit > 0 {
+		// MaxBytesReader sets a 413 on the writer when exceeded, but
+		// since we surface our own JSON error envelope downstream we
+		// pass a nil writer — the limit is enforced via the reader
+		// returning an error on overshoot.
+		body = http.MaxBytesReader(nil, r.Body, uploadLimit)
+	}
+	mr := multipart.NewReader(body, boundary)
+	const inMemory = 32 << 20 // per-part in-memory threshold; bigger spills to tempfile.
+	form, err := mr.ReadForm(inMemory)
+	if err != nil {
+		return fmt.Errorf("multipart: read form: %w", err)
+	}
+	// Non-file form values pass through as strings; multi-valued
+	// fields land as []any to preserve repeated-key semantics.
+	for k, vs := range form.Value {
+		if len(vs) == 0 {
+			continue
+		}
+		if len(vs) == 1 {
+			args[k] = vs[0]
+		} else {
+			arr := make([]any, len(vs))
+			for i, v := range vs {
+				arr[i] = v
+			}
+			args[k] = arr
+		}
+	}
+	// File parts substitute into *Upload values. Only parts whose name
+	// appears in route.formdataArgs are recognised as Upload-typed; an
+	// unexpected file part for a non-binary slot is rejected so the
+	// adopter sees the mismatch immediately rather than silently
+	// dropping the bytes.
+	for k, fhs := range form.File {
+		if !route.formdataArgs[k] {
+			return fmt.Errorf("multipart: file part %q does not correspond to an Upload-typed property", k)
+		}
+		ups := make([]*Upload, 0, len(fhs))
+		for _, fh := range fhs {
+			f, err := fh.Open()
+			if err != nil {
+				return fmt.Errorf("multipart: open file %q: %w", k, err)
+			}
+			ups = append(ups, &Upload{
+				Filename:    fh.Filename,
+				ContentType: fh.Header.Get("Content-Type"),
+				Size:        fh.Size,
+				File:        f,
+			})
+		}
+		if len(ups) == 1 {
+			args[k] = ups[0]
+		} else {
+			arr := make([]any, len(ups))
+			for i, u := range ups {
+				arr[i] = u
+			}
+			args[k] = arr
+		}
+	}
+	return nil
 }
 
 // decodeJSONObject reads up to 10 MiB of body and decodes a JSON
