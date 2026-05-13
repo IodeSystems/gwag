@@ -64,40 +64,6 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **Todo.** (none — drop on next pass)
 
-### Competitor performance matrix (gwag vs graphql-mesh / Apollo Router / WunderGraph)
-
-**The push.** "How do you compare to X?" is a top-three adopter question — `docs/perf.md` answers "how does gwag perform on my hardware?", not the comparative one. Ships *with* v1, doesn't gate it: if the pitch / API / wire-rename / tracing / uploads / WS caps / changelog all land but the matrix isn't published, the release still goes — adopters get a "comparison coming soon" rather than blocking v1 on someone else's Docker image. Scaffolding lives at `perf/` (root-level, separate from `bench/` which is for self-measurement only): hermetic Docker image, declarative `perf/competitors.yaml`, orchestrator at `perf/cmd/compare/main.go` running each gateway serially against shared backends to avoid CPU contention. Three peers in scope for v1: graphql-mesh (closest peer — multi-format ingest), Apollo Router (federation specialist in single-subgraph mode), and gwag itself. WunderGraph deferred (codegen-heavy, dual-process — `enabled: false` in competitors.yaml). Output: `perf/comparison.md`.
-
-**Done.** Scaffolding shipped: Dockerfile, `competitors.yaml` (gateways × scenarios × sweep config), orchestrator skeleton (`perf/cmd/compare/main.go`), per-peer configs (`perf/configs/apollo/`, `perf/configs/mesh/`), start scripts, `docker-build.sh` staging the graphql-go fork into `perf/.build/graphql` so the host-absolute `replace` directive works inside Docker, and the README documenting scope + caveats. Status per peer: gwag ✅ working, graphql-mesh 🟡 scaffolded, Apollo Router 🟡 scaffolded, WunderGraph ❌ deferred.
-
-**Todo.**
-
-- [ ] **graphql-mesh integration debug.** Most-scenarios peer (`openapi` + `graphql`) — debugging here exercises the orchestrator the most. Common issues per `perf/README.md`: npm version pins in `configs/mesh/package.json` need adjusting against current upstream packages; `query_overrides` for field-name divergence vs gwag's namespace-prefix mirror is already encoded in `competitors.yaml` but may need iteration. ~1-2d.
-- [ ] **Apollo Router integration debug.** Single-subgraph "federation" mode against `hello-graphql` only (Apollo doesn't natively consume proto / openapi). `configs/apollo/supergraph.graphql` is hand-written; `@link` / `@join__*` versions may need to track the router runtime; `APOLLO_VERSION` bumps in `scripts/start-apollo.sh` + `Dockerfile`. `waitForGateway`'s `__typename` probe may need tweaking for router's 4xx-on-probe behavior. ~1-2d.
-- [ ] **End-to-end hermetic Docker validation.** First build is ~1GB / 5-10min — confirm the image boots, the orchestrator binary runs the full sweep in-container, output lands at `/out/comparison.md` via the volume mount. ~0.5d.
-- [ ] **Full sweep run + `perf/comparison.md` published.** RPS rungs [1k → 60k], 3 reps, 5s duration per `competitors.yaml::sweep`. ~0.5d wall-clock (not engineering hours — most of it is the sweep itself running).
-- [ ] **Cross-link from `docs/perf.md` and README.** Two sentences in each, pointing at the comparison and naming the difference between the two perf surfaces (self-measurement vs head-to-head). ~0.25d.
-
-**Commit grouping.**
-
-| # | Commits | Covers Todos | Why |
-|---|---|---|---|
-| 1 | graphql-mesh debug end-to-end | 1 | Closest peer; covers most scenarios; exercises orchestrator hardest. |
-| 2 | Apollo Router debug end-to-end | 2 | Smaller debug surface; could land first if mesh stalls. |
-| 3 | Docker validation + full sweep + `comparison.md` + cross-links | 3, 4, 5 | Final integration; results published; README + `docs/perf.md` point at it. |
-
-**Followups (mid-workstream, don't block).**
-
-- **WunderGraph row.** Codegen-heavy, dual-process integration. `enabled: false` in `competitors.yaml` today. Pull post-v1 if WunderGraph keeps appearing in adopter questions.
-- **Backends beyond `hello-*`.** Current scenarios are micro-bench (single-field selection). Real-world payload shapes (deeper selections, larger bodies, error paths) are a separate workstream — touch when the published comparison surfaces a "representativeness" complaint.
-- **CI cadence.** Running the full matrix on every PR is expensive (~1GB Docker build + multi-minute sweep). Nightly or weekly once results stabilize.
-
-**Followups (parked, separate workstreams):**
-- CI hook reuses the same `bench traffic --json` output for diff-vs-main; revisit when the Tier 3 perf-gate item lands.
-- Subscription throughput is a separate dimension (NATS-bound, not request-bound); add a `bin/bench perf --subs` scenario if/when an adopter asks.
-- Driver-managed latency rungs (`perf run --upstream-latency-rungs 0,100us,1ms` iterating restarts) — operator-driven single-value workflow works for now; pull when a maintainer wants the full curve in one shot.
-- Higher-throughput bench client (the current `bench traffic` caps ~4 k RPS on this 24-core host due to ticker overhead; gateway numbers above ~3 k are client-bound, not gateway-bound). Touch when the headline number matters more than getting the report out the door.
-
 ---
 
 ## Tier 2 — design-completing (priority order)
