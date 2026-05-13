@@ -12,7 +12,7 @@ import (
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
-// MCP schema tools (plan §2 MCP integration).
+// MCP schema tools.
 //
 // These are the format-agnostic primitives the MCP server core
 // exposes as `schema_list` / `schema_search` / `schema_expand`. They
@@ -597,10 +597,10 @@ type mcpQueryInput struct {
 	OperationName string         `json:"operationName,omitempty"`
 }
 
-// mcpResponseWithEvents is the uniform wrapper plan §2 mandates from
-// v1 onward so v2 subscription stitching can land additively without
-// breaking the wire shape. v1 Events.Level is always "none" and
-// Channels is always empty.
+// mcpResponseWithEvents is the uniform wrapper carried from v1
+// onward so a future subscription-stitching contract can land
+// additively without breaking the wire shape. v1 Events.Level is
+// always "none" and Channels is always empty.
 type mcpResponseWithEvents struct {
 	Response any             `json:"response"`
 	Events   mcpEventsBundle `json:"events"`
@@ -626,11 +626,11 @@ type mcpChannelEvent struct {
 
 // mcpQuery executes a GraphQL operation against the gateway's
 // runtime schema in-process. Bearer auth on the MCP transport is the
-// security boundary (per plan §2: "same auth posture as admin
-// writes"); the MCPConfig allowlist is operator-curated discovery
-// guidance, not an execution gate. An agent only learns about an op
-// via schema_list / schema_search / schema_expand, so its working
-// set is implicitly bounded by what the operator has surfaced —
+// security boundary (same posture as admin writes); the MCPConfig
+// allowlist is operator-curated discovery guidance, not an execution
+// gate. An agent only learns about an op via schema_list /
+// schema_search / schema_expand, so its working set is implicitly
+// bounded by what the operator has surfaced —
 // without making the gateway pay per-call AST validation cost.
 // Per-op execution gating may layer on in v1.x if adopters pull on
 // it.

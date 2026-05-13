@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -65,14 +64,13 @@ func resolveAdminEventsOutputDesc() (protoreflect.MessageDescriptor, error) {
 // publishes a ServiceChange to NATS — clients subscribed via WS
 // receive frames in real time.
 //
-// Cluster mode is required (subscriptions are NATS-backed); calling
-// this without a configured cluster returns an error.
+// Cluster-less gateways can still register the schema fragment so
+// SDL-driven codegen consumers pick up the subscription field;
+// runtime subscriptions return a "subscription broker not available"
+// error from the handler if no broker resolves at subscribe time.
 //
 // Stability: stable
 func (g *Gateway) AddAdminEvents() error {
-	if g.cfg.cluster == nil {
-		return errors.New("gateway: AddAdminEvents requires a configured cluster (NATS-backed subscriptions)")
-	}
 	fd, err := compileProtoBytes("adminevents.proto", admineventsProtoSource, nil)
 	if err != nil {
 		return fmt.Errorf("admin_events: compile: %w", err)

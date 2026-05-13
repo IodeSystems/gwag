@@ -10,6 +10,33 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gw.WithMCPInclude(globs...)` / `gw.WithMCPExclude(globs...)` /
+  `gw.WithMCPAutoInclude()` (gw/gateway.go) seed the MCP allowlist at
+  construction. Operators declare which operations agents can call
+  before any runtime admin edit, so the `/mcp` endpoint serves a
+  meaningful surface from the first request without an out-of-band
+  admin POST. Globs are dot-segmented (`*` matches one segment, `**`
+  matches any number). Internal `_*` namespaces remain filtered first;
+  neither Include nor AutoInclude can override that. Runtime
+  `/api/admin/mcp/*` edits still override the seed.
+- `gw.MountMCP(mux, opts...)` and `gateway.MCPPath(path)`
+  (gw/mcp_server.go) wrap `MCPHandler()` in `AdminMiddleware` and
+  register it on a `*http.ServeMux` in one call. Default path
+  `/mcp`; override with `MCPPath`. Used by `gwag up` and the multi
+  example so the standard gwag binary exposes MCP out of the box.
+- `mcpIncludeRemove` and `mcpExcludeRemove` admin huma operations
+  (`POST /api/admin/mcp/include/remove`, `POST /api/admin/mcp/exclude/remove`)
+  — explicit removal sibling to the existing include / exclude
+  endpoints. Needed so the UI can manage entries without overwriting
+  the full list.
+- `docs/mcp.md` — full MCP surface reference (tools, allowlist
+  semantics, mounting, cluster behavior, runtime control). Linked
+  from the README and from `docs/admin-auth.md`.
+- `gat.RegisterHTTP(mux, g, prefix)` (gw/gat/http_register.go) — the
+  huma-free counterpart of `RegisterHuma`. Mounts gat's four HTTP
+  endpoints (`/graphql` + three schema views) on any `HandleMux` after
+  `gat.New(regs...)` has built the gateway. `gwag serve` uses this
+  path internally.
 - `gwag serve` subcommand (gw/cmd/gwag/serve.go) boots the embedded
   gat translator against one upstream service described by an OpenAPI
   spec or `.proto` file. `gwag serve --openapi spec.yaml --to
@@ -109,6 +136,35 @@ changes on MINOR, drops on MAJOR.
 - `CHANGELOG.md` (this file) and `RELEASE.md` (release process).
 
 ### Changed
+- `gw.MCPConfig` and `gw.MCPHandler` promoted from `Stability:
+  experimental` to `Stability: stable`. Same for the
+  `/api/admin/mcp/*` huma operations. The four MCP tools
+  (`schema_list` / `schema_search` / `schema_expand` / `query`) and
+  the allowlist shape (AutoInclude / Include / Exclude with
+  dot-segmented globs) are part of the 1.x contract.
+- `gw.AddAdminEvents()` no longer requires a configured cluster — it
+  registers the schema fragment unconditionally so SDL-driven codegen
+  consumers pick up the `admin_events_watchServices` subscription
+  field. Runtime subscriptions return a clean "subscription broker
+  not available" error when no cluster resolves; cluster-mode
+  behaviour is unchanged.
+- Cluster-mode MCP allowlist: the first runtime mutation now merges
+  into the local `WithMCPInclude(...)` seed instead of replacing it.
+  Previously `tryMutateMCPConfig` started from `MCPConfig{}` when
+  the JetStream KV bucket had no record, so the first
+  `/api/admin/mcp/include` POST blew the seed away. The CAS path
+  now falls back to the local snapshot on `ErrKeyNotFound`; after
+  the first Put, KV stays authoritative as before.
+- `examples/multi`: MCP mount moved from `/api/mcp` to `/mcp`, and
+  the example seeds the allowlist with `WithMCPInclude("greeter.**",
+  "library.**", "admin.**")`. Operators previously needed to POST to
+  `/api/admin/mcp/include` before any tool returned useful results;
+  the seed makes the demo work end-to-end on first boot.
+- `gw/ir` SDL renderer emits one block-string per description (rather
+  than one block per source line). Resolves a "consecutive
+  triple-quoted strings" parse error from GraphQL lexers (including
+  graphql-codegen) when descriptions contained blank or multi-line
+  text. The rendered SDL is semantically equivalent.
 - Wire-level identifiers renamed `go-api-gateway` → `gwag` across
   JetStream KV bucket names (`gwag-{registry,peers,stable,
   deprecated,mcp-config}`), the default NATS cluster name
@@ -117,8 +173,8 @@ changes on MINOR, drops on MAJOR.
   `gwag:admin-token-changed`). Pre-1.0 cleanup so the project
   ships with one consistent identifier.
 - `github.com/IodeSystems/graphql-go` bumped 0.8.1 → 1.0.0 — first
-  tagged release of the fork. `ExecutePlanAppend` walker available
-  (gateway-side wiring is a Tier 2.5 follow-on).
+  tagged release of the fork. `ExecutePlanAppend` walker available;
+  gateway-side wiring is a follow-on perf step.
 
 ### Removed (pre-1.0 cleanup; no SemVer contract yet)
 - `gw/`: unexported every admin-internal helper that escaped:
@@ -190,7 +246,7 @@ the changelog cold.
 
 ### Dispatch
 - Reflection-based unary dispatch is the canonical path. Codegen +
-  plugin paths are roadmap (Tier 2.5).
+  plugin paths are roadmap, not shipped.
 - Per-pool backpressure (`BackpressureOptions`) with separate
   unary in-flight caps, per-replica caps, and gateway-wide stream
   caps. No gateway-wide unary cap — pools are the isolation primitive.
@@ -241,13 +297,15 @@ the changelog cold.
   without polling.
 
 ### Embedded translator (`gw/gat`)
-- `gat.New()` + `gat.Register{,Huma,GRPC}` ship a single-server
+- `gat.New()` + `gat.Register{,Huma,HTTP,GRPC}` ship a single-server
   in-process translator that turns huma operations into both a
   GraphQL surface and connect-go gRPC endpoints. No NATS, no
-  admin, no MCP — the "minimum-cost entry" for a huma app that
-  wants typed multi-format clients.
-- Tier 2 work outstanding: proto ingest, the `gwag serve`
-  subcommand; package classified `experimental` until both land.
+  admin, no MCP — the minimum-cost entry for a huma app that wants
+  typed multi-format clients.
+- Proto ingest via `gat.ProtoFile` / `gat.ProtoSource` and the
+  `gwag serve` subcommand for single-upstream embedded boot.
+- Package classified `experimental`; surface may shift on a minor
+  release.
 
 ### MCP integration
 - `MCPHandler()` mounts an MCP-streamable HTTP endpoint with four

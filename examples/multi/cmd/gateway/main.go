@@ -182,6 +182,14 @@ func main() {
 	if *pprofEnable {
 		gwOpts = append(gwOpts, gateway.WithPprof())
 	}
+	// Seed the MCP allowlist so /mcp exposes greeter + library + admin
+	// out of the box. Operators retune at runtime via
+	// /api/admin/mcp/{include,exclude,auto-include}.
+	gwOpts = append(gwOpts, gateway.WithMCPInclude(
+		"greeter.**",
+		"library.**",
+		"admin.**",
+	))
 	gw := gateway.New(gwOpts...)
 
 	// ----------------------------------------------------------------
@@ -263,14 +271,12 @@ func main() {
 	// Bearer-gated: writes require the boot token; reads stay public so
 	// the UI's services-list/peer views work unauthenticated.
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
-	// MCP Streamable HTTP transport. Bearer-gated like admin writes —
-	// every MCP RPC is POSTed, so AdminMiddleware demands the boot
-	// token on each call. The four tools (schema_list / search /
-	// expand / query) wrap the in-process Gateway methods; the
-	// allowlist is operator-curated through /api/admin/mcp/*. See
-	// examples/multi/cmd/mcp-demo for a worked client.
-	mcpHandler := gw.MCPHandler()
-	mux.Handle("/api/mcp", gw.AdminMiddleware(mcpHandler))
+	// MCP Streamable HTTP transport at /mcp. MountMCP wraps the
+	// handler in AdminMiddleware (bearer-gated) and registers at the
+	// conventional path; the allowlist is seeded above via
+	// WithMCPInclude and tunable at runtime via /api/admin/mcp/*.
+	// See examples/multi/cmd/mcp-demo for a worked client.
+	gw.MountMCP(mux)
 	if pmux := gw.PprofMux(); pmux != nil {
 		// Bearer-gated. pprof leaks goroutine + heap state; never serve it
 		// without auth.
@@ -296,11 +302,11 @@ func main() {
 	// Surface admin_events_watchServices in the Subscription type.
 	// The gateway publishes ServiceChange events to NATS whenever its
 	// registry mutates; UI clients (and any subscriber) see them in
-	// real time.
-	if cluster != nil {
-		if err := gw.AddAdminEvents(); err != nil {
-			log.Fatalf("AddAdminEvents: %v", err)
-		}
+	// real time. Cluster-less invocations still register the schema
+	// fragment — runtime subscriptions return a clean error if no
+	// broker resolves.
+	if err := gw.AddAdminEvents(); err != nil {
+		log.Fatalf("AddAdminEvents: %v", err)
 	}
 	go func() {
 		log.Printf("graphql listening on %s", *httpAddr)
@@ -380,6 +386,9 @@ func emitSchemaSDL() {
 		gateway.As("admin"),
 		gateway.To("http://localhost/api")); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
+	}
+	if err := gw.AddAdminEvents(); err != nil {
+		log.Fatalf("AddAdminEvents: %v", err)
 	}
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/schema/graphql", nil)

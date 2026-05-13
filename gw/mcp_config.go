@@ -12,7 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// MCP surface allowlist storage (plan §Tier 2, MCP integration).
+// MCP surface allowlist storage.
 //
 // `mcp_config` is a single-key JetStream KV bucket (TTL=0; operator-set
 // state must survive restarts). The lone record under
@@ -40,7 +40,7 @@ const (
 
 // MCPConfig is the wire/JSON shape of the MCP surface allowlist.
 //
-// Stability: experimental
+// Stability: stable
 type MCPConfig struct {
 	AutoInclude bool     `json:"auto_include"`
 	Include     []string `json:"include,omitempty"`
@@ -146,7 +146,13 @@ func (g *Gateway) setMCPConfig(ctx context.Context, cfg MCPConfig) error {
 // the watch loop to confirm the change.
 func (g *Gateway) mutateMCPConfig(ctx context.Context, mut func(*MCPConfig)) (MCPConfig, error) {
 	if t := g.peers; t != nil && t.mcpConfig != nil {
-		return clusterMutateMCPConfig(ctx, t.mcpConfig, mut)
+		// On a fresh KV bucket we want the local seed (from
+		// WithMCPInclude / etc.) to be the starting state for the
+		// first CAS write — otherwise the first runtime POST blows
+		// the seeded entries away. After any successful Put, KV is
+		// authoritative and the seed is no longer consulted.
+		seed := g.mcpConfigSnapshot()
+		return clusterMutateMCPConfig(ctx, t.mcpConfig, seed, mut)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -156,11 +162,11 @@ func (g *Gateway) mutateMCPConfig(ctx context.Context, mut func(*MCPConfig)) (MC
 	return cloneMCPConfig(cur), nil
 }
 
-func clusterMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func(*MCPConfig)) (MCPConfig, error) {
+func clusterMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, seed MCPConfig, mut func(*MCPConfig)) (MCPConfig, error) {
 	var lastErr error
 	for attempt := 0; attempt < 10; attempt++ {
 		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		next, err := tryMutateMCPConfig(cctx, kv, mut)
+		next, err := tryMutateMCPConfig(cctx, kv, seed, mut)
 		cancel()
 		if err == nil {
 			return next, nil
@@ -178,7 +184,7 @@ func clusterMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func
 	return MCPConfig{}, fmt.Errorf("mcp_config: %w", lastErr)
 }
 
-func tryMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func(*MCPConfig)) (MCPConfig, error) {
+func tryMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, seed MCPConfig, mut func(*MCPConfig)) (MCPConfig, error) {
 	entry, err := kv.Get(ctx, mcpConfigKey)
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return MCPConfig{}, err
@@ -191,6 +197,11 @@ func tryMutateMCPConfig(ctx context.Context, kv jetstream.KeyValue, mut func(*MC
 			cur = MCPConfig{}
 		}
 		rev = entry.Revision()
+	} else {
+		// No prior cluster record: start from the local seed so the
+		// first runtime mutation merges into (rather than replaces)
+		// WithMCPInclude / WithMCPExclude / WithMCPAutoInclude.
+		cur = cloneMCPConfig(seed)
 	}
 	mut(&cur)
 	payload, err := json.Marshal(cur)

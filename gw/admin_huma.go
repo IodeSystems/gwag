@@ -400,7 +400,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		OperationID: "servicesHistory",
 		Method:      http.MethodGet,
 		Path:        "/admin/services/history",
-		Summary:     "Per-bucket history per (namespace, version) for the chosen window. The public status page renders one dot per bucket — color = error ratio. Bucket widths track the underlying ring (1s / 1m / 10m for 1m / 1h / 24h). Plan §2.",
+		Summary:     "Per-bucket history per (namespace, version) for the chosen window. The public status page renders one dot per bucket — color = error ratio. Bucket widths track the underlying ring (1s / 1m / 10m for 1m / 1h / 24h).",
 	}, func(ctx context.Context, in *servicesHistoryIn) (*servicesHistoryOut, error) {
 		window, err := parseStatsWindow(in.Window)
 		if err != nil {
@@ -625,7 +625,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		OperationID: "mcpList",
 		Method:      http.MethodGet,
 		Path:        "/admin/mcp",
-		Summary:     "Read the MCP surface allowlist (auto_include flag + include / exclude path lists). Plan §2 MCP integration.",
+		Summary:     "Read the MCP surface allowlist (auto_include flag + include / exclude path lists).",
 	}, func(_ context.Context, _ *struct{}) (*mcpListOut, error) {
 		return mcpListOutFrom(g.mcpConfigSnapshot()), nil
 	})
@@ -671,6 +671,42 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "mcpIncludeRemove",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/include/remove",
+		Summary:     "Remove a previously-added path or glob from the MCP include list. Idempotent — entries that aren't present are a no-op.",
+	}, func(ctx context.Context, in *mcpIncludeIn) (*mcpListOut, error) {
+		if in.Body.Path == "" {
+			return nil, huma.Error400BadRequest("path must not be empty")
+		}
+		cfg, err := g.mutateMCPConfig(ctx, func(cfg *MCPConfig) {
+			cfg.Include = removeString(cfg.Include, in.Body.Path)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mcpListOutFrom(cfg), nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mcpExcludeRemove",
+		Method:      http.MethodPost,
+		Path:        "/admin/mcp/exclude/remove",
+		Summary:     "Remove a previously-added path or glob from the MCP exclude list. Idempotent.",
+	}, func(ctx context.Context, in *mcpExcludeIn) (*mcpListOut, error) {
+		if in.Body.Path == "" {
+			return nil, huma.Error400BadRequest("path must not be empty")
+		}
+		cfg, err := g.mutateMCPConfig(ctx, func(cfg *MCPConfig) {
+			cfg.Exclude = removeString(cfg.Exclude, in.Body.Path)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mcpListOutFrom(cfg), nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "mcpSetAutoInclude",
 		Method:      http.MethodPost,
 		Path:        "/admin/mcp/auto-include",
@@ -685,18 +721,17 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return mcpListOutFrom(cfg), nil
 	})
 
-	// MCP tool surface (plan §2). Dogfooded via huma so adopters can
-	// drive the schema_list / search / expand / query tools through
-	// the standard admin OpenAPI path; the dedicated /api/mcp Streamable
-	// HTTP mount (next plan §2 todo) wraps the same underlying
-	// MCPSchemaList / MCPSchemaSearch / MCPSchemaExpand / MCPQuery
-	// gateway methods.
+	// MCP tool surface. Dogfooded via huma so adopters can drive the
+	// schema_list / search / expand / query tools through the standard
+	// admin OpenAPI path; the dedicated /mcp Streamable HTTP mount
+	// wraps the same underlying MCPSchemaList / MCPSchemaSearch /
+	// MCPSchemaExpand / MCPQuery gateway methods.
 
 	huma.Register(api, huma.Operation{
 		OperationID: "mcpSchemaList",
 		Method:      http.MethodGet,
 		Path:        "/admin/mcp/schema/list",
-		Summary:     "List every operation the MCPConfig allowlist exposes, grouped by Query / Mutation / Subscription. Plan §2.",
+		Summary:     "List every operation the MCPConfig allowlist exposes, grouped by Query / Mutation / Subscription.",
 	}, func(_ context.Context, _ *struct{}) (*mcpSchemaListOut, error) {
 		rows := g.mcpSchemaList()
 		out := &mcpSchemaListOut{}
@@ -809,9 +844,9 @@ type serviceInfo struct {
 	HashHex      string `json:"hashHex"`
 	ReplicaCount uint32 `json:"replicaCount"`
 	// ManualDeprecationReason is the operator-set reason from
-	// Deprecate/Undeprecate (plan §5). Empty = no manual
-	// deprecation. Auto-deprecation (older `vN`) is computed by the
-	// UI from `version` plus the namespace's latest registered `vN`.
+	// Deprecate/Undeprecate. Empty = no manual deprecation.
+	// Auto-deprecation (older `vN`) is computed by the UI from
+	// `version` plus the namespace's latest registered `vN`.
 	ManualDeprecationReason string `json:"manualDeprecationReason,omitempty"`
 	// RejectedJoins surfaces the running `registerSlotLocked`
 	// rejection counter for this slot's (namespace, version) — set
@@ -1162,6 +1197,16 @@ func containsString(xs []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func removeString(xs []string, v string) []string {
+	out := xs[:0:0]
+	for _, x := range xs {
+		if x != v {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 type mcpSchemaListOut struct {

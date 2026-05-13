@@ -19,11 +19,15 @@ import (
 // doesn't need session pinning.
 //
 // Mount with whatever path makes sense — the example gateway uses
-// `/api/mcp` (see plan §2). Operators should gate the mount behind
-// the admin bearer (or whichever auth posture they prefer); the
-// underlying gateway methods don't authenticate.
+// `/mcp`. Operators should gate the mount behind the admin bearer
+// (or whichever auth posture they prefer); the underlying gateway
+// methods don't authenticate.
 //
-// Stability: experimental
+// The exposed operation surface is controlled by MCPConfig — seed
+// it at construction with WithMCPInclude / WithMCPExclude /
+// WithMCPAutoInclude, or edit at runtime via /api/admin/mcp/*.
+//
+// Stability: stable
 func (g *Gateway) MCPHandler() http.Handler {
 	srv := server.NewMCPServer(
 		"gwag",
@@ -118,6 +122,39 @@ func (g *Gateway) registerMCPTools(srv *server.MCPServer) {
 		}
 		return mcpResultJSON(res)
 	})
+}
+
+// MCPMountOption tunes MountMCP — currently the path, may grow.
+//
+// Stability: stable
+type MCPMountOption func(*mcpMountConfig)
+
+type mcpMountConfig struct {
+	path string
+}
+
+// MCPPath overrides the path MountMCP registers under. Default `/mcp`.
+//
+// Stability: stable
+func MCPPath(p string) MCPMountOption {
+	return func(c *mcpMountConfig) { c.path = p }
+}
+
+// MountMCP registers the MCP Streamable HTTP transport on `mux`.
+// Default path is `/mcp`; override with MCPPath. The mount is wrapped
+// in AdminMiddleware, so every MCP RPC is bearer-gated (the boot
+// token or an AdminAuthorizer-delegated identity). Pair with
+// WithMCPInclude / WithMCPExclude / WithMCPAutoInclude at construction
+// to seed the allowlist; operators can retune at runtime via
+// /api/admin/mcp/*.
+//
+// Stability: stable
+func (g *Gateway) MountMCP(mux *http.ServeMux, opts ...MCPMountOption) {
+	cfg := mcpMountConfig{path: "/mcp"}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	mux.Handle(cfg.path, g.AdminMiddleware(g.MCPHandler()))
 }
 
 // mcpResultJSON wraps a structured value as a CallToolResult that

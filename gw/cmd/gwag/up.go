@@ -155,6 +155,7 @@ func upCmd(args []string) int {
 	mux.Handle("/api/metrics", gw.MetricsHandler())
 	mux.Handle("/api/health", gw.HealthHandler())
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
+	gw.MountMCP(mux)
 	if pmux := gw.PprofMux(); pmux != nil {
 		mux.Handle("/debug/pprof/", gw.AdminMiddleware(pmux))
 		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")

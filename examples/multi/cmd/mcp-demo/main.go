@@ -1,16 +1,16 @@
-// Worked example for the gateway's MCP integration (plan §2). Drives
-// the gateway's MCP Streamable HTTP transport end-to-end against the
+// Worked example for the gateway's MCP integration. Drives the
+// gateway's MCP Streamable HTTP transport end-to-end against the
 // running examples/multi stack:
 //
 //  1. read the admin boot token from <admin-data-dir>/admin-token
-//  2. curate the MCP allowlist via /api/admin/mcp/* (default-deny →
-//     include `greeter.**` and `library.**`)
-//  3. open an MCP client at /api/mcp with `Authorization: Bearer <hex>`
+//  2. retune the MCP allowlist via /api/admin/mcp/* (idempotent —
+//     greeter.** + library.** are already seeded at gateway boot by
+//     WithMCPInclude in cmd/gateway/main.go)
+//  3. open an MCP client at /mcp with `Authorization: Bearer <hex>`
 //  4. tools/list → schema_list → schema_search → schema_expand → query
 //
 // Run alongside `./run.sh` (which persists the token to
-// /tmp/gwag-multi/admin-token by default). The demo prints every step
-// so you can see exactly how an agent would chain the tools.
+// /tmp/gwag-multi/admin-token by default).
 //
 //	$ cd examples/multi && ./run.sh   # terminal 1
 //	$ cd examples/multi && go run ./cmd/mcp-demo   # terminal 2
@@ -51,7 +51,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	step(1, "curate the MCP allowlist (default-deny → include greeter.** + library.**)")
+	step(1, "retune the MCP allowlist (idempotent — greeter.** + library.** are seeded at boot)")
 	if err := adminInclude(ctx, *gatewayURL, authz, "greeter.**"); err != nil {
 		log.Fatalf("include greeter.**: %v", err)
 	}
@@ -64,8 +64,8 @@ func main() {
 	}
 	fmt.Printf("  → MCPConfig: %s\n", cfg)
 
-	step(2, "open MCP client at "+*gatewayURL+"/api/mcp")
-	client, err := mcpclient.NewStreamableHttpClient(*gatewayURL+"/api/mcp",
+	step(2, "open MCP client at "+*gatewayURL+"/mcp")
+	client, err := mcpclient.NewStreamableHttpClient(*gatewayURL+"/mcp",
 		transport.WithHTTPHeaders(map[string]string{"Authorization": authz}),
 	)
 	if err != nil {

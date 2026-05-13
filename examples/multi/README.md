@@ -86,7 +86,7 @@ lives in [`examples/auth`](../auth) so the gateway here stays generic
 ## MCP integration (worked example)
 
 The gateway publishes its registered GraphQL surface to LLM agents
-via the Model Context Protocol over Streamable HTTP at `/api/mcp`,
+via the Model Context Protocol over Streamable HTTP at `/mcp`,
 gated by the admin bearer. Four tools land:
 
 | Tool            | Purpose |
@@ -94,34 +94,41 @@ gated by the admin bearer. Four tools land:
 | `schema_list`   | Every op the operator's allowlist exposes (path + kind + namespace + first-line doc). |
 | `schema_search` | Filter by dot-segmented path glob + regex over op name / arg names / doc body. |
 | `schema_expand` | Full structured definition of one op or type, plus its transitive type closure. |
-| `query`         | Execute a GraphQL operation in-process. Result wrapped as `ResponseWithEvents { response, events }`; `events.level="none"` in v1 (v2 subscription stitching is additive). |
+| `query`         | Execute a GraphQL operation in-process. Result wrapped as `ResponseWithEvents { response, events }`. |
 
-The allowlist is operator-curated and default-deny — agents only see
-what was explicitly included. Toggle `auto_include=true` for "every
-public leaf minus the exclude list" mode. Internal `_*` namespaces
-are filtered first either way.
+The allowlist is operator-curated. `cmd/gateway/main.go` seeds the
+example surface at boot:
+
+```go
+gateway.WithMCPInclude("greeter.**", "library.**", "admin.**")
+```
+
+Default-deny — agents only see what's explicitly included. Toggle
+`auto_include=true` (via WithMCPAutoInclude or
+`/api/admin/mcp/auto-include`) for "every public leaf minus the
+exclude list" mode. Internal `_*` namespaces are filtered first
+either way.
 
 `./run.sh` persists the admin token to `/tmp/gwag-multi/admin-token`
-(via `--admin-data-dir`) so a worked client can read it without
-scraping logs. Then:
+(via `--admin-data-dir`). Then:
 
 ```
 $ cd examples/multi
 $ go run ./cmd/mcp-demo
 using admin token from /tmp/gwag-multi/admin-token (64 hex chars)
 
---- step 1 — curate the MCP allowlist (default-deny → include greeter.** + library.**) ---
+--- step 1 — retune the MCP allowlist (idempotent — already seeded at boot) ---
   → POST /api/admin/mcp/include path=greeter.** ok
   → POST /api/admin/mcp/include path=library.** ok
-  → MCPConfig: {"auto_include":false,"include":["greeter.**","library.**"],"exclude":[]}
+  → MCPConfig: {"auto_include":false,"include":["greeter.**","library.**","admin.**"],"exclude":[]}
 
---- step 2 — open MCP client at http://localhost:8080/api/mcp ---
+--- step 2 — open MCP client at http://localhost:8080/mcp ---
   → server: gwag 1.0.0
 
 --- step 3 — tools/list ---
-  → schema_list — List every operation exposed via the MCP surface, grouped by Query / Mutation / Subscription.
+  → schema_list — List every operation exposed via the MCP surface…
   → schema_search — Filter the MCP-allowed operation surface.
-  → schema_expand — Return the structured definition of one op path or type name, plus every type transitively reachable from it.
+  → schema_expand — Return the structured definition of one op or type…
   → query — Execute a GraphQL operation against the gateway in-process.
 
 --- step 4 — schema_list ---
@@ -131,9 +138,10 @@ using admin token from /tmp/gwag-multi/admin-token (64 hex chars)
 
 The demo chains all four tools: list → search → expand → query. See
 [`cmd/mcp-demo/main.go`](./cmd/mcp-demo/main.go) for the full
-sequence; it's a useful template if you're wiring your own MCP-aware
-agent against the gateway. Curate the allowlist directly with the
-admin OpenAPI routes:
+sequence; it's a useful template for wiring your own MCP-aware agent
+against the gateway.
+
+Retune the allowlist at runtime via the admin OpenAPI routes:
 
 ```
 $ TOKEN=$(cat /tmp/gwag-multi/admin-token)
@@ -152,8 +160,7 @@ The same `admin_mcp_*` mutations are also surfaced as GraphQL fields
 (dogfooded via the huma → OpenAPI → self-ingest path), so any GraphQL
 client can curate the surface without separate REST calls.
 
-**Known gap**: subscriptions aren't exposed as MCP tools in v1 — the
-event-stitching design is captured in `docs/plan.md` for v2.
+Subscriptions are not exposed as MCP tools in v1.
 
 ## Layout
 

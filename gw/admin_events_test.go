@@ -107,13 +107,20 @@ func TestAdminEvents_PublishOnRegister(t *testing.T) {
 	}
 }
 
-// TestAdminEvents_RequiresCluster ensures AddAdminEvents errors
-// cleanly in standalone mode rather than silently registering a
-// proto whose subscription path can't actually deliver anything.
-func TestAdminEvents_RequiresCluster(t *testing.T) {
+// TestAdminEvents_StandaloneSchemaOnly ensures AddAdminEvents
+// succeeds on a cluster-less gateway so SDL-driven codegen consumers
+// still see the admin_events_watchServices subscription field. The
+// subscription handler itself returns a clean "subscription broker
+// not available" error at subscribe time, but that's a runtime
+// concern; the schema registration is what makes the SDL useful in
+// development / codegen contexts.
+func TestAdminEvents_StandaloneSchemaOnly(t *testing.T) {
 	gw := New(WithoutMetrics(), WithoutBackpressure())
 	t.Cleanup(gw.Close)
-	if err := gw.AddAdminEvents(); err == nil {
-		t.Fatal("expected error on standalone gateway")
+	if err := gw.AddAdminEvents(); err != nil {
+		t.Fatalf("AddAdminEvents on standalone gateway: %v", err)
+	}
+	if _, err := gw.adminEventsWatchServicesHandler(t.Context(), map[string]any{}); err == nil {
+		t.Fatal("expected subscription broker error on standalone gateway")
 	}
 }

@@ -175,12 +175,46 @@ func writeDescription(b *strings.Builder, indent, desc string) {
 	if desc == "" {
 		return
 	}
-	for _, line := range strings.Split(desc, "\n") {
-		b.WriteString(indent)
-		b.WriteString("\"\"\"")
-		b.WriteString(line)
-		b.WriteString("\"\"\"\n")
+	// Emit one block-string description (triple-quoted). One block
+	// per line was previously emitted but produces consecutive
+	// triple-quoted strings that GraphQL lexers reject (codegen tools
+	// in particular). Collapse internal whitespace-only lines to a
+	// single blank line and trim leading/trailing whitespace per line
+	// to keep the rendered SDL readable.
+	lines := strings.Split(desc, "\n")
+	trimmed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed = append(trimmed, strings.TrimRight(line, " \t"))
 	}
+	// Drop leading/trailing blank lines.
+	for len(trimmed) > 0 && strings.TrimSpace(trimmed[0]) == "" {
+		trimmed = trimmed[1:]
+	}
+	for len(trimmed) > 0 && strings.TrimSpace(trimmed[len(trimmed)-1]) == "" {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	if len(trimmed) == 0 {
+		return
+	}
+	body := strings.Join(trimmed, "\n")
+	// Escape any embedded `"""` so the block-string remains parseable.
+	body = strings.ReplaceAll(body, "\"\"\"", "\\\"\\\"\\\"")
+	if strings.Contains(body, "\n") {
+		b.WriteString(indent)
+		b.WriteString("\"\"\"\n")
+		for _, line := range strings.Split(body, "\n") {
+			b.WriteString(indent)
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString(indent)
+		b.WriteString("\"\"\"\n")
+		return
+	}
+	b.WriteString(indent)
+	b.WriteString("\"\"\"")
+	b.WriteString(body)
+	b.WriteString("\"\"\"\n")
 }
 
 func writeObject(b *strings.Builder, o *graphql.Object) {

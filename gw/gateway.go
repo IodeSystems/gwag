@@ -361,6 +361,15 @@ type config struct {
 	// rejects publishes to channels with no matching binding pattern.
 	// Default false. See WithStrictPayloadTypes.
 	psStrictPayloadTypes bool
+
+	// mcpSeed seeds the MCP allowlist at construction. Applied once at
+	// New() before any control-plane / cluster watch overrides. Runtime
+	// admin edits via /api/admin/mcp/* still take effect after the
+	// seed. mcpSeedSet records whether any WithMCP* option ran so
+	// callers can tell "default zero" from "explicitly empty."
+	// See WithMCPInclude / WithMCPExclude / WithMCPAutoInclude.
+	mcpSeed    MCPConfig
+	mcpSeedSet bool
 }
 
 // AllowedTiers expresses which §4 version tiers a gateway will accept
@@ -726,6 +735,56 @@ func WithOpenAPIClient(c *http.Client) Option {
 	return func(cfg *config) { cfg.openAPIHTTP = c }
 }
 
+// WithMCPInclude declares which operations are exposed via the MCP
+// surface (the four tools schema_list / schema_search / schema_expand
+// / query mounted by MCPHandler). Each glob is dot-segmented: `*`
+// matches one segment, `**` matches any number of segments including
+// zero. Examples: "greeter.**" (everything under the greeter
+// namespace), "*.list*" (any namespace, methods starting with
+// "list"), "admin.**".
+//
+// Internal `_*` namespaces (admin auth, quota, ps auth) are filtered
+// before MCPConfig; neither Include nor AutoInclude can override
+// that. AutoInclude=false (the default; flip with WithMCPAutoInclude)
+// means the MCP surface is exactly what Include matches.
+//
+// Runtime admin edits via /api/admin/mcp/include override the seed;
+// the seed is the starting state for an unconfigured gateway.
+//
+// Stability: stable
+func WithMCPInclude(globs ...string) Option {
+	return func(cfg *config) {
+		cfg.mcpSeed.Include = append(cfg.mcpSeed.Include, globs...)
+		cfg.mcpSeedSet = true
+	}
+}
+
+// WithMCPExclude declares glob patterns subtracted from the MCP
+// surface. Only meaningful when AutoInclude=true — the surface is
+// (every public op) − Exclude. Each glob is dot-segmented, same
+// shape as WithMCPInclude.
+//
+// Stability: stable
+func WithMCPExclude(globs ...string) Option {
+	return func(cfg *config) {
+		cfg.mcpSeed.Exclude = append(cfg.mcpSeed.Exclude, globs...)
+		cfg.mcpSeedSet = true
+	}
+}
+
+// WithMCPAutoInclude flips the MCP allowlist to opt-out mode: every
+// public operation appears on the MCP surface except those matched
+// by Exclude. Internal `_*` namespaces stay hidden regardless. Off
+// by default (the surface is exactly what Include matches).
+//
+// Stability: stable
+func WithMCPAutoInclude() Option {
+	return func(cfg *config) {
+		cfg.mcpSeed.AutoInclude = true
+		cfg.mcpSeedSet = true
+	}
+}
+
 // WithPprof opts the gateway into exposing the standard net/http/pprof
 // profiling endpoints via PprofMux. Disabled by default — pprof leaks
 // goroutine + heap state and must never be public. Pair the resulting
@@ -994,6 +1053,15 @@ func New(opts ...Option) *Gateway {
 	recording.callerExtractor = cfg.callerIDExtractor
 	if cfg.backpressure.MaxStreamsTotal > 0 {
 		g.streamGlobalSem = make(chan struct{}, cfg.backpressure.MaxStreamsTotal)
+	}
+	// Seed the MCP allowlist from WithMCPInclude / WithMCPExclude /
+	// WithMCPAutoInclude. Standalone gateways: this is the in-process
+	// state until an operator POSTs to /admin/mcp/*. Cluster gateways:
+	// the seed lands locally; the KV watch loop (startMCPConfigWatcher
+	// once the cluster is bound) reconciles with the cluster-wide
+	// record on next Put.
+	if cfg.mcpSeedSet {
+		g.mcpConfig = &mcpConfigState{cfg: cloneMCPConfig(cfg.mcpSeed)}
 	}
 	if !cfg.docCacheDisabled {
 		g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
