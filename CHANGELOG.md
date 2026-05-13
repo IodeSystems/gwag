@@ -10,6 +10,14 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `Upload` GraphQL scalar (`gw.UploadScalar`, `*gw.Upload`) — exposed
+  in every assembled schema so clients can declare `mutation
+  ($f: Upload!)` against upload-capable fields. The
+  graphql-multipart-request-spec wire format (operations / map / file
+  parts) is parsed at the GraphQL HTTP ingress; file parts substitute
+  into the variables tree before plan execution. Field-level binding
+  for OpenAPI `format: binary` and proto `bytes` lands with the
+  outbound-dispatch follow-on.
 - `docs/stability.md` — SemVer contract for 1.x. Defines what's
   locked, what's allowed to change, and what's experimental.
 - `// Stability: stable` and `// Stability: experimental` godoc

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/IodeSystems/graphql-go"
+	"github.com/IodeSystems/graphql-go/gqlerrors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -1572,7 +1573,20 @@ func isGraphiQLRequest(r *http.Request) bool {
 // with Pretty: true on a hit; on a miss we go through parser.Parse +
 // graphql.ValidateDocument once and store the result.
 func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, w http.ResponseWriter, r *http.Request) {
-	opts := parseGraphqlRequest(r)
+	opts, parseErr := parseGraphqlRequest(r)
+	if parseErr != nil {
+		// Today this fires only on a malformed multipart/form-data
+		// body — the JSON / form parsers still degrade silently to an
+		// empty options struct, matching the upstream handler. Surface
+		// the multipart parse failure as a GraphQL errors envelope so
+		// uploaders get a recognisable message instead of "no query".
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(&graphql.Result{
+			Errors: []gqlerrors.FormattedError{gqlerrors.NewFormattedError(parseErr.Error())},
+		})
+		return
+	}
 
 	pr := g.planCache.Get(schema, opts.Query, opts.OperationName)
 

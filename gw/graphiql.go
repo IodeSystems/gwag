@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	contentTypeJSON           = "application/json"
 	contentTypeGraphQL        = "application/graphql"
 	contentTypeFormURLEncoded = "application/x-www-form-urlencoded"
+	contentTypeMultipartForm  = "multipart/form-data"
 )
 
 // graphqlRequestOptions is the parsed shape of a GraphQL HTTP
@@ -65,42 +67,56 @@ func graphqlOptionsFromForm(values url.Values) *graphqlRequestOptions {
 
 // parseGraphqlRequest parses an http.Request into GraphQL request
 // options. Drop-in replacement for the upstream
-// `handler.NewRequestOptions`.
-func parseGraphqlRequest(r *http.Request) *graphqlRequestOptions {
+// `handler.NewRequestOptions`. Non-nil err means the request is
+// malformed in a way the caller should surface (today: only the
+// multipart path); JSON / form parse failures still return an empty
+// options struct, matching the upstream behaviour.
+func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
 	if reqOpt := graphqlOptionsFromForm(r.URL.Query()); reqOpt != nil {
-		return reqOpt
+		return reqOpt, nil
 	}
 	if r.Method != http.MethodPost {
-		return &graphqlRequestOptions{}
+		return &graphqlRequestOptions{}, nil
 	}
 	if r.Body == nil {
-		return &graphqlRequestOptions{}
+		return &graphqlRequestOptions{}, nil
 	}
 	contentTypeStr := r.Header.Get("Content-Type")
-	contentTypeTokens := strings.Split(contentTypeStr, ";")
-	contentType := contentTypeTokens[0]
+	contentType, ctParams, _ := mime.ParseMediaType(contentTypeStr)
+	if contentType == "" {
+		contentType = strings.TrimSpace(strings.SplitN(contentTypeStr, ";", 2)[0])
+	}
 	switch contentType {
+	case contentTypeMultipartForm:
+		// graphql-multipart-request-spec: files arrive as additional
+		// form parts and substitute into Variables. parseGraphqlMultipart
+		// owns the request body lifetime once it starts reading.
+		opts, err := parseGraphqlMultipart(r, ctParams["boundary"])
+		if err != nil {
+			return &graphqlRequestOptions{}, err
+		}
+		return opts, nil
 	case contentTypeGraphQL:
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			return &graphqlRequestOptions{}
+			return &graphqlRequestOptions{}, nil
 		}
-		return &graphqlRequestOptions{Query: string(body)}
+		return &graphqlRequestOptions{Query: string(body)}, nil
 	case contentTypeFormURLEncoded:
 		if err := r.ParseForm(); err != nil {
-			return &graphqlRequestOptions{}
+			return &graphqlRequestOptions{}, nil
 		}
 		if reqOpt := graphqlOptionsFromForm(r.PostForm); reqOpt != nil {
-			return reqOpt
+			return reqOpt, nil
 		}
-		return &graphqlRequestOptions{}
+		return &graphqlRequestOptions{}, nil
 	case contentTypeJSON:
 		fallthrough
 	default:
 		var opts graphqlRequestOptions
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			return &opts
+			return &opts, nil
 		}
 		if err := json.Unmarshal(body, &opts); err != nil {
 			// `variables` may have been sent as a JSON-encoded string.
@@ -108,7 +124,7 @@ func parseGraphqlRequest(r *http.Request) *graphqlRequestOptions {
 			_ = json.Unmarshal(body, &optsCompat)
 			_ = json.Unmarshal([]byte(optsCompat.Variables), &opts.Variables)
 		}
-		return &opts
+		return &opts, nil
 	}
 }
 
@@ -129,7 +145,7 @@ func newGraphiqlServer(schema *graphql.Schema) *graphiqlServer {
 // server-side and its result embedded into the page; otherwise the
 // browser fetches against `/api/graphql` itself.
 func (s *graphiqlServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	opts := parseGraphqlRequest(r)
+	opts, _ := parseGraphqlRequest(r)
 	params := graphql.Params{
 		Schema:         *s.schema,
 		RequestString:  opts.Query,

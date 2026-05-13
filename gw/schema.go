@@ -116,7 +116,17 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 		Fields: rootFields,
 	})
 
-	cfg := graphql.SchemaConfig{Query: queryObj}
+	cfg := graphql.SchemaConfig{
+		Query: queryObj,
+		// Force-include the `Upload` scalar so SDL + introspection
+		// expose it even before any ingested field is typed Upload.
+		// Clients declaring `mutation ($file: Upload!) { … }` against
+		// an upload-capable field rely on the scalar being a known
+		// named type in the schema; without this it'd only appear
+		// once a downstream service binds a multipart body to a field
+		// (which lands with chunk 3).
+		Types: []graphql.Type{UploadScalar()},
+	}
 
 	mutationFields := mutations
 	if len(mutationFields) > 0 {
