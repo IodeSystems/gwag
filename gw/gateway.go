@@ -144,6 +144,10 @@ type Gateway struct {
 	wsMu    sync.Mutex
 	wsConns map[uintptr]context.CancelFunc
 
+	// wsLimit enforces WithWSLimit. nil when no cap is configured;
+	// the Upgrade path nil-checks before acquiring.
+	wsLimit *wsLimiter
+
 	// planCache caches parsed + validated + planned query state so
 	// the hot path skips graphql-go's parse + ValidateDocument +
 	// PlanQuery cost. With WithDocNormalization(), literal-baked
@@ -272,6 +276,12 @@ type config struct {
 	// Upload-Length declaration and at multipart-spec parser. 0 =
 	// unlimited (gateway adds no constraint beyond the store / edge).
 	uploadLimit int64
+
+	// wsLimit configures per-IP caps on GraphQL WebSocket
+	// subscription upgrades. Zero-valued = no cap (the upgrade path
+	// stays uncapped, which is the right answer when an upstream
+	// proxy / CDN already limits it). See WithWSLimit.
+	wsLimit WSLimitOptions
 
 	// grpcConnPoolSize is the number of grpc.ClientConn instances
 	// the gateway dials per upstream replica address. 0 means
@@ -957,6 +967,7 @@ func New(opts ...Option) *Gateway {
 		slots:       map[poolKey]*slot{},
 		internal:    map[string]bool{},
 		wsConns:     map[uintptr]context.CancelFunc{},
+		wsLimit:     newWSLimiter(cfg.wsLimit),
 		life:        life,
 		lifeCancel:  cancel,
 		dispatchers: ir.NewDispatchRegistry(),
@@ -1632,6 +1643,13 @@ func (g *Gateway) Handler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isWebSocketUpgrade(r) {
+			release, reason, ok := g.wsLimit.acquire(r)
+			if !ok {
+				g.cfg.metrics.RecordWSRejected(reason)
+				http.Error(w, "ws limit exceeded: "+reason, http.StatusTooManyRequests)
+				return
+			}
+			defer release()
 			// WebSocket subscriptions live as long as the client stays
 			// connected; request_*_seconds is a per-request histogram,
 			// not a per-stream-lifetime one. Skip recording.

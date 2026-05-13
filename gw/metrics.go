@@ -106,6 +106,11 @@ type Metrics interface {
 	// registered channel binding, so the event will carry an empty
 	// payload_type.
 	RecordPubNoBinding()
+
+	// RecordWSRejected records a graphql-transport-ws Upgrade
+	// rejected by WithWSLimit. reason is one of: "max_per_ip",
+	// "rate_limit".
+	RecordWSRejected(reason string)
 }
 
 // noopMetrics is the sink used when WithoutMetrics is set.
@@ -125,6 +130,7 @@ func (noopMetrics) RecordGraphQLSubFanout(string, string)                       
 func (noopMetrics) SetGraphQLSubFanoutsActive(string, int)                      {}
 func (noopMetrics) RecordRequest(string, time.Duration, time.Duration)          {}
 func (noopMetrics) RecordPubNoBinding()                                         {}
+func (noopMetrics) RecordWSRejected(string)                                     {}
 
 // prometheusMetrics implements Metrics over a Prometheus registry.
 // Created by newPrometheusMetrics; the registry is exposed via
@@ -145,6 +151,7 @@ type prometheusMetrics struct {
 	reqDuration     *prometheus.HistogramVec
 	reqSelf         *prometheus.HistogramVec
 	pubNoBinding    prometheus.Counter
+	wsRejected      *prometheus.CounterVec
 	callerHeaders   []string
 	callerExtractor CallerIDExtractor
 	callerLimiter   *callerLimiter
@@ -213,7 +220,11 @@ func newPrometheusMetrics() *prometheusMetrics {
 		Name: "go_api_gateway_pub_no_binding_total",
 		Help: "Pubs to channels with no registered channel binding (empty payload_type).",
 	})
-	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding)
+	wsRejected := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "go_api_gateway_ws_rejected_total",
+		Help: "graphql-transport-ws Upgrade requests rejected by WithWSLimit. reason=max_per_ip|rate_limit.",
+	}, []string{"reason"})
+	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected)
 	return &prometheusMetrics{
 		registry:     reg,
 		hist:         hist,
@@ -230,6 +241,7 @@ func newPrometheusMetrics() *prometheusMetrics {
 		reqDuration:  reqDuration,
 		reqSelf:      reqSelf,
 		pubNoBinding: pubNoBinding,
+		wsRejected:   wsRejected,
 	}
 }
 
@@ -295,6 +307,10 @@ func (m *prometheusMetrics) RecordRequest(ingress string, total, self time.Durat
 
 func (m *prometheusMetrics) RecordPubNoBinding() {
 	m.pubNoBinding.Inc()
+}
+
+func (m *prometheusMetrics) RecordWSRejected(reason string) {
+	m.wsRejected.WithLabelValues(reason).Inc()
 }
 
 // classifyError maps an error to a stable label value. gRPC status

@@ -10,6 +10,20 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gw.WithWSLimit(gw.WSLimitOptions{MaxPerIP, RatePerSec, Burst, TrustedIPs})`
+  (gw/ws_limit.go) caps the graphql-transport-ws Upgrade path per
+  peer IP — a concurrent-connection semaphore plus a token-bucket
+  rate limit on the handshake itself. Operators running gwag at the
+  edge (no upstream reverse proxy / CDN terminating WebSockets) get
+  the minimum DoS guard; an unset option leaves the upgrade path
+  uncapped, preserving the pre-v1 behaviour. Rejected upgrades
+  return HTTP 429 and increment
+  `go_api_gateway_ws_rejected_total{reason}` with reason
+  `max_per_ip` or `rate_limit`. Peer IP comes from `r.RemoteAddr`
+  (port stripped); spoofable headers like `X-Forwarded-For` are
+  not honoured — operators behind a trusted proxy pin its address
+  in `TrustedIPs` and rely on the proxy for per-origin limits.
+  Doc: `docs/operations.md` "WebSocket upgrade caps".
 - `gw.WithTracer(trace.TracerProvider)` (gw/gateway.go) installs an
   OpenTelemetry TracerProvider for distributed tracing. Per-request
   server-kind spans land at every ingress shape: GraphQL

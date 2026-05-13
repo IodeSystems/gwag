@@ -88,3 +88,42 @@ Override or disable:
 gw := gateway.New(gateway.WithoutMetrics())            // disable
 gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 ```
+
+## WebSocket upgrade caps
+
+`gw.Handler()` accepts graphql-transport-ws upgrades for subscriptions.
+The pool's `MaxStreams` and the gateway-wide `MaxStreamsTotal` cap
+*post-handshake* stream count; they don't protect the handshake itself.
+A single misbehaving peer can open thousands of upgrades before hitting
+the stream cap, exhausting file descriptors and `streamSem`. `WithWSLimit`
+adds two per-peer-IP caps applied before `Accept`:
+
+```go
+gw := gateway.New(gateway.WithWSLimit(gateway.WSLimitOptions{
+    MaxPerIP:   64,                // concurrent connections per peer
+    RatePerSec: 10,                // upgrade token-bucket refill
+    Burst:      20,                // token-bucket capacity (defaults to RatePerSec)
+    TrustedIPs: []string{"10.0.0.1"}, // skip the cap for known proxies
+}))
+```
+
+Rejected upgrades return HTTP 429 and increment
+`go_api_gateway_ws_rejected_total{reason="max_per_ip"|"rate_limit"}`.
+
+**When this is load-bearing:** the gateway is the outermost
+TLS / WebSocket terminator — the public IP listens directly on the
+gwag process, or sits behind a pass-through LB (NLB, k8s LoadBalancer
+without HTTPS termination). The handshake protection has nowhere else
+to live.
+
+**When this is redundant:** an upstream reverse proxy (nginx, HAProxy,
+Cloudflare, ALB with WS support) already enforces per-IP connection
+caps and upgrade rate limits. In that posture the *peer IP* the gateway
+sees is the proxy address, not the originator — so `MaxPerIP` would
+trip first on the proxy itself, not on abusers. Either leave
+`WithWSLimit` unset or add the proxy address to `TrustedIPs`.
+
+Peer IP comes from `r.RemoteAddr` (port stripped). The limiter does
+not honour `X-Forwarded-For` — spoofable headers are not a useful
+rate-limit key. Operators terminating TLS upstream pin the trusted
+proxy in `TrustedIPs` and rely on the proxy for per-origin limits.

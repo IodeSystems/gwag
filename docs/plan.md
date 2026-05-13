@@ -60,10 +60,9 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **The push.** Unmetered WS upgrade is the obvious DoS surface — a single client can open thousands of connections and exhaust the per-pool `streamSem`. Per-IP cap on concurrent WS subscriptions + a token-bucket rate limit on `Upgrade` requests is the minimum. Operators behind nginx / Cloudflare get equivalents for free; operators who run gwag at the edge (and pre-v1 there will be plenty) currently have a foot-gun.
 
-**Todo.**
-- [ ] **`WithWSLimit(maxPerIP, ratePerSec int)` option + per-IP semaphore + token-bucket on Upgrade.** Bypass for a configurable trusted-IP list (cluster-internal traffic). ~1d.
-- [ ] **Metric: `gateway_ws_rejected_total{reason=...}`.** ~0.25d.
-- [ ] **Doc note in `docs/operations.md`** — when the cap is load-bearing (gateway at the edge) vs redundant (proxy / CDN terminates WS first). ~0.25d.
+**Done.** `WithWSLimit(WSLimitOptions{MaxPerIP, RatePerSec, Burst, TrustedIPs})` + per-IP semaphore + token-bucket on Upgrade (`gw/ws_limit.go`); `go_api_gateway_ws_rejected_total{reason}` counter with `max_per_ip` / `rate_limit` reasons; `docs/operations.md` "WebSocket upgrade caps" section covering load-bearing-vs-redundant guidance + the `X-Forwarded-For` non-trust note.
+
+**Todo.** (none — drop on next pass)
 
 ### Competitor performance matrix (gwag vs graphql-mesh / Apollo Router / WunderGraph)
 
