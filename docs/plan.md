@@ -58,15 +58,15 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **The push.** "Can I upload a file?" is a recurring question for any GraphQL system. The current answer ("base64 into a `bytes` field, ≤ N MiB") is a workaround that makes the project read as toy. Surface: GraphQL `Upload` scalar (graphql-multipart-request-spec) on inbound; HTTP ingress detects multipart and decodes; outbound forwards to OpenAPI services that accept multipart, or proto `bytes` field for proto services with a size cap. Touches inbound parsers, canonical-args shape, two dispatcher branches.
 
-**Done.** `Upload` scalar (`gw.UploadScalar`, `*gw.Upload`) force-included in every assembled schema (`gw/schema.go`); graphql-multipart-request-spec parser at the GraphQL HTTP ingress (`gw/graphql_multipart.go`) substitutes file parts into the variables tree before plan execution; parse failures surface as a 400 + GraphQL errors envelope; batched `operations` array form is rejected (out of scope for chunk 1). Tests pin SDL exposure, the input-only ParseLiteral/Serialize contract, happy-path single + list substitution, missing-file rejection, and the 400 wire shape.
+**Done.** `Upload` scalar (`gw.UploadScalar`, `*gw.Upload`) force-included in every assembled schema (43e7e37). IR `ScalarUpload` + `Operation.MultipartBody` scaffolding (fa0ba85). `gw.UploadStore` interface + default `FilesystemUploadStore` + `WithUploadStore` / `WithUploadDataDir` / `WithUploadLimit` options (09706af). tus.io v1.0 HTTP endpoints at `gw.UploadsTusHandler()` — POST/HEAD/PATCH/DELETE/OPTIONS, `creation` / `creation-defer-length` / `termination` extensions (8139a3a). Dual-mode `Upload` scalar — `ParseValue` accepts inline `*Upload` or string upload-id, `(*Upload).Open(ctx, store)` materialises body regardless of source (4d8919c). OpenAPI ingest detects `multipart/form-data` request bodies and flattens binary props to `Upload!` args; `dispatchOpenAPI` builds multipart bodies upstream; HTTP ingress decodes multipart inbound; `WithUploadLimit` enforced at both inline parser and tus PATCH path; end-to-end tests cover REST passthrough, graphql-multipart-spec, and tus → mutation paths; `docs/uploads.md` (003d1f9).
 
 **Todo.**
-- [ ] **HTTP ingress multipart detection + decode into canonical args.** ~1d.
-- [ ] **Outbound dispatch.** OpenAPI: forward multipart as-is. Proto: write into a designated `bytes` field with a size cap. ~1.5d.
-- [ ] **`WithUploadLimit(maxBytes int64)` + streaming policy.** Buffered up to limit (default 32 MiB); reject larger with `InvalidArgument`. ~0.5d.
-- [ ] **`docs/uploads.md`** + README mention; remove the known-limitations row. ~0.25d.
+- [ ] **Proto `bytes` field → `Upload` arg binding.** Deferred per the unified design decision; pull when an adopter pulls. Convention sketch: `[(gwag.upload) = true]` field extension on a `bytes` field, dispatcher writes `*Upload.Open(ctx, store)` bytes into the field with `WithUploadLimit` cap.
 
-**Followups.** Resumable uploads (tus / chunked multipart) — wait for adopter ask.
+**Followups.**
+- Streaming the inline multipart parser into `UploadStore` (today: `ReadForm` with 32 MiB in-memory threshold + tempfile spill; bounded but leaks tempfiles until process exit). Pull when a memory-pressure report surfaces.
+- Tus extensions: `checksum` (Content-MD5 / Content-SHA1 on PATCH), `expiration` (server-advertised `Upload-Expires`), `concatenation` (multi-part parallel chunk upload). Pull when an adopter asks.
+- `WithUploadAuthorizer` to gate tus endpoints behind bearer auth (today: public-with-cryptographic-id-as-credential, which works for browser flows but corporate-network operators may want stronger).
 
 ### WebSocket connection-rate / per-IP caps
 

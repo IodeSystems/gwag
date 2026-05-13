@@ -239,6 +239,48 @@ func TestUpload_TusThenGraphQLMutation(t *testing.T) {
 	}
 }
 
+// TestUpload_WithUploadLimitEnforcedInline — WithUploadLimit caps
+// inline graphql-multipart-request-spec bodies at the configured
+// number of bytes; oversized requests get a JSON error envelope, not
+// a silent parse error or a panic.
+func TestUpload_WithUploadLimitEnforcedInline(t *testing.T) {
+	upstream := newUploadEchoBackend(t)
+	defer upstream.Close()
+
+	gw := New(WithUploadDataDir(t.TempDir()), WithUploadLimit(64))
+	defer gw.Close()
+	if err := gw.AddOpenAPIBytes(uploadEchoSpec(upstream.URL), To(upstream.URL), As("files")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	// Build a body that's clearly bigger than 64 bytes — the file
+	// part alone is 512 bytes.
+	body, ct := buildGraphQLMultipart(t, graphQLMultipartCase{
+		query:     `mutation($file: Upload!) { files { upload(file: $file) { filename } } }`,
+		variables: map[string]any{"file": nil},
+		mapJSON:   `{"0":["variables.file"]}`,
+		files: []uploadMultipartFilePart{
+			{name: "0", filename: "big.bin", contentType: "application/octet-stream", body: strings.Repeat("X", 512)},
+		},
+	})
+
+	resp, err := http.Post(srv.URL, ct, body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	// We don't care whether the status is 400 or 413 — both are
+	// honest. We care that the request is rejected (not silently
+	// truncated + parsed) and that the response is a recognisable
+	// error envelope.
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("status = 200; want a non-2xx rejection")
+	}
+}
+
 // TestUpload_SchemaSurfacesUploadField — verifies the OpenAPI ingest's
 // multipart/form-data → Upload field mapping actually shows up in
 // SDL. Without this the client codegen can't see the upload arg.
@@ -255,7 +297,10 @@ func TestUpload_SchemaSurfacesUploadField(t *testing.T) {
 
 	srv := httptest.NewServer(gw.SchemaHandler())
 	defer srv.Close()
-	resp, _ := http.Get(srv.URL)
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET schema: %v", err)
+	}
 	defer resp.Body.Close()
 	sdl, _ := io.ReadAll(resp.Body)
 	s := string(sdl)

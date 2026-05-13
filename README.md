@@ -237,7 +237,7 @@ order — see [`docs/plan.md`](./docs/plan.md) for the punch list:
 2. **Public API audit + SemVer commitment** — lock the surface before v1 advertises stability.
 3. **Wire-level identifier rename to `gwag-*`** — pre-1.0 freebie.
 4. **OpenTelemetry tracing** — the missing observability primitive.
-5. **File uploads** — multipart/form-data passthrough.
+5. **File uploads** — graphql-multipart-request-spec + tus.io chunked uploads. See [`docs/uploads.md`](./docs/uploads.md).
 6. **WebSocket connection-rate / per-IP caps** — DoS surface today.
 7. **CHANGELOG + release versioning** — first stable tag.
 8. **Competitor performance matrix** — ships *with* v1, doesn't gate it.

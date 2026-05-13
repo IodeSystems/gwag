@@ -1653,6 +1653,21 @@ func isGraphiQLRequest(r *http.Request) bool {
 // with Pretty: true on a hit; on a miss we go through parser.Parse +
 // graphql.ValidateDocument once and store the result.
 func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, w http.ResponseWriter, r *http.Request) {
+	// Cap inline multipart bodies at WithUploadLimit so a misbehaving
+	// client can't push an unbounded body through the parser. The cap
+	// is enforced via MaxBytesReader (the reader returns an error once
+	// the limit is exceeded; the multipart machinery surfaces that
+	// error to the GraphQL ingress, which renders the JSON error
+	// envelope downstream). MaxBytesReader writes a 413 to w on
+	// overshoot, which the existing parseErr handling then overrides
+	// with our richer envelope — that's fine since headers haven't
+	// been flushed yet.
+	if g.cfg.uploadLimit > 0 && r.Body != nil {
+		ct := r.Header.Get("Content-Type")
+		if strings.HasPrefix(ct, "multipart/") {
+			r.Body = http.MaxBytesReader(w, r.Body, g.cfg.uploadLimit)
+		}
+	}
 	opts, parseErr := parseGraphqlRequest(r)
 	if parseErr != nil {
 		// Today this fires only on a malformed multipart/form-data

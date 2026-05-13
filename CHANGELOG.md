@@ -12,12 +12,33 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - `Upload` GraphQL scalar (`gw.UploadScalar`, `*gw.Upload`) — exposed
   in every assembled schema so clients can declare `mutation
-  ($f: Upload!)` against upload-capable fields. The
-  graphql-multipart-request-spec wire format (operations / map / file
-  parts) is parsed at the GraphQL HTTP ingress; file parts substitute
-  into the variables tree before plan execution. Field-level binding
-  for OpenAPI `format: binary` and proto `bytes` lands with the
-  outbound-dispatch follow-on.
+  ($f: Upload!)` against upload-capable fields. End-to-end multipart
+  uploads via two complementary wire shapes: the
+  graphql-multipart-request-spec parser handles inline single-request
+  files at `POST /api/graphql`; tus.io v1.0 chunked uploads land at
+  `gw.UploadsTusHandler()` (`/api/uploads/tus`) and the upload-id
+  rides in GraphQL variables. The `Upload` scalar accepts both forms
+  at `ParseValue`; the dispatcher opens the body lazily via
+  `(*Upload).Open(ctx, store)` regardless of which wire shape
+  delivered it.
+- OpenAPI ingest recognises `multipart/form-data` request bodies and
+  flattens `type: string, format: binary` schema properties into
+  top-level `Upload!` (or `[Upload!]!`) GraphQL args. The
+  `openAPIDispatcher` forwards as `multipart/form-data` upstream
+  preserving the captured `Filename` and `Content-Type`. The
+  gateway's re-exposed REST surface (`gw.IngressHandler`) accepts
+  multipart inbound too. Proto-side binding deferred.
+- `gw.UploadStore` interface (`Create` / `Append` / `Info` / `Open`
+  / `Delete`) backing both wire shapes; default
+  `gw.FilesystemUploadStore` impl with 24-hour TTL eviction.
+- `gw.WithUploadStore(UploadStore)` plugs a custom store;
+  `gw.WithUploadDataDir(string)` shorthand installs the default
+  filesystem store (gateway owns lifecycle, `Close` shuts it down);
+  `gw.WithUploadLimit(int64)` caps per-upload total bytes at both
+  parsers.
+- `docs/uploads.md` — adopter-facing docs covering both wire shapes,
+  configuration knobs, error shapes, and outbound dispatch
+  semantics.
 - `docs/stability.md` — SemVer contract for 1.x. Defines what's
   locked, what's allowed to change, and what's experimental.
 - `// Stability: stable` and `// Stability: experimental` godoc
