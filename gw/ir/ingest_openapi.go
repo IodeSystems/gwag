@@ -190,9 +190,17 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 	if pt := primaryOpenAPIType(s); pt != "" {
 		switch pt {
 		case "string":
-			if len(s.Enum) > 0 {
+			switch {
+			case s.Format == "binary" || s.Format == "byte":
+				// OpenAPI's spec-blessed file-upload encoding: in a
+				// multipart/form-data schema, type:string + format:binary
+				// is "this property is a file". format:byte (base64 in
+				// JSON contexts) is treated identically — both map to the
+				// Upload scalar; the dispatcher chooses the wire encoding.
+				f.Type = TypeRef{Builtin: ScalarUpload}
+			case len(s.Enum) > 0:
 				f.Type = TypeRef{Named: synthesizeInlineEnum(svc, pathHint, s)}
-			} else {
+			default:
 				f.Type = TypeRef{Builtin: ScalarString}
 			}
 		case "boolean":
@@ -466,9 +474,17 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 	}
 
 	// Body → "body" arg, located OpenAPILocation="body".
+	//
+	// multipart/form-data is checked before application/json: when both
+	// are declared the gateway uses the multipart shape (uploads are
+	// the unique value-add and JSON is always representable elsewhere).
+	// The form-data schema's properties are flattened to top-level
+	// Args; binary properties land as TypeRef{Builtin: ScalarUpload}.
 	if op.RequestBody != nil && op.RequestBody.Value != nil {
 		body := op.RequestBody.Value
-		if mt, ok := body.Content["application/json"]; ok && mt.Schema != nil {
+		if mt, ok := body.Content["multipart/form-data"]; ok && mt.Schema != nil && mt.Schema.Value != nil {
+			ingestOpenAPIFormDataBody(svc, out, opHint, mt.Schema.Value, body)
+		} else if mt, ok := body.Content["application/json"]; ok && mt.Schema != nil {
 			out.Args = append(out.Args, &Arg{
 				Name:            "body",
 				Type:            openapiPropToField(svc, opHint+"Body", "body", mt.Schema, body.Required).Type,
@@ -484,6 +500,55 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 		out.Output = openapiResponseTypeRef(svc, opHint, op.Responses)
 	}
 	return out
+}
+
+// ingestOpenAPIFormDataBody flattens a multipart/form-data request
+// body schema into top-level Args on `out`. Each property becomes one
+// Arg with OpenAPILocation="formdata"; properties typed
+// string/format:binary land as TypeRef{Builtin: ScalarUpload}, others
+// follow the regular openapiPropToField mapping. Array-of-binary
+// properties land as repeated ScalarUpload (`[Upload!]!` once required
+// + ItemRequired are honored downstream).
+//
+// The Operation is flagged MultipartBody so the HTTP ingress decodes
+// inbound requests as multipart and the dispatcher builds outbound
+// multipart bodies.
+//
+// Property names land in declaration order alphabetically so the SDL
+// is reproducible across runs (the wire format is name-keyed, not
+// position-keyed, so the order is purely a presentation choice).
+func ingestOpenAPIFormDataBody(svc *Service, out *Operation, opHint string, s *openapi3.Schema, body *openapi3.RequestBody) {
+	out.MultipartBody = true
+	if len(s.Properties) == 0 {
+		return
+	}
+	required := make(map[string]bool, len(s.Required))
+	for _, r := range s.Required {
+		required[r] = true
+	}
+	keys := make([]string, 0, len(s.Properties))
+	for k := range s.Properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		propRef := s.Properties[k]
+		field := openapiPropToField(svc, opHint+"FormData"+pascalIdent(k), k, propRef, required[k])
+		out.Args = append(out.Args, &Arg{
+			Name:            k,
+			Type:            field.Type,
+			Repeated:        field.Repeated,
+			Required:        required[k],
+			ItemRequired:    field.Repeated && required[k],
+			Description:     field.Description,
+			OpenAPILocation: "formdata",
+		})
+	}
+	// body.Required / body.Description belong to the whole body, not
+	// any single Arg — they're already reflected per-property via the
+	// required[] set above. Keep the closure tight to avoid leaking
+	// shadowed metadata.
+	_ = body
 }
 
 func openapiResponseTypeRef(svc *Service, opHint string, r *openapi3.Responses) *TypeRef {

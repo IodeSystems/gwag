@@ -295,6 +295,8 @@ func primitiveOpenAPI(s ScalarKind) *openapi3.SchemaRef {
 		return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "date-time"}}
 	case ScalarID, ScalarString:
 		return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}
+	case ScalarUpload:
+		return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "binary"}}
 	}
 	return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}
 }
@@ -335,6 +337,47 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 				Required: len(required) > 0,
 				Content: openapi3.Content{
 					"application/json": &openapi3.MediaType{
+						Schema: &openapi3.SchemaRef{
+							Value: &openapi3.Schema{
+								Type:       &openapi3.Types{"object"},
+								Properties: props,
+								Required:   required,
+							},
+						},
+					},
+				},
+			},
+		}
+	} else if op.MultipartBody {
+		// Round-trip the multipart/form-data shape: every formdata arg
+		// becomes a property; binary props re-emit as
+		// string/format:binary. Path/query/header args stay as
+		// Parameters (a multipart op may still have those).
+		props := openapi3.Schemas{}
+		var required []string
+		for _, a := range op.Args {
+			if a.OpenAPILocation != "formdata" {
+				out.Parameters = append(out.Parameters, &openapi3.ParameterRef{
+					Value: &openapi3.Parameter{
+						Name:        a.Name,
+						In:          a.OpenAPILocation,
+						Required:    a.Required,
+						Description: a.Description,
+						Schema:      renderOpenAPIRefForType(a.Type),
+					},
+				})
+				continue
+			}
+			props[a.Name] = renderOpenAPIArgFieldSchema(a)
+			if a.Required {
+				required = append(required, a.Name)
+			}
+		}
+		out.RequestBody = &openapi3.RequestBodyRef{
+			Value: &openapi3.RequestBody{
+				Required: len(required) > 0,
+				Content: openapi3.Content{
+					"multipart/form-data": &openapi3.MediaType{
 						Schema: &openapi3.SchemaRef{
 							Value: &openapi3.Schema{
 								Type:       &openapi3.Types{"object"},

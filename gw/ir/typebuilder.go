@@ -104,6 +104,14 @@ type IRTypeBuilderOptions struct {
 	MapType    graphql.Output
 	JSONType   *graphql.Scalar
 	IDType     graphql.Output
+	// UploadType is the GraphQL type used for TypeRef{Builtin:
+	// ScalarUpload}. Nil falls back to graphql.String so renderers
+	// that don't supply an Upload scalar (gat without uploads wired,
+	// proto reflection over services that have no upload fields) still
+	// produce a valid schema. The gateway populates this with
+	// gw.UploadScalar() so the multipart-request-spec parser's
+	// *Upload values land at the right graphql type.
+	UploadType graphql.Output
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
@@ -536,6 +544,11 @@ func (b *IRTypeBuilder) scalar(s ScalarKind) (graphql.Output, error) {
 		return graphql.String, nil
 	case ScalarID:
 		return b.options.IDType, nil
+	case ScalarUpload:
+		if b.options.UploadType != nil {
+			return b.options.UploadType, nil
+		}
+		return graphql.String, nil
 	case ScalarUnknown:
 		if b.options.JSONType != nil {
 			return b.options.JSONType, nil

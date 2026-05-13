@@ -17,6 +17,11 @@ type RuntimeOptions struct {
 	LongType           *graphql.Scalar
 	SharedProtoBuilder *IRTypeBuilder
 	StableVN           map[string]int
+	// UploadType is the GraphQL type used for IR args of TypeRef{Builtin:
+	// ScalarUpload}. The gateway passes gw.UploadScalar() here; gat or
+	// minimal embedders can omit it (then ScalarUpload falls back to
+	// graphql.String, matching the ScalarBytes mapping).
+	UploadType graphql.Output
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
@@ -460,7 +465,9 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			UnionName:  exportedName,
 			InputName:  func(s string) string { return exportedName(s) + "_Input" },
 			FieldName:  lowerCamel,
-		}, IRTypeBuilderOptions{}), nil
+		}, IRTypeBuilderOptions{
+			UploadType: opts.UploadType,
+		}), nil
 
 	case KindOpenAPI:
 		prefix := svc.Namespace + "_"
@@ -481,6 +488,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			UInt64Type: opts.LongType,
 			MapType:    opts.JSONType,
 			JSONType:   opts.JSONType,
+			UploadType: opts.UploadType,
 		}), nil
 
 	case KindGraphQL:
@@ -500,8 +508,9 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			MapType:  opts.JSONType,
-			JSONType: opts.JSONType,
+			MapType:    opts.JSONType,
+			JSONType:   opts.JSONType,
+			UploadType: opts.UploadType,
 		}), nil
 
 	default:

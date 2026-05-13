@@ -214,6 +214,15 @@ type Operation struct {
 	HTTPPath   string
 	Tags       []string
 
+	// MultipartBody is true for OpenAPI operations whose requestBody
+	// content type is multipart/form-data. The schema's properties are
+	// flattened into top-level Args (each with
+	// OpenAPILocation="formdata"); binary properties land as
+	// TypeRef{Builtin: ScalarUpload}. Dispatchers and ingress decoders
+	// branch on this flag to build / parse multipart bodies instead of
+	// JSON.
+	MultipartBody bool
+
 	OriginKind Kind
 	Origin     any // *descriptorpb.MethodDescriptorProto / *openapi3.Operation / *introspectionField
 }
@@ -390,6 +399,7 @@ const (
 	ScalarBytes
 	ScalarID        // GraphQL ID
 	ScalarTimestamp // proto google.protobuf.Timestamp / openapi format=date-time
+	ScalarUpload    // file upload; OpenAPI string/format:binary in multipart/form-data
 )
 
 // FlatOperations returns Service.Operations plus every operation
