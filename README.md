@@ -117,7 +117,9 @@ of a direct dial in the matching wire format):
 
 Each active middleware rule on the hot path adds ~15–20 µs at p50.
 Full numbers + reproduce recipe: [`docs/perf.md`](./docs/perf.md).
-Head-to-head vs alternatives: [`perf/`](./perf).
+Head-to-head vs graphql-mesh + Apollo Router on the same backends:
+[`perf/comparison.md`](./perf/comparison.md) (harness + reproduce
+recipe: [`perf/`](./perf)).
 
 ## Embedded mode (`gat`)
 
@@ -175,7 +177,8 @@ you want gwag.
 
 **graphql-mesh / Apollo Router (single-subgraph mode)** are the
 closest peers on the multi-format-ingest dimension. Head-to-head
-performance comparison: [`perf/`](./perf).
+performance comparison: [`perf/comparison.md`](./perf/comparison.md)
+(harness: [`perf/`](./perf)).
 
 Deeper breakdown vs service discovery, service meshes, and individual
 gateways: [`docs/comparison.md`](./docs/comparison.md).
@@ -195,8 +198,8 @@ step, not a release gate.
 
 Self-measurement (your hardware): [`docs/perf.md`](./docs/perf.md) —
 escalating-target-RPS sweep with knee detection. Head-to-head vs peers
-(graphql-mesh, Apollo Router): [`perf/`](./perf) — Docker-hermetic
-matrix.
+(graphql-mesh, Apollo Router): [`perf/comparison.md`](./perf/comparison.md) —
+results from the Docker-hermetic matrix at [`perf/`](./perf).
 
 ## Documentation
 
@@ -214,7 +217,8 @@ matrix.
 
 - [`docs/perf.md`](./docs/perf.md) — throughput sweep on your hardware
 - [`docs/comparison.md`](./docs/comparison.md) — gwag vs service discovery / mesh / Kong / Federation
-- [`perf/`](./perf) — competitor matrix harness
+- [`perf/comparison.md`](./perf/comparison.md) — head-to-head numbers vs graphql-mesh + Apollo Router
+- [`perf/`](./perf) — competitor matrix harness (Dockerfile + orchestrator)
 
 **Maintainer**:
 

@@ -9,6 +9,11 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 **Headline (proto scenario, last healthy rung):** **48707 RPS** at p95 **22.59ms** with gateway self-time mean **225µs**.
 
+> **Looking for "how does gwag compare to X?"** This page is gwag's
+> own throughput on your hardware. For a head-to-head against
+> graphql-mesh and Apollo Router on the same backends, see
+> [`perf/comparison.md`](../perf/comparison.md).
+
 ## Machine
 
 | Field | Value |

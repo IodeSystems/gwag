@@ -161,6 +161,11 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 **Headline (proto scenario, last healthy rung):** **{{ .HeadlineRPS }} RPS** at p95 **{{ usFormat .HeadlineP95Us }}** with gateway self-time mean **{{ usFormat .HeadlineSelfUs }}**.
 {{- end }}
 
+> **Looking for "how does gwag compare to X?"** This page is gwag's
+> own throughput on your hardware. For a head-to-head against
+> graphql-mesh and Apollo Router on the same backends, see
+> [` + "`perf/comparison.md`" + `](../perf/comparison.md).
+
 ## Machine
 
 {{ .SpecsMarkdown }}

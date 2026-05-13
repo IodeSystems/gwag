@@ -25,8 +25,15 @@ if [[ ! -x perf/.run/bin/compare || perf/cmd/compare/main.go -nt perf/.run/bin/c
 fi
 
 mkdir -p perf/.out
-exec perf/.run/bin/compare \
+perf/.run/bin/compare \
   --config perf/competitors.yaml \
   --out perf/.out \
   --repo "$REPO" \
   "${EXTRA_ARGS[@]}"
+
+# Mirror the rendered comparison.md to the tracked path so the
+# published artefact lives in git. Intermediate JSONs stay under
+# perf/.out/ (gitignored).
+if [[ -f perf/.out/comparison.md ]]; then
+  cp perf/.out/comparison.md perf/comparison.md
+fi

@@ -43,8 +43,13 @@ perf/
 ```bash
 docker build -t gwag-perf -f perf/Dockerfile .
 
-# Run the full comparison sweep (writes perf/.out/comparison.md):
-docker run --rm -v $(pwd)/perf/.out:/out gwag-perf
+# Run the full comparison sweep (writes perf/.out/comparison.md).
+# HOST_UID/HOST_GID let the container chown the output back to the
+# invoking user so subsequent host-local runs can overwrite the dir.
+docker run --rm \
+  -v $(pwd)/perf/.out:/out \
+  -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+  gwag-perf
 ```
 
 **Host-local (faster iteration, requires bench stack down):**

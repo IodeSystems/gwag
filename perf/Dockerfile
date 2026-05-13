@@ -127,4 +127,9 @@ VOLUME ["/out"]
 
 # Run the comparator. Override CMD to drop into bash for debugging:
 #   docker run --rm -it --entrypoint bash gwag-perf
-CMD ["bash", "-c", "/perf/perf/run.sh && cp -r /perf/perf/.out/* /out/"]
+#
+# Pass HOST_UID/HOST_GID (e.g. `-e HOST_UID=$(id -u) -e HOST_GID=$(id -g)`)
+# to chown the output back to the invoking host user — otherwise the
+# container's root identity bleeds into the bind mount and host-side
+# `perf/.out/` ends up unwritable on the next host-local run.
+CMD ["bash", "-c", "set -e; /perf/perf/run.sh && cp -r /perf/perf/.out/. /out/ && if [ -n \"${HOST_UID:-}\" ]; then chown -R \"${HOST_UID}:${HOST_GID:-${HOST_UID}}\" /out; fi"]
