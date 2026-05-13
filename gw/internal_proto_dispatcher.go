@@ -86,6 +86,13 @@ func newInternalProtoDispatcher(src *internalProtoSource, sd protoreflect.Servic
 
 // Dispatch satisfies ir.Dispatcher.
 func (d *internalProtoDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.internal",
+		namespaceAttr(d.namespace),
+		versionAttr(d.version),
+		methodAttr(d.op),
+	)
+	defer span.End()
 	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
 	req := acquireDynamicMessage(d.inputDesc)
 	defer releaseDynamicMessage(d.inputDesc, req)

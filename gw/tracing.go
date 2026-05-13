@@ -133,6 +133,33 @@ func (tr *tracer) startDispatchSpan(ctx context.Context, name string, attrs ...a
 	)
 }
 
+// tracerCtxKey is the type used to stash the gateway's *tracer on
+// per-request contexts. Dispatchers retrieve it via tracerFromContext
+// so they can open child spans + inject traceparent on outbound calls
+// without taking a Gateway pointer.
+type tracerCtxKey struct{}
+
+// withTracer returns ctx with tr installed. Called from the three
+// ingress sites once the ingress span is open.
+func withTracer(ctx context.Context, tr *tracer) context.Context {
+	return context.WithValue(ctx, tracerCtxKey{}, tr)
+}
+
+// tracerFromContext returns the tracer installed on ctx, or a noop
+// fallback. Always non-nil.
+func tracerFromContext(ctx context.Context) *tracer {
+	if v, ok := ctx.Value(tracerCtxKey{}).(*tracer); ok && v != nil {
+		return v
+	}
+	return noopTracer
+}
+
+// noopTracer is the fallback tracer used by dispatchers that run
+// outside an ingress (background reconcilers, tests calling Dispatch
+// directly). It carries an enabled=false flag so inject helpers
+// short-circuit cheaply.
+var noopTracer = newTracer(nil)
+
 // mdCarrier adapts metadata.MD to TextMapCarrier. gRPC metadata keys
 // are lowercased on the wire; the W3C TraceContext propagator emits
 // "traceparent" / "tracestate" which already conform.

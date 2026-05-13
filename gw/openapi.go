@@ -727,6 +727,7 @@ func dispatchOpenAPI(
 	}
 	req.Header.Set("Accept", "application/json")
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
+	tracerFromContext(ctx).injectHTTP(ctx, req.Header)
 	injected, err := applyHeaderInjectors(ctx, headerInjectors)
 	if err != nil {
 		closeUploads(multipartCloseups)

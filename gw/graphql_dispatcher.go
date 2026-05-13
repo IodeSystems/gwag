@@ -92,6 +92,13 @@ func newGraphQLDispatcher(m *graphQLMirror, op *ir.Operation, opLabel string, me
 }
 
 func (d *graphQLDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.graphql",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+	)
+	defer span.End()
 	if d.opLabel == "subscription" {
 		return d.dispatchSubscribe(ctx)
 	}

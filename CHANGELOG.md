@@ -15,14 +15,20 @@ changes on MINOR, drops on MAJOR.
   server-kind spans land at every ingress shape: GraphQL
   (`gateway.graphql`), HTTP/JSON (`gateway.http`), gRPC
   (`gateway.grpc`), plus `.subscription` variants for SSE and gRPC
-  server-streaming. Spans carry the canonical `gateway.ingress` /
-  `gateway.namespace` / `gateway.method` attribute trio plus
+  server-streaming. Each upstream call opens a nested client-kind
+  span (`gateway.dispatch.proto`, `gateway.dispatch.openapi`,
+  `gateway.dispatch.graphql`, `gateway.dispatch.internal`,
+  `gateway.dispatch.proto.subscription`) and injects W3C TraceContext
+  on the outbound side — `traceparent` rides HTTP headers
+  (OpenAPI / downstream GraphQL) and gRPC metadata (proto unary +
+  server-streaming) so downstream services join the same trace. Spans
+  carry the canonical `gateway.ingress` / `gateway.namespace` /
+  `gateway.method` / `gateway.version` attribute set plus
   ingress-specific `http.*` / `rpc.*` keys from the OpenTelemetry
-  semantic conventions. W3C TraceContext (`traceparent`) is honoured on
-  inbound HTTP headers and gRPC metadata so the gateway joins the
-  caller's trace. When the option is unset, a noop tracer is wired and
-  per-request cost stays near zero. Default builds depend on
-  `go.opentelemetry.io/otel` directly.
+  semantic conventions. Inbound `traceparent` on the request is
+  honoured so the gateway joins the caller's trace. When the option is
+  unset, a noop tracer is wired and per-request cost stays near zero.
+  Default builds depend on `go.opentelemetry.io/otel` directly.
 - `Upload` GraphQL scalar (`gw.UploadScalar`, `*gw.Upload`) — exposed
   in every assembled schema so clients can declare `mutation
   ($f: Upload!)` against upload-capable fields. End-to-end multipart

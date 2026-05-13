@@ -1646,6 +1646,7 @@ func (g *Gateway) Handler() http.Handler {
 			httpTargetAttr(r.URL.Path),
 		)
 		defer span.End()
+		ctx = withTracer(ctx, g.tracer)
 		ctx, accum := withDispatchAccumulator(ctx)
 		ctx = withInjectCache(ctx)
 		ctx = withHTTPRequest(ctx, r)

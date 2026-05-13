@@ -55,6 +55,19 @@ func (d *protoDirectSubscriptionDispatcher) Dispatch(ctx context.Context, args m
 	ver := d.pool.key.version
 	method := fmt.Sprintf("/%s/%s", d.sd.FullName(), d.md.Name())
 
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.proto.subscription",
+		namespaceAttr(ns),
+		versionAttr(ver),
+		methodAttr(string(d.md.Name())),
+		grpcSystemAttr(),
+		rpcMethodAttr(method),
+	)
+	// Subscription spans wrap the OPEN-side only — the stream lifetime
+	// is unbounded; the span ends once SendMsg + CloseSend complete.
+	// Per-event spans would balloon trace volume without payoff.
+	defer span.End()
+
 	// Try-acquire stream caps: non-blocking. Subscriptions don't
 	// queue — hitting the cap is an immediate ResourceExhausted.
 	acquiredGlobal := d.g.streamGlobalSem == nil
@@ -124,6 +137,7 @@ func (d *protoDirectSubscriptionDispatcher) Dispatch(ctx context.Context, args m
 		ServerStreams: true,
 		ClientStreams: false,
 	}
+	ctx = tr.injectGRPC(ctx)
 	stream, err := r.conn.NewStream(ctx, streamDesc, method)
 	if err != nil {
 		rollbackSlots()

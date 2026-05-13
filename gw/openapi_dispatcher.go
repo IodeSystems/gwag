@@ -50,6 +50,15 @@ func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pa
 }
 
 func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	tr := tracerFromContext(ctx)
+	ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.openapi",
+		namespaceAttr(d.ns),
+		versionAttr(d.ver),
+		methodAttr(d.label),
+		httpMethodAttr(d.method),
+		httpRouteAttr(d.pathTemplate),
+	)
+	defer span.End()
 	start := time.Now()
 	r := d.src.pickReplica()
 	if r == nil {

@@ -442,6 +442,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 			httpRouteAttr(route.path),
 		)
 		defer span.End()
+		ctx = withTracer(ctx, g.tracer)
 		ctx = withInjectCache(ctx)
 		ctx = withHTTPRequest(ctx, r)
 		streamSSE(ctx, w, route, args)
@@ -459,6 +460,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		httpRouteAttr(route.path),
 	)
 	defer span.End()
+	ctx = withTracer(ctx, g.tracer)
 	ctx, accum := withDispatchAccumulator(ctx)
 	ctx = withInjectCache(ctx)
 	ctx = withHTTPRequest(ctx, r)

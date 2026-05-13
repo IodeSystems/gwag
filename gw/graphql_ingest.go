@@ -470,6 +470,7 @@ func dispatchGraphQL(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
+	tracerFromContext(ctx).injectHTTP(ctx, req.Header)
 	if client == nil {
 		client = http.DefaultClient
 	}

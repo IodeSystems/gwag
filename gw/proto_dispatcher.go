@@ -50,6 +50,15 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 	outputDesc := md.Output()
 	ns, ver := p.key.namespace, p.key.version
 	return Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+		tr := tracerFromContext(ctx)
+		ctx, span := tr.startDispatchSpan(ctx, "gateway.dispatch.proto",
+			namespaceAttr(ns),
+			versionAttr(ver),
+			methodAttr(string(md.Name())),
+			grpcSystemAttr(),
+			rpcMethodAttr(method),
+		)
+		defer span.End()
 		start := time.Now()
 		r := p.pickReplica()
 		if r == nil {
@@ -92,6 +101,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
+		ctx = tr.injectGRPC(ctx)
 		resp := acquireDynamicMessage(outputDesc)
 		err = r.conn.Invoke(ctx, method, req, resp)
 		elapsed := time.Since(start)

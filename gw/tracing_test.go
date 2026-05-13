@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	greeterv1 "github.com/iodesystems/gwag/examples/multi/gen/greeter/v1"
 )
@@ -211,5 +213,159 @@ func TestTracing_NoopWhenUnset(t *testing.T) {
 	}
 	if gw.tracer.enabled {
 		t.Fatal("tracer.enabled must be false when WithTracer unset")
+	}
+}
+
+func TestTracing_GraphQLDispatchSpan_NestsUnderIngress(t *testing.T) {
+	gw, exp, _ := newTracingFixture(t)
+
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", gw.Handler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body := `{"query":"{ greeter { v1 { hello(name: \"world\") { greeting } } } }"}`
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+
+	spans := exp.GetSpans()
+	ingress := findSpan(spans, "gateway.graphql")
+	dispatch := findSpan(spans, "gateway.dispatch.proto")
+	if ingress == nil || dispatch == nil {
+		t.Fatalf("missing spans; got=%v", spanNamesFor(spans))
+	}
+	if dispatch.Parent.SpanID() != ingress.SpanContext.SpanID() {
+		t.Fatalf("dispatch.parent=%s want=ingress.span=%s",
+			dispatch.Parent.SpanID(), ingress.SpanContext.SpanID())
+	}
+	if dispatch.SpanContext.TraceID() != ingress.SpanContext.TraceID() {
+		t.Fatalf("dispatch trace_id=%s want=%s",
+			dispatch.SpanContext.TraceID(), ingress.SpanContext.TraceID())
+	}
+}
+
+func TestTracing_OpenAPIDispatch_InjectsTraceparent(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	gotTraceparent := make(chan string, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotTraceparent <- r.Header.Get("traceparent"):
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")), WithTracer(tp))
+	t.Cleanup(gw.Close)
+
+	spec := []byte(`{
+  "openapi": "3.0.0",
+  "info": {"title": "T", "version": "1"},
+  "paths": {
+    "/echo": {"get": {"operationId": "echo", "responses": {"200": {"description": "ok"}}}}
+  }
+}`)
+	if err := gw.AddOpenAPIBytes(spec, To(backend.URL), As("echo")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", gw.IngressHandler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/echo")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+
+	got := <-gotTraceparent
+	if got == "" {
+		t.Fatal("backend did not see traceparent on outbound request")
+	}
+	if !strings.HasPrefix(got, "00-") {
+		t.Fatalf("traceparent has unexpected format: %q", got)
+	}
+	spans := exp.GetSpans()
+	ingress := findSpan(spans, "gateway.http")
+	dispatch := findSpan(spans, "gateway.dispatch.openapi")
+	if ingress == nil || dispatch == nil {
+		t.Fatalf("missing spans; got=%v", spanNamesFor(spans))
+	}
+	if dispatch.SpanContext.TraceID() != ingress.SpanContext.TraceID() {
+		t.Fatalf("dispatch trace_id mismatch")
+	}
+	if !strings.Contains(got, dispatch.SpanContext.TraceID().String()) {
+		t.Fatalf("outbound traceparent=%q did not encode dispatch trace_id=%s",
+			got, dispatch.SpanContext.TraceID())
+	}
+}
+
+func TestTracing_GRPCDispatch_InjectsTraceparent(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	greeter := &fakeGreeterServer{}
+	var lastTraceparent atomic.Value // string
+	greeter.helloFn = func(ctx context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		if v := md.Get("traceparent"); len(v) > 0 {
+			lastTraceparent.Store(v[0])
+		} else {
+			lastTraceparent.Store("")
+		}
+		return &greeterv1.HelloResponse{Greeting: "hello " + req.GetName()}, nil
+	}
+	gsrv := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(gsrv, greeter)
+	go func() { _ = gsrv.Serve(lis) }()
+	t.Cleanup(gsrv.Stop)
+
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")), WithTracer(tp))
+	t.Cleanup(gw.Close)
+	if err := gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
+		To(lis.Addr().String()), As("greeter")); err != nil {
+		t.Fatalf("AddProtoBytes: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", gw.Handler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body := `{"query":"{ greeter { v1 { hello(name: \"x\") { greeting } } } }"}`
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+
+	got, _ := lastTraceparent.Load().(string)
+	if got == "" {
+		t.Fatal("backend did not observe traceparent in incoming gRPC metadata")
+	}
+	spans := exp.GetSpans()
+	dispatch := findSpan(spans, "gateway.dispatch.proto")
+	if dispatch == nil {
+		t.Fatalf("no dispatch span; got=%v", spanNamesFor(spans))
+	}
+	if !strings.Contains(got, dispatch.SpanContext.TraceID().String()) {
+		t.Fatalf("outbound traceparent=%q did not encode dispatch trace_id=%s",
+			got, dispatch.SpanContext.TraceID())
 	}
 }

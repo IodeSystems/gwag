@@ -385,7 +385,7 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		// timing lands in the trace; child spans on the dispatcher
 		// path land under the ingress span via the per-dispatch wiring.
 		ctx := g.tracer.extractGRPC(stream.Context())
-		_, span := g.tracer.startIngressSpan(ctx, "gateway.grpc.subscription",
+		ctx, span := g.tracer.startIngressSpan(ctx, "gateway.grpc.subscription",
 			ingressAttr("grpc"),
 			namespaceAttr(ns),
 			versionAttr(ver),
@@ -394,7 +394,8 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 			rpcMethodAttr(method),
 		)
 		defer span.End()
-		return g.serveGRPCStreamingUnknown(stream, route)
+		ctx = withTracer(ctx, g.tracer)
+		return g.serveGRPCStreamingUnknown(ctx, stream, route)
 	}
 
 	req := acquireDynamicMessage(route.inputDesc)
@@ -419,6 +420,7 @@ func (g *Gateway) serveGRPCUnknown(_ any, stream grpc.ServerStream) error {
 		rpcMethodAttr(method),
 	)
 	defer span.End()
+	ctx = withTracer(ctx, g.tracer)
 	ctx, accum := withDispatchAccumulator(ctx)
 	ctx = withInjectCache(ctx)
 	start := time.Now()
@@ -454,7 +456,7 @@ const (
 	mdSubscribeKid       = "x-gateway-kid"
 )
 
-func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grpcIngressRoute) error {
+func (g *Gateway) serveGRPCStreamingUnknown(ctx context.Context, stream grpc.ServerStream, route *grpcIngressRoute) error {
 	req := acquireDynamicMessage(route.inputDesc)
 	defer releaseDynamicMessage(route.inputDesc, req)
 	if err := stream.RecvMsg(req); err != nil {
@@ -477,7 +479,7 @@ func (g *Gateway) serveGRPCStreamingUnknown(stream grpc.ServerStream, route *grp
 		}
 	}
 
-	ctx := withInjectCache(stream.Context())
+	ctx = withInjectCache(ctx)
 
 	out, err := route.streamDispatcher.Dispatch(ctx, args)
 	if err != nil {
