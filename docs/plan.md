@@ -46,8 +46,10 @@ Priority order below (top → bottom). Pitch sets framing for everything else; A
 
 **The push.** v1 advertises "this surface won't break for 1.x." Today we can't make that promise — `gw/` has accreted exports through every feature workstream; some are intentionally public (`Option`, `Register*`, `With*`), some are test helpers that escaped, some are types that leaked for one caller. Without a curated split, the promise is unbounded. One pass with a public/internal classification before v1, then keep it. Lands before uploads / WS caps / tracing so new options ship on the locked surface.
 
+**Done.** `gw/` classified in `docs/api-audit.md` — 94 Public / 25 Internal / 8 Keep-Public-Pending-Review / 0 Deprecated (ae6e42f). Boundary calls ruled on: IR re-export shims dropped (4fb9a54); InternalProto handler types, admin-internal MCP/stats/inject wire types, BackpressureConfig+Middleware, the Hide/Nullable rewrite concrete types, the auth/HTTP context helpers, and Transform.{Headers,Inventory} (now opaque) all unexported (7923f9e). Handler+Middleware function types stayed Public on review — `docs/middleware.md` documents the manual `Transform{Runtime: mw}` pattern, which the audit initially missed.
+
 **Todo.**
-- [ ] **Audit `gw/` exports; classify Public / Internal / Deprecated.** Walk `go doc github.com/iodesystems/gwag/gw` output, decide per symbol. Move internal helpers to `gw/internal/...` or unexport; nothing breaks at the import boundary. ~1.5d.
+- [x] **Audit `gw/` exports; classify Public / Internal / Deprecated.** Walk `go doc github.com/iodesystems/gwag/gw` output, decide per symbol. Move internal helpers to `gw/internal/...` or unexport; nothing breaks at the import boundary. ~1.5d.
 - [ ] **Same pass for `gw/gat`.** Smaller surface — lock before gat's proto-ingest todo (Tier 2) lands. ~0.5d.
 - [ ] **Same pass for `gw/ir`.** Public-by-design (gat consumes it); quick sanity audit. ~0.25d.
 - [ ] **`docs/stability.md`.** SemVer promise spelled out: what counts as a breaking `Option` change vs additive; wire-format guarantees on `proto_source` / `openapi_spec`; when the IR is allowed to evolve. ~0.5d.
