@@ -2,29 +2,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A polyglot API gateway. Register services that speak gRPC, OpenAPI,
-or GraphQL; clients consume them as any of the three. Auth, quotas,
-backpressure, metrics, tracing, and MCP derive from one unified
-schema, declared once and applied at every protocol edge.
+A schema gateway for Go services. Ingest gRPC, OpenAPI, or GraphQL;
+emit all three as typed client surfaces. Tier-versioned with a CI
+gate on breaking changes; client teams keep their existing codegen
+tools.
+
+Two configurations:
+
+- **`gat`** — embed in a Go binary. Your huma OpenAPI service serves
+  REST as before; gat adds GraphQL and gRPC client surfaces from the
+  same handlers. No second schema, no second process.
+- **`gwag`** — out-of-process gateway. The seam when a monolith
+  outgrows its singleton: register multiple services together,
+  clustered via embedded NATS, while pieces migrate out at their own
+  pace.
+
+Start on gat. Graduate to gwag when a piece of the monolith needs
+to split.
 
 ## What it gives you
 
-- **GraphQL + gRPC on top of a huma OpenAPI server.** Same handlers,
-  same port, no second schema, no second binary. `gat` mode; see
-  [Embedded mode (`gat`)](#embedded-mode-gat).
-
-- **Composition of mixed-protocol services under one schema.**
-  Register gRPC, OpenAPI, and GraphQL services together; clients query
-  the composed schema in one request, and the same schema feeds an
-  MCP endpoint for LLM agents. Clustered via embedded NATS +
-  JetStream — any node dispatches to any service registered with any
-  peer.
-
-- **Typed clients in any protocol against any upstream.** proto
-  upstream → typed TS or OpenAPI clients. OpenAPI upstream → typed
-  gRPC or GraphQL clients. The registry round-trips through all
-  three IRs; each client team uses the codegen tool it already runs,
-  off the same `/api/schema/*` endpoint.
+Beyond the lead — the pieces that need their own mechanics paragraph:
 
 - **Tier-based versioning with a CI gate.** `unstable` / `stable` /
   `vN`; older `vN` is auto-`@deprecated`; CI fails the build on a
