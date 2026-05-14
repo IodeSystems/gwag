@@ -276,6 +276,11 @@ func writeFields(b *strings.Builder, fields graphql.FieldDefinitionMap) {
 }
 
 func writeArgs(b *strings.Builder, args []*graphql.Argument) {
+	// graphql-go materializes Args from FieldConfigArgument (a map), so
+	// the slice order is randomized per process. Sort by name so the SDL
+	// is reproducible — matches writeFields / writeInputObject / writeEnum.
+	args = append([]*graphql.Argument(nil), args...)
+	sort.Slice(args, func(i, j int) bool { return args[i].Name() < args[j].Name() })
 	hasDesc := false
 	for _, a := range args {
 		if a.Description() != "" {
