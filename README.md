@@ -7,6 +7,8 @@ emit all three as typed client surfaces. Tier-versioned with a CI
 gate on breaking changes; client teams keep their existing codegen
 tools.
 
+![Live registration: each new service binary appears in the gateway's Services panel without a restart](docs/img/live-reload.gif)
+
 Two configurations:
 
 - **`gat`** — embed in a Go binary. Your huma OpenAPI service serves
