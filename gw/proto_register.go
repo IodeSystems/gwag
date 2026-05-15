@@ -24,6 +24,8 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 	headers := g.headerInjectorSnapshot()
 	metrics := g.cfg.metrics
 	bp := g.cfg.backpressure
+	uploadStore := g.cfg.uploadStore
+	uploadLimit := g.cfg.uploadLimit
 	for _, slot := range g.slots {
 		switch slot.kind {
 		case slotKindProto:
@@ -49,7 +51,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 						continue
 					}
 					label := methodLabel(sd, md)
-					core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp)
+					core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp, uploadStore, uploadLimit)
 					dispatcher := backpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
 					dispatcher = g.quotaMiddleware(p.key.namespace, p.key.version)(dispatcher)
 					dispatcher = g.callerIDEnforceMiddleware()(dispatcher)

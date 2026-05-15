@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/IodeSystems/graphql-go/language/ast"
@@ -28,6 +29,16 @@ type protoDispatcher struct {
 	namespace string
 	version   string
 	op        string
+
+	// uploadStore + uploadLimit snapshot g.cfg at schema-build time so
+	// per-dispatch *Upload args bound to bytes fields marked
+	// `(gwag.upload.v1.upload) = true` materialise here without
+	// reaching back into the gateway. Nil store + a tus-staged value
+	// surfaces as a configuration error from (*Upload).Open. Zero
+	// uploadLimit = no cap (inline is already capped at the ingress;
+	// tus is capped at the PATCH path).
+	uploadStore UploadStore
+	uploadLimit int64
 }
 
 // newProtoInvocationHandler returns the proto-native inner Handler
@@ -125,14 +136,16 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 // time; with backpressureMiddleware now the outer layer the dwell
 // metric carries the queue portion separately. No test asserts on
 // the prior shape.
-func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, headers []headerInjector, metrics Metrics, bpOpts BackpressureOptions) *protoDispatcher {
+func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor, chain Middleware, headers []headerInjector, metrics Metrics, bpOpts BackpressureOptions, uploadStore UploadStore, uploadLimit int64) *protoDispatcher {
 	inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
 	return &protoDispatcher{
-		inputDesc: md.Input(),
-		handler:   chain(inner),
-		namespace: p.key.namespace,
-		version:   p.key.version,
-		op:        string(md.Name()),
+		inputDesc:   md.Input(),
+		handler:     chain(inner),
+		namespace:   p.key.namespace,
+		version:     p.key.version,
+		op:          string(md.Name()),
+		uploadStore: uploadStore,
+		uploadLimit: uploadLimit,
 	}
 }
 
@@ -146,6 +159,13 @@ func newProtoDispatcher(p *pool, sd protoreflect.ServiceDescriptor, md protorefl
 // marshaling by then, so the buffer is safe to reuse).
 func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
+	closeUploadReaders, err := d.materializeUploadArgs(ctx, args)
+	if closeUploadReaders != nil {
+		defer closeUploadReaders()
+	}
+	if err != nil {
+		return nil, err
+	}
 	req := acquireDynamicMessage(d.inputDesc)
 	defer releaseDynamicMessage(d.inputDesc, req)
 	if err := argsToMessage(args, req); err != nil {
@@ -175,6 +195,13 @@ func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 // the projected wedge for proto-origin services.
 func (d *protoDispatcher) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
 	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
+	closeUploadReaders, err := d.materializeUploadArgs(ctx, args)
+	if closeUploadReaders != nil {
+		defer closeUploadReaders()
+	}
+	if err != nil {
+		return dst, err
+	}
 	req := acquireDynamicMessage(d.inputDesc)
 	defer releaseDynamicMessage(d.inputDesc, req)
 	if err := argsToMessage(args, req); err != nil {
@@ -249,3 +276,103 @@ func acquireReplicaSlot(ctx context.Context, r *replica, p *pool, label string, 
 
 // Compile-time assertion: protoDispatcher implements ir.Dispatcher.
 var _ ir.Dispatcher = (*protoDispatcher)(nil)
+
+// materializeUploadArgs walks d.inputDesc looking for bytes fields
+// marked `(gwag.upload.v1.upload) = true` and replaces any *Upload
+// values in `args` with the upload's body bytes (capped at
+// d.uploadLimit). Recurses into message-typed args so nested upload
+// fields work. Returns a closer that releases every reader the
+// helper opened — caller defers it regardless of error.
+//
+// Args without an Upload-flagged target field, args whose value
+// isn't *Upload, and Upload-flagged fields with no corresponding arg
+// entry are all no-ops. Read errors and limit overruns surface as
+// dispatch errors so the caller can return them to the client.
+func (d *protoDispatcher) materializeUploadArgs(ctx context.Context, args map[string]any) (func(), error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	var openers []io.Closer
+	closer := func() {
+		for _, r := range openers {
+			_ = r.Close()
+		}
+	}
+	if err := materializeUploadFieldsInto(ctx, args, d.inputDesc, d.uploadStore, d.uploadLimit, &openers); err != nil {
+		return closer, err
+	}
+	if len(openers) == 0 {
+		return nil, nil
+	}
+	return closer, nil
+}
+
+// materializeUploadFieldsInto is the recursive worker. Walks every
+// field on `desc`; for each bytes field marked with the upload
+// extension, replaces a matching *Upload arg with its body bytes;
+// for message fields, recurses into the nested map. Filename /
+// ContentType / Size on the *Upload are not threaded into the proto
+// message — those would need their own fields on the user's proto;
+// the binding is intentionally minimal.
+func materializeUploadFieldsInto(ctx context.Context, args map[string]any, desc protoreflect.MessageDescriptor, store UploadStore, limit int64, openers *[]io.Closer) error {
+	fields := desc.Fields()
+	for i := 0; i < fields.Len(); i++ {
+		fd := fields.Get(i)
+		key := lowerCamel(string(fd.Name()))
+		v, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch fd.Kind() {
+		case protoreflect.BytesKind:
+			if !ir.IsUploadField(fd) {
+				continue
+			}
+			up, ok := v.(*Upload)
+			if !ok {
+				continue
+			}
+			body, err := readUploadBytes(ctx, up, store, limit, openers)
+			if err != nil {
+				return fmt.Errorf("upload arg %q: %w", key, err)
+			}
+			args[key] = body
+		case protoreflect.MessageKind, protoreflect.GroupKind:
+			nested, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := materializeUploadFieldsInto(ctx, nested, fd.Message(), store, limit, openers); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// readUploadBytes opens the upload, caps the read at `limit` (0 =
+// no cap), and returns the body bytes. The opened reader is added
+// to `openers` so the caller's deferred close releases it; reading
+// to EOF doesn't relieve the close obligation (tus-staged readers
+// hold a file handle).
+func readUploadBytes(ctx context.Context, up *Upload, store UploadStore, limit int64, openers *[]io.Closer) ([]byte, error) {
+	rc, err := up.Open(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	*openers = append(*openers, rc)
+	var src io.Reader = rc
+	if limit > 0 {
+		// Read one extra byte so a body that exactly fills the cap
+		// succeeds while one that overruns surfaces as an error.
+		src = io.LimitReader(rc, limit+1)
+	}
+	body, err := io.ReadAll(src)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && int64(len(body)) > limit {
+		return nil, fmt.Errorf("upload exceeds WithUploadLimit (%d bytes)", limit)
+	}
+	return body, nil
+}

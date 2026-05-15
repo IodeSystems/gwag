@@ -48,10 +48,21 @@ func fieldInfosFor(md protoreflect.MessageDescriptor) []protoFieldInfo {
 // argsToMessage walks `args` (graphql-decoded JSON-ish: map[string]any,
 // []any, primitives) and writes them into `msg` according to its
 // descriptor. Unknown args are ignored; type mismatches return errors.
+//
+// Unmaterialised *Upload values on bytes fields are silently skipped:
+// the proto dispatcher's materializeUploadArgs replaces them with
+// []byte before this runs; the canonical-chain wrapper (synth-message
+// path used by openapi/graphql ingest with runtime middleware) has
+// no upload store and shouldn't fail when an Upload arg flows
+// through — preserving the *Upload in the args map lets the inner
+// dispatcher consume it.
 func argsToMessage(args map[string]any, msg *dynamicpb.Message) error {
 	for _, info := range fieldInfosFor(msg.Descriptor()) {
 		v, ok := args[info.jsonKey]
 		if !ok {
+			continue
+		}
+		if _, isUpload := v.(*Upload); isUpload {
 			continue
 		}
 		if err := setField(msg, info.fd, v); err != nil {
@@ -136,11 +147,14 @@ func toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoreflect.Value, 
 		}
 		return protoreflect.ValueOfString(s), nil
 	case protoreflect.BytesKind:
-		s, ok := v.(string)
-		if !ok {
-			return protoreflect.Value{}, fmt.Errorf("expected string for bytes, got %T", v)
+		switch x := v.(type) {
+		case []byte:
+			return protoreflect.ValueOfBytes(x), nil
+		case string:
+			return protoreflect.ValueOfBytes([]byte(x)), nil
+		default:
+			return protoreflect.Value{}, fmt.Errorf("expected string or []byte for bytes, got %T", v)
 		}
-		return protoreflect.ValueOfBytes([]byte(s)), nil
 	case protoreflect.EnumKind:
 		switch x := v.(type) {
 		case int32:

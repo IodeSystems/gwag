@@ -63,7 +63,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	// proto package don't trip graphql-go's duplicate-named-type
 	// rejection (proto FullNames are globally unique, so a single
 	// merged Types map is collision-free).
-	protoTB := newProtoIRTypeBuilder(g.slots, hidesSet)
+	protoTB := newProtoIRTypeBuilder(g.slots, hidesSet, UploadScalar())
 
 	rootFields := graphql.Fields{}
 

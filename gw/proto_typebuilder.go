@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"github.com/IodeSystems/graphql-go"
+
 	"github.com/iodesystems/gwag/gw/ir"
 )
 
@@ -11,8 +13,13 @@ import (
 // across the Query / Subscription roots.
 //
 // Hides is applied to the merged service in-place so the type-builder
-// emits Object/Input types without hidden fields.
-func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *ir.IRTypeBuilder {
+// emits Object/Input types without hidden fields. uploadType is the
+// graphql Output bound to TypeRef{Builtin: ScalarUpload} args/fields
+// — the gateway threads gw.UploadScalar() so proto bytes fields
+// marked `(gwag.upload.v1.upload) = true` render as `Upload` rather
+// than the `String` fallback the typebuilder uses when no Upload
+// type is registered.
+func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool, uploadType graphql.Output) *ir.IRTypeBuilder {
 	merged := &ir.Service{Types: map[string]*ir.Type{}}
 	for _, slot := range slots {
 		var svcs []*ir.Service
@@ -47,5 +54,7 @@ func newProtoIRTypeBuilder(slots map[poolKey]*slot, hides map[string]bool) *ir.I
 		UnionName:  exportedName,
 		InputName:  func(s string) string { return exportedName(s) + "_Input" },
 		FieldName:  lowerCamel,
-	}, ir.IRTypeBuilderOptions{})
+	}, ir.IRTypeBuilderOptions{
+		UploadType: uploadType,
+	})
 }

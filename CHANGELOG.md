@@ -10,6 +10,16 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Proto `bytes` field → `Upload` arg binding. Mark a `bytes` field
+  with `[(gwag.upload.v1.upload) = true]` (extension declared at
+  `gwag/upload/v1/options.proto`) and the gateway exposes it as a
+  GraphQL `Upload` arg; the proto dispatcher reads the upload body
+  (inline graphql-multipart-spec or tus-staged) into the field,
+  capped by `WithUploadLimit`. Closes the proto-side gap in the
+  upload story — OpenAPI `multipart/form-data` already mapped to
+  `Upload`. New IR helper `ir.IsUploadField`; new public symbol
+  `gw/proto/upload/v1.E_Upload`. Worked end-to-end in
+  `gw/upload_proto_test.go`.
 - `ir.AppendDispatcher` (gw/ir/dispatch.go) — optional capability
   interface for dispatchers that can emit their result as JSON bytes
   directly. The runtime renderer prefers `DispatchAppend` over
@@ -228,6 +238,13 @@ changes on MINOR, drops on MAJOR.
   `/api/admin/mcp/include` POST blew the seed away. The CAS path
   now falls back to the local snapshot on `ErrKeyNotFound`; after
   the first Put, KV stays authoritative as before.
+- `gwag serve --mcp` now works with `--openapi` and `--proto`, not
+  only `--graphql`. When `--mcp` (or `--mcp-include`) is set, the run
+  promotes from the lite gat path onto the full `*gateway.Gateway`
+  so `/mcp` shares dispatcher, plan cache, and metrics with every
+  other ingress. The `/api/graphql` + `/api/schema/*` URL shape
+  matches the existing `--graphql` flow; `--prefix` is ignored when
+  `--mcp` is on.
 - `examples/multi`: MCP mount moved from `/api/mcp` to `/mcp`, and
   the example seeds the allowlist with `WithMCPInclude("greeter.**",
   "library.**", "admin.**")`. Operators previously needed to POST to

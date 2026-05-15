@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package gwag.upload.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/iodesystems/gwag/gw/proto/upload/v1;uploadv1";
+
+extend google.protobuf.FieldOptions {
+  // Marks a `bytes` field as accepting a graphql `Upload!` value.
+  // The gateway exposes the field as an `Upload!` arg in the
+  // generated GraphQL schema; the dispatcher reads the upload body
+  // (inline multipart or tus-staged) into the field, capped by the
+  // gateway's `WithUploadLimit`. Only valid on `bytes` fields —
+  // ingest ignores the option on every other kind.
+  //
+  // Custom-option number 51235 is in the descriptor.proto in-house
+  // 50000–99999 range; gateway-internal so the in-house range is
+  // correct (per descriptor.proto guidance).
+  optional bool upload = 51235;
+}

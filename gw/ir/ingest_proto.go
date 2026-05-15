@@ -6,6 +6,17 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+// uploadExtensionFullName is the proto full name of the
+// `(gwag.upload.v1.upload)` extension declared in
+// `gw/proto/upload/v1/options.proto`. We compare by extension full
+// name rather than via the generated `uploadv1.E_Upload` type
+// because protocompile resolves options against its own descriptor
+// pool — `proto.GetExtension` panics when the value's concrete type
+// doesn't match the generated extension type. The protoreflect
+// Range pattern works regardless of which pool the descriptor came
+// from.
+const uploadExtensionFullName = "gwag.upload.v1.upload"
+
 // IngestProto walks `fd` and returns one Service per service
 // declared in the file. Each returned Service.Origin is the
 // FileDescriptorProto for fd, so a same-kind render can reproduce
@@ -223,6 +234,9 @@ func fieldTypeRef(f protoreflect.FieldDescriptor) TypeRef {
 	case protoreflect.StringKind:
 		return TypeRef{Builtin: ScalarString}
 	case protoreflect.BytesKind:
+		if IsUploadField(f) {
+			return TypeRef{Builtin: ScalarUpload}
+		}
 		return TypeRef{Builtin: ScalarBytes}
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		return TypeRef{Builtin: ScalarInt32}
@@ -243,6 +257,35 @@ func fieldTypeRef(f protoreflect.FieldDescriptor) TypeRef {
 func messageRef(md protoreflect.MessageDescriptor) *TypeRef {
 	r := TypeRef{Named: string(md.FullName())}
 	return &r
+}
+
+// IsUploadField returns true when a proto field carries
+// `[(gwag.upload.v1.upload) = true]`. Reads the option via
+// protoreflect.Range + extension-FullName match so both the global
+// protobuf-go pool (AddProtoDescriptor path) and protocompile's
+// pool (AddProto path) work without panicking.
+//
+// Stability: stable
+func IsUploadField(f protoreflect.FieldDescriptor) bool {
+	opts := f.Options()
+	if opts == nil {
+		return false
+	}
+	var found bool
+	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if !fd.IsExtension() {
+			return true
+		}
+		if string(fd.FullName()) != uploadExtensionFullName {
+			return true
+		}
+		if fd.Kind() == protoreflect.BoolKind && v.Bool() {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // stringFromComments pulls leading comments off a descriptor.

@@ -20,7 +20,7 @@ normalises to the same `ScalarUpload` token.
 | Ingest format | Marker for "this is an upload" |
 |---|---|
 | **OpenAPI** | Operation with `requestBody.content["multipart/form-data"]` and a property whose schema is `type: string, format: binary` (or `format: byte`). Arrays of binary props produce `[Upload!]!`. Other form-data properties become regular scalar args. |
-| **Proto** | *Deferred.* When pulled, expect a field-level extension `[(gwag.upload) = true]` on a `bytes` field. Document an adopter convention until then. |
+| **Proto** | A `bytes` field marked `[(gwag.upload.v1.upload) = true]` (extension at `gwag/upload/v1/options.proto`). The dispatcher reads the upload body into the field, capped by `WithUploadLimit`. See "Proto bytes binding" below. |
 | **Downstream GraphQL** (`AddGraphQL`) | If the upstream service already declares its own `Upload` scalar, the mirror passes it through as `Upload`. |
 
 The same operation, declared either way, shows up in the gateway's
@@ -127,6 +127,57 @@ Authentication: tus endpoints are **public by design** — the upload
 id is cryptographically random (16 bytes hex) and acts as the
 credential. Wrap `UploadsTusHandler()` with bearer-level auth if you
 need it.
+
+## Proto bytes binding
+
+For proto-ingested services, mark a `bytes` field with the
+`(gwag.upload.v1.upload)` field extension and the gateway exposes
+it as a GraphQL `Upload` arg instead of `String` (the default
+mapping for `bytes`):
+
+```proto
+syntax = "proto3";
+package files.v1;
+
+import "gwag/upload/v1/options.proto";
+
+service FilesService {
+  rpc Upload(UploadRequest) returns (UploadResponse);
+}
+
+message UploadRequest {
+  bytes data = 1 [(gwag.upload.v1.upload) = true];
+  string filename = 2;
+}
+```
+
+The extension is published from `gw/proto/upload/v1/options.proto`
+in the gwag repository. Vendor it into your protos directory or
+fetch it via your proto module manager; protocompile resolves it
+through the same import path the file declares.
+
+At dispatch time the proto dispatcher accepts both wire shapes
+exposed by the `Upload` scalar — inline graphql-multipart-spec
+(`*Upload` with body bytes already in memory) and tus-staged
+(`*Upload{TusID: …}` materialised from `WithUploadStore`) — reads
+the body capped by `WithUploadLimit`, and writes the bytes into the
+proto field via dynamicpb. The dispatcher always reads the upload
+fully into memory before the gRPC call (gRPC unary needs a complete
+request), so the cap is what bounds memory.
+
+Limitations:
+- One extension value per field — `true` opts in; `false` or
+  omitting the option leaves the field as plain `bytes` (`String`
+  on the GraphQL side).
+- The extension is only meaningful on `bytes` fields. Setting it on
+  any other kind is a no-op.
+- Filename / content-type metadata don't ride through to the proto
+  message — there's no convention for "the field that carries the
+  upload's filename." If your upstream needs it, declare a sibling
+  `string filename` field and your client passes it explicitly.
+- Repeated `bytes` (`bytes data = 1 [(gwag.upload.v1.upload) =
+  true];` with `repeated`) is not yet supported. Pull when an
+  adopter needs multi-file proto uploads.
 
 ## Gateway configuration
 

@@ -348,6 +348,8 @@ func typeRefStr(r TypeRef, repeated, required, itemRequired bool) string {
 			inner = "Float"
 		case ScalarBytes, ScalarString, ScalarTimestamp:
 			inner = "String"
+		case ScalarUpload:
+			inner = "Upload"
 		case ScalarID:
 			inner = "ID"
 		default:
