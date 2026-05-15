@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# bin/gwag — run the gwag gateway from a per-arch cached build.
+#
+#   bin/gwag <args>            run; builds once into bin/.run/ on first use
+#   REBUILD=1 bin/gwag <args>  force a fresh Go build, then run
+#
+# The cached binary is keyed by GOOS/GOARCH so a checkout shared across
+# machines (NFS, cross-arch containers) never execs the wrong binary.
+#
+# gwag embeds ui/dist via //go:embed. If the UI bundle is absent this
+# seeds ui/fallback/index.html so the binary links and starts — run
+# bin/build for the real admin console.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR"
+
+BIN="bin/.run/gwag-$(go env GOOS)-$(go env GOARCH)"
+
+if [[ ! -x "$BIN" || -n "${REBUILD:-}" ]]; then
+    if [[ ! -f ui/dist/index.html ]]; then
+        echo "==> ui/dist empty, seeding ui/fallback/ (run bin/build for the real UI)" >&2
+        mkdir -p ui/dist
+        cp ui/fallback/index.html ui/dist/index.html
+    fi
+    echo "==> building $BIN" >&2
+    mkdir -p "$(dirname "$BIN")"
+    go build -o "$BIN" ./gw/cmd/gwag
+fi
+
+exec "$BIN" "$@"

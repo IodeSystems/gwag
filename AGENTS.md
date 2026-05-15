@@ -77,9 +77,16 @@ UI embed, self-ingested OpenAPI, NATS cluster, graceful drain.
 ## Binary
 
 ```
-go run ./gw/cmd/gwag --proto foo.proto=foo-svc:50051 --addr :8080
-go run ./gw/cmd/gwag up                # zero-config: NATS + admin + UI
+bin/gwag --proto foo.proto=foo-svc:50051 --addr :8080
+bin/gwag up                            # zero-config: NATS + admin + UI
+REBUILD=1 bin/gwag up                  # force a fresh build first
 ```
+
+`bin/gwag` runs a per-arch cached build under `bin/.run/`; first run
+(or `REBUILD=1`) compiles `./gw/cmd/gwag`. Equivalent to
+`go run ./gw/cmd/gwag` but skips recompilation on every invocation.
+For the real admin UI, run `bin/build` first — `bin/gwag` only seeds
+the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
 Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
 `sign`, `login/logout/context/use`.
