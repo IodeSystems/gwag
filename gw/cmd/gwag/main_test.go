@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	gateway "github.com/iodesystems/gwag/gw"
 )
 
 func TestParseAllowTier(t *testing.T) {
@@ -54,6 +56,47 @@ func TestParseAllowTier(t *testing.T) {
 		}
 		if _, err := parseAllowTier(",,,"); err == nil {
 			t.Errorf("expected error for all-empty entries")
+		}
+	})
+}
+
+func TestParseMCPUpstream(t *testing.T) {
+	t.Run("http", func(t *testing.T) {
+		ns, tr, target, err := parseMCPUpstream("weather:http:https://mcp.example.com/mcp")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if ns != "weather" || tr != gateway.MCPHTTP || target != "https://mcp.example.com/mcp" {
+			t.Errorf("got (%q, %q, %q)", ns, tr, target)
+		}
+	})
+
+	t.Run("stdio-command-with-spaces", func(t *testing.T) {
+		ns, tr, target, err := parseMCPUpstream("files:stdio:npx -y @modelcontextprotocol/server-filesystem /tmp")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if ns != "files" || tr != gateway.MCPStdio {
+			t.Errorf("ns/transport wrong: %q %q", ns, tr)
+		}
+		if target != "npx -y @modelcontextprotocol/server-filesystem /tmp" {
+			t.Errorf("target = %q", target)
+		}
+	})
+
+	t.Run("rejects-bad-shape", func(t *testing.T) {
+		if _, _, _, err := parseMCPUpstream("nocolons"); err == nil {
+			t.Error("expected error for missing fields")
+		}
+		if _, _, _, err := parseMCPUpstream(":http:url"); err == nil {
+			t.Error("expected error for empty namespace")
+		}
+	})
+
+	t.Run("rejects-unknown-transport", func(t *testing.T) {
+		_, _, _, err := parseMCPUpstream("x:grpc:host:1")
+		if err == nil || !strings.Contains(err.Error(), "unknown transport") {
+			t.Errorf("expected unknown-transport error, got %v", err)
 		}
 	})
 }

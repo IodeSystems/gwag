@@ -1112,7 +1112,11 @@ func (g *Gateway) Close() {
 	g.peers = nil
 	store := g.cfg.uploadStore
 	owned := g.cfg.uploadStoreOwned
+	mcpClients := g.closeMCPClientsLocked()
 	g.mu.Unlock()
+	for _, c := range mcpClients {
+		_ = c.Close()
+	}
 	tracker.stop()
 	g.lifeCancel()
 	if owned {

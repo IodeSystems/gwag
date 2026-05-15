@@ -6,6 +6,10 @@
 /bin/.run/
 .claude/
 
+# `go build ./gw/cmd/gwag` from the repo root drops a `gwag` binary
+# here. Use `bin/gwag` (cached under bin/.run/) instead.
+/gwag
+
 # `gwag login` / `gwag up` write a project-local context directory
 # containing credentials.json (with admin bearer tokens) and per-
 # context runtime state (JetStream, admin-token persistence). Never

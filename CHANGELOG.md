@@ -10,6 +10,18 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Downstream MCP server ingestion — a fourth ingest kind alongside
+  proto / OpenAPI / GraphQL. `gw.AddMCP(transport, target, opts...)`
+  connects to an MCP server, runs `tools/list`, and re-exposes each
+  tool as a GraphQL Mutation; `tools/call` dispatches at request
+  time. Transports: `MCPStdio` (subprocess), `MCPHTTP` (Streamable
+  HTTP), `MCPSSE`. CLI: `gwag --mcp-upstream NS:TRANSPORT:TARGET`
+  (repeatable, also on `gwag up`). New public symbols `gw.AddMCP`,
+  `gw.MCPTransport` + `MCPStdio` / `MCPHTTP` / `MCPSSE`, `ir.IngestMCP`,
+  `ir.KindMCP`, `ir.MCPToolOrigin`. Tools-only — resources and
+  prompts are not ingested. See [`docs/mcp.md`](./docs/mcp.md).
+- `gwag --mcp` mounts the outbound MCP server at `/mcp` on the bare
+  `gwag` command (previously only `gwag serve` / `gwag up`).
 - Proto `bytes` field → `Upload` arg binding. Mark a `bytes` field
   with `[(gwag.upload.v1.upload) = true]` (extension declared at
   `gwag/upload/v1/options.proto`) and the gateway exposes it as a

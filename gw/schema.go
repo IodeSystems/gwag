@@ -84,6 +84,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
 		return nil, err
 	}
+	g.registerMCPDispatchersLocked(allSvcs)
 	long, jsonScalar := openAPISharedScalars()
 	var stableSnap map[string]int
 	if g.effectiveAllowedTiers().Stable {

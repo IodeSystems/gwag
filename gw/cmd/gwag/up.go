@@ -55,6 +55,8 @@ func upCmd(args []string) int {
 	insecureSubscribe := fs.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	signerSecret := fs.String("signer-secret", "", "Hex-encoded bearer for SignSubscriptionToken (admin token also works)")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
+	mcpUpstreams := &stringListValue{}
+	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
 		fmt.Fprintln(fs.Output(), "  Boots a standalone gateway: embedded NATS, admin endpoints, UI,")
@@ -161,6 +163,17 @@ func upCmd(args []string) int {
 		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")
 	}
 	mux.Handle("/", apiOrUIHandler(gateway.UIHandler(gwui.FS())))
+
+	for _, v := range mcpUpstreams.values {
+		ns, transport, target, err := parseMCPUpstream(v)
+		if err != nil {
+			log.Fatalf("--mcp-upstream: %v", err)
+		}
+		if err := gw.AddMCP(transport, target, gateway.As(ns)); err != nil {
+			log.Fatalf("register mcp upstream %q: %v", v, err)
+		}
+		log.Printf("registered mcp upstream %s (%s) → namespace %s", target, transport, ns)
+	}
 
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),

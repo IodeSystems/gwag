@@ -1,6 +1,6 @@
 # gwag — Agent Instructions
 
-A Go library + binary that fronts three kinds of upstream services
+A Go library + binary that fronts four kinds of upstream services
 under a single typed GraphQL surface:
 
 - **gRPC services** described by `.proto`, registered via
@@ -10,6 +10,9 @@ under a single typed GraphQL surface:
   `ServiceBinding.openapi_spec`).
 - **Existing GraphQL services** stitched in via `AddGraphQL`
   (boot-time introspection + namespace-prefixed type mirror).
+- **MCP servers** ingested via `AddMCP` (boot-time `tools/list`
+  introspection; each tool → a GraphQL Mutation). Tools-only;
+  stdio / Streamable-HTTP / SSE transports.
 
 Multi-gateway clustering via embedded NATS; subscriptions via NATS
 pub/sub with HMAC channel auth.
@@ -117,8 +120,15 @@ Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
   `SourceInfoStandard` so comments survive into SDL and MCP corpus.
   Control plane ships raw `.proto` bytes, not compiled FileDescriptorSet.
 - **ServiceOption** applies to every registration entry point
-  (`AddProto`, `AddOpenAPI`, `AddGraphQL`). Options: `To`, `As`, `Version`,
-  `AsInternal`, `ForwardHeaders`, `OpenAPIClient`, `ProtoImports`.
+  (`AddProto`, `AddOpenAPI`, `AddGraphQL`, `AddMCP`). Options: `To`,
+  `As`, `Version`, `AsInternal`, `ForwardHeaders`, `OpenAPIClient`,
+  `ProtoImports`. (`AddMCP` reads `As` / `Version` / `AsInternal`;
+  transport + target are positional.)
+- **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
+  once at registration via the `mark3labs/mcp-go` client; `slot.kind`
+  is `mcp`, the slot owns the live client (a subprocess for stdio).
+  No control-plane path. `ir.IngestMCP` takes raw JSON so `gw/ir`
+  carries no mcp-go dependency.
 
 ## Test Gotchas
 

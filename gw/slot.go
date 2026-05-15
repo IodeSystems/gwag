@@ -27,6 +27,11 @@ const (
 	// (`gwag.ps.v1.PubSub`); future migrations of admin operations
 	// off huma/OpenAPI can ride the same machinery.
 	slotKindInternalProto
+	// slotKindMCP is a slot fronting a downstream MCP server. The slot
+	// owns a live MCP client (stdio subprocess or HTTP/SSE connection)
+	// and the raw `tools/list` JSON; each tool ingests as a GraphQL
+	// Mutation. Boot-time introspection only — no control-plane path.
+	slotKindMCP
 )
 
 func (k slotKind) String() string {
@@ -39,6 +44,8 @@ func (k slotKind) String() string {
 		return "graphql"
 	case slotKindInternalProto:
 		return "internalproto"
+	case slotKindMCP:
+		return "mcp"
 	default:
 		return "unknown"
 	}
@@ -98,6 +105,7 @@ type slot struct {
 	openapi       *openAPISource
 	graphql       *graphQLSource
 	internalProto *internalProtoSource
+	mcp           *mcpSource
 
 	// channelBindings is the slot-level canonical list of pub/sub
 	// channel→payload-type pairings carried by this slot's source
@@ -355,6 +363,16 @@ func (g *Gateway) internalProtoSlot(key poolKey) *internalProtoSource {
 	return s.internalProto
 }
 
+// mcpSlot returns the MCP source stored on the slot at `key`, or nil.
+// Caller holds g.mu.
+func (g *Gateway) mcpSlot(key poolKey) *mcpSource {
+	s := g.slots[key]
+	if s == nil || s.kind != slotKindMCP {
+		return nil
+	}
+	return s.mcp
+}
+
 // bakeSlotIRLocked fills `s.ir` from the slot's per-kind handle,
 // applying the gateway's current schema-half transforms in the same
 // order the legacy `*ServicesAsIRLocked` walks did:
@@ -399,6 +417,16 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 			return
 		}
 		raw = ir.IngestProto(s.internalProto.file)
+	case slotKindMCP:
+		if s.mcp == nil {
+			return
+		}
+		svc, err := ir.IngestMCP(s.mcp.rawTools)
+		if err != nil {
+			s.ir = nil
+			return
+		}
+		raw = []*ir.Service{svc}
 	default:
 		return
 	}

@@ -39,6 +39,7 @@ const (
 	KindProto
 	KindOpenAPI
 	KindGraphQL
+	KindMCP
 )
 
 // Service is one (namespace, version) coordinate's worth of API

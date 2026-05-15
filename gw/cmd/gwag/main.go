@@ -148,14 +148,18 @@ func runGateway() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
+	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
+	mcpUpstreams := &stringListValue{}
+	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
+		fmt.Fprintln(flag.CommandLine.Output(), "            [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if len(protos) == 0 && *cpAddr == "" {
-		fmt.Fprintln(os.Stderr, "gwag: nothing to serve — pass --proto for static registration, --control-plane for runtime registration, or both")
+	if len(protos) == 0 && *cpAddr == "" && len(mcpUpstreams.values) == 0 {
+		fmt.Fprintln(os.Stderr, "gwag: nothing to serve — pass --proto for static registration, --control-plane for runtime registration, --mcp-upstream to ingest an MCP server, or a combination")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -176,6 +180,16 @@ func runGateway() {
 		}
 		log.Printf("registered %s → %s", p.path, p.addr)
 	}
+	for _, v := range mcpUpstreams.values {
+		ns, transport, target, err := parseMCPUpstream(v)
+		if err != nil {
+			log.Fatalf("--mcp-upstream: %v", err)
+		}
+		if err := gw.AddMCP(transport, target, gateway.As(ns)); err != nil {
+			log.Fatalf("register mcp upstream %q: %v", v, err)
+		}
+		log.Printf("registered mcp upstream %s (%s) → namespace %s", target, transport, ns)
+	}
 
 	if *cpAddr != "" {
 		cpLis, err := net.Listen("tcp", *cpAddr)
@@ -195,10 +209,34 @@ func runGateway() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", gw.MetricsHandler())
 	mux.Handle("/health", gw.HealthHandler())
+	if *mcpEnable {
+		gw.MountMCP(mux)
+		log.Printf("MCP server at /mcp (admin-bearer gated)")
+	}
 	mux.Handle("/", gw.Handler())
 	log.Printf("listening on %s", *addr)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// parseMCPUpstream parses a --mcp-upstream value of the form
+// NS:TRANSPORT:TARGET. TARGET may itself contain colons (URLs,
+// command lines), so the split is bounded to three fields.
+func parseMCPUpstream(v string) (ns string, transport gateway.MCPTransport, target string, err error) {
+	parts := strings.SplitN(v, ":", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("expected NS:TRANSPORT:TARGET, got %q", v)
+	}
+	ns, t, target := parts[0], parts[1], parts[2]
+	if ns == "" || target == "" {
+		return "", "", "", fmt.Errorf("namespace and target are both required, got %q", v)
+	}
+	switch gateway.MCPTransport(t) {
+	case gateway.MCPStdio, gateway.MCPHTTP, gateway.MCPSSE:
+		return ns, gateway.MCPTransport(t), target, nil
+	default:
+		return "", "", "", fmt.Errorf("unknown transport %q in %q (want stdio, http, or sse)", t, v)
 	}
 }
 

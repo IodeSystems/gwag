@@ -698,6 +698,30 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			UploadType: opts.UploadType,
 		}), nil
 
+	case KindMCP:
+		// Synthesised object / enum Types (nested tool-input schemas)
+		// are namespace-prefixed so two upstream MCP servers can both
+		// declare an "Address" without colliding. Tool args keep their
+		// JSON Schema property names verbatim.
+		prefix := svc.Namespace + "_"
+		if !isLatest && svc.Version != "" {
+			prefix = svc.Namespace + "_" + svc.Version + "_"
+		}
+		naming := IRTypeNaming{
+			ObjectName:    func(s string) string { return prefix + s },
+			InputName:     func(s string) string { return prefix + s + "Input" },
+			EnumName:      func(s string) string { return prefix + s },
+			UnionName:     func(s string) string { return prefix + s },
+			InterfaceName: func(s string) string { return prefix + s },
+			ScalarName:    func(s string) string { return prefix + s },
+			FieldName:     identityName,
+		}
+		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+			MapType:    opts.JSONType,
+			JSONType:   opts.JSONType,
+			UploadType: opts.UploadType,
+		}), nil
+
 	default:
 		return nil, fmt.Errorf("runtime: unsupported OriginKind %v on %s/%s", svc.OriginKind, svc.Namespace, svc.Version)
 	}

@@ -229,6 +229,52 @@ re-applies against the now-authoritative state, so an "include +
 include" race converges to both entries; an "include + remove" race
 preserves the operator's intent on whichever node landed second.
 
+## Ingesting upstream MCP servers
+
+MCP also runs the other direction: gwag can ingest a *downstream* MCP
+server and re-expose its tools as GraphQL Mutations, alongside proto /
+OpenAPI / GraphQL services. An MCP server's tools become first-class
+operations in the unified schema — a GraphQL or REST client calls
+them without speaking MCP.
+
+```go
+gw.AddMCP(gateway.MCPStdio,
+    "npx -y @modelcontextprotocol/server-filesystem /tmp",
+    gateway.As("files"))
+gw.AddMCP(gateway.MCPHTTP, "https://mcp.example.com", gateway.As("weather"))
+```
+
+Or from the CLI — `--mcp-upstream NS:TRANSPORT:TARGET`, repeatable:
+
+```
+gwag --mcp-upstream weather:http:https://mcp.example.com
+gwag up --mcp-upstream files:stdio:"npx -y @modelcontextprotocol/server-filesystem /tmp"
+```
+
+`TRANSPORT` is `stdio`, `http` (Streamable HTTP), or `sse`. For
+`stdio`, `TARGET` is a command line — gwag spawns it as a subprocess
+and speaks JSON-RPC over its stdin/stdout; for `http` / `sse` it's
+the server URL.
+
+At boot the gateway connects, runs `tools/list`, and registers one
+Mutation per tool under the namespace. A `tools/call` round-trip
+dispatches each call; the result (content blocks + optional
+`structuredContent`) is returned as the `JSON` scalar. An unreachable
+server at boot is a registration error — same posture as `AddGraphQL`
+introspection.
+
+Scope (v1): **tools only.** MCP resources and prompts are not
+ingested. Tool names with characters invalid in GraphQL identifiers
+are sanitised (`get-weather` → `getweather`); a sanitised collision
+is a registration error rather than a silent drop. Tool `inputSchema`
+JSON Schema flattens to GraphQL arguments — object, string (incl.
+enum), integer, number, boolean, and array shapes are supported;
+nested objects synthesise named types.
+
+This is the inverse of the outbound server above: `--mcp` *exposes*
+the gateway to agents, `--mcp-upstream` *consumes* an MCP server into
+the gateway. They compose — a gateway can do both at once.
+
 ## Stability
 
 | Symbol | Stability |
@@ -237,6 +283,7 @@ preserves the operator's intent on whichever node landed second.
 | `gw.MCPHandler()` | stable |
 | `gw.MountMCP(mux, opts...)`, `gw.MCPPath(path)` | stable |
 | `gw.WithMCPInclude(...)`, `gw.WithMCPExclude(...)`, `gw.WithMCPAutoInclude()` | stable |
+| `gw.AddMCP(transport, target, opts...)`, `gw.MCPTransport` + constants | stable |
 | `/api/admin/mcp/*` huma routes (paths + JSON shapes) | stable |
 | Four MCP tool names + argument shapes | stable |
 | `mcpResponseWithEvents.events.level == "none"` (v1) | stable (additive evolution allowed) |
@@ -259,3 +306,9 @@ MINOR bump; removing or renaming an existing tool is a MAJOR bump.
 - **Schema search is single-pass.** The `regex` filter walks the
   description body once per allowed op; no precomputed index. Fine
   for the hundreds-of-ops regime adopters have seen so far.
+- **Upstream MCP ingest is boot-time + tools-only.** `AddMCP` /
+  `--mcp-upstream` introspect once at registration; there is no
+  control-plane path and no live re-introspection when an upstream's
+  tool set changes. Resources and prompts are not ingested. A `stdio`
+  upstream is a subprocess owned for the gateway's lifetime —
+  `Gateway.Close()` terminates it.
