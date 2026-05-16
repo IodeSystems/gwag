@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.0.0 — 2026-05-16
+
 ### Added
 - Downstream MCP server ingestion — a fourth ingest kind alongside
   proto / OpenAPI / GraphQL. `gw.AddMCP(transport, target, opts...)`
