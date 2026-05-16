@@ -6,6 +6,12 @@
 //   - --graphql URL                  full gateway — metrics, backpressure,
 //                                    subscription proxy, optional --mcp
 //
+// --mcp is supported with every source. With --graphql it rides on the
+// full gateway path that's already there; with --openapi / --proto it
+// promotes the run from the lite gat path onto the full gateway so the
+// /mcp mount has the same dispatcher, plan cache, and metrics every
+// other ingress hits.
+//
 // The smallest possible "typed clients in three formats over my
 // existing service" CLI — useful for proxies, demos, and
 // graphql-codegen targets backed by a single backend.
@@ -34,10 +40,10 @@ func serveCmd(args []string) int {
 	graphqlURL := fs.String("graphql", "", "URL of a downstream GraphQL endpoint (introspects on boot)")
 	target := fs.String("to", "", "Upstream target — http(s):// for --openapi, host:port for --proto. Not used with --graphql.")
 	addr := fs.String("addr", ":8080", "HTTP listen address")
-	prefix := fs.String("prefix", "/", "URL prefix to mount /graphql + /schema/* under (ignored for --graphql)")
+	prefix := fs.String("prefix", "/", "URL prefix to mount /graphql + /schema/* under (ignored for --graphql and for any run with --mcp)")
 	namespace := fs.String("namespace", "", "Override the GraphQL namespace; defaults to spec-derived")
 	version := fs.String("version", "", "Override the GraphQL version; defaults to spec-derived (\"v1\" for OpenAPI / GraphQL)")
-	enableMCP := fs.Bool("mcp", false, "Mount /mcp (admin-bearer gated). Currently only with --graphql; --openapi / --proto use the gat lite path.")
+	enableMCP := fs.Bool("mcp", false, "Mount /mcp (admin-bearer gated). With --openapi / --proto, promotes the run from the lite gat path onto the full gateway so /mcp shares dispatch and metrics with every other ingress.")
 	mcpInclude := &stringListValue{}
 	fs.Var(mcpInclude, "mcp-include", "MCP allowlist glob (repeatable). Implies --mcp.")
 	fs.Usage = func() {
@@ -46,7 +52,8 @@ func serveCmd(args []string) int {
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "Fronts one upstream service as typed proto / OpenAPI / GraphQL clients.")
 		fmt.Fprintln(out, "  --openapi / --proto:  embedded gat translator (no metrics, no NATS, no admin).")
-		fmt.Fprintln(out, "  --graphql:            full gateway (metrics, backpressure, subscription proxy, optional --mcp).")
+		fmt.Fprintln(out, "  --graphql:            full gateway (metrics, backpressure, subscription proxy).")
+		fmt.Fprintln(out, "  --mcp:                works with every source; with --openapi / --proto it promotes to the full gateway path.")
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "Flags:")
 		fs.PrintDefaults()
@@ -77,24 +84,39 @@ func serveCmd(args []string) int {
 		return 2
 	}
 
-	if *graphqlURL != "" {
-		return serveFullGateway(*graphqlURL, *addr, *namespace, *version, *enableMCP || len(mcpInclude.values) > 0, mcpInclude.values)
-	}
+	mcpOn := *enableMCP || len(mcpInclude.values) > 0
 
-	// --openapi / --proto: lite gat path. --mcp here is not yet wired
-	// — surface that loudly rather than silently dropping the flag.
-	if *enableMCP || len(mcpInclude.values) > 0 {
-		fmt.Fprintln(os.Stderr, "gwag serve: --mcp / --mcp-include are only supported with --graphql today")
-		return 2
+	// --graphql always uses the full gateway. --openapi / --proto promote
+	// to the full gateway when --mcp is set, so /mcp shares the
+	// dispatcher and metrics path with every other ingress. Otherwise
+	// they stay on the lite gat path.
+	if *graphqlURL != "" || mcpOn {
+		src := fullGatewaySource{
+			graphqlURL:  *graphqlURL,
+			openapiPath: *openapiPath,
+			protoPath:   *protoPath,
+			target:      *target,
+		}
+		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values)
 	}
 	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version)
 }
 
+// fullGatewaySource carries exactly one source (graphqlURL, openapiPath,
+// or protoPath) plus the upstream target string used by AddOpenAPI /
+// AddProto. The exact-one invariant is enforced upstream by serveCmd.
+type fullGatewaySource struct {
+	graphqlURL  string
+	openapiPath string
+	protoPath   string
+	target      string
+}
+
 // serveFullGateway boots a full *gateway.Gateway (metrics, backpressure,
-// subscription proxy) wrapping one downstream GraphQL service. /mcp is
-// optional via --mcp. No NATS, no admin UI, no cluster — those ride on
-// `gwag up`.
-func serveFullGateway(graphqlURL, addr, namespace, version string, enableMCP bool, mcpIncludes []string) int {
+// subscription proxy) wrapping one upstream of any supported kind.
+// /mcp is optional via --mcp. No NATS, no admin UI, no cluster — those
+// ride on `gwag up`.
+func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string) int {
 	gwOpts := []gateway.Option{}
 	if enableMCP && len(mcpIncludes) > 0 {
 		gwOpts = append(gwOpts, gateway.WithMCPInclude(mcpIncludes...))
@@ -109,9 +131,27 @@ func serveFullGateway(graphqlURL, addr, namespace, version string, enableMCP boo
 	if version != "" {
 		addOpts = append(addOpts, gateway.Version(version))
 	}
-	if err := gw.AddGraphQL(graphqlURL, addOpts...); err != nil {
-		fmt.Fprintf(os.Stderr, "gwag serve: AddGraphQL: %v\n", err)
-		return 1
+
+	var label string
+	switch {
+	case src.graphqlURL != "":
+		label = src.graphqlURL
+		if err := gw.AddGraphQL(src.graphqlURL, addOpts...); err != nil {
+			fmt.Fprintf(os.Stderr, "gwag serve: AddGraphQL: %v\n", err)
+			return 1
+		}
+	case src.openapiPath != "":
+		label = src.openapiPath
+		if err := gw.AddOpenAPI(src.openapiPath, append(addOpts, gateway.To(src.target))...); err != nil {
+			fmt.Fprintf(os.Stderr, "gwag serve: AddOpenAPI: %v\n", err)
+			return 1
+		}
+	case src.protoPath != "":
+		label = src.protoPath
+		if err := gw.AddProto(src.protoPath, append(addOpts, gateway.To(src.target))...); err != nil {
+			fmt.Fprintf(os.Stderr, "gwag serve: AddProto: %v\n", err)
+			return 1
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -125,7 +165,7 @@ func serveFullGateway(graphqlURL, addr, namespace, version string, enableMCP boo
 		gw.MountMCP(mux)
 	}
 
-	log.Printf("gwag serve: %s → POST %s/api/graphql", graphqlURL, strings.TrimRight(addr, "/"))
+	log.Printf("gwag serve: %s → POST %s/api/graphql", label, strings.TrimRight(addr, "/"))
 	if enableMCP {
 		log.Printf("gwag serve: MCP at /mcp  (admin token = %s)", gw.AdminTokenHex())
 	}

@@ -69,9 +69,11 @@ deployment:
   `gwag serve --openapi spec.yaml --to URL`,
   `gwag serve --proto file.proto --to HOST:PORT`, or
   `gwag serve --graphql URL` exposes any single upstream as all
-  three typed surfaces. `--graphql` routes through the full
-  gateway (metrics, backpressure, subscription proxy, optional
-  `--mcp`); `--openapi` / `--proto` use the lite gat path.
+  three typed surfaces. `--graphql` always routes through the full
+  gateway (metrics, backpressure, subscription proxy);
+  `--openapi` / `--proto` default to the lite gat path and promote
+  to the full gateway when `--mcp` is set, so `/mcp` shares
+  dispatch and metrics with every other ingress.
 
 ## Unified cross-format APIs
 
