@@ -121,10 +121,11 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 
 	svc := ir.IngestOpenAPI(doc)
 	if svc.Namespace == "" {
-		// Derive namespace from the OpenAPI title (lowercased, with
-		// spaces stripped). Adopters can override via huma's config.
+		// Derive the namespace from the OpenAPI title via the shared
+		// ir.SanitizeNamespace rule (case preserved). Adopters can
+		// override via huma's config.
 		if oapi := api.OpenAPI(); oapi != nil && oapi.Info != nil && oapi.Info.Title != "" {
-			svc.Namespace = sanitizeNamespace(oapi.Info.Title)
+			svc.Namespace = ir.SanitizeNamespace(oapi.Info.Title)
 		}
 		if svc.Namespace == "" {
 			svc.Namespace = "huma"
@@ -165,29 +166,6 @@ func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
 		// which already understands query/mutation envelopes.
 		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
 	})
-}
-
-// sanitizeNamespace lower-cases s and strips characters that aren't
-// valid in a GraphQL field name (anything non-alphanumeric becomes
-// the field separator; leading digits get an underscore prefix).
-func sanitizeNamespace(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r - 'A' + 'a')
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
-	if out == "" {
-		return ""
-	}
-	if out[0] >= '0' && out[0] <= '9' {
-		return "_" + out
-	}
-	return out
 }
 
 // mountSchemaEndpoints registers the three /schema/{graphql,proto,openapi}

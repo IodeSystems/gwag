@@ -90,8 +90,8 @@ func TestPairedRegister_GraphQLAndREST(t *testing.T) {
 	// GraphQL path dispatches in-process to the same handler.
 	t.Run("graphql_get", func(t *testing.T) {
 		resp := mustGraphQL(t, srv.URL+"/api/graphql",
-			`query { demo { getProject(id: "p1") { id name } } }`)
-		path := digPath(resp, "data", "demo", "getProject")
+			`query { Demo { getProject(id: "p1") { id name } } }`)
+		path := digPath(resp, "data", "Demo", "getProject")
 		if path == nil {
 			t.Fatalf("missing getProject: %v", resp)
 		}
@@ -103,8 +103,8 @@ func TestPairedRegister_GraphQLAndREST(t *testing.T) {
 
 	t.Run("graphql_list", func(t *testing.T) {
 		resp := mustGraphQL(t, srv.URL+"/api/graphql",
-			`query { demo { listProjects { projects { id } } } }`)
-		path := digPath(resp, "data", "demo", "listProjects", "projects")
+			`query { Demo { listProjects { projects { id } } } }`)
+		path := digPath(resp, "data", "Demo", "listProjects", "projects")
 		if path == nil {
 			t.Fatalf("missing projects: %v", resp)
 		}

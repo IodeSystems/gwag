@@ -263,40 +263,19 @@ func loadOpenAPIRegistration(path, target string) ([]gat.ServiceRegistration, er
 }
 
 // openAPINamespaceFromDoc derives a GraphQL-safe namespace string
-// from the spec's Info.Title, falling back to the filename stem. The
-// title path matches what gat does in the huma flow (sanitizeNamespace
-// in register.go) — duplicated here so we don't re-export the helper.
+// from the spec's Info.Title via the shared ir.SanitizeNamespace rule
+// (case preserved), falling back to the spec filename stem and then a
+// literal "openapi".
 func openAPINamespaceFromDoc(doc *openapi3.T, path string) string {
 	if doc != nil && doc.Info != nil {
-		if ns := sanitizeOpenAPINamespace(doc.Info.Title); ns != "" {
+		if ns := ir.SanitizeNamespace(doc.Info.Title); ns != "" {
 			return ns
 		}
 	}
 	base := filepath.Base(path)
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
-	if ns := sanitizeOpenAPINamespace(stem); ns != "" {
+	if ns := ir.SanitizeNamespace(stem); ns != "" {
 		return ns
 	}
 	return "openapi"
-}
-
-// sanitizeOpenAPINamespace lower-cases s and drops characters that
-// aren't valid in a GraphQL identifier. Matches gat's internal
-// sanitizeNamespace; reproduced here so this command doesn't need to
-// take a package-private dep.
-func sanitizeOpenAPINamespace(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_':
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
-	if len(out) > 0 && out[0] >= '0' && out[0] <= '9' {
-		out = "_" + out
-	}
-	return out
 }

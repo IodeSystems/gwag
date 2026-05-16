@@ -231,6 +231,16 @@ changes on MINOR, drops on MAJOR.
   `TestGraphQLIngest_AliasInGroupSelection`.
 
 ### Changed
+- OpenAPI namespace derivation now **preserves the spec title's
+  case** — a spec titled `Pets` yields the GraphQL namespace `Pets`,
+  not `pets`. Previously the library `AddOpenAPI` path preserved
+  case while the `gat` translator and `gwag serve --openapi` lower-
+  cased it, so the same spec produced a different schema depending
+  on how it was registered. All three paths now route through one
+  shared rule, `ir.SanitizeNamespace` (case preserved, spaces /
+  dashes → `_`, leading digit guarded). This also fixes a latent
+  bug where a digit-leading title produced an invalid GraphQL
+  identifier.
 - `gw.MCPConfig` and `gw.MCPHandler` promoted from `Stability:
   experimental` to `Stability: stable`. Same for the
   `/api/admin/mcp/*` huma operations. The four MCP tools

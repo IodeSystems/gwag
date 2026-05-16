@@ -12,25 +12,6 @@ import (
 	"testing"
 )
 
-func TestSanitizeOpenAPINamespace(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"", ""},
-		{"Pets", "pets"},
-		{"Pet Store", "petstore"},
-		{"hello-world!", "helloworld"},
-		{"123abc", "_123abc"},
-		{"v1_api", "v1_api"},
-	}
-	for _, tc := range cases {
-		got := sanitizeOpenAPINamespace(tc.in)
-		if got != tc.want {
-			t.Errorf("sanitizeOpenAPINamespace(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 const petsSpec = `{
   "openapi": "3.0.0",
   "info": {"title": "Pets", "version": "1.0.0"},
@@ -91,8 +72,8 @@ func TestLoadOpenAPIRegistration_E2E(t *testing.T) {
 	if len(regs) != 1 {
 		t.Fatalf("expected 1 reg, got %d", len(regs))
 	}
-	if ns := regs[0].Service.Namespace; ns != "pets" {
-		t.Errorf("namespace: got %q, want %q", ns, "pets")
+	if ns := regs[0].Service.Namespace; ns != "Pets" {
+		t.Errorf("namespace: got %q, want %q (case preserved from spec title)", ns, "Pets")
 	}
 	if ver := regs[0].Service.Version; ver != "v1" {
 		t.Errorf("version: got %q, want %q", ver, "v1")

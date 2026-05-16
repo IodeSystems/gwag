@@ -19,6 +19,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/IodeSystems/graphql-go"
 	"github.com/IodeSystems/graphql-go/language/ast"
+
+	"github.com/iodesystems/gwag/gw/ir"
 )
 
 // AddOpenAPIBytes registers an in-memory OpenAPI 3.x spec. Same shape
@@ -581,21 +583,14 @@ func openAPIBaseURL(c any) (string, error) {
 	return strings.TrimRight(addr, "/"), nil
 }
 
+// sanitizeNamespace derives a GraphQL namespace from a spec title via
+// the shared ir.SanitizeNamespace rule (case preserved), defaulting to
+// "openapi" when nothing identifier-valid remains.
 func sanitizeNamespace(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == ' ', r == '-':
-			b.WriteRune('_')
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_':
-			b.WriteRune(r)
-		}
+	if ns := ir.SanitizeNamespace(s); ns != "" {
+		return ns
 	}
-	out := b.String()
-	if out == "" {
-		out = "openapi"
-	}
-	return out
+	return "openapi"
 }
 
 // openAPISharedScalars constructs the Long + JSON scalars once per
