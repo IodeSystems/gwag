@@ -48,6 +48,10 @@ type Gateway struct {
 	// New(regs...) or by RegisterHuma). Subsequent registrations are
 	// rejected.
 	built bool
+
+	// pubsub is gat's in-process publish/subscribe primitive, always
+	// available via PubSub().
+	pubsub *pubSub
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.
@@ -85,6 +89,7 @@ type ServiceRegistration struct {
 func New(regs ...ServiceRegistration) (*Gateway, error) {
 	g := &Gateway{
 		registry: ir.NewDispatchRegistry(),
+		pubsub:   newPubSub(),
 	}
 	if len(regs) == 0 {
 		// Empty gateway — adopter will populate via gat.Register and
@@ -215,6 +220,60 @@ func (g *Gateway) Schema() *graphql.Schema {
 // Stability: experimental
 func (g *Gateway) Services() []*ir.Service {
 	return g.services
+}
+
+// PubSub returns the gateway's publish/subscribe handle. It is always
+// available — single-node (in-process) out of the box. Call
+// EnablePeerMesh to add best-effort cross-node fanout to a set of
+// peer gat instances.
+//
+// Stability: experimental
+func (g *Gateway) PubSub() *PubSub {
+	return &PubSub{g: g}
+}
+
+// Close releases gateway resources: it cancels every active pubsub
+// subscription. A gateway is single-use after Close.
+//
+// Stability: experimental
+func (g *Gateway) Close() {
+	g.pubsub.closeAll()
+}
+
+// PubSub is the publish/subscribe handle returned by Gateway.PubSub.
+// Publish delivers to local subscribers and, when a peer mesh is
+// configured, fans out best-effort to peer gat instances; Subscribe
+// is always local-only.
+//
+// Stability: experimental
+type PubSub struct {
+	g *Gateway
+}
+
+// Publish delivers payload to every local subscriber whose pattern
+// matches channel.
+//
+// Stability: experimental
+func (p *PubSub) Publish(channel string, payload []byte) {
+	p.g.publish(channel, payload)
+}
+
+// Subscribe registers a subscriber for channels matching pattern
+// (NATS-style: `*` one segment, `>` the rest). Returns an event
+// channel and a cancel func. Subscriptions are local to this gateway
+// — peers deliver into it via the mesh receive path, not by
+// subscribing remotely.
+//
+// Stability: experimental
+func (p *PubSub) Subscribe(pattern string) (<-chan Event, func()) {
+	return p.g.pubsub.Subscribe(pattern)
+}
+
+// publish is the gateway-internal publish entry point behind the
+// PubSub facade. Local fanout only; the peer-mesh layer extends this
+// with best-effort cross-node fanout.
+func (g *Gateway) publish(channel string, payload []byte) {
+	g.pubsub.publishLocal(channel, payload)
 }
 
 func writeError(w http.ResponseWriter, msg string, status int) {
