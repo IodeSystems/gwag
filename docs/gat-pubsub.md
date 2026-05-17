@@ -37,17 +37,46 @@ Delivery is best-effort. Each subscriber has a bounded buffer; a
 consumer that falls behind loses its oldest queued events rather than
 stalling the publisher.
 
-## Browser clients (SSE)
+## Clients (WebSocket)
 
-`RegisterHTTP` and `RegisterHuma` mount a Server-Sent Events stream:
+`RegisterHTTP` and `RegisterHuma` mount a WebSocket stream:
 
 ```
-GET {prefix}/_gat/subscribe?channel=orders.>
+GET {prefix}/_gat/subscribe?channel=orders.>   (WebSocket upgrade)
 ```
 
-Each event arrives as an SSE `data:` line carrying `{channel,
-payload}` JSON (`payload` base64-encoded). The subscription ends when
-the client disconnects.
+Each matching event arrives as a text frame carrying `{channel,
+payload}` JSON (`payload` base64-encoded). It is a server-to-client
+stream — the client sends nothing after the handshake. The
+subscription ends when the client disconnects or the gateway closes.
+
+### Subscribe auth
+
+By default the subscribe endpoint is open — anyone who can reach it
+streams any channel. `EnableSubscribeAuth` gates it behind HMAC
+tokens:
+
+```go
+g.EnableSubscribeAuth(subscribeSecret) // distinct from PeerMesh.Auth
+```
+
+A client mints a token for the channel it wants and passes it on the
+WebSocket URL:
+
+```go
+token, ts := gat.SignSubscribeToken(subscribeSecret, "orders.>")
+// → GET {prefix}/_gat/subscribe?channel=orders.>&token=<token>&ts=<ts>
+```
+
+The token is `HMAC-SHA256(channel, ts)` — bound to one channel
+pattern — and is accepted within ±5 minutes of `ts`. A missing,
+malformed, expired, or wrong token is rejected with `401` before the
+WebSocket handshake completes.
+
+The subscribe-auth secret is **separate from the peer-mesh `Auth`
+key**: gateway↔client trust and gateway↔gateway trust are different
+domains. Leaving `EnableSubscribeAuth` unset keeps the endpoint open
+— acceptable only on a trusted network.
 
 ## Cross-node peer mesh
 

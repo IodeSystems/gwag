@@ -18,11 +18,15 @@ changes on MINOR, drops on MAJOR.
   forgets the event to every peer gat over HTTP (HMAC-signed), and
   each peer fans it out local-only — one hop, no re-broadcast.
   Per-peer bounded queue + circuit breaker so a dead peer never
-  stalls the publisher. `RegisterHTTP` / `RegisterHuma` mount an SSE
-  stream at `{prefix}/_gat/subscribe?channel=PATTERN` for browser
-  clients, plus the internal peer-receive endpoint. `gat.Gateway`
-  gains `Close()`. See [`docs/gat-pubsub.md`](./docs/gat-pubsub.md).
-  Static peer list only — a dynamic `PeerProvider` is a followup.
+  stalls the publisher. `RegisterHTTP` / `RegisterHuma` mount a
+  WebSocket subscribe stream at
+  `{prefix}/_gat/subscribe?channel=PATTERN`, plus the internal
+  peer-receive endpoint. `EnableSubscribeAuth(secret)` gates the
+  subscribe endpoint behind HMAC tokens minted by
+  `gat.SignSubscribeToken` — a key independent of the peer-mesh
+  `Auth`. `gat.Gateway` gains `Close()`. See
+  [`docs/gat-pubsub.md`](./docs/gat-pubsub.md). Static peer list
+  only — a dynamic `PeerProvider` is a followup.
 
 ## v1.0.0 — 2026-05-16
 
