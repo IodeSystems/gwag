@@ -9,6 +9,21 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- gat pubsub. The embedded `gat` translator gains a publish/subscribe
+  primitive — `Gateway.PubSub()` with `Publish` / `Subscribe` and
+  NATS-style channel patterns (`*` one segment, `>` the rest),
+  best-effort buffered delivery. `EnablePeerMesh(PeerMesh{Peers,
+  Auth})` adds best-effort cross-node fanout: `Publish` fire-and-
+  forgets the event to every peer gat over HTTP (HMAC-signed), and
+  each peer fans it out local-only — one hop, no re-broadcast.
+  Per-peer bounded queue + circuit breaker so a dead peer never
+  stalls the publisher. `RegisterHTTP` / `RegisterHuma` mount an SSE
+  stream at `{prefix}/_gat/subscribe?channel=PATTERN` for browser
+  clients, plus the internal peer-receive endpoint. `gat.Gateway`
+  gains `Close()`. See [`docs/gat-pubsub.md`](./docs/gat-pubsub.md).
+  Static peer list only — a dynamic `PeerProvider` is a followup.
+
 ## v1.0.0 — 2026-05-16
 
 ### Added

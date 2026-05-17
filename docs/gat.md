@@ -208,8 +208,11 @@ Three views over the same IR projection:
 
 - One huma API per gat gateway. Multi-huma is doable (BYO-IR path)
   but not the recommended path.
-- Subscriptions over WebSocket are not in gat. The pub/sub stack
-  lives in full gwag (`gw/subscriptions.go`).
+- GraphQL subscriptions (server-streaming over WebSocket) are not in
+  gat — bring full gwag for those. gat does have a separate
+  publish/subscribe primitive with best-effort cross-node fanout and
+  an SSE delivery stream; see [`gat-pubsub.md`](./gat-pubsub.md). The
+  NATS-backed, durable pub/sub stack remains gwag-only.
 - gat doesn't manage auth. Whatever middleware the adopter wraps
   the huma router with applies to gat's GraphQL/gRPC routes too,
   since they ride on the same handler chain.
