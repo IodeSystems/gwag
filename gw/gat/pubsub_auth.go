@@ -46,11 +46,13 @@ func SignSubscribeToken(secret []byte, channel string) (token string, ts int64) 
 	return computeSubscribeToken(secret, channel, ts), ts
 }
 
-// computeSubscribeToken is the HMAC-SHA256 of `channel\nts`, base64.
+// computeSubscribeToken is the HMAC-SHA256 of `channel\nts`,
+// URL-safe-base64 encoded (no padding) so the token drops straight
+// into the WebSocket subscribe URL's query string without escaping.
 func computeSubscribeToken(secret []byte, channel string, ts int64) string {
 	mac := hmac.New(sha256.New, secret)
 	fmt.Fprintf(mac, "%s\n%d", channel, ts)
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // verifySubscribeRequest checks the subscribe-auth token on a WS
