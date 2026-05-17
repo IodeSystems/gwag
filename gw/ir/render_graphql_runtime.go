@@ -667,6 +667,10 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			InterfaceName: func(s string) string { return prefix + s },
 			ScalarName:    func(s string) string { return prefix + s },
 			FieldName:     lowerCamel,
+			// OpenAPI/JSON enum data carries the enum *name* (a string),
+			// so the graphql-go runtime Value must be the name — not the
+			// default ordinal Number, which no JSON value would match.
+			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
 			Int64Type:  opts.LongType,

@@ -44,7 +44,29 @@ func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 	if err != nil {
 		return nil, err
 	}
-	return extractBody(out), nil
+	return normalizeJSON(extractBody(out))
+}
+
+// normalizeJSON round-trips v through encoding/json so the GraphQL
+// runtime receives generic JSON types (map[string]any, []any, scalars)
+// — the same shape proto/OpenAPI-origin dispatchers produce. Without
+// this the inproc path hands graphql-go raw Go structs: custom
+// json.Marshaler implementations never run, union ResolveType cannot
+// read discriminator properties off a struct, and typed scalar fields
+// (enums) fail to resolve.
+func normalizeJSON(v any) (any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("gat: marshal result: %w", err)
+	}
+	var norm any
+	if err := json.Unmarshal(raw, &norm); err != nil {
+		return nil, fmt.Errorf("gat: normalize result: %w", err)
+	}
+	return norm, nil
 }
 
 // bindInput maps GraphQL args into the typed huma input struct. Huma

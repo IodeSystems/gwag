@@ -28,6 +28,17 @@ changes on MINOR, drops on MAJOR.
   [`docs/gat-pubsub.md`](./docs/gat-pubsub.md). Static peer list
   only — a dynamic `PeerProvider` is a followup.
 
+### Fixed
+- gat embedded dispatch — in-process huma handler results are now
+  JSON-normalized before GraphQL resolution. Previously the raw Go
+  value was handed to the graphql-go runtime, so custom
+  `json.Marshaler` types and sealed-union responses (`oneOf` +
+  discriminator) could not resolve. (`gw/gat/dispatch_inproc.go`)
+- gat OpenAPI-origin enums — the graphql-go runtime value for an enum
+  member now binds to the enum name (string) rather than the default
+  ordinal number, so enum fields in JSON-shaped data resolve instead
+  of returning null. (`gw/ir/render_graphql_runtime.go`)
+
 ## v1.0.0 — 2026-05-16
 
 ### Added
