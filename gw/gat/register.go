@@ -173,10 +173,12 @@ func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
 }
 
 // mountSubscribe registers GET {prefix}/_gat/subscribe as a huma
-// adapter handler — the SSE pubsub stream. Always mounted; the
-// in-process pubsub primitive is always available.
+// adapter handler — the WebSocket pubsub stream. Always mounted; the
+// in-process pubsub primitive is always available. The WS upgrade
+// relies on adapterResponseWriter forwarding Hijack to the
+// underlying writer.
 func mountSubscribe(api huma.API, g *Gateway, prefix string) {
-	h := g.subscribeSSEHandler()
+	h := g.subscribeWSHandler()
 	api.Adapter().Handle(&huma.Operation{
 		Method: http.MethodGet,
 		Path:   prefix + SubscribePath,

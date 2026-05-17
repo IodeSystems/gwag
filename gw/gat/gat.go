@@ -52,8 +52,12 @@ type Gateway struct {
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
 	// cross-node fanout layer — nil until EnablePeerMesh is called.
-	pubsub *pubSub
-	mesh   *peerMesh
+	// subAuth is the HMAC secret gating the WebSocket subscribe
+	// endpoint — nil until EnableSubscribeAuth is called (endpoint
+	// open).
+	pubsub  *pubSub
+	mesh    *peerMesh
+	subAuth []byte
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.

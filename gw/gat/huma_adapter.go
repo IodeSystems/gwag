@@ -1,7 +1,9 @@
 package gat
 
 import (
+	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 
@@ -73,11 +75,24 @@ func (w *adapterResponseWriter) Write(b []byte) (int, error) {
 }
 
 // Flush forwards to the underlying writer when it supports flushing,
-// so streaming handlers (SSE) work through the huma adapter. A no-op
-// when the underlying writer isn't an http.Flusher.
+// so streaming handlers work through the huma adapter. A no-op when
+// the underlying writer isn't an http.Flusher.
 func (w *adapterResponseWriter) Flush() {
 	if f, ok := w.ctx.BodyWriter().(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack forwards to the underlying writer when it supports
+// hijacking, so the WebSocket subscribe endpoint can upgrade through
+// the huma adapter. Errors with http.ErrNotSupported when the
+// underlying writer isn't an http.Hijacker (a non-stdlib huma
+// adapter) — in that case mount the WS endpoint on a plain mux via
+// RegisterHTTP instead.
+func (w *adapterResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ctx.BodyWriter().(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
