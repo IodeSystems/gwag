@@ -17,9 +17,12 @@ import (
 //	GET  {prefix}/schema/graphql    SDL (or ?format=json introspection)
 //	GET  {prefix}/schema/proto      FileDescriptorSet (binary)
 //	GET  {prefix}/schema/openapi    Re-emitted OpenAPI document
+//	POST {prefix}/_gat/publish      peer-mesh receive (only when EnablePeerMesh)
 //
 // Must be called after the gateway is built — either New(regs...) or
-// RegisterHuma. Returns an error if the schema isn't ready.
+// RegisterHuma. Call EnablePeerMesh before RegisterHTTP for the
+// peer-publish endpoint to be mounted. Returns an error if the schema
+// isn't ready.
 //
 // Stability: experimental
 func RegisterHTTP(mux HandleMux, g *Gateway, prefix string) error {
@@ -31,5 +34,8 @@ func RegisterHTTP(mux HandleMux, g *Gateway, prefix string) error {
 	mux.Handle(prefix+"/schema/graphql", schemaGraphQLHandler(g))
 	mux.Handle(prefix+"/schema/proto", schemaProtoHandler(g))
 	mux.Handle(prefix+"/schema/openapi", schemaOpenAPIHandler(g))
+	if g.mesh != nil {
+		mux.Handle(prefix+PeerPublishPath, g.peerPublishHandler())
+	}
 	return nil
 }

@@ -101,6 +101,9 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 
 	mountSchemaEndpoints(api, g, prefix)
 	mountGraphQLEndpoint(api, g, prefix)
+	if g.mesh != nil {
+		mountPeerPublish(api, g, prefix)
+	}
 	return nil
 }
 
@@ -165,6 +168,19 @@ func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
 		// GraphQL has its own request shape, and reuse g.Handler
 		// which already understands query/mutation envelopes.
 		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+	})
+}
+
+// mountPeerPublish registers POST {prefix}/_gat/publish as a huma
+// adapter handler — the peer-mesh receive endpoint. Mounted only when
+// EnablePeerMesh was called.
+func mountPeerPublish(api huma.API, g *Gateway, prefix string) {
+	h := g.peerPublishHandler()
+	api.Adapter().Handle(&huma.Operation{
+		Method: http.MethodPost,
+		Path:   prefix + PeerPublishPath,
+	}, func(ctx huma.Context) {
+		h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
 	})
 }
 

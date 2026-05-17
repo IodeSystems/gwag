@@ -50,8 +50,10 @@ type Gateway struct {
 	built bool
 
 	// pubsub is gat's in-process publish/subscribe primitive, always
-	// available via PubSub().
+	// available via PubSub(). mesh is the optional best-effort
+	// cross-node fanout layer — nil until EnablePeerMesh is called.
 	pubsub *pubSub
+	mesh   *peerMesh
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.
@@ -232,11 +234,15 @@ func (g *Gateway) PubSub() *PubSub {
 	return &PubSub{g: g}
 }
 
-// Close releases gateway resources: it cancels every active pubsub
-// subscription. A gateway is single-use after Close.
+// Close releases gateway resources: it stops the peer-mesh fanout
+// goroutines (if EnablePeerMesh was called) and cancels every active
+// pubsub subscription. A gateway is single-use after Close.
 //
 // Stability: experimental
 func (g *Gateway) Close() {
+	if g.mesh != nil {
+		g.mesh.stop()
+	}
 	g.pubsub.closeAll()
 }
 
@@ -270,10 +276,13 @@ func (p *PubSub) Subscribe(pattern string) (<-chan Event, func()) {
 }
 
 // publish is the gateway-internal publish entry point behind the
-// PubSub facade. Local fanout only; the peer-mesh layer extends this
-// with best-effort cross-node fanout.
+// PubSub facade: local fanout, plus best-effort cross-node fanout
+// when a peer mesh is configured.
 func (g *Gateway) publish(channel string, payload []byte) {
 	g.pubsub.publishLocal(channel, payload)
+	if g.mesh != nil {
+		g.mesh.fanout(channel, payload)
+	}
 }
 
 func writeError(w http.ResponseWriter, msg string, status int) {
