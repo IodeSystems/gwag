@@ -7,11 +7,13 @@ import (
 
 // Event is one published message. Channel is the concrete dotted
 // channel name it was published on; Payload is the opaque body.
+// The JSON tags are the wire shape used by the SSE subscribe stream
+// and the peer-mesh transport.
 //
 // Stability: experimental
 type Event struct {
-	Channel string
-	Payload []byte
+	Channel string `json:"channel"`
+	Payload []byte `json:"payload"`
 }
 
 // subscriberQueueDepth bounds each subscriber's buffered channel.

@@ -72,3 +72,12 @@ func (w *adapterResponseWriter) Write(b []byte) (int, error) {
 	return w.ctx.BodyWriter().Write(b)
 }
 
+// Flush forwards to the underlying writer when it supports flushing,
+// so streaming handlers (SSE) work through the huma adapter. A no-op
+// when the underlying writer isn't an http.Flusher.
+func (w *adapterResponseWriter) Flush() {
+	if f, ok := w.ctx.BodyWriter().(http.Flusher); ok {
+		f.Flush()
+	}
+}
+

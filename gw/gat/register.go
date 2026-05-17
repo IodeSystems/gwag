@@ -101,6 +101,7 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 
 	mountSchemaEndpoints(api, g, prefix)
 	mountGraphQLEndpoint(api, g, prefix)
+	mountSubscribe(api, g, prefix)
 	if g.mesh != nil {
 		mountPeerPublish(api, g, prefix)
 	}
@@ -168,6 +169,19 @@ func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
 		// GraphQL has its own request shape, and reuse g.Handler
 		// which already understands query/mutation envelopes.
 		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+	})
+}
+
+// mountSubscribe registers GET {prefix}/_gat/subscribe as a huma
+// adapter handler — the SSE pubsub stream. Always mounted; the
+// in-process pubsub primitive is always available.
+func mountSubscribe(api huma.API, g *Gateway, prefix string) {
+	h := g.subscribeSSEHandler()
+	api.Adapter().Handle(&huma.Operation{
+		Method: http.MethodGet,
+		Path:   prefix + SubscribePath,
+	}, func(ctx huma.Context) {
+		h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
 	})
 }
 
