@@ -112,6 +112,68 @@ func newDynamicInitializer() func(connect.Spec, any) error {
 	}
 }
 
+// handlerErrorToConnect maps a captured-handler error to a
+// connect.Error with a status-aware code.
+//
+// Huma's `huma.NewError(status, msg)` (and its 4xx helpers) returns a
+// value whose dynamic type implements `interface { GetStatus() int }`
+// — that's the StatusError shape. We duck-type rather than import the
+// huma package so gat stays loose-coupled to its OpenAPI ingest path;
+// any framework that exposes the same shape (e.g., a hand-rolled
+// error type) gets the same treatment for free.
+//
+// Unrecognised errors stay CodeInternal — same as before this helper
+// existed.
+func handlerErrorToConnect(err error) *connect.Error {
+	type statusError interface{ GetStatus() int }
+	if se, ok := err.(statusError); ok {
+		return connect.NewError(httpStatusToConnectCode(se.GetStatus()), err)
+	}
+	return connect.NewError(connect.CodeInternal, err)
+}
+
+// httpStatusToConnectCode maps an HTTP status code to the Connect code
+// the gRPC spec uses for that semantic. The mapping mirrors the
+// table in https://connectrpc.com/docs/protocol#error-codes (inverse
+// direction). Anything we can't classify falls back to CodeUnknown so
+// the caller can still tell something went wrong without misleading
+// them into a more specific failure mode.
+func httpStatusToConnectCode(status int) connect.Code {
+	switch status {
+	case http.StatusBadRequest: // 400
+		return connect.CodeInvalidArgument
+	case http.StatusUnauthorized: // 401
+		return connect.CodeUnauthenticated
+	case http.StatusForbidden: // 403
+		return connect.CodePermissionDenied
+	case http.StatusNotFound: // 404
+		return connect.CodeNotFound
+	case http.StatusConflict: // 409
+		return connect.CodeAlreadyExists
+	case http.StatusGone: // 410
+		return connect.CodeNotFound
+	case http.StatusPreconditionFailed: // 412
+		return connect.CodeFailedPrecondition
+	case http.StatusRequestEntityTooLarge: // 413
+		return connect.CodeResourceExhausted
+	case http.StatusTooManyRequests: // 429
+		return connect.CodeResourceExhausted
+	case http.StatusNotImplemented: // 501
+		return connect.CodeUnimplemented
+	case http.StatusBadGateway, http.StatusGatewayTimeout: // 502, 504
+		return connect.CodeUnavailable
+	case http.StatusServiceUnavailable: // 503
+		return connect.CodeUnavailable
+	}
+	if status >= 500 {
+		return connect.CodeInternal
+	}
+	if status >= 400 {
+		return connect.CodeInvalidArgument
+	}
+	return connect.CodeUnknown
+}
+
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
 func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
@@ -143,7 +205,7 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 
 		out, err := cap.invoke(ctx, inPtr.Interface())
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, handlerErrorToConnect(err)
 		}
 		body := extractBody(out)
 
