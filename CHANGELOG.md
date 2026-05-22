@@ -38,6 +38,13 @@ changes on MINOR, drops on MAJOR.
   member now binds to the enum name (string) rather than the default
   ordinal number, so enum fields in JSON-shaped data resolve instead
   of returning null. (`gw/ir/render_graphql_runtime.go`)
+- gat bind — protojson-encoded numbers (int64/uint64 land as JSON
+  strings to preserve precision past `Number.MAX_SAFE_INTEGER`) now
+  coerce into numeric Go fields with bounds-checked `strconv` parsing,
+  both at top-level args and recursively through nested body structs
+  and slices. Consumer huma input structs can declare `int64` /
+  `uint64` fields directly without ad-hoc `string` shims at every
+  call site. (`gw/gat/dispatch_inproc.go`)
 
 ## v1.0.0 — 2026-05-16
 

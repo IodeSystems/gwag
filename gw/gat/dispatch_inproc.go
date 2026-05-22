@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/iodesystems/gwag/gw/ir"
@@ -127,11 +128,7 @@ func bindInput(in reflect.Value, op *ir.Operation, args map[string]any, bodyArg 
 
 	if bodyArg != "" && bodyIdx >= 0 {
 		if v, present := args[bodyArg]; present && v != nil {
-			b, err := json.Marshal(v)
-			if err != nil {
-				return fmt.Errorf("marshal body: %w", err)
-			}
-			if err := json.Unmarshal(b, in.Field(bodyIdx).Addr().Interface()); err != nil {
+			if err := assignValue(in.Field(bodyIdx), v); err != nil {
 				return fmt.Errorf("unmarshal body: %w", err)
 			}
 		}
@@ -140,9 +137,24 @@ func bindInput(in reflect.Value, op *ir.Operation, args map[string]any, bodyArg 
 	return nil
 }
 
-// assignValue converts v to dst's type via JSON round-trip when the
-// types don't match directly. Cheap and correct for the JSON-shaped
-// data GraphQL hands us.
+// assignValue converts v to dst's type. It prefers direct
+// assign/convert; falls back to a JSON round-trip for the simple cases
+// (string→string, number→number); and applies two protojson-specific
+// coercions for the cases where the simple round-trip fails:
+//
+//  1. A stringified number into a numeric field. protojson encodes
+//     proto int64 / uint64 as JSON strings to preserve precision past
+//     Number.MAX_SAFE_INTEGER; once protojson has gone map[string]any,
+//     "5" is a Go string with a numeric Go destination.
+//
+//  2. A map[string]any into a struct, walking field-by-field. The
+//     same int64-as-string issue applies recursively to body args
+//     whose schema contains nested numeric fields.
+//
+// Both coercions are applied in the gat bind path so consumer code
+// can declare Huma input structs with their natural Go types (int64
+// for limits, etc.) rather than working around protojson at every
+// call site.
 func assignValue(dst reflect.Value, v any) error {
 	if !dst.CanSet() {
 		return fmt.Errorf("field not settable")
@@ -153,14 +165,140 @@ func assignValue(dst reflect.Value, v any) error {
 		return nil
 	}
 	if src.IsValid() && src.Type().ConvertibleTo(dst.Type()) {
-		dst.Set(src.Convert(dst.Type()))
+		// Don't convert string ↔ numeric here — strconv handles those
+		// below with bounds checks; raw Go conversion of "5" → int
+		// would silently succeed only for runes (string is []byte).
+		if !(src.Kind() == reflect.String && isNumericKind(dst.Kind())) {
+			dst.Set(src.Convert(dst.Type()))
+			return nil
+		}
+	}
+
+	// (1) protojson-encoded number landing in a numeric Go field.
+	if s, ok := v.(string); ok && isNumericKind(dst.Kind()) {
+		return assignNumericFromString(dst, s)
+	}
+
+	// (2) deep walk: map[string]any → struct, applying assignValue
+	// recursively so nested int64-as-strings survive.
+	if m, ok := v.(map[string]any); ok {
+		target := dst
+		if target.Kind() == reflect.Ptr {
+			if target.IsNil() {
+				target.Set(reflect.New(target.Type().Elem()))
+			}
+			target = target.Elem()
+		}
+		if target.Kind() == reflect.Struct {
+			return assignMapToStruct(target, m)
+		}
+	}
+
+	// Slice walk.
+	if sl, ok := v.([]any); ok && dst.Kind() == reflect.Slice {
+		out := reflect.MakeSlice(dst.Type(), len(sl), len(sl))
+		for i, item := range sl {
+			if err := assignValue(out.Index(i), item); err != nil {
+				return fmt.Errorf("[%d]: %w", i, err)
+			}
+		}
+		dst.Set(out)
 		return nil
 	}
+
+	// Fallback: JSON round-trip. Covers booleans, time strings, enums,
+	// and any other shape with a working UnmarshalJSON.
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(b, dst.Addr().Interface())
+}
+
+func isNumericKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+func assignNumericFromString(dst reflect.Value, s string) error {
+	switch dst.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse int %q: %w", s, err)
+		}
+		if dst.OverflowInt(n) {
+			return fmt.Errorf("int overflow for %q", s)
+		}
+		dst.SetInt(n)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse uint %q: %w", s, err)
+		}
+		if dst.OverflowUint(n) {
+			return fmt.Errorf("uint overflow for %q", s)
+		}
+		dst.SetUint(n)
+	case reflect.Float32, reflect.Float64:
+		n, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return fmt.Errorf("parse float %q: %w", s, err)
+		}
+		if dst.OverflowFloat(n) {
+			return fmt.Errorf("float overflow for %q", s)
+		}
+		dst.SetFloat(n)
+	default:
+		return fmt.Errorf("not a numeric kind: %v", dst.Kind())
+	}
+	return nil
+}
+
+// assignMapToStruct walks m's keys and dispatches each value through
+// assignValue into the matching struct field. Field lookup mirrors
+// encoding/json: exact JSON tag name, then exact Go field name, then
+// case-insensitive fallback.
+func assignMapToStruct(dst reflect.Value, m map[string]any) error {
+	t := dst.Type()
+	byTag := map[string]int{}
+	byName := map[string]int{}
+	byLower := map[string]int{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		byName[f.Name] = i
+		byLower[strings.ToLower(f.Name)] = i
+		if tag, ok := f.Tag.Lookup("json"); ok {
+			name := strings.SplitN(tag, ",", 2)[0]
+			if name != "" && name != "-" {
+				byTag[name] = i
+			}
+		}
+	}
+	for k, v := range m {
+		idx, ok := byTag[k]
+		if !ok {
+			idx, ok = byName[k]
+		}
+		if !ok {
+			idx, ok = byLower[strings.ToLower(k)]
+		}
+		if !ok {
+			continue // ignore unknown keys (DiscardUnknown semantics)
+		}
+		if err := assignValue(dst.Field(idx), v); err != nil {
+			return fmt.Errorf("field %q: %w", k, err)
+		}
+	}
+	return nil
 }
 
 // extractBody pulls the JSON payload off a huma output. Huma outputs
