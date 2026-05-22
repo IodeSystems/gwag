@@ -3,6 +3,7 @@ package ir
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode"
@@ -341,6 +342,66 @@ func (b *IRTypeBuilder) inputForType(t *Type) (graphql.Input, error) {
 	return nil, fmt.Errorf("ir typebuilder: %v not valid in input position (%s)", t.TypeKind, t.Name)
 }
 
+// sourceKeyResolver returns a graphql.FieldResolveFn that handles the
+// schema-vs-source name mismatch gat introduces by camelCasing field
+// names for GraphQL idiom (e.g., snake_case `created_at` →
+// camelCase `createdAt`).
+//
+// The OpenAPI dispatcher hands graphql-go a `map[string]any` from
+// `json.Unmarshal(respBytes, &out)` — keys are whatever the upstream
+// REST encoder emitted (typically snake_case). graphql-go's
+// DefaultResolveFn looks up that map by the schema field name
+// (camelCase here), misses, and returns nil — which then trips
+// non-null fields and propagates a `null` up the response. This
+// resolver tries the IR's original field name first (matching the
+// snake_case source) and falls back to the camelCase schema key
+// (matching proto-origin maps, which go through `lowerCamel` in
+// `gw/gat/proto_convert.go::protoMessageToMap`).
+//
+// Non-map sources — Go structs, interface implementers, anything else
+// graphql-go can introspect — delegate to DefaultResolveFn so its
+// json/graphql tag handling and FieldResolver interface path keep
+// working unchanged.
+//
+// When original == schemaKey (the proto-with-no-rename case), we
+// return nil so graphql-go uses DefaultResolveFn directly with zero
+// per-lookup overhead.
+func sourceKeyResolver(originalName, schemaKey string) graphql.FieldResolveFn {
+	if originalName == schemaKey {
+		return nil
+	}
+	return func(p graphql.ResolveParams) (any, error) {
+		if m, ok := p.Source.(map[string]any); ok {
+			if v, ok := m[originalName]; ok {
+				return v, nil
+			}
+			if v, ok := m[schemaKey]; ok {
+				return v, nil
+			}
+			return nil, nil
+		}
+		// Generic string-keyed map case (e.g., `map[string]string`
+		// from a body that the upstream encoded with snake_case keys).
+		if r := reflect.ValueOf(p.Source); r.IsValid() && r.Kind() == reflect.Map && r.Type().Key().Kind() == reflect.String {
+			if v := r.MapIndex(reflect.ValueOf(originalName)); v.IsValid() {
+				return v.Interface(), nil
+			}
+			if v := r.MapIndex(reflect.ValueOf(schemaKey)); v.IsValid() {
+				return v.Interface(), nil
+			}
+			return nil, nil
+		}
+		// Nil / zero source: graphql-go's executor normally short-
+		// circuits before calling us, but be defensive — the fork's
+		// DefaultResolveFn doesn't guard nil Source and will panic on
+		// the reflect path.
+		if p.Source == nil {
+			return nil, nil
+		}
+		return graphql.DefaultResolveFn(p)
+	}
+}
+
 func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 	if obj, ok := b.objects[t.Name]; ok {
 		return obj
@@ -364,6 +425,7 @@ func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 					Type:              ft,
 					Description:       f.Description,
 					DeprecationReason: f.Deprecated,
+					Resolve:           sourceKeyResolver(f.Name, key),
 				}
 			}
 			if len(fields) == 0 {
