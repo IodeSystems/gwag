@@ -1,14 +1,10 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -49,7 +45,7 @@ func runGraphQL(args []string) error {
 
 	targets := make([]runner.Target, 0, len(targetURLs))
 	for _, u := range targetURLs {
-		fire := makeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, body)
+		fire := runner.MakeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, body)
 		targets = append(targets, runner.Target{
 			Label:      u,
 			MetricsURL: runner.MetricsURLFromGateway(u),
@@ -67,7 +63,7 @@ func runGraphQL(args []string) error {
 	}
 	directTargets := make([]runner.Target, 0, len(directURLs))
 	for _, u := range directURLs {
-		fire := makeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, directBody)
+		fire := runner.MakeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, directBody)
 		directTargets = append(directTargets, runner.Target{
 			Label: "direct " + u,
 			// MetricsURL empty: gateway not in path on this pass.
@@ -106,68 +102,4 @@ func runGraphQL(args []string) error {
 	runner.PrintPass(directOpts, dRes)
 	runner.PrintCompare(gwRes, dRes)
 	return nil
-}
-
-func makeGraphQLFire(timeout time.Duration, concurrency int, target string, body []byte) func(context.Context, *runner.Stats) {
-	// Default http.Transport sets MaxIdleConnsPerHost=2 — at any real
-	// load, requests beyond that pair burn fresh TCP connections, pile
-	// up in TIME_WAIT, and after a few seconds surface as "connect:
-	// cannot assign requested address". Size the pool to match
-	// concurrency so keep-alive actually works.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.MaxIdleConns = concurrency * 4
-	tr.MaxIdleConnsPerHost = concurrency * 4
-	tr.IdleConnTimeout = 90 * time.Second
-	client := &http.Client{Timeout: timeout, Transport: tr}
-	return func(ctx context.Context, s *runner.Stats) {
-		start := time.Now()
-		req, err := http.NewRequestWithContext(ctx, "POST", target, bytes.NewReader(body))
-		if err != nil {
-			s.RecordErr(runner.ErrTransport, "build request: "+err.Error())
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		elapsed := time.Since(start)
-		if err != nil {
-			// tcancel() at end-of-duration fails any in-flight request
-			// with this error; indistinguishable from real timeouts at
-			// the syscall level. Drop the sample.
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			s.RecordErr(runner.ErrTransport, err.Error())
-			return
-		}
-		defer resp.Body.Close()
-
-		statusLabel := fmt.Sprintf("%d", resp.StatusCode)
-		s.RecordCode(statusLabel)
-
-		respBody, _ := io.ReadAll(resp.Body)
-		excerpt := runner.Truncate(string(respBody), 200)
-		if resp.StatusCode != 200 {
-			s.RecordErr(runner.ErrHTTP, fmt.Sprintf("status=%d body=%s", resp.StatusCode, excerpt))
-			s.RecordBody(statusLabel, excerpt)
-			return
-		}
-		var env struct {
-			Errors []struct {
-				Message    string         `json:"message"`
-				Extensions map[string]any `json:"extensions"`
-			} `json:"errors"`
-		}
-		if err := json.Unmarshal(respBody, &env); err == nil && len(env.Errors) > 0 {
-			first := env.Errors[0]
-			code := ""
-			if c, ok := first.Extensions["code"].(string); ok {
-				code = " code=" + c
-			}
-			s.RecordErr(runner.ErrEnvelope, fmt.Sprintf("%s%s", first.Message, code))
-			s.RecordBody("200 (graphql errors)", excerpt)
-			return
-		}
-		s.RecordBody(statusLabel, excerpt)
-		s.RecordOK(elapsed)
-	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iodesystems/gwag/bench/cmd/traffic/runner"
 )
 
 // Sweep is the wire shape one `perf run` invocation produces. The
@@ -163,9 +166,29 @@ func runSweep(args []string) error {
 		return fmt.Errorf("--reps must be ≥ 1")
 	}
 
-	trafficBin, err := ensureTrafficBinary()
+	// Build the runner target ONCE with an HTTP-client pool sized for
+	// the largest rung in the sweep. Reusing this target across every
+	// step and every rep means one keep-alive pool persists for the
+	// whole scenario — without it, every rep spawned a fresh process
+	// (or fresh client) whose connections all dropped into TIME_WAIT
+	// on exit, exhausting the ~28K ephemeral-port range by the time
+	// the sweep hit the 40k–60k rungs. The "regression" you saw at
+	// the upper rungs was that TIME_WAIT cliff, not gateway code.
+	maxRPS := steps[0]
+	for _, s := range steps {
+		if s > maxRPS {
+			maxRPS = s
+		}
+	}
+	poolConcurrency := runner.ResolveConcurrency(maxRPS, 0)
+	body, err := json.Marshal(map[string]any{"query": *query})
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal query: %w", err)
+	}
+	sharedTarget := runner.Target{
+		Label:      *target,
+		MetricsURL: runner.MetricsURLFromGateway(*target),
+		Fire:       runner.MakeGraphQLFire(5*time.Second, poolConcurrency, *target, body),
 	}
 
 	sw := Sweep{
@@ -201,7 +224,7 @@ func runSweep(args []string) error {
 	}()
 
 	for _, rps := range steps {
-		step, err := runStep(trafficBin, *target, *query, rps, *duration, *reps, sw.Warmup, repsDir)
+		step, err := runStep(sharedTarget, rps, *duration, *reps, sw.Warmup, repsDir)
 		if err != nil {
 			return fmt.Errorf("step rps=%d: %w", rps, err)
 		}
@@ -233,10 +256,13 @@ func runSweep(args []string) error {
 	return nil
 }
 
-// runStep drives one (target-rps) rung — runs `reps` traffic
-// invocations, parses each --json output, aggregates the
-// non-warmup reps.
-func runStep(trafficBin, target, query string, rps int, dur time.Duration, reps int, warmup bool, repsDir string) (SweepStep, error) {
+// runStep drives one (target-rps) rung — runs `reps` runner.Run
+// passes against the shared Target, aggregates the non-warmup reps,
+// and persists each rep's JSON shape under repsDir.
+//
+// The sharedTarget is the single source of HTTP keep-alive pool for
+// the whole sweep; do not rebuild it per step.
+func runStep(sharedTarget runner.Target, rps int, dur time.Duration, reps int, warmup bool, repsDir string) (SweepStep, error) {
 	step := SweepStep{TargetRPS: rps}
 	type aggInputs struct {
 		achievedRPS []float64
@@ -246,24 +272,24 @@ func runStep(trafficBin, target, query string, rps int, dur time.Duration, reps 
 		dispMeanUs  []int64
 	}
 	var inputs aggInputs
+	opts := runner.Options{
+		RPS:           rps,
+		Duration:      dur,
+		ServerMetrics: true,
+	}
 	for r := 1; r <= reps; r++ {
-		repPath := filepath.Join(repsDir, fmt.Sprintf("rps-%d-rep-%d.json", rps, r))
-		args := []string{
-			"graphql",
-			"--rps", strconv.Itoa(rps),
-			"--duration", dur.String(),
-			"--target", target,
-			"--query", query,
-			"--json", repPath,
-		}
-		cmd := exec.Command(trafficBin, args...)
-		cmd.Stderr = os.Stderr // traffic prints its summary to stdout — we discard it, errors land here
-		if err := cmd.Run(); err != nil {
-			return step, fmt.Errorf("rep %d/%d traffic: %w", r, reps, err)
-		}
-		raw, err := os.ReadFile(repPath)
+		res, err := runner.Run(opts, "", []runner.Target{sharedTarget})
 		if err != nil {
-			return step, fmt.Errorf("rep %d/%d read sidecar: %w", r, reps, err)
+			return step, fmt.Errorf("rep %d/%d run: %w", r, reps, err)
+		}
+		var buf bytes.Buffer
+		if err := runner.WriteJSON(&buf, opts, res); err != nil {
+			return step, fmt.Errorf("rep %d/%d encode: %w", r, reps, err)
+		}
+		raw := buf.Bytes()
+		repPath := filepath.Join(repsDir, fmt.Sprintf("rps-%d-rep-%d.json", rps, r))
+		if err := os.WriteFile(repPath, raw, 0o644); err != nil {
+			return step, fmt.Errorf("rep %d/%d write sidecar: %w", r, reps, err)
 		}
 		isWarmup := warmup && r == 1
 		step.Reps = append(step.Reps, TrafficRep{
