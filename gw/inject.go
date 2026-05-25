@@ -463,11 +463,16 @@ func InjectHeader(name string, resolve func(ctx context.Context, current *string
 // the cache because `current` varies per call site (though for
 // headers it's the same inbound HTTP request — kept symmetric with
 // InjectType / InjectPath for one mental model).
+//
+// The returned map is drawn from a sync.Pool; hot-path callers
+// should defer releaseInjectorMap to return it. Callers that don't
+// release simply drop the map for GC — correctness is unaffected,
+// the pool just refills on the next Get.
 func applyHeaderInjectors(ctx context.Context, injectors []headerInjector) (map[string]string, error) {
 	if len(injectors) == 0 {
 		return nil, nil
 	}
-	out := make(map[string]string, len(injectors))
+	out := injectMapPool.Get().(map[string]string)
 	for _, inj := range injectors {
 		var current *string
 		if !inj.Hide {
@@ -479,6 +484,7 @@ func applyHeaderInjectors(ctx context.Context, injectors []headerInjector) (map[
 		}
 		v, err := resolveCachedHeader(ctx, inj.Name, current, inj.Fn)
 		if err != nil {
+			releaseInjectorMap(out)
 			return nil, err
 		}
 		if v == "" {
@@ -487,6 +493,25 @@ func applyHeaderInjectors(ctx context.Context, injectors []headerInjector) (map[
 		out[inj.Name] = v
 	}
 	return out, nil
+}
+
+// injectMapPool reuses the result map applyHeaderInjectors hands
+// back. Header counts in practice are 1-2 so a tiny preallocated
+// map is enough; mapping growth into a second bucket is rare.
+var injectMapPool = sync.Pool{
+	New: func() any { return make(map[string]string, 2) },
+}
+
+// releaseInjectorMap clears m and returns it to injectMapPool. Safe
+// on nil. Caller must not touch m after calling.
+func releaseInjectorMap(m map[string]string) {
+	if m == nil {
+		return
+	}
+	for k := range m {
+		delete(m, k)
+	}
+	injectMapPool.Put(m)
 }
 
 // resolveCachedHeader memoises header-resolver output per request,

@@ -115,9 +115,14 @@ func (tr *tracer) injectGRPC(ctx context.Context) context.Context {
 
 // startIngressSpan opens a server-kind span for an ingress request.
 // Returns the new ctx (carrying the span) and the span itself; caller
-// must End() it. When tracing is disabled, the noop tracer returns a
-// recording-off span with negligible overhead.
+// must End() it. When tracing is disabled, returns the existing ctx
+// and a non-recording span — bypasses otel's option machinery, which
+// allocates a tracer.SpanStartConfig + an attribute slice copy even
+// for the noop tracer.
 func (tr *tracer) startIngressSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	if !tr.enabled {
+		return ctx, noopSpanInst
+	}
 	return tr.t.Start(ctx, name,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(attrs...),
@@ -127,11 +132,20 @@ func (tr *tracer) startIngressSpan(ctx context.Context, name string, attrs ...at
 // startDispatchSpan opens a client-kind span for an outbound dispatch
 // (proto/openapi/graphql forwarder).
 func (tr *tracer) startDispatchSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	if !tr.enabled {
+		return ctx, noopSpanInst
+	}
 	return tr.t.Start(ctx, name,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...),
 	)
 }
+
+// noopSpanInst is a process-wide instance of the otel/trace/noop span,
+// returned by the tracer hot-paths when WithTracer is unset. Avoids
+// boxing a fresh noop.Span into the trace.Span interface on every
+// call.
+var noopSpanInst trace.Span = noop.Span{}
 
 // tracerCtxKey is the type used to stash the gateway's *tracer on
 // per-request contexts. Dispatchers retrieve it via tracerFromContext

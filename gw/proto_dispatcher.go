@@ -109,6 +109,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 				}
 				ctx = metadata.AppendToOutgoingContext(ctx, kvs...)
 			}
+			releaseInjectorMap(injected)
 		}
 
 		r.inflight.Add(1)

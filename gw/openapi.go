@@ -760,6 +760,7 @@ func dispatchOpenAPIRaw(
 	for k, v := range injected {
 		req.Header.Set(k, v)
 	}
+	releaseInjectorMap(injected)
 
 	client := httpClient
 	if client == nil {

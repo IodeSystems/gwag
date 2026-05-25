@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"html/template"
 	"io"
@@ -8,9 +9,22 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/IodeSystems/graphql-go"
 )
+
+// graphqlBodyBufPool keeps a per-request body buffer alive across
+// requests so io.Copy reuses the same backing slice instead of
+// io.ReadAll allocating a fresh one every call. JSON Unmarshal
+// copies string values out, so it's safe to Put the buffer back
+// once decoding finishes. Caps overgrown buffers at 64 KiB to keep
+// one fat upload from pinning a fat alloc in steady state.
+var graphqlBodyBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+const graphqlBodyBufPoolMax = 64 << 10
 
 // Vendored from github.com/graphql-go/handler@v0.2.4 — the upstream
 // module imports the original graphql-go/graphql, which is no longer
@@ -72,8 +86,12 @@ func graphqlOptionsFromForm(values url.Values) *graphqlRequestOptions {
 // multipart path); JSON / form parse failures still return an empty
 // options struct, matching the upstream behaviour.
 func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
-	if reqOpt := graphqlOptionsFromForm(r.URL.Query()); reqOpt != nil {
-		return reqOpt, nil
+	// r.URL.Query() always allocates a url.Values map; skip when there
+	// is no query string to parse.
+	if r.URL.RawQuery != "" {
+		if reqOpt := graphqlOptionsFromForm(r.URL.Query()); reqOpt != nil {
+			return reqOpt, nil
+		}
 	}
 	if r.Method != http.MethodPost {
 		return &graphqlRequestOptions{}, nil
@@ -82,9 +100,20 @@ func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
 		return &graphqlRequestOptions{}, nil
 	}
 	contentTypeStr := r.Header.Get("Content-Type")
-	contentType, ctParams, _ := mime.ParseMediaType(contentTypeStr)
-	if contentType == "" {
-		contentType = strings.TrimSpace(strings.SplitN(contentTypeStr, ";", 2)[0])
+	// Fast path: the canonical "application/json" with no parameters
+	// dodges mime.ParseMediaType, which allocates the params map even
+	// when there are none.
+	var (
+		contentType string
+		ctParams    map[string]string
+	)
+	if contentTypeStr == contentTypeJSON {
+		contentType = contentTypeJSON
+	} else {
+		contentType, ctParams, _ = mime.ParseMediaType(contentTypeStr)
+		if contentType == "" {
+			contentType = strings.TrimSpace(strings.SplitN(contentTypeStr, ";", 2)[0])
+		}
 	}
 	switch contentType {
 	case contentTypeMultipartForm:
@@ -114,10 +143,17 @@ func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
 		fallthrough
 	default:
 		var opts graphqlRequestOptions
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
+		buf := graphqlBodyBufPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		defer func() {
+			if buf.Cap() <= graphqlBodyBufPoolMax {
+				graphqlBodyBufPool.Put(buf)
+			}
+		}()
+		if _, err := io.Copy(buf, r.Body); err != nil {
 			return &opts, nil
 		}
+		body := buf.Bytes()
 		if err := json.Unmarshal(body, &opts); err != nil {
 			// `variables` may have been sent as a JSON-encoded string.
 			var optsCompat graphqlRequestOptionsCompat

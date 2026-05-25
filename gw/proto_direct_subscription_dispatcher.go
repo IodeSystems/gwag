@@ -130,6 +130,7 @@ func (d *protoDirectSubscriptionDispatcher) Dispatch(ctx context.Context, args m
 			}
 			ctx = metadata.AppendToOutgoingContext(ctx, kvs...)
 		}
+		releaseInjectorMap(injected)
 	}
 
 	// Open server-streaming call.
