@@ -95,6 +95,11 @@ func main() {
 		Method:      http.MethodGet,
 		Path:        "/projects",
 		Summary:     "List projects.",
+		// SDL-visible annotation: carried verbatim into the GraphQL SDL
+		// (GET /api/schema/graphql) as `@audited`. Metadata only.
+		Extensions: map[string]any{
+			"x-gwag-annotations": []map[string]any{{"name": "audited"}},
+		},
 	}, listProjects)
 
 	gat.Register(api, g, huma.Operation{
@@ -109,6 +114,12 @@ func main() {
 		Method:      http.MethodPost,
 		Path:        "/projects",
 		Summary:     "Create a new project.",
+		// Renders as `@hasRole(role: "ADMIN")` on the GraphQL mutation.
+		Extensions: map[string]any{
+			"x-gwag-annotations": []map[string]any{
+				{"name": "hasRole", "args": map[string]any{"role": "ADMIN"}},
+			},
+		},
 	}, createProject)
 
 	// Mount gat's surfaces. RegisterHuma covers GraphQL + the three
