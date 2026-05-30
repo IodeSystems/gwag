@@ -138,6 +138,7 @@ func (d *protoDirectSubscriptionDispatcher) Dispatch(ctx context.Context, args m
 		ServerStreams: true,
 		ClientStreams: false,
 	}
+	ctx = bridgeTraceMetadata(ctx)
 	ctx = tr.injectGRPC(ctx)
 	stream, err := r.conn.NewStream(ctx, streamDesc, method)
 	if err != nil {

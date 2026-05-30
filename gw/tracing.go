@@ -113,6 +113,40 @@ func (tr *tracer) injectGRPC(ctx context.Context) context.Context {
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
+// bridgeTraceMetadata copies the inbound trace-propagation headers
+// (traceForwardHeaders) onto the outgoing gRPC metadata, so a trace
+// survives a proto dispatch even without an OTel TracerProvider — the
+// gRPC counterpart of forwardOpenAPIHeaders. The inbound source is the
+// originating HTTP request (GraphQL / REST ingress) or, for the gRPC
+// ingress, the incoming gRPC metadata. injectGRPC, called right after,
+// overwrites traceparent with the gateway's span context when a provider
+// is wired. Returns ctx unchanged when no trace headers are present.
+func bridgeTraceMetadata(ctx context.Context) context.Context {
+	var get func(string) string
+	if in := HTTPRequestFromContext(ctx); in != nil {
+		get = in.Header.Get
+	} else if md, ok := metadata.FromIncomingContext(ctx); ok {
+		get = func(h string) string {
+			if vs := md.Get(h); len(vs) > 0 {
+				return vs[0]
+			}
+			return ""
+		}
+	} else {
+		return ctx
+	}
+	var kvs []string
+	for _, h := range traceForwardHeaders {
+		if v := get(h); v != "" {
+			kvs = append(kvs, h, v)
+		}
+	}
+	if len(kvs) == 0 {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, kvs...)
+}
+
 // startIngressSpan opens a server-kind span for an ingress request.
 // Returns the new ctx (carrying the span) and the span itself; caller
 // must End() it. When tracing is disabled, returns the existing ctx

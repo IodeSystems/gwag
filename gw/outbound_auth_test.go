@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/metadata"
 )
 
 // capturingRT records the request it receives and returns an empty 200.
@@ -140,6 +142,60 @@ func TestForwardTraceHeaders(t *testing.T) {
 		forwardOpenAPIHeaders(ctx, out, []string{})
 		if out.Header.Get("traceparent") != "" || out.Header.Get("Authorization") != "" {
 			t.Error("empty allowlist must forward nothing, trace headers included")
+		}
+	})
+}
+
+// TestBridgeTraceMetadata covers both inbound sources: an originating
+// HTTP request (GraphQL/REST ingress) and incoming gRPC metadata (gRPC
+// ingress). Trace headers must land on the outgoing gRPC metadata.
+func TestBridgeTraceMetadata(t *testing.T) {
+	first := func(md metadata.MD, k string) string {
+		if v := md.Get(k); len(v) > 0 {
+			return v[0]
+		}
+		return ""
+	}
+
+	t.Run("from-http-request", func(t *testing.T) {
+		in, _ := http.NewRequest(http.MethodPost, "http://gw/api/graphql", nil)
+		in.Header.Set("traceparent", "00-http-trace-01")
+		in.Header.Set("x-request-id", "rid-1")
+		in.Header.Set("X-Secret", "nope")
+		ctx := bridgeTraceMetadata(withHTTPRequest(context.Background(), in))
+		md, ok := metadata.FromOutgoingContext(ctx)
+		if !ok {
+			t.Fatal("no outgoing metadata")
+		}
+		if got := first(md, "traceparent"); got != "00-http-trace-01" {
+			t.Errorf("traceparent = %q", got)
+		}
+		if got := first(md, "x-request-id"); got != "rid-1" {
+			t.Errorf("x-request-id = %q", got)
+		}
+		if len(md.Get("x-secret")) != 0 {
+			t.Error("non-trace header leaked into metadata")
+		}
+	})
+
+	t.Run("from-incoming-grpc-metadata", func(t *testing.T) {
+		inMD := metadata.Pairs("traceparent", "00-grpc-trace-02", "b3", "b3val")
+		ctx := bridgeTraceMetadata(metadata.NewIncomingContext(context.Background(), inMD))
+		md, ok := metadata.FromOutgoingContext(ctx)
+		if !ok {
+			t.Fatal("no outgoing metadata")
+		}
+		if got := first(md, "traceparent"); got != "00-grpc-trace-02" {
+			t.Errorf("traceparent = %q", got)
+		}
+		if got := first(md, "b3"); got != "b3val" {
+			t.Errorf("b3 = %q", got)
+		}
+	})
+
+	t.Run("no-inbound-is-noop", func(t *testing.T) {
+		if _, ok := metadata.FromOutgoingContext(bridgeTraceMetadata(context.Background())); ok {
+			t.Error("expected no outgoing metadata without an inbound source")
 		}
 	})
 }

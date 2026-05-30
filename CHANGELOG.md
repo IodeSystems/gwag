@@ -79,14 +79,17 @@ changes on MINOR, drops on MAJOR.
   only — a dynamic `PeerProvider` is a followup.
 
 ### Changed
-- Outbound OpenAPI / downstream-GraphQL dispatches now forward
-  distributed-tracing / correlation headers (W3C `traceparent` /
-  `tracestate` / `baggage`, B3, `x-request-id`, AWS / GCP trace
-  headers) from the inbound request alongside the existing auth
-  allowlist, so a trace survives the gateway hop without configuring
-  OpenTelemetry. An OTel `TracerProvider`, when set, still overwrites
-  `traceparent` with the gateway's span context. An empty
-  `ForwardHeaders()` opts out of all forwarding, trace headers included.
+- Outbound dispatches now propagate distributed-tracing / correlation
+  headers (W3C `traceparent` / `tracestate` / `baggage`, B3,
+  `x-request-id`, AWS / GCP trace headers) from the inbound request, so
+  a trace survives the gateway hop without configuring OpenTelemetry.
+  OpenAPI / downstream-GraphQL forward them as HTTP headers alongside
+  the auth allowlist; proto / gRPC dispatch bridges them onto the
+  outbound gRPC metadata (inbound source is the HTTP request, or the
+  incoming gRPC metadata on the gRPC ingress). An OTel `TracerProvider`,
+  when set, still overwrites `traceparent` with the gateway's span
+  context. An empty `ForwardHeaders()` opts out of HTTP forwarding,
+  trace headers included.
 
 ### Removed
 - `ir.RenderGraphQL(svcs) string` — the standalone IR→SDL string

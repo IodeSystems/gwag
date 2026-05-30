@@ -114,6 +114,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 
 		r.inflight.Add(1)
 		defer r.inflight.Add(-1)
+		ctx = bridgeTraceMetadata(ctx)
 		ctx = tr.injectGRPC(ctx)
 		resp := acquireDynamicMessage(outputDesc)
 		err = r.conn.Invoke(ctx, method, req, resp)

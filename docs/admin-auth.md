@@ -71,6 +71,13 @@ the parent span; without a provider, the inbound trace headers pass
 through unchanged. An empty `ForwardHeaders()` opts out of everything,
 trace headers included.
 
+This works for **proto / gRPC dispatch** too: the same trace headers
+are bridged from the inbound request (an HTTP GraphQL/REST ingress, or
+the incoming gRPC metadata on the gRPC ingress) onto the outbound gRPC
+metadata, again without needing OpenTelemetry. (Auth-header forwarding
+via `ForwardHeaders` remains a no-op for gRPC — only the trace headers
+bridge.)
+
 **Service-account auth.** When the gateway should call the upstream as
 *itself* rather than forwarding the caller's token, use the built-in
 `ServiceAccountTransport` (or the `ServiceAccountClient` shortcut) and
