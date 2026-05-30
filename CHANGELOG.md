@@ -10,6 +10,11 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gwag --admin-data-dir DIR` flag. Persists (and reloads) the boot
+  admin token to `<DIR>/admin-token` for ad-hoc `gwag` startups, mirroring
+  the example gateway and `gwag up`. A stable token means
+  `gwag sign --gateway --bearer $(cat <DIR>/admin-token)` works against a
+  local gateway instead of falling back to local `--secret HEX` signing.
 - Static `--openapi` / `--graphql` registration flags for the `gwag`
   command, alongside the existing `--proto`. `--openapi SPEC=[NS@]URL`
   ingests a spec (file or http URL) and forwards to the upstream base;

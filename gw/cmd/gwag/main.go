@@ -217,13 +217,14 @@ func runGateway() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
+	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists (and reloads) its boot admin token; empty = in-memory only. Set a writable path so 'gwag sign --gateway --bearer $(cat <dir>/admin-token)' works against this gateway instead of local --secret signing.")
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
-		fmt.Fprintln(flag.CommandLine.Output(), "            [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
+		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		flag.PrintDefaults()
 	}
@@ -239,7 +240,11 @@ func runGateway() {
 		fmt.Fprintf(os.Stderr, "--allow-tier: %v\n", err)
 		os.Exit(2)
 	}
-	gw := gateway.New(gateway.WithAllowTier(tiers...))
+	gwOpts := []gateway.Option{gateway.WithAllowTier(tiers...)}
+	if *adminDataDir != "" {
+		gwOpts = append(gwOpts, gateway.WithAdminDataDir(*adminDataDir))
+	}
+	gw := gateway.New(gwOpts...)
 	for _, p := range protos {
 		opts := []gateway.ServiceOption{gateway.To(p.addr)}
 		if p.ns != "" {
