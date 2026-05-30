@@ -11,9 +11,12 @@
 //	gwag serve --openapi spec.yaml --to http://localhost:8081
 //	gwag serve --proto greeter.proto --to localhost:50051
 //
-//	# Static configuration from .proto files (no NATS, no admin):
+//	# Static configuration from .proto / OpenAPI / GraphQL sources
+//	# (no NATS, no admin):
 //	gwag --proto path/to/foo.proto=foo-svc:50051 \
 //	     --proto path/to/bar.proto=billing@bar-svc:50051 \
+//	     --openapi petstore.json=pets@http://pets-svc:8080 \
+//	     --graphql reviews@https://reviews-svc/graphql \
 //	     --addr :8080
 //
 //	# Static + runtime registration (no NATS):
@@ -35,6 +38,12 @@
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
 // the proto's filename stem is used. Without TLS configuration, dialing
 // is insecure — fine for inside a service mesh, not the public network.
+//
+// --openapi takes SPEC=[NAMESPACE@]URL: SPEC is a local spec file or an
+// http(s) URL, URL is the upstream base the gateway forwards to.
+// --graphql takes [NAMESPACE@]URL: a downstream GraphQL endpoint
+// introspected once at boot. All three static flags are repeatable and
+// compose with --control-plane runtime registration.
 package main
 
 import (
@@ -114,6 +123,62 @@ func (p *protoFlag) Set(v string) error {
 	return nil
 }
 
+type openapiSpec struct {
+	spec string // local file path or http(s):// URL to the OpenAPI document
+	ns   string
+	url  string // upstream base URL the gateway forwards to
+}
+
+type openapiFlag []openapiSpec
+
+func (o *openapiFlag) String() string { return fmt.Sprint(*o) }
+
+func (o *openapiFlag) Set(v string) error {
+	eq := strings.Index(v, "=")
+	if eq < 0 {
+		return fmt.Errorf("expected --openapi SPEC=[NS@]URL, got %q", v)
+	}
+	spec := v[:eq]
+	ns, url := splitNSURL(v[eq+1:])
+	if spec == "" || url == "" {
+		return fmt.Errorf("--openapi: both spec and upstream url are required, got %q", v)
+	}
+	*o = append(*o, openapiSpec{spec: spec, ns: ns, url: url})
+	return nil
+}
+
+type graphqlSpec struct {
+	ns  string
+	url string // GraphQL endpoint, introspected at boot and dispatched to
+}
+
+type graphqlFlag []graphqlSpec
+
+func (q *graphqlFlag) String() string { return fmt.Sprint(*q) }
+
+func (q *graphqlFlag) Set(v string) error {
+	ns, url := splitNSURL(v)
+	if url == "" {
+		return fmt.Errorf("--graphql: endpoint URL is required, got %q", v)
+	}
+	*q = append(*q, graphqlSpec{ns: ns, url: url})
+	return nil
+}
+
+// splitNSURL peels an optional "ns@" prefix off a URL. The '@' is a
+// namespace separator only when it precedes the scheme's "://", so a URL
+// carrying userinfo (http://user@host) stays intact.
+func splitNSURL(s string) (ns, url string) {
+	at := strings.Index(s, "@")
+	if at < 0 {
+		return "", s
+	}
+	if scheme := strings.Index(s, "://"); scheme >= 0 && at > scheme {
+		return "", s
+	}
+	return s[:at], s[at+1:]
+}
+
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
@@ -145,6 +210,10 @@ func main() {
 func runGateway() {
 	var protos protoFlag
 	flag.Var(&protos, "proto", "PATH=[NS@]ADDR (repeatable)")
+	var openapis openapiFlag
+	flag.Var(&openapis, "openapi", "SPEC=[NS@]URL — SPEC is a spec file or http(s) URL, URL is the upstream base (repeatable)")
+	var graphqls graphqlFlag
+	flag.Var(&graphqls, "graphql", "[NS@]URL — downstream GraphQL endpoint, introspected at boot (repeatable)")
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
@@ -153,13 +222,14 @@ func runGateway() {
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
+		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if len(protos) == 0 && *cpAddr == "" && len(mcpUpstreams.values) == 0 {
-		fmt.Fprintln(os.Stderr, "gwag: nothing to serve — pass --proto for static registration, --control-plane for runtime registration, --mcp-upstream to ingest an MCP server, or a combination")
+	if len(protos) == 0 && len(openapis) == 0 && len(graphqls) == 0 && *cpAddr == "" && len(mcpUpstreams.values) == 0 {
+		fmt.Fprintln(os.Stderr, "gwag: nothing to serve — pass --proto / --openapi / --graphql for static registration, --control-plane for runtime registration, --mcp-upstream to ingest an MCP server, or a combination")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -179,6 +249,26 @@ func runGateway() {
 			log.Fatalf("register %s: %v", p.path, err)
 		}
 		log.Printf("registered %s → %s", p.path, p.addr)
+	}
+	for _, o := range openapis {
+		opts := []gateway.ServiceOption{gateway.To(o.url)}
+		if o.ns != "" {
+			opts = append(opts, gateway.As(o.ns))
+		}
+		if err := gw.AddOpenAPI(o.spec, opts...); err != nil {
+			log.Fatalf("register openapi %s: %v", o.spec, err)
+		}
+		log.Printf("registered openapi %s → %s", o.spec, o.url)
+	}
+	for _, q := range graphqls {
+		var opts []gateway.ServiceOption
+		if q.ns != "" {
+			opts = append(opts, gateway.As(q.ns))
+		}
+		if err := gw.AddGraphQL(q.url, opts...); err != nil {
+			log.Fatalf("register graphql %s: %v", q.url, err)
+		}
+		log.Printf("registered graphql %s", q.url)
 	}
 	for _, v := range mcpUpstreams.values {
 		ns, transport, target, err := parseMCPUpstream(v)

@@ -100,3 +100,66 @@ func TestParseMCPUpstream(t *testing.T) {
 		}
 	})
 }
+
+func TestSplitNSURL(t *testing.T) {
+	cases := []struct{ in, ns, url string }{
+		{"pets@http://pets-svc:8080", "pets", "http://pets-svc:8080"},
+		{"http://pets-svc:8080", "", "http://pets-svc:8080"},
+		{"https://reviews/graphql", "", "https://reviews/graphql"},
+		{"reviews@https://reviews/graphql", "reviews", "https://reviews/graphql"},
+		// '@' after the scheme is userinfo, not a namespace separator.
+		{"http://user@host/graphql", "", "http://user@host/graphql"},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			ns, url := splitNSURL(c.in)
+			if ns != c.ns || url != c.url {
+				t.Errorf("splitNSURL(%q) = (%q, %q), want (%q, %q)", c.in, ns, url, c.ns, c.url)
+			}
+		})
+	}
+}
+
+func TestOpenapiFlagSet(t *testing.T) {
+	var f openapiFlag
+	if err := f.Set("petstore.json=pets@http://pets-svc:8080"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := f.Set("http://svc/openapi.json=http://svc"); err != nil {
+		t.Fatalf("Set (no ns): %v", err)
+	}
+	want := openapiFlag{
+		{spec: "petstore.json", ns: "pets", url: "http://pets-svc:8080"},
+		{spec: "http://svc/openapi.json", ns: "", url: "http://svc"},
+	}
+	if !reflect.DeepEqual(f, want) {
+		t.Errorf("got %+v, want %+v", f, want)
+	}
+	for _, bad := range []string{"no-equals", "=http://svc", "spec.json="} {
+		var g openapiFlag
+		if err := g.Set(bad); err == nil {
+			t.Errorf("Set(%q) expected error", bad)
+		}
+	}
+}
+
+func TestGraphqlFlagSet(t *testing.T) {
+	var f graphqlFlag
+	if err := f.Set("reviews@https://reviews/graphql"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := f.Set("https://bare/graphql"); err != nil {
+		t.Fatalf("Set (no ns): %v", err)
+	}
+	want := graphqlFlag{
+		{ns: "reviews", url: "https://reviews/graphql"},
+		{ns: "", url: "https://bare/graphql"},
+	}
+	if !reflect.DeepEqual(f, want) {
+		t.Errorf("got %+v, want %+v", f, want)
+	}
+	var g graphqlFlag
+	if err := g.Set(""); err == nil {
+		t.Error("Set(\"\") expected error")
+	}
+}

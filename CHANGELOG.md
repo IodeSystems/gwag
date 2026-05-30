@@ -10,6 +10,13 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Static `--openapi` / `--graphql` registration flags for the `gwag`
+  command, alongside the existing `--proto`. `--openapi SPEC=[NS@]URL`
+  ingests a spec (file or http URL) and forwards to the upstream base;
+  `--graphql [NS@]URL` introspects a downstream GraphQL endpoint at
+  boot. Both repeatable; compose with `--control-plane` runtime
+  registration. A CLI-driven static pipeline no longer needs the
+  control plane for those two kinds.
 - SDL-visible annotation carriage. An upstream author can attach
   custom directives to an operation / type / field — `x-gwag-annotations`
   on an OpenAPI (incl. huma) operation or schema, or a `@gql Name(args)`
