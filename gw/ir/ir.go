@@ -199,6 +199,13 @@ type Operation struct {
 	Description string
 	Deprecated  string
 
+	// Ref is the `@ref <path>[:<symbol>]` source-of-truth marker an
+	// upstream author attached to this operation. Captured at ingest
+	// (proto leading comment / OpenAPI x-ref / GraphQL description
+	// line) and re-emitted in every format's idiom so tslsmcp can
+	// link generated artifacts back to the source. Empty when unset.
+	Ref string
+
 	// SchemaID is the registry key for the runtime Dispatcher that
 	// serves this operation. Empty until PopulateSchemaIDs is called
 	// (which the gateway does once Namespace/Version are assigned to
@@ -292,6 +299,9 @@ type Type struct {
 	TypeKind    TypeKind
 	Description string
 
+	// Ref is the `@ref` source-of-truth marker (see Operation.Ref).
+	Ref string
+
 	// Object/Input: ordered field list.
 	Fields []*Field
 
@@ -350,6 +360,7 @@ type Field struct {
 	ItemRequired bool // when Repeated, each list element is non-null
 	Description  string
 	Deprecated   string
+	Ref          string // `@ref` source-of-truth marker (see Operation.Ref)
 	Default      any
 
 	// Proto-specific:

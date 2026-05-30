@@ -170,7 +170,39 @@ func IngestGraphQL(data json.RawMessage) (*Service, error) {
 	for n := range namespaceTypes {
 		delete(svc.Types, n)
 	}
+	extractGraphQLRefs(svc)
 	return svc, nil
+}
+
+// extractGraphQLRefs moves `@ref` source-of-truth markers out of
+// ingested descriptions into the dedicated Ref field for every type,
+// field, and operation in svc. GraphQL carries the marker as a
+// description line (proto uses a leading comment, OpenAPI an x-ref
+// extension), so one pass over the assembled IR keeps the per-case
+// ingest literals untouched. Grouped operations are mutated in place,
+// not via FlatOperations (which clones them).
+func extractGraphQLRefs(svc *Service) {
+	for _, t := range svc.Types {
+		t.Description, t.Ref = splitRef(t.Description)
+		for _, f := range t.Fields {
+			f.Description, f.Ref = splitRef(f.Description)
+		}
+	}
+	for _, op := range svc.Operations {
+		op.Description, op.Ref = splitRef(op.Description)
+	}
+	var walk func(g *OperationGroup)
+	walk = func(g *OperationGroup) {
+		for _, op := range g.Operations {
+			op.Description, op.Ref = splitRef(op.Description)
+		}
+		for _, sub := range g.Groups {
+			walk(sub)
+		}
+	}
+	for _, g := range svc.Groups {
+		walk(g)
+	}
 }
 
 // classifyGraphQLRootField decides whether one field on a root (or

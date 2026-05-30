@@ -159,6 +159,32 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 			merged.Method = append(merged.Method, extra.Method...)
 		}
 		fp.Service = []*descriptorpb.ServiceDescriptorProto{merged}
+
+		// Attach `@ref` source-of-truth markers as method leading
+		// comments so the proto SDL view (protoprint honours
+		// SourceCodeInfo) carries the reference. Exactly one method is
+		// appended per op above, in flatOps order, so method index ==
+		// flatOps index. Path [6,0,2,i] = file.service[0].method[i]
+		// (FileDescriptorProto.service=6, ServiceDescriptorProto.method=2).
+		var locs []*descriptorpb.SourceCodeInfo_Location
+		for i, op := range flatOps {
+			if op.Ref == "" {
+				continue
+			}
+			lead := "@ref " + op.Ref + "\n"
+			locs = append(locs, &descriptorpb.SourceCodeInfo_Location{
+				Path: []int32{6, 0, 2, int32(i)},
+				// Synthesized methods have no real source position;
+				// protoprint requires a valid span (3 or 4 ints) and
+				// associates the comment by Path. Distinct line per
+				// method keeps ordering deterministic.
+				Span:            []int32{int32(i), 0, 0},
+				LeadingComments: &lead,
+			})
+		}
+		if len(locs) > 0 {
+			fp.SourceCodeInfo = &descriptorpb.SourceCodeInfo{Location: locs}
+		}
 	}
 
 	// renderProtoField defaults Named refs to TYPE_MESSAGE because

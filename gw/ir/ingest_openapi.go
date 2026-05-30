@@ -81,6 +81,7 @@ func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Ty
 	t := &Type{
 		Name:        name,
 		Description: s.Description,
+		Ref:         extString(s.Extensions, xRefExtension),
 		OriginKind:  KindOpenAPI,
 		Origin:      ref,
 	}
@@ -176,6 +177,7 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 	}
 	s := ref.Value
 	f.Description = s.Description
+	f.Ref = extString(s.Extensions, xRefExtension)
 	f.Format = s.Format
 	f.Pattern = s.Pattern
 	// Inline oneOf / anyOf with $ref'd variants: synthesise a
@@ -434,6 +436,7 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 	out := &Operation{
 		Name:        op.OperationID,
 		Description: op.Description,
+		Ref:         extString(op.Extensions, xRefExtension),
 		HTTPMethod:  method,
 		HTTPPath:    path,
 		Tags:        op.Tags,

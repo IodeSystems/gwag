@@ -487,7 +487,7 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		return &graphql.Field{
 			Type:              out,
 			Args:              args,
-			Description:       op.Description,
+			Description:       withRef(op.Description, op.Ref),
 			DeprecationReason: op.Deprecated,
 			Subscribe:         dispatch,
 			Resolve: func(rp graphql.ResolveParams) (any, error) {
@@ -506,7 +506,7 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		return &graphql.Field{
 			Type:              out,
 			Args:              args,
-			Description:       op.Description,
+			Description:       withRef(op.Description, op.Ref),
 			DeprecationReason: op.Deprecated,
 			Resolve:           graphqlGroupChildResolver,
 		}, nil
@@ -514,7 +514,7 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 	return &graphql.Field{
 		Type:              out,
 		Args:              args,
-		Description:       op.Description,
+		Description:       withRef(op.Description, op.Ref),
 		DeprecationReason: op.Deprecated,
 		Resolve:           dispatch,
 		ResolveAppend:     appendDispatch,

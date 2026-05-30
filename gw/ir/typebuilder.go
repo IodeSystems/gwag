@@ -409,7 +409,7 @@ func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 	name := b.naming.ObjectName(t.Name)
 	obj := graphql.NewObject(graphql.ObjectConfig{
 		Name:        name,
-		Description: t.Description,
+		Description: withRef(t.Description, t.Ref),
 		Fields: graphql.FieldsThunk(func() graphql.Fields {
 			fields := graphql.Fields{}
 			for _, f := range t.Fields {
@@ -423,7 +423,7 @@ func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 				}
 				fields[key] = &graphql.Field{
 					Type:              ft,
-					Description:       f.Description,
+					Description:       withRef(f.Description, f.Ref),
 					DeprecationReason: f.Deprecated,
 					Resolve:           sourceKeyResolver(f.Name, key),
 				}
@@ -445,7 +445,7 @@ func (b *IRTypeBuilder) inputObjectFor(t *Type) *graphql.InputObject {
 	name := b.naming.InputName(t.Name)
 	io := graphql.NewInputObject(graphql.InputObjectConfig{
 		Name:        name,
-		Description: t.Description,
+		Description: withRef(t.Description, t.Ref),
 		Fields: graphql.InputObjectConfigFieldMapThunk(func() graphql.InputObjectConfigFieldMap {
 			fields := graphql.InputObjectConfigFieldMap{}
 			for _, f := range t.Fields {
@@ -459,7 +459,7 @@ func (b *IRTypeBuilder) inputObjectFor(t *Type) *graphql.InputObject {
 				}
 				fields[key] = &graphql.InputObjectFieldConfig{
 					Type:        ft,
-					Description: f.Description,
+					Description: withRef(f.Description, f.Ref),
 				}
 			}
 			if len(fields) == 0 {
@@ -490,7 +490,7 @@ func (b *IRTypeBuilder) enumFor(t *Type) *graphql.Enum {
 	}
 	e := graphql.NewEnum(graphql.EnumConfig{
 		Name:        b.naming.EnumName(t.Name),
-		Description: t.Description,
+		Description: withRef(t.Description, t.Ref),
 		Values:      values,
 	})
 	b.enums[t.Name] = e
@@ -532,7 +532,7 @@ func (b *IRTypeBuilder) unionFor(t *Type) (graphql.Output, error) {
 	discMap := t.DiscriminatorMapping
 	u := graphql.NewUnion(graphql.UnionConfig{
 		Name:        b.naming.UnionName(t.Name),
-		Description: t.Description,
+		Description: withRef(t.Description, t.Ref),
 		Types:       types,
 		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
 			m, ok := p.Value.(map[string]any)
@@ -581,7 +581,7 @@ func (b *IRTypeBuilder) scalarFor(t *Type) *graphql.Scalar {
 	}
 	s := graphql.NewScalar(graphql.ScalarConfig{
 		Name:         b.naming.ScalarName(t.Name),
-		Description:  t.Description,
+		Description:  withRef(t.Description, t.Ref),
 		Serialize:    func(v any) any { return v },
 		ParseValue:   func(v any) any { return v },
 		ParseLiteral: func(v ast.Value) any { return v },

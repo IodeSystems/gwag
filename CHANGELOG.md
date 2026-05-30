@@ -10,6 +10,18 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `@ref` source-of-truth markers. A `@ref
+  <workspace-relative-path>[:<symbol>]` Doxygen tag an upstream author
+  attaches to an operation / type / field is now captured at ingest
+  (proto leading comment, OpenAPI `x-ref` extension, or GraphQL
+  description line) into the new `ir.Operation/Type/Field.Ref` field and
+  re-emitted across every format the gateway serves: a `@ref` line in
+  the GraphQL SDL + introspection descriptions, `x-ref` on OpenAPI
+  operations, and a method leading comment in the proto SDL view. The
+  marker is propagated, never synthesized — it carries through unchanged
+  so [tslsmcp](https://github.com/iodesystems/tslsmcp) can link
+  generated artifacts back to source. Purely informational; runtime
+  behavior unchanged. First marker wins (multi-source deferred).
 - gat pubsub. The embedded `gat` translator gains a publish/subscribe
   primitive — `Gateway.PubSub()` with `Publish` / `Subscribe` and
   NATS-style channel patterns (`*` one segment, `>` the rest),
