@@ -197,7 +197,9 @@ func upCmd(args []string) int {
 	// flags. Demotes any other primary; operator switches back with
 	// `gwag use NAME`. Skip with --no-context-write.
 	if !*noContext {
-		creds, _ := loadCredentials()
+		// gwag up manages the project-local context; load local-only so a
+		// global fallback isn't copied into a fresh .gw/.
+		creds, _ := loadCredentialsAt(credentialsFile)
 		entry := loginEntry{
 			Name:     resolvedCtx,
 			Primary:  true,

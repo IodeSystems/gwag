@@ -223,3 +223,74 @@ func TestContextDataDir(t *testing.T) {
 		t.Errorf("contextDataDir('local')=%q", got)
 	}
 }
+
+func mustResolveName(t *testing.T, name string) loginEntry {
+	t.Helper()
+	c, err := loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials: %v", err)
+	}
+	e, _ := c.resolve(name)
+	return e
+}
+
+// TestCredentialsGlobalFallback: with no project-local .gw, resolution
+// falls back to ~/.config/gwag/credentials.json; a local file overrides.
+func TestCredentialsGlobalFallback(t *testing.T) {
+	t.Chdir(t.TempDir()) // empty cwd → no ./.gw
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg) // Linux
+	t.Setenv("HOME", cfg)            // macOS UserConfigDir
+
+	gp, err := credentialsPath(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(gp) != "credentials.json" || filepath.Base(filepath.Dir(gp)) != "gwag" {
+		t.Fatalf("global path = %q, want .../gwag/credentials.json", gp)
+	}
+	if err := saveCredentialsAt(gp, credentials{Logins: []loginEntry{
+		{Name: "glob", Primary: true, Gateway: "g:50090"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mustResolveName(t, ""); got.Name != "glob" {
+		t.Errorf("fallback resolve = %q, want glob", got.Name)
+	}
+	if activeCredentialsPath() != gp {
+		t.Errorf("activeCredentialsPath = %q, want global %q", activeCredentialsPath(), gp)
+	}
+
+	// A project-local file shadows the global one.
+	if err := saveCredentialsAt(credentialsFile, credentials{Logins: []loginEntry{
+		{Name: "loc", Primary: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustResolveName(t, ""); got.Name != "loc" {
+		t.Errorf("local override resolve = %q, want loc", got.Name)
+	}
+	if activeCredentialsPath() != credentialsFile {
+		t.Errorf("activeCredentialsPath = %q, want local %q", activeCredentialsPath(), credentialsFile)
+	}
+}
+
+// TestLoginGlobalScope: `login --global` writes the global file, not .gw.
+func TestLoginGlobalScope(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", cfg)
+
+	if rc := loginCmd([]string{"--name", "g", "--gateway", "h:50090", "--global"}); rc != 0 {
+		t.Fatalf("login --global rc=%d", rc)
+	}
+	if _, err := os.Stat(credentialsFile); !os.IsNotExist(err) {
+		t.Error("login --global must not create the local .gw/credentials.json")
+	}
+	gp, _ := credentialsPath(true)
+	if _, err := os.Stat(gp); err != nil {
+		t.Errorf("global credentials not written: %v", err)
+	}
+}

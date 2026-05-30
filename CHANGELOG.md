@@ -10,6 +10,13 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Global `gwag` context fallback. When a directory has no project-local
+  `./.gw/credentials.json`, login resolution falls back to
+  `~/.config/gwag/credentials.json` (XDG_CONFIG_HOME-aware) — kubectl-
+  style, so a login set once globally applies in every directory unless
+  a project overrides it. `gwag login` / `logout` / `use` take `--global`
+  to manage that file; `gwag context` prints the resolved source path;
+  `gwag up` still writes the project-local context.
 - OAuth/JWT token-exchange outbound auth. `gateway.TokenExchangeClient`
   / `TokenExchangeConfig` / `NewTokenExchangeTransport` perform RFC 8693
   token exchange: the inbound caller's bearer (read from the HTTP request

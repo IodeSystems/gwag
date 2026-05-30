@@ -24,6 +24,12 @@
 //	}
 //
 // File mode 0600; the bearer is a secret. .gw/ is gitignored.
+//
+// Global fallback: when a directory has no ./.gw/credentials.json,
+// resolution falls back to ~/.config/gwag/credentials.json
+// (XDG_CONFIG_HOME-aware) — kubectl-style, so a login set once globally
+// applies everywhere unless a project overrides it. login / logout / use
+// take --global to manage that file; gwag up always writes the local one.
 package main
 
 import (
@@ -53,12 +59,37 @@ type credentials struct {
 	Logins []loginEntry `json:"logins"`
 }
 
-// loadCredentials reads .gw/credentials.json. Returns the zero value
-// with no error when the file (or directory) is missing — operators
-// without a context fall back to per-command flags. Malformed JSON
-// is a real error.
-func loadCredentials() (credentials, error) {
-	b, err := os.ReadFile(credentialsFile)
+// credentialsPath returns the credentials file for the requested scope:
+// the project-local .gw/credentials.json, or the global
+// ~/.config/gwag/credentials.json (XDG_CONFIG_HOME-aware via
+// os.UserConfigDir).
+func credentialsPath(global bool) (string, error) {
+	if !global {
+		return credentialsFile, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user config dir: %w", err)
+	}
+	return filepath.Join(dir, "gwag", "credentials.json"), nil
+}
+
+// activeCredentialsPath is the file loadCredentials resolves against:
+// the project-local one when present, else the global fallback.
+func activeCredentialsPath() string {
+	if _, err := os.Stat(credentialsFile); err == nil {
+		return credentialsFile
+	}
+	if gp, err := credentialsPath(true); err == nil {
+		return gp
+	}
+	return credentialsFile
+}
+
+// loadCredentialsAt reads one credentials file. Returns the zero value
+// with no error when it's missing; malformed JSON is a real error.
+func loadCredentialsAt(path string) (credentials, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return credentials{}, nil
@@ -67,20 +98,36 @@ func loadCredentials() (credentials, error) {
 	}
 	var c credentials
 	if err := json.Unmarshal(b, &c); err != nil {
-		return credentials{}, fmt.Errorf("parse %s: %w", credentialsFile, err)
+		return credentials{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return c, nil
 }
 
-func saveCredentials(c credentials) error {
-	if err := os.MkdirAll(contextDir, 0700); err != nil {
+// loadCredentials resolves the active context: the project-local
+// .gw/credentials.json when present, otherwise the global
+// ~/.config/gwag/credentials.json — kubectl-style, so a login set once
+// globally applies in every directory unless a project overrides it.
+func loadCredentials() (credentials, error) {
+	return loadCredentialsAt(activeCredentialsPath())
+}
+
+// saveCredentialsAt writes one credentials file (0600), creating its
+// parent directory.
+func saveCredentialsAt(path string, c credentials) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(credentialsFile, append(b, '\n'), 0600)
+	return os.WriteFile(path, append(b, '\n'), 0600)
+}
+
+// saveCredentials writes the project-local credentials file. Used by
+// gwag up, which manages the local project context.
+func saveCredentials(c credentials) error {
+	return saveCredentialsAt(credentialsFile, c)
 }
 
 // resolve picks an entry from the credentials. Order: explicit name
@@ -181,6 +228,7 @@ func loginCmd(args []string) int {
 	endpoint := fs.String("endpoint", "", "HTTP base URL (e.g. http://localhost:8080); empty = derive from --gateway host")
 	token := fs.String("token", "", "Admin bearer token (hex); empty = leave unset")
 	primary := fs.Bool("primary", false, "Mark this login primary (default: true if it's the first login)")
+	global := fs.Bool("global", false, "Write to the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag login --name N --gateway HOST:PORT [--endpoint URL] [--token HEX] [--primary]")
 		fmt.Fprintln(fs.Output(), "  Adds or updates a login in .gw/credentials.json. The first login")
@@ -208,7 +256,12 @@ func loginCmd(args []string) int {
 		}
 		ep = "http://" + host + ":8080"
 	}
-	creds, err := loadCredentials()
+	path, err := credentialsPath(*global)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	creds, err := loadCredentialsAt(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
 		return 1
@@ -230,11 +283,11 @@ func loginCmd(args []string) int {
 		}
 	}
 	updated := creds.upsert(entry)
-	if err := saveCredentials(creds); err != nil {
+	if err := saveCredentialsAt(path, creds); err != nil {
 		fmt.Fprintf(os.Stderr, "save credentials: %v\n", err)
 		return 1
 	}
-	abs, _ := filepath.Abs(credentialsFile)
+	abs, _ := filepath.Abs(path)
 	verb := "added"
 	if updated {
 		verb = "updated"
@@ -253,26 +306,36 @@ func loginCmd(args []string) int {
 
 func logoutCmd(args []string) int {
 	fs := flag.NewFlagSet("logout", flag.ContinueOnError)
-	all := fs.Bool("all", false, "Remove the entire .gw/ directory (deletes credentials AND every context's data)")
+	all := fs.Bool("all", false, "Remove the entire .gw/ directory (deletes credentials AND every context's data); with --global, removes the global credentials file")
+	global := fs.Bool("global", false, "Operate on the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag logout [NAME]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag logout [NAME] [--global]")
 		fmt.Fprintln(fs.Output(), "  No NAME: removes the primary login.")
-		fmt.Fprintln(fs.Output(), "  --all:   removes the entire .gw/ directory.")
+		fmt.Fprintln(fs.Output(), "  --all:   removes the entire .gw/ directory (or the global file with --global).")
 		fs.PrintDefaults()
 	}
 	flags, positionals := splitFlagsAndPositionals(args)
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
+	path, err := credentialsPath(*global)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
 	if *all {
-		if err := os.RemoveAll(contextDir); err != nil {
-			fmt.Fprintf(os.Stderr, "remove %s: %v\n", contextDir, err)
+		target := contextDir
+		if *global {
+			target = path
+		}
+		if err := os.RemoveAll(target); err != nil {
+			fmt.Fprintf(os.Stderr, "remove %s: %v\n", target, err)
 			return 1
 		}
-		fmt.Println("removed .gw/")
+		fmt.Printf("removed %s\n", target)
 		return 0
 	}
-	creds, err := loadCredentials()
+	creds, err := loadCredentialsAt(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
 		return 1
@@ -312,7 +375,7 @@ func logoutCmd(args []string) int {
 			creds.Logins[0].Primary = true
 		}
 	}
-	if err := saveCredentials(creds); err != nil {
+	if err := saveCredentialsAt(path, creds); err != nil {
 		fmt.Fprintf(os.Stderr, "save credentials: %v\n", err)
 		return 1
 	}
@@ -322,19 +385,27 @@ func logoutCmd(args []string) int {
 
 func useCmd(args []string) int {
 	fs := flag.NewFlagSet("use", flag.ContinueOnError)
+	global := fs.Bool("global", false, "Operate on the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag use NAME")
+		fmt.Fprintln(fs.Output(), "Usage: gwag use NAME [--global]")
 		fmt.Fprintln(fs.Output(), "  Promotes NAME to primary; demotes every other login.")
+		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	flags, positionals := splitFlagsAndPositionals(args)
+	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(positionals) < 1 {
 		fs.Usage()
 		return 2
 	}
-	target := fs.Arg(0)
-	creds, err := loadCredentials()
+	target := positionals[0]
+	path, err := credentialsPath(*global)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	creds, err := loadCredentialsAt(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
 		return 1
@@ -343,7 +414,7 @@ func useCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "no login named %q\n", target)
 		return 1
 	}
-	if err := saveCredentials(creds); err != nil {
+	if err := saveCredentialsAt(path, creds); err != nil {
 		fmt.Fprintf(os.Stderr, "save credentials: %v\n", err)
 		return 1
 	}
@@ -360,6 +431,9 @@ func contextCmd(args []string) int {
 	if len(creds.Logins) == 0 {
 		fmt.Println("(no logins; run 'gwag login' or 'gwag up')")
 		return 0
+	}
+	if abs, err := filepath.Abs(activeCredentialsPath()); err == nil {
+		fmt.Printf("# %s\n", abs)
 	}
 	fmt.Printf("%-15s %-7s %-25s %s\n", "NAME", "PRIMARY", "GATEWAY", "ENDPOINT")
 	for _, e := range creds.Logins {
