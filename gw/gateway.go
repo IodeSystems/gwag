@@ -1260,6 +1260,11 @@ func AsInternal() ServiceOption {
 // dispatches. Replaces the default ([]string{"Authorization"}) when
 // supplied. Pass an empty list to forward nothing.
 //
+// Distributed-tracing / correlation headers (W3C traceparent +
+// tracestate + baggage, B3, x-request-id, the AWS / GCP trace headers)
+// ride along automatically whenever forwarding is active — they don't
+// need to be listed here. An empty list opts out of those too.
+//
 // Currently a no-op for AddProto / AddProtoBytes — gRPC dispatch
 // uses ctx propagation, not HTTP headers.
 //

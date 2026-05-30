@@ -10,6 +10,13 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Service-account outbound auth helper. `gateway.ServiceAccountTransport`
+  (an `http.RoundTripper`) + the `ServiceAccountClient` shortcut and
+  `TokenSource` / `StaticToken` attach the gateway's *own* credential to
+  outbound OpenAPI / downstream-GraphQL dispatches — distinct from
+  forwarding the caller's token. Install via `WithOpenAPIClient` /
+  `OpenAPIClient`. Defaults to `Authorization: Bearer <token>`; header +
+  scheme are configurable. See [`docs/admin-auth.md`](./docs/admin-auth.md).
 - `gwag --admin-data-dir DIR` flag. Persists (and reloads) the boot
   admin token to `<DIR>/admin-token` for ad-hoc `gwag` startups, mirroring
   the example gateway and `gwag up`. A stable token means
@@ -70,6 +77,16 @@ changes on MINOR, drops on MAJOR.
   `EnableSubscribeAuth` is unset). `gat.Gateway` gains `Close()`. See
   [`docs/gat-pubsub.md`](./docs/gat-pubsub.md). Static peer list
   only — a dynamic `PeerProvider` is a followup.
+
+### Changed
+- Outbound OpenAPI / downstream-GraphQL dispatches now forward
+  distributed-tracing / correlation headers (W3C `traceparent` /
+  `tracestate` / `baggage`, B3, `x-request-id`, AWS / GCP trace
+  headers) from the inbound request alongside the existing auth
+  allowlist, so a trace survives the gateway hop without configuring
+  OpenTelemetry. An OTel `TracerProvider`, when set, still overwrites
+  `traceparent` with the gateway's span context. An empty
+  `ForwardHeaders()` opts out of all forwarding, trace headers included.
 
 ### Removed
 - `ir.RenderGraphQL(svcs) string` — the standalone IR→SDL string

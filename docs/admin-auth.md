@@ -56,12 +56,42 @@ that, see below.
 ## Outbound HTTP transport for OpenAPI dispatch
 
 By default, `Authorization` is forwarded from the inbound GraphQL
-request to the outbound OpenAPI dispatch. Override the allowlist
-per source with `gateway.ForwardHeaders(...)`.
+request to the outbound OpenAPI dispatch (the caller's token reaches
+the upstream verbatim). Override the allowlist per source with
+`gateway.ForwardHeaders(...)`.
 
-For anything beyond plain bearer pass-through — mTLS, a custom
-`http.RoundTripper` that injects a service-account token, signed-URL
-rewriting, retry/timeout policy — supply a `*http.Client`:
+**Trace propagation.** Distributed-tracing / correlation headers —
+W3C `traceparent` / `tracestate` / `baggage`, B3 (`b3`, `x-b3-*`),
+`x-request-id`, and the AWS / GCP trace headers — ride along
+automatically with any active forwarding; you don't list them in
+`ForwardHeaders`. When an OpenTelemetry `TracerProvider` is wired
+(`WithTracer`), the gateway's own span context is injected as
+`traceparent` after forwarding, so the upstream sees the gateway as
+the parent span; without a provider, the inbound trace headers pass
+through unchanged. An empty `ForwardHeaders()` opts out of everything,
+trace headers included.
+
+**Service-account auth.** When the gateway should call the upstream as
+*itself* rather than forwarding the caller's token, use the built-in
+`ServiceAccountTransport` (or the `ServiceAccountClient` shortcut) and
+install it via the client below:
+
+```go
+src := gateway.StaticToken(os.Getenv("SA_TOKEN")) // or a refreshing TokenSource
+gw.AddOpenAPI("https://billing.internal/openapi.json",
+    gateway.As("billing"), gateway.To("https://billing.internal"),
+    gateway.OpenAPIClient(gateway.ServiceAccountClient(src)), // Authorization: Bearer <token>
+)
+```
+
+`ServiceAccountTransport{Token, Header, Scheme, Base}` customizes the
+header (default `Authorization`), scheme (default `Bearer`; `""` writes
+the raw token for a custom header like `X-Api-Key`), and underlying
+transport.
+
+For anything else — mTLS, signed-URL rewriting, retry/timeout policy,
+a hand-rolled token-exchange `RoundTripper` — supply your own
+`*http.Client`:
 
 ```go
 // Gateway-wide default — used by every OpenAPI source unless

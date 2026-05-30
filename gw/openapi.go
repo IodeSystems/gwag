@@ -972,9 +972,35 @@ var readFile = os.ReadFile
 // schemes (X-Api-Key, mTLS, service-account tokens) opt in per source.
 var defaultForwardedHeaders = []string{"Authorization"}
 
+// traceForwardHeaders are the distributed-tracing / correlation headers
+// propagated to upstreams alongside any active header forwarding,
+// independent of the auth allowlist — so a trace survives the hop
+// without operators re-listing these per source. Covers W3C Trace
+// Context + Baggage, B3 (single + multi), the common x-request-id, and
+// the AWS / GCP vendor headers. When an OTel TracerProvider is wired,
+// injectHTTP (called right after this on the dispatch path) overwrites
+// traceparent/tracestate with the gateway's own span context; without
+// one, the inbound values pass through unchanged.
+var traceForwardHeaders = []string{
+	"traceparent",
+	"tracestate",
+	"baggage",
+	"b3",
+	"x-b3-traceid",
+	"x-b3-spanid",
+	"x-b3-parentspanid",
+	"x-b3-sampled",
+	"x-b3-flags",
+	"x-request-id",
+	"x-amzn-trace-id",
+	"x-cloud-trace-context",
+}
+
 // forwardOpenAPIHeaders copies the configured allowlist from the
-// inbound GraphQL request onto outbound OpenAPI dispatches. allow ==
-// nil → use defaultForwardedHeaders. allow == []{} → forward nothing.
+// inbound GraphQL request onto outbound OpenAPI dispatches, plus the
+// trace-propagation headers. allow == nil → use defaultForwardedHeaders.
+// allow == []{} → forward nothing (the full opt-out, trace headers
+// included).
 func forwardOpenAPIHeaders(ctx context.Context, out *http.Request, allow []string) {
 	if allow == nil {
 		allow = defaultForwardedHeaders
@@ -987,6 +1013,11 @@ func forwardOpenAPIHeaders(ctx context.Context, out *http.Request, allow []strin
 		return
 	}
 	for _, h := range allow {
+		if v := in.Header.Get(h); v != "" {
+			out.Header.Set(h, v)
+		}
+	}
+	for _, h := range traceForwardHeaders {
 		if v := in.Header.Get(h); v != "" {
 			out.Header.Set(h, v)
 		}
