@@ -96,6 +96,27 @@ header (default `Authorization`), scheme (default `Bearer`; `""` writes
 the raw token for a custom header like `X-Api-Key`), and underlying
 transport.
 
+**OAuth/JWT token exchange.** To preserve the caller's identity but
+re-mint the token for the upstream's audience (RFC 8693), use
+`TokenExchangeClient`. It reads the inbound bearer (from the HTTP
+request or the gRPC ingress metadata), swaps it at `TokenURL` for an
+upstream-scoped token, caches the result until shortly before expiry,
+and attaches it outbound:
+
+```go
+client, err := gateway.TokenExchangeClient(gateway.TokenExchangeConfig{
+    TokenURL: "https://idp/oauth/token",
+    Audience: "billing",          // + optional Scope / Resource / ClientID+Secret
+})
+gw.AddOpenAPI(spec, gateway.As("billing"), gateway.To(url),
+    gateway.OpenAPIClient(client))
+```
+
+It errors the request if no inbound token is present (there's nothing
+to exchange). The three identity modes — forward the caller's token
+(`ForwardHeaders`), call as the gateway (`ServiceAccountTransport`), or
+exchange (`TokenExchangeClient`) — are picked per source.
+
 For anything else — mTLS, signed-URL rewriting, retry/timeout policy,
 a hand-rolled token-exchange `RoundTripper` — supply your own
 `*http.Client`:

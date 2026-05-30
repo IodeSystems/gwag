@@ -10,6 +10,17 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- OAuth/JWT token-exchange outbound auth. `gateway.TokenExchangeClient`
+  / `TokenExchangeConfig` / `NewTokenExchangeTransport` perform RFC 8693
+  token exchange: the inbound caller's bearer (read from the HTTP request
+  or the gRPC ingress metadata) is swapped at a configurable issuer for
+  an upstream-scoped token, cached until shortly before expiry
+  (concurrent misses coalesce into one exchange) and attached outbound.
+  Preserves caller identity while re-minting for the upstream's
+  audience — the third outbound-identity mode next to `ForwardHeaders`
+  (passthrough) and `ServiceAccountTransport` (gateway's own identity).
+  Install via `WithOpenAPIClient` / `OpenAPIClient`. See
+  [`docs/admin-auth.md`](./docs/admin-auth.md).
 - Service-account outbound auth helper. `gateway.ServiceAccountTransport`
   (an `http.RoundTripper`) + the `ServiceAccountClient` shortcut and
   `TokenSource` / `StaticToken` attach the gateway's *own* credential to
