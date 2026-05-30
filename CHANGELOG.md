@@ -40,6 +40,16 @@ changes on MINOR, drops on MAJOR.
   [`docs/gat-pubsub.md`](./docs/gat-pubsub.md). Static peer list
   only — a dynamic `PeerProvider` is a followup.
 
+### Removed
+- `ir.RenderGraphQL(svcs) string` — the standalone IR→SDL string
+  renderer. It had no non-test callers and silently disagreed with the
+  served schema: it rendered operations flat on `Query` and skipped the
+  namespace/version projection (and descriptions, hence `@ref`) that the
+  runtime path applies. The served `/schema/graphql` SDL has always come
+  from the runtime schema. **Migration:** build the schema with
+  `ir.RenderGraphQLRuntime(svcs, registry, opts)` and serialize it with
+  `ir.PrintSchemaSDL(schema)` — the same path the gateway already serves.
+
 ### Fixed
 - gat embedded dispatch — in-process huma handler results are now
   JSON-normalized before GraphQL resolution. Previously the raw Go

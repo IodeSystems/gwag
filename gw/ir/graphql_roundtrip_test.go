@@ -186,14 +186,17 @@ func TestGraphQLRender_NestedNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
-	sdl := RenderGraphQL([]*Service{svc})
+	svc.Namespace = "api"
+	svc.Version = "v1"
+	sdl := runtimeSDL(t, svc)
 	for _, want := range []string{
 		"type Query {",
-		"greeter: GreeterQueryNamespace!",
-		"type GreeterQueryNamespace {",
+		"api: ApiQueryNamespace!",
+		"type ApiQueryNamespace {",
+		"greeter: ApiGreeterQueryNamespace!",
+		"type ApiGreeterQueryNamespace {",
 		"hello(name: String!): String!",
-		"v1: GreeterQueryV1Namespace!",
-		"type GreeterQueryV1Namespace {",
+		"v1: ApiGreeterV1QueryNamespace!",
 	} {
 		if !strings.Contains(sdl, want) {
 			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
@@ -234,18 +237,20 @@ func TestGraphQLRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
-	sdl := RenderGraphQL([]*Service{svc})
+	svc.Namespace = "api"
+	svc.Version = "v1"
+	sdl := runtimeSDL(t, svc)
 	for _, want := range []string{
-		"type User {",
+		"type api_User {",
 		"id: ID!",
 		"name: String",
-		"role: Role!",
-		"enum Role {",
+		"role: api_Role!",
+		"enum api_Role {",
 		"ADMIN",
 		"MEMBER",
-		"type Query {",
-		"users: [User!]!",
-		"user(id: ID!): User",
+		"type ApiQueryNamespace {",
+		"users: [api_User!]!",
+		"user(id: ID!): api_User",
 	} {
 		if !strings.Contains(sdl, want) {
 			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)

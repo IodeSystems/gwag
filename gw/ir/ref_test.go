@@ -100,8 +100,7 @@ func TestOpenAPIRefCarriage(t *testing.T) {
 	}
 
 	// GraphQL emit: the served SDL is the runtime schema printed via
-	// PrintSchemaSDL (the static RenderGraphQL structural view carries
-	// no descriptions).
+	// PrintSchemaSDL.
 	sdl := runtimeSDL(t, svc)
 	if !strings.Contains(sdl, "@ref server/main.go:listPets") {
 		t.Errorf("SDL missing @ref marker\n--- SDL ---\n%s", sdl)
@@ -207,11 +206,12 @@ func refOf(t *Type) string {
 	return t.Ref
 }
 
-// runtimeSDL builds the runtime graphql.Schema for svc and prints it as
-// SDL — the artifact the gateway serves at /schema/graphql.
-func runtimeSDL(t *testing.T, svc *Service) string {
+// runtimeSDL builds the runtime graphql.Schema for svcs and prints it as
+// SDL — the artifact the gateway serves at /schema/graphql, and the only
+// GraphQL SDL producer in the package.
+func runtimeSDL(t *testing.T, svcs ...*Service) string {
 	t.Helper()
-	schema, err := RenderGraphQLRuntime([]*Service{svc}, NewDispatchRegistry(), RuntimeOptions{})
+	schema, err := RenderGraphQLRuntime(svcs, NewDispatchRegistry(), RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("RenderGraphQLRuntime: %v", err)
 	}

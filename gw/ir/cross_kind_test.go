@@ -112,20 +112,21 @@ func TestOpenAPIIngest_RenderProto(t *testing.T) {
 }
 
 // TestProtoIngest_RenderGraphQL completes the matrix: proto in,
-// GraphQL SDL out. Cross-kind so non-streaming RPCs should
-// surface as Query operations and Subscription roots get the
-// streaming ones.
+// GraphQL SDL out (the served runtime schema, via PrintSchemaSDL).
+// Cross-kind so non-streaming RPCs surface as Query operations under
+// the namespace fold and streaming ones flatten onto Subscription.
 func TestProtoIngest_RenderGraphQL(t *testing.T) {
 	svcs := IngestProto(greeterv1.File_greeter_proto)
 	svcs[0].Namespace = "greeter"
 	svcs[0].Version = "v1"
-	sdl := RenderGraphQL(svcs)
+	sdl := runtimeSDL(t, svcs...)
 
 	for _, want := range []string{
 		"type Query",
-		"Hello",
+		"greeter: GreeterQueryNamespace!",
+		"hello(name: String)",
 		"type Subscription",
-		"Greetings",
+		"greeter_greetings",
 	} {
 		if !strings.Contains(sdl, want) {
 			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
