@@ -68,6 +68,17 @@ token, ts := gat.SignSubscribeToken(subscribeSecret, "orders.>")
 // → GET {prefix}/_gat/subscribe?channel=orders.>&token=<token>&ts=<ts>
 ```
 
+Server-side code that already holds the `*Gateway` can skip threading
+the secret and sign against the configured key directly — the Go
+import is the auth boundary, so there's no admin-token gate:
+
+```go
+token, ts, err := g.SignSubscribeToken("orders.>") // uses the EnableSubscribeAuth secret
+```
+
+It errors if `EnableSubscribeAuth` hasn't been called (nothing to sign
+against).
+
 The token is `HMAC-SHA256(channel, ts)` — bound to one channel
 pattern — and is accepted within ±5 minutes of `ts`. A missing,
 malformed, expired, or wrong token is rejected with `401` before the

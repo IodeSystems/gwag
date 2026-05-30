@@ -46,6 +46,25 @@ func SignSubscribeToken(secret []byte, channel string) (token string, ts int64) 
 	return computeSubscribeToken(secret, channel, ts), ts
 }
 
+// SignSubscribeToken is the import-boundary counterpart of the package
+// function: it mints a subscribe token for `channel` using the secret
+// configured via EnableSubscribeAuth, so anything holding the *Gateway
+// can sign without threading the secret around and without an admin
+// token — the Go import is the auth boundary.
+//
+// Returns an error if EnableSubscribeAuth has not been called: an open
+// endpoint has nothing to sign against, so signing is a usage mistake
+// worth surfacing rather than minting a token under a nil key.
+//
+// Stability: experimental
+func (g *Gateway) SignSubscribeToken(channel string) (token string, ts int64, err error) {
+	if g.subAuth == nil {
+		return "", 0, fmt.Errorf("gat: subscribe auth not enabled (call EnableSubscribeAuth first)")
+	}
+	ts = time.Now().Unix()
+	return computeSubscribeToken(g.subAuth, channel, ts), ts, nil
+}
+
 // computeSubscribeToken is the HMAC-SHA256 of `channel\nts`,
 // URL-safe-base64 encoded (no padding) so the token drops straight
 // into the WebSocket subscribe URL's query string without escaping.

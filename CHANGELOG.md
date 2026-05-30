@@ -52,7 +52,10 @@ changes on MINOR, drops on MAJOR.
   peer-receive endpoint. `EnableSubscribeAuth(secret)` gates the
   subscribe endpoint behind HMAC tokens minted by
   `gat.SignSubscribeToken` — a key independent of the peer-mesh
-  `Auth`. `gat.Gateway` gains `Close()`. See
+  `Auth`. `(*gat.Gateway).SignSubscribeToken(channel)` is the
+  import-boundary method form: server-side code holding the gateway
+  signs against the configured secret without threading it (errors if
+  `EnableSubscribeAuth` is unset). `gat.Gateway` gains `Close()`. See
   [`docs/gat-pubsub.md`](./docs/gat-pubsub.md). Static peer list
   only — a dynamic `PeerProvider` is a followup.
 
