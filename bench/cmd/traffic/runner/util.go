@@ -131,11 +131,22 @@ func autoShardCount(rps int) int {
 // this when constructing Targets so the runner can snapshot
 // gateway-side dispatch counters.
 func MetricsURLFromGateway(target string) string {
+	return MetricsURLWithPath(target, "/api/metrics")
+}
+
+// MetricsURLWithPath is MetricsURLFromGateway with a caller-supplied
+// metrics path, for raw gateways that expose Prometheus somewhere other
+// than /api/metrics (e.g. /metrics). An empty path returns "" so the
+// runner skips server-side capture entirely.
+func MetricsURLWithPath(target, path string) string {
+	if path == "" {
+		return ""
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return ""
 	}
-	u.Path = "/api/metrics"
+	u.Path = path
 	u.RawQuery = ""
 	return u.String()
 }

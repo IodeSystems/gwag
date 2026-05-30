@@ -54,7 +54,8 @@ Subcommands:
   openapi  HTTP/JSON via gateway IngressHandler (typically /api/ingress/...)
 
 Each subcommand shares: --rps, --duration, --concurrency, --timeout,
---target, --server-metrics. Run 'traffic <sub> --help' for details.
+--target, --server-metrics, --metrics-path. Run 'traffic <sub> --help'
+for details.
 `
 
 func main() {

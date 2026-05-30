@@ -21,7 +21,8 @@ func runGraphQL(args []string) error {
 	concurrency := fs.Int("concurrency", 0, "max concurrent in-flight per target (extras are dropped); 0 = auto = max(64, rps/20)")
 	shards := fs.Int("shards", 0, "driver goroutines per target; 0 = auto = ceil(rps/1500). Sub-millisecond Go tickers cap at ~3k Hz per goroutine, so anything above ~3k RPS must be sharded.")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request HTTP timeout")
-	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
+	serverSide := fs.Bool("server-metrics", true, "snapshot gateway metrics before+after for the per-backend table")
+	metricsPath := fs.String("metrics-path", "/api/metrics", "path the gateway exposes Prometheus metrics at; use /metrics for a raw gateway, empty to skip server-side capture")
 	jsonOut := fs.String("json", "", "write the gateway-pass summary (target_rps, achieved RPS, p50/p95/p99, gateway dispatch + ingress) to PATH as JSON. Direct-pass results are not exported. PATH '-' writes to stdout.")
 	query := fs.String("query", `{ greeter { hello(name: "world") { greeting } } }`, "GraphQL query string")
 	directQuery := fs.String("direct-query", "", "GraphQL query string for the --direct pass. Defaults to --query — but the upstream's schema is usually unprefixed, so override (e.g. '{ hello(name:\"world\") { greeting } }') when the gateway adds a namespace.")
@@ -48,7 +49,7 @@ func runGraphQL(args []string) error {
 		fire := runner.MakeGraphQLFire(*timeout, runner.ResolveConcurrency(*rps, *concurrency), u, body)
 		targets = append(targets, runner.Target{
 			Label:      u,
-			MetricsURL: runner.MetricsURLFromGateway(u),
+			MetricsURL: runner.MetricsURLWithPath(u, *metricsPath),
 			Fire:       fire,
 		})
 	}

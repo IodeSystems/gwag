@@ -38,7 +38,8 @@ func runGRPC(args []string) error {
 	concurrency := fs.Int("concurrency", 0, "max concurrent in-flight per target (extras are dropped); 0 = auto = max(64, rps/20)")
 	shards := fs.Int("shards", 0, "driver goroutines per target; 0 = auto = ceil(rps/1500)")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-request gRPC timeout")
-	serverSide := fs.Bool("server-metrics", true, "snapshot gateway /api/metrics before+after for the per-backend table")
+	serverSide := fs.Bool("server-metrics", true, "snapshot gateway metrics before+after for the per-backend table")
+	metricsPath := fs.String("metrics-path", "/api/metrics", "path the gateway exposes Prometheus metrics at; use /metrics for a raw gateway, empty to skip server-side capture")
 	jsonOut := fs.String("json", "", "write the gateway-pass summary to PATH as JSON; '-' for stdout")
 	service := fs.String("service", "", "registered namespace (e.g. greeter or greeter:v1); required")
 	method := fs.String("method", "", "RPC method name within the service; required")
@@ -96,7 +97,7 @@ func runGRPC(args []string) error {
 		fire := makeGRPCFire(*timeout, conn, fullPath, requestProto, outputDesc)
 		targets = append(targets, runner.Target{
 			Label:      fmt.Sprintf("%s -> %s%s", gt, ht, fullPath),
-			MetricsURL: runner.MetricsURLFromGateway(ht),
+			MetricsURL: runner.MetricsURLWithPath(ht, *metricsPath),
 			Fire:       fire,
 		})
 	}
