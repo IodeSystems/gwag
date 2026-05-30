@@ -313,11 +313,17 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 		Tags:        op.Tags,
 		Responses:   openapi3.NewResponses(),
 	}
-	// Carry the source-of-truth marker as the x-ref extension. Same-kind
-	// OpenAPI ops return their origin verbatim above (keeping any
-	// author-set x-ref); this covers proto/GraphQL-origin renders.
+	// Carry source-of-truth + annotation metadata as extensions. Same-
+	// kind OpenAPI ops return their origin verbatim above (keeping any
+	// author-set extensions); this covers proto/GraphQL-origin renders.
 	if op.Ref != "" {
 		out.Extensions = map[string]any{xRefExtension: op.Ref}
+	}
+	if len(op.Annotations) > 0 {
+		if out.Extensions == nil {
+			out.Extensions = map[string]any{}
+		}
+		out.Extensions[xAnnotationsExtension] = annotationsToExt(op.Annotations)
 	}
 
 	// Proto-origin unary RPCs land at ingressShapeProtoPost in the

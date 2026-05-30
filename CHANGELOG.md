@@ -10,6 +10,22 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- SDL-visible annotation carriage. An upstream author can attach
+  custom directives to an operation / type / field — `x-gwag-annotations`
+  on an OpenAPI (incl. huma) operation or schema, or a `@gql Name(args)`
+  proto leading comment — and gwag carries them verbatim into every
+  egress: real GraphQL SDL directives (with synthesized `directive`
+  declarations so the document stays valid), `x-gwag-annotations` on the
+  rendered OpenAPI, and `@gql` comments in the proto SDL view. Metadata
+  only; runtime policy stays in transforms. New surface: `ir.Annotation`
+  / `ir.AnnotationArg`, `ir.Operation/Type/Field.Annotations`,
+  `ir.AnnotationIndex` + `ir.NewAnnotationIndex`,
+  `ir.RuntimeOptions.AnnotationSink`, and `ir.PrintSchemaSDL` now takes
+  an optional `*AnnotationIndex`. Two limits: GraphQL is a destination
+  only (introspection can't carry applied directives, so downstream
+  GraphQL directives can't be read), and the directives appear in the
+  served SDL but not the introspection JSON. See
+  [`docs/directives.md`](./docs/directives.md).
 - `@ref` source-of-truth markers. A `@ref
   <workspace-relative-path>[:<symbol>]` Doxygen tag an upstream author
   attaches to an operation / type / field is now captured at ingest

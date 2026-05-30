@@ -82,11 +82,12 @@ func ingestProtoMethod(md protoreflect.MethodDescriptor, fileProto *descriptorpb
 		}
 	}
 
-	desc, ref := splitRef(stringFromComments(md))
+	desc, ref, anns := splitMeta(stringFromComments(md))
 	op := &Operation{
 		Name:            string(md.Name()),
 		Description:     desc,
 		Ref:             ref,
+		Annotations:     anns,
 		StreamingClient: md.IsStreamingClient(),
 		OriginKind:      KindProto,
 		Origin:          methodProto,
@@ -149,12 +150,13 @@ func walkMessages(ms protoreflect.MessageDescriptors, dst map[string]*Type) {
 		if _, ok := dst[full]; ok {
 			continue
 		}
-		desc, ref := splitRef(stringFromComments(md))
+		desc, ref, anns := splitMeta(stringFromComments(md))
 		t := &Type{
 			Name:        full,
 			TypeKind:    TypeObject,
 			Description: desc,
 			Ref:         ref,
+			Annotations: anns,
 			OriginKind:  KindProto,
 		}
 		// Pre-register so recursive references resolve.
@@ -180,12 +182,13 @@ func walkEnums(es protoreflect.EnumDescriptors, dst map[string]*Type) {
 		if _, ok := dst[full]; ok {
 			continue
 		}
-		desc, ref := splitRef(stringFromComments(ed))
+		desc, ref, anns := splitMeta(stringFromComments(ed))
 		t := &Type{
 			Name:        full,
 			TypeKind:    TypeEnum,
 			Description: desc,
 			Ref:         ref,
+			Annotations: anns,
 			OriginKind:  KindProto,
 		}
 		values := ed.Values()
@@ -202,12 +205,13 @@ func walkEnums(es protoreflect.EnumDescriptors, dst map[string]*Type) {
 }
 
 func ingestProtoField(f protoreflect.FieldDescriptor) *Field {
-	desc, ref := splitRef(stringFromComments(f))
+	desc, ref, anns := splitMeta(stringFromComments(f))
 	out := &Field{
 		Name:        string(f.Name()),
 		JSONName:    f.JSONName(),
 		Description: desc,
 		Ref:         ref,
+		Annotations: anns,
 		ProtoNumber: int32(f.Number()),
 		OneofIndex:  -1,
 		Optional:    f.HasOptionalKeyword(),

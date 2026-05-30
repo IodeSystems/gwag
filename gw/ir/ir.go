@@ -206,6 +206,11 @@ type Operation struct {
 	// link generated artifacts back to the source. Empty when unset.
 	Ref string
 
+	// Annotations are SDL-visible directives carried verbatim from the
+	// contract (OpenAPI x-gwag-annotations / proto @gql comment) into
+	// every egress format. Metadata only — see Annotation.
+	Annotations []Annotation
+
 	// SchemaID is the registry key for the runtime Dispatcher that
 	// serves this operation. Empty until PopulateSchemaIDs is called
 	// (which the gateway does once Namespace/Version are assigned to
@@ -302,6 +307,9 @@ type Type struct {
 	// Ref is the `@ref` source-of-truth marker (see Operation.Ref).
 	Ref string
 
+	// Annotations are SDL-visible directives (see Operation.Annotations).
+	Annotations []Annotation
+
 	// Object/Input: ordered field list.
 	Fields []*Field
 
@@ -360,7 +368,8 @@ type Field struct {
 	ItemRequired bool // when Repeated, each list element is non-null
 	Description  string
 	Deprecated   string
-	Ref          string // `@ref` source-of-truth marker (see Operation.Ref)
+	Ref          string       // `@ref` source-of-truth marker (see Operation.Ref)
+	Annotations  []Annotation // SDL-visible directives (see Operation.Annotations)
 	Default      any
 
 	// Proto-specific:

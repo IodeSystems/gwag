@@ -168,10 +168,10 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 		// (FileDescriptorProto.service=6, ServiceDescriptorProto.method=2).
 		var locs []*descriptorpb.SourceCodeInfo_Location
 		for i, op := range flatOps {
-			if op.Ref == "" {
+			lead := protoMetaComment(op.Ref, op.Annotations)
+			if lead == "" {
 				continue
 			}
-			lead := "@ref " + op.Ref + "\n"
 			locs = append(locs, &descriptorpb.SourceCodeInfo_Location{
 				Path: []int32{6, 0, 2, int32(i)},
 				// Synthesized methods have no real source position;

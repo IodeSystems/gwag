@@ -57,6 +57,10 @@ type Gateway struct {
 	internal   map[string]bool // namespaces hidden from the public schema
 	transforms []Transform
 	schema     atomic.Pointer[graphql.Schema]
+	// schemaAnnotations holds the SDL annotation index for the cached
+	// schema, rebuilt in lockstep by assembleLocked so /schema/graphql
+	// can decorate the served SDL with directives.
+	schemaAnnotations atomic.Pointer[ir.AnnotationIndex]
 
 	// stableVN tracks the highest-ever-seen "vN" per namespace.
 	// Monotonic; only advances. Read at schema-build time so the
@@ -1932,21 +1936,24 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			return
 		}
 		var schema *graphql.Schema
+		var annotations *ir.AnnotationIndex
 		if len(selectors) == 0 {
 			schema = g.schema.Load()
 			if schema == nil {
 				http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
 				return
 			}
+			annotations = g.schemaAnnotations.Load()
 		} else {
 			g.mu.Lock()
-			built, err := g.buildSchemaLocked(schemaFilter{selectors: selectors})
+			built, builtAnn, err := g.buildSchemaLocked(schemaFilter{selectors: selectors})
 			g.mu.Unlock()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			schema = built
+			annotations = builtAnn
 		}
 		switch r.URL.Query().Get("format") {
 		case "json":
@@ -1955,7 +1962,7 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			_ = ir.WriteJSON(w, result)
 		default:
 			w.Header().Set("Content-Type", "application/graphql; charset=utf-8")
-			_, _ = w.Write([]byte(ir.PrintSchemaSDL(schema)))
+			_, _ = w.Write([]byte(ir.PrintSchemaSDL(schema, annotations)))
 		}
 	})
 }

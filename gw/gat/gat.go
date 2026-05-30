@@ -36,9 +36,10 @@ import (
 //
 // Stability: experimental
 type Gateway struct {
-	schema   *graphql.Schema
-	registry *ir.DispatchRegistry
-	services []*ir.Service
+	schema      *graphql.Schema
+	annotations *ir.AnnotationIndex
+	registry    *ir.DispatchRegistry
+	services    []*ir.Service
 
 	// captured holds ops registered via gat.Register for paired huma
 	// dispatch. Empty when only the BYO-IR path is used.
@@ -144,14 +145,17 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 // captured ops are present).
 func (g *Gateway) build() error {
 	longScalar, jsonScalar := ir.StandardScalars()
+	annotations := ir.NewAnnotationIndex()
 	schema, err := ir.RenderGraphQLRuntime(g.services, g.registry, ir.RuntimeOptions{
-		LongType: longScalar,
-		JSONType: jsonScalar,
+		LongType:       longScalar,
+		JSONType:       jsonScalar,
+		AnnotationSink: annotations,
 	})
 	if err != nil {
 		return fmt.Errorf("gat: build schema: %w", err)
 	}
 	g.schema = schema
+	g.annotations = annotations
 	g.built = true
 	return nil
 }

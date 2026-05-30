@@ -94,7 +94,11 @@ func WriteJSON(w io.Writer, v any) error {
 // (resolvers, defaults beyond String/Int/Bool/Enum) are not reflected.
 //
 // Stability: stable
-func PrintSchemaSDL(s *graphql.Schema) string {
+func PrintSchemaSDL(s *graphql.Schema, ann ...*AnnotationIndex) string {
+	var idx *AnnotationIndex
+	if len(ann) > 0 {
+		idx = ann[0]
+	}
 	var b strings.Builder
 	tm := s.TypeMap()
 
@@ -146,26 +150,36 @@ func PrintSchemaSDL(s *graphql.Schema) string {
 		b.WriteString("}\n")
 	}
 
+	// Synthesized directive declarations the annotated fields/types
+	// below reference, so the emitted SDL stays self-validating.
+	if decls := idx.declarations(); len(decls) > 0 {
+		separate()
+		for _, d := range decls {
+			b.WriteString(d)
+			b.WriteString("\n")
+		}
+	}
+
 	for _, name := range names {
 		switch t := tm[name].(type) {
 		case *graphql.Object:
 			separate()
-			writeObject(&b, t)
+			writeObject(&b, t, idx)
 		case *graphql.InputObject:
 			separate()
-			writeInputObject(&b, t)
+			writeInputObject(&b, t, idx)
 		case *graphql.Enum:
 			separate()
-			writeEnum(&b, t)
+			writeEnum(&b, t, idx)
 		case *graphql.Scalar:
 			separate()
-			writeScalar(&b, t)
+			writeScalar(&b, t, idx)
 		case *graphql.Interface:
 			separate()
-			writeInterface(&b, t)
+			writeInterface(&b, t, idx)
 		case *graphql.Union:
 			separate()
-			writeUnion(&b, t)
+			writeUnion(&b, t, idx)
 		}
 	}
 	return b.String()
@@ -217,28 +231,31 @@ func writeDescription(b *strings.Builder, indent, desc string) {
 	b.WriteString("\"\"\"\n")
 }
 
-func writeObject(b *strings.Builder, o *graphql.Object) {
+func writeObject(b *strings.Builder, o *graphql.Object, idx *AnnotationIndex) {
 	writeDescription(b, "", o.Description())
 	b.WriteString("type ")
 	b.WriteString(o.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(o.Name())))
 	b.WriteString(" {\n")
-	writeFields(b, o.Fields())
+	writeFields(b, o.Fields(), idx, o.Name())
 	b.WriteString("}\n")
 }
 
-func writeInterface(b *strings.Builder, o *graphql.Interface) {
+func writeInterface(b *strings.Builder, o *graphql.Interface, idx *AnnotationIndex) {
 	writeDescription(b, "", o.Description())
 	b.WriteString("interface ")
 	b.WriteString(o.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(o.Name())))
 	b.WriteString(" {\n")
-	writeFields(b, o.Fields())
+	writeFields(b, o.Fields(), idx, o.Name())
 	b.WriteString("}\n")
 }
 
-func writeUnion(b *strings.Builder, u *graphql.Union) {
+func writeUnion(b *strings.Builder, u *graphql.Union, idx *AnnotationIndex) {
 	writeDescription(b, "", u.Description())
 	b.WriteString("union ")
 	b.WriteString(u.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(u.Name())))
 	b.WriteString(" =")
 	for i, t := range u.Types() {
 		if i > 0 {
@@ -250,7 +267,7 @@ func writeUnion(b *strings.Builder, u *graphql.Union) {
 	b.WriteString("\n")
 }
 
-func writeFields(b *strings.Builder, fields graphql.FieldDefinitionMap) {
+func writeFields(b *strings.Builder, fields graphql.FieldDefinitionMap, idx *AnnotationIndex, typeName string) {
 	names := make([]string, 0, len(fields))
 	for n := range fields {
 		names = append(names, n)
@@ -271,6 +288,7 @@ func writeFields(b *strings.Builder, fields graphql.FieldDefinitionMap) {
 			b.WriteString(quoteString(f.DeprecationReason))
 			b.WriteString(")")
 		}
+		b.WriteString(gqlAnnotations(idx.fieldAnnotations(typeName, f.Name)))
 		b.WriteString("\n")
 	}
 }
@@ -321,10 +339,11 @@ func writeArgs(b *strings.Builder, args []*graphql.Argument) {
 	b.WriteString("  )")
 }
 
-func writeInputObject(b *strings.Builder, io *graphql.InputObject) {
+func writeInputObject(b *strings.Builder, io *graphql.InputObject, idx *AnnotationIndex) {
 	writeDescription(b, "", io.Description())
 	b.WriteString("input ")
 	b.WriteString(io.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(io.Name())))
 	b.WriteString(" {\n")
 	fields := io.Fields()
 	names := make([]string, 0, len(fields))
@@ -343,15 +362,17 @@ func writeInputObject(b *strings.Builder, io *graphql.InputObject) {
 			b.WriteString(" = ")
 			b.WriteString(formatDefault(dv))
 		}
+		b.WriteString(gqlAnnotations(idx.fieldAnnotations(io.Name(), f.Name())))
 		b.WriteString("\n")
 	}
 	b.WriteString("}\n")
 }
 
-func writeEnum(b *strings.Builder, e *graphql.Enum) {
+func writeEnum(b *strings.Builder, e *graphql.Enum, idx *AnnotationIndex) {
 	writeDescription(b, "", e.Description())
 	b.WriteString("enum ")
 	b.WriteString(e.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(e.Name())))
 	b.WriteString(" {\n")
 	values := append([]*graphql.EnumValueDefinition(nil), e.Values()...)
 	sort.Slice(values, func(i, j int) bool { return values[i].Name < values[j].Name })
@@ -369,10 +390,11 @@ func writeEnum(b *strings.Builder, e *graphql.Enum) {
 	b.WriteString("}\n")
 }
 
-func writeScalar(b *strings.Builder, s *graphql.Scalar) {
+func writeScalar(b *strings.Builder, s *graphql.Scalar, idx *AnnotationIndex) {
 	writeDescription(b, "", s.Description())
 	b.WriteString("scalar ")
 	b.WriteString(s.Name())
+	b.WriteString(gqlAnnotations(idx.typeAnnotations(s.Name())))
 	b.WriteString("\n")
 }
 

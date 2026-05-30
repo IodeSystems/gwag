@@ -22,6 +22,13 @@ type RuntimeOptions struct {
 	// minimal embedders can omit it (then ScalarUpload falls back to
 	// graphql.String, matching the ScalarBytes mapping).
 	UploadType graphql.Output
+
+	// AnnotationSink, when non-nil, is populated during the build with
+	// the per-element SDL annotations keyed by their final (printed)
+	// type/field names. Pass the same index to PrintSchemaSDL to emit
+	// the directives + their declarations. Nil disables annotation
+	// carriage into the GraphQL egress.
+	AnnotationSink *AnnotationIndex
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
@@ -243,11 +250,12 @@ func buildNamespaceFold(ns string, services []*Service, latest *Service, latestR
 
 func addServiceContent(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, kind OpKind, parentPath, depReason string, registry *DispatchRegistry) error {
 	rename := opNameForRuntime(svc)
+	containerName := parentPath + kindSuffixForRuntime(kind) + "Namespace"
 	for _, op := range svc.Operations {
 		if op.Kind != kind {
 			continue
 		}
-		if err := emitOperation(dst, op, tb, depReason, registry, rename, false); err != nil {
+		if err := emitOperation(dst, op, tb, depReason, registry, rename, false, containerName); err != nil {
 			return err
 		}
 	}
@@ -286,9 +294,10 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 	// true (sub-group inside an outer graphql group), keep it; if
 	// this group is itself graphql-origin, flip it for descendants.
 	childInGroup := inGraphQLGroup || g.OriginKind == KindGraphQL
+	containerName := childPath + kindSuffixForRuntime(kind) + "Namespace"
 	fields := graphql.Fields{}
 	for _, op := range g.Operations {
-		if err := emitOperation(fields, op, tb, depReason, registry, rename, childInGroup); err != nil {
+		if err := emitOperation(fields, op, tb, depReason, registry, rename, childInGroup, containerName); err != nil {
 			return fmt.Errorf("group %s: %w", g.Name, err)
 		}
 	}
@@ -363,7 +372,7 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 	return nil
 }
 
-func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReason string, registry *DispatchRegistry, rename func(string) string, inGraphQLGroup bool) error {
+func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReason string, registry *DispatchRegistry, rename func(string) string, inGraphQLGroup bool, containerName string) error {
 	field, err := buildRuntimeOperation(tb, op, registry, inGraphQLGroup)
 	if err != nil {
 		return fmt.Errorf("op %s: %w", op.Name, err)
@@ -376,6 +385,7 @@ func emitOperation(dst graphql.Fields, op *Operation, tb *IRTypeBuilder, depReas
 		return fmt.Errorf("op field collision: %s", name)
 	}
 	dst[name] = field
+	tb.options.AnnotationSink.recordField(containerName, name, op.Annotations)
 	return nil
 }
 
@@ -595,6 +605,7 @@ func addSubscriptionFlat(dst graphql.Fields, svc *Service, tb *IRTypeBuilder, pr
 			return fmt.Errorf("subscription field collision: %s", name)
 		}
 		dst[name] = f
+		tb.options.AnnotationSink.recordField("Subscription", name, op.Annotations)
 	}
 	for _, g := range svc.Groups {
 		if g.Kind != OpSubscription {
@@ -622,6 +633,7 @@ func flattenSubGroupWithPrefix(dst graphql.Fields, g *OperationGroup, prefix, de
 			return fmt.Errorf("subscription field collision: %s", name)
 		}
 		dst[name] = f
+		tb.options.AnnotationSink.recordField("Subscription", name, op.Annotations)
 	}
 	for _, sub := range g.Groups {
 		if err := flattenSubGroupWithPrefix(dst, sub, pre, depReason, registry, tb, rename); err != nil {
@@ -642,6 +654,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 	switch svc.OriginKind {
 	case KindProto:
 		if opts.SharedProtoBuilder != nil {
+			opts.SharedProtoBuilder.options.AnnotationSink = opts.AnnotationSink
 			return opts.SharedProtoBuilder, nil
 		}
 		return NewIRTypeBuilder(svc, IRTypeNaming{
@@ -651,7 +664,8 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			InputName:  func(s string) string { return exportedName(s) + "_Input" },
 			FieldName:  lowerCamel,
 		}, IRTypeBuilderOptions{
-			UploadType: opts.UploadType,
+			UploadType:     opts.UploadType,
+			AnnotationSink: opts.AnnotationSink,
 		}), nil
 
 	case KindOpenAPI:
@@ -673,11 +687,12 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			Int64Type:  opts.LongType,
-			UInt64Type: opts.LongType,
-			MapType:    opts.JSONType,
-			JSONType:   opts.JSONType,
-			UploadType: opts.UploadType,
+			Int64Type:      opts.LongType,
+			UInt64Type:     opts.LongType,
+			MapType:        opts.JSONType,
+			JSONType:       opts.JSONType,
+			UploadType:     opts.UploadType,
+			AnnotationSink: opts.AnnotationSink,
 		}), nil
 
 	case KindGraphQL:
@@ -697,9 +712,10 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			MapType:    opts.JSONType,
-			JSONType:   opts.JSONType,
-			UploadType: opts.UploadType,
+			MapType:        opts.JSONType,
+			JSONType:       opts.JSONType,
+			UploadType:     opts.UploadType,
+			AnnotationSink: opts.AnnotationSink,
 		}), nil
 
 	case KindMCP:
@@ -721,9 +737,10 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			FieldName:     identityName,
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			MapType:    opts.JSONType,
-			JSONType:   opts.JSONType,
-			UploadType: opts.UploadType,
+			MapType:        opts.JSONType,
+			JSONType:       opts.JSONType,
+			UploadType:     opts.UploadType,
+			AnnotationSink: opts.AnnotationSink,
 		}), nil
 
 	default:

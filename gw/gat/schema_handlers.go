@@ -33,7 +33,7 @@ func schemaGraphQLHandler(g *Gateway) http.Handler {
 			_ = ir.WriteJSON(w, result)
 		default:
 			w.Header().Set("Content-Type", "application/graphql; charset=utf-8")
-			_, _ = w.Write([]byte(ir.PrintSchemaSDL(g.schema)))
+			_, _ = w.Write([]byte(ir.PrintSchemaSDL(g.schema, g.annotations)))
 		}
 	})
 }

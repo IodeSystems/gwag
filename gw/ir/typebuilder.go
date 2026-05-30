@@ -113,6 +113,11 @@ type IRTypeBuilderOptions struct {
 	// gw.UploadScalar() so the multipart-request-spec parser's
 	// *Upload values land at the right graphql type.
 	UploadType graphql.Output
+
+	// AnnotationSink, when non-nil, receives the SDL annotations on each
+	// type/field this builder materializes, keyed by the final printed
+	// name. See RuntimeOptions.AnnotationSink.
+	AnnotationSink *AnnotationIndex
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
@@ -402,11 +407,35 @@ func sourceKeyResolver(originalName, schemaKey string) graphql.FieldResolveFn {
 	}
 }
 
+// recordAnnotations registers a type's SDL annotations (type-level and
+// per-field) into the build's AnnotationSink, keyed by the final printed
+// type name. Field keys mirror objectFor/inputObjectFor's skip rules so
+// the recorded keys match what PrintSchemaSDL emits. No-op when no sink
+// is wired.
+func (b *IRTypeBuilder) recordAnnotations(typeName string, t *Type) {
+	sink := b.options.AnnotationSink
+	if sink == nil {
+		return
+	}
+	sink.recordType(typeName, t.Annotations)
+	for _, f := range t.Fields {
+		if len(f.Annotations) == 0 {
+			continue
+		}
+		key := b.naming.FieldName(f.Name)
+		if !isValidGraphQLIdent(key) {
+			continue
+		}
+		sink.recordField(typeName, key, f.Annotations)
+	}
+}
+
 func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 	if obj, ok := b.objects[t.Name]; ok {
 		return obj
 	}
 	name := b.naming.ObjectName(t.Name)
+	b.recordAnnotations(name, t)
 	obj := graphql.NewObject(graphql.ObjectConfig{
 		Name:        name,
 		Description: withRef(t.Description, t.Ref),
@@ -443,6 +472,7 @@ func (b *IRTypeBuilder) inputObjectFor(t *Type) *graphql.InputObject {
 		return io
 	}
 	name := b.naming.InputName(t.Name)
+	b.recordAnnotations(name, t)
 	io := graphql.NewInputObject(graphql.InputObjectConfig{
 		Name:        name,
 		Description: withRef(t.Description, t.Ref),
@@ -488,6 +518,7 @@ func (b *IRTypeBuilder) enumFor(t *Type) *graphql.Enum {
 	if len(values) == 0 {
 		values["_EMPTY"] = &graphql.EnumValueConfig{Value: int32(0)}
 	}
+	b.options.AnnotationSink.recordType(b.naming.EnumName(t.Name), t.Annotations)
 	e := graphql.NewEnum(graphql.EnumConfig{
 		Name:        b.naming.EnumName(t.Name),
 		Description: withRef(t.Description, t.Ref),
@@ -530,6 +561,7 @@ func (b *IRTypeBuilder) unionFor(t *Type) (graphql.Output, error) {
 	}
 	discProp := t.DiscriminatorProperty
 	discMap := t.DiscriminatorMapping
+	b.options.AnnotationSink.recordType(b.naming.UnionName(t.Name), t.Annotations)
 	u := graphql.NewUnion(graphql.UnionConfig{
 		Name:        b.naming.UnionName(t.Name),
 		Description: withRef(t.Description, t.Ref),
@@ -579,6 +611,7 @@ func (b *IRTypeBuilder) scalarFor(t *Type) *graphql.Scalar {
 	if s, ok := b.scalars[t.Name]; ok {
 		return s
 	}
+	b.options.AnnotationSink.recordType(b.naming.ScalarName(t.Name), t.Annotations)
 	s := graphql.NewScalar(graphql.ScalarConfig{
 		Name:         b.naming.ScalarName(t.Name),
 		Description:  withRef(t.Description, t.Ref),

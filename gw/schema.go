@@ -23,11 +23,12 @@ import (
 // which subset is rendered.
 func (g *Gateway) assembleLocked() error {
 	g.dispatchers = ir.NewDispatchRegistry()
-	schema, err := g.buildSchemaLocked(schemaFilter{})
+	schema, annotations, err := g.buildSchemaLocked(schemaFilter{})
 	if err != nil {
 		return err
 	}
 	g.schema.Store(schema)
+	g.schemaAnnotations.Store(annotations)
 	if !g.cfg.disableGraphiQL {
 		g.graphiqlHandler.Store(newGraphiqlServer(schema))
 	}
@@ -50,8 +51,9 @@ func (g *Gateway) assembleLocked() error {
 // filter so codegen consumers can fetch a single namespace's slice
 // without rebuilding the gateway-wide schema.
 //
-// Caller holds g.mu. Returns the built schema; does NOT store it.
-func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error) {
+// Caller holds g.mu. Returns the built schema + its SDL annotation
+// index; does NOT store them.
+func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.AnnotationIndex, error) {
 	hidesSet := map[string]bool{}
 	for _, name := range g.hiddenTypeNames() {
 		hidesSet[name] = true
@@ -79,10 +81,10 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	allSvcs := g.collectSlotIRLocked(filter)
 	g.registerProtoDispatchersLocked(filter)
 	if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	g.registerMCPDispatchersLocked(allSvcs)
 	long, jsonScalar := openAPISharedScalars()
@@ -90,15 +92,17 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 	if g.effectiveAllowedTiers().Stable {
 		stableSnap = g.stableSnapshotLocked()
 	}
+	annotations := ir.NewAnnotationIndex()
 	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, ir.RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,
 		StableVN:           stableSnap,
 		UploadType:         UploadScalar(),
+		AnnotationSink:     annotations,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runtime render: %w", err)
+		return nil, nil, fmt.Errorf("runtime render: %w", err)
 	}
 	for k, v := range queries {
 		rootFields[k] = v
@@ -150,9 +154,9 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, error
 
 	schema, err := graphql.NewSchema(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("graphql.NewSchema: %w", err)
+		return nil, nil, fmt.Errorf("graphql.NewSchema: %w", err)
 	}
-	return &schema, nil
+	return &schema, annotations, nil
 }
 
 // waitForSlot blocks until sem has capacity or the per-dispatch
