@@ -89,12 +89,16 @@ positions; field removals don't happen. The `Kind`, `OpKind`,
 so a new variant is also additive.
 
 **Ingest + render pipeline.** `IngestProto`, `IngestOpenAPI`,
-`IngestGraphQL`, `RenderProtoFiles`, `RenderOpenAPI`, `RenderGraphQL`,
-`RenderGraphQLRuntime`, `RenderGraphQLRuntimeFields`,
+`IngestGraphQL`, `RenderProtoFiles`, `RenderOpenAPI`,
+`RenderGraphQLRuntime`, `RenderGraphQLRuntimeFields`, `PrintSchemaSDL`,
 `PopulateSchemaIDs`, `MakeSchemaID`, `ParseSelectors`, `Filter`,
 `HideInternal`, `Hides`. Same shape across 1.x; bug fixes that change
 the *output* of these functions (e.g. SDL formatting) are not
 considered API breaks — see the SDL note below.
+
+The standalone `RenderGraphQL` SDL string-renderer was **removed**
+pre-1.0 (it duplicated and silently diverged from the served schema).
+The served SDL is `PrintSchemaSDL(RenderGraphQLRuntime(...))`.
 
 **Middleware primitives.** `Transform.Schema` (`[]SchemaRewrite`),
 `Transform.Runtime` (`Middleware`), `Handler` (`func(ctx, req)
@@ -105,11 +109,11 @@ fields are intentionally unexported; construct via the factory funcs.
 
 ## What's allowed to change in 1.x
 
-**SDL formatting and field ordering.** The `RenderGraphQL` /
-`RenderGraphQLRuntime` output is a *valid* SDL / `graphql.Schema`,
-not a stable byte-for-byte artifact. We may reorder fields, adjust
-whitespace, or evolve description rendering. If your CI diffs SDL
-against a golden file, expect drift on minor bumps.
+**SDL formatting and field ordering.** The
+`PrintSchemaSDL(RenderGraphQLRuntime(...))` output is a *valid* SDL /
+`graphql.Schema`, not a stable byte-for-byte artifact. We may reorder
+fields, adjust whitespace, or evolve description rendering. If your CI
+diffs SDL against a golden file, expect drift on minor bumps.
 
 **OpenAPI re-emit details.** `RenderOpenAPI` produces the OpenAPI 3.x
 projection of an IR service. Identifier casing, summary text, and
@@ -148,6 +152,27 @@ captures the huma + GraphQL + connect-go-gRPC paired pattern, plus
 the `gwag serve` / `RegisterHTTP` / proto-ingest paths. Treat gat
 as the unstable testbed for "what if gwag were embedded?" — the
 shape may shift on a minor.
+
+**Experimental escape-hatches inside `gw` / `gw/ir`.** A handful of
+recently-added symbols live in the otherwise-stable packages but carry
+`// Stability: experimental` and are **not** locked in 1.x until a
+release of real-world use validates their shape:
+
+- *Outbound-identity helpers* — `ServiceAccountTransport`,
+  `ServiceAccountClient`, `TokenSource`, `StaticToken`, and the RFC 8693
+  `TokenExchangeConfig` / `TokenExchangeTransport` /
+  `NewTokenExchangeTransport` / `TokenExchangeClient`. (`ForwardHeaders`
+  itself stays stable.)
+- *SDL annotation carriage* — `ir.Annotation`, `AnnotationArg`,
+  `AnnKind`, `AnnotationIndex`, `NewAnnotationIndex`, and
+  `RuntimeOptions.AnnotationSink`. The carriage *behavior* may grow
+  (multi-source, enum-value / argument-level), so the shape isn't fixed.
+  The additive `Operation/Type/Field.Annotations` and `.Ref` fields on
+  the stable IR structs are themselves additive, but the `Annotation`
+  element type is experimental.
+- *Destructive-read gate* — `WithDestructiveReads`. The Option shape is
+  settled but its path-matching semantics are unvalidated (no concrete
+  destructive route exists yet).
 
 **Codegen + plugin dispatch paths.** Not shipped. When they do,
 they'll ride on the existing `DispatchRegistry` surface in `gw/ir`

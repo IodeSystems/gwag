@@ -23,6 +23,8 @@ type Annotation struct {
 
 // AnnotationArg is one named argument on an Annotation. Kind drives how
 // Value renders per format (quoted string vs bareword vs number/bool).
+//
+// Stability: experimental
 type AnnotationArg struct {
 	Name  string
 	Kind  AnnKind
@@ -31,6 +33,8 @@ type AnnotationArg struct {
 
 // AnnKind tags an argument value's lexical type so each emitter renders
 // it correctly.
+//
+// Stability: experimental
 type AnnKind uint8
 
 const (
@@ -468,10 +472,6 @@ func (idx *AnnotationIndex) fieldAnnotations(typeName, fieldName string) []Annot
 		return m[fieldName]
 	}
 	return nil
-}
-
-func (idx *AnnotationIndex) empty() bool {
-	return idx == nil || (len(idx.typeAnns) == 0 && len(idx.fieldAnns) == 0)
 }
 
 // declarations renders the synthesized `directive @Name(...) on ...`
