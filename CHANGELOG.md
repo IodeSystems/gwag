@@ -32,8 +32,10 @@ changes on MINOR, drops on MAJOR.
   / `TokenExchangeConfig` / `NewTokenExchangeTransport` perform RFC 8693
   token exchange: the inbound caller's bearer (read from the HTTP request
   or the gRPC ingress metadata) is swapped at a configurable issuer for
-  an upstream-scoped token, cached until shortly before expiry
-  (concurrent misses coalesce into one exchange) and attached outbound.
+  an upstream-scoped token, cached until shortly before expiry (bounded
+  by `MaxCachedTokens`; concurrent misses coalesce via singleflight
+  without holding the cache lock during the network call) and attached
+  outbound.
   Preserves caller identity while re-minting for the upstream's
   audience — the third outbound-identity mode next to `ForwardHeaders`
   (passthrough) and `ServiceAccountTransport` (gateway's own identity).

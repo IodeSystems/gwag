@@ -158,3 +158,25 @@ func TestTokenExchange_RequiresTokenURL(t *testing.T) {
 		t.Fatal("expected error for empty TokenURL")
 	}
 }
+
+func TestTokenExchange_BoundedCache(t *testing.T) {
+	es := newExchangeServer(t)
+	rt, _ := NewTokenExchangeTransport(TokenExchangeConfig{
+		TokenURL:        es.srv.URL,
+		Base:            &capturingRT{},
+		MaxCachedTokens: 2,
+	})
+	// Four distinct callers (distinct subject tokens → distinct keys); the
+	// cache must stay within the cap rather than growing unbounded.
+	for _, sub := range []string{"a", "b", "c", "d"} {
+		if _, err := rt.RoundTrip(outboundWithInboundToken(t, sub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt.mu.Lock()
+	n := len(rt.cache)
+	rt.mu.Unlock()
+	if n > 2 {
+		t.Errorf("cache size = %d, want <= 2 (bounded)", n)
+	}
+}

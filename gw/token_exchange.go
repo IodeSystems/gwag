@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -19,6 +20,11 @@ import (
 // treats it as stale, so a request never goes out with a token about to
 // expire mid-flight.
 const exchangeSkew = 30 * time.Second
+
+// defaultMaxCachedTokens bounds the exchanged-token cache when
+// TokenExchangeConfig.MaxCachedTokens is unset, so a high-cardinality
+// caller population can't grow it without limit.
+const defaultMaxCachedTokens = 4096
 
 // tokenExchangeGrant is the RFC 8693 grant type.
 const tokenExchangeGrant = "urn:ietf:params:oauth:grant-type:token-exchange"
@@ -57,19 +63,26 @@ type TokenExchangeConfig struct {
 	// http.DefaultTransport.
 	Base http.RoundTripper
 
+	// MaxCachedTokens caps the exchanged-token cache. 0 →
+	// defaultMaxCachedTokens. When full, expired entries are purged
+	// first, then the soonest-to-expire entry is evicted.
+	MaxCachedTokens int
+
 	// now overrides the clock for tests.
 	now func() time.Time
 }
 
 // TokenExchangeTransport is the http.RoundTripper built from a
 // TokenExchangeConfig. It caches exchanged tokens by (subject, audience,
-// scope, resource) until shortly before expiry; a cache miss performs
-// the exchange under a lock, so concurrent requests for the same token
-// coalesce into one exchange rather than stampeding the endpoint.
+// scope, resource) until shortly before expiry, bounded by
+// MaxCachedTokens. Concurrent misses for one key coalesce into a single
+// exchange (singleflight) — and the network call does NOT hold the cache
+// lock, so a slow token endpoint can't stall dispatches for other keys.
 //
 // Stability: experimental
 type TokenExchangeTransport struct {
 	cfg   TokenExchangeConfig
+	group singleflight.Group // coalesces concurrent misses for one key
 	mu    sync.Mutex
 	cache map[string]cachedExchange
 }
@@ -97,6 +110,9 @@ func NewTokenExchangeTransport(cfg TokenExchangeConfig) (*TokenExchangeTransport
 	}
 	if cfg.now == nil {
 		cfg.now = time.Now
+	}
+	if cfg.MaxCachedTokens <= 0 {
+		cfg.MaxCachedTokens = defaultMaxCachedTokens
 	}
 	return &TokenExchangeTransport{cfg: cfg, cache: map[string]cachedExchange{}}, nil
 }
@@ -130,20 +146,77 @@ func (t *TokenExchangeTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 func (t *TokenExchangeTransport) tokenFor(ctx context.Context, subject string) (string, error) {
 	key := exchangeKey(subject, t.cfg.Audience, t.cfg.Scope, t.cfg.Resource)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	now := t.cfg.now()
-	if c, ok := t.cache[key]; ok && now.Before(c.expires) {
-		return c.token, nil
+	if tok, ok := t.cached(key); ok {
+		return tok, nil
 	}
-	tok, ttl, err := t.exchange(ctx, subject)
+	// Coalesce concurrent misses for the same key into one exchange — the
+	// network call runs WITHOUT the cache lock held, so a slow IdP can't
+	// block dispatches for other keys.
+	v, err, _ := t.group.Do(key, func() (any, error) {
+		// Another goroutine may have filled the cache while we queued.
+		if tok, ok := t.cached(key); ok {
+			return tok, nil
+		}
+		tok, ttl, err := t.exchange(ctx, subject)
+		if err != nil {
+			return "", err
+		}
+		t.store(key, tok, ttl)
+		return tok, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	if life := ttl - exchangeSkew; life > 0 {
-		t.cache[key] = cachedExchange{token: tok, expires: now.Add(life)}
+	return v.(string), nil
+}
+
+// cached returns a live cached token for key, if present and unexpired.
+func (t *TokenExchangeTransport) cached(key string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.cache[key]; ok && t.cfg.now().Before(c.expires) {
+		return c.token, true
 	}
-	return tok, nil
+	return "", false
+}
+
+// store caches a freshly exchanged token, bounding the cache: when at
+// capacity it purges expired entries first, then evicts the soonest-to-
+// expire one. Tokens whose remaining life is under the skew aren't
+// cached.
+func (t *TokenExchangeTransport) store(key, tok string, ttl time.Duration) {
+	life := ttl - exchangeSkew
+	if life <= 0 {
+		return
+	}
+	now := t.cfg.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, fresh := t.cache[key]; !fresh && len(t.cache) >= t.cfg.MaxCachedTokens {
+		t.evictLocked(now)
+	}
+	t.cache[key] = cachedExchange{token: tok, expires: now.Add(life)}
+}
+
+// evictLocked frees room in a full cache: drop expired entries, then if
+// still full, the soonest-to-expire one. Caller holds t.mu.
+func (t *TokenExchangeTransport) evictLocked(now time.Time) {
+	for k, c := range t.cache {
+		if !now.Before(c.expires) {
+			delete(t.cache, k)
+		}
+	}
+	if len(t.cache) < t.cfg.MaxCachedTokens {
+		return
+	}
+	var evictKey string
+	var soonest time.Time
+	for k, c := range t.cache {
+		if evictKey == "" || c.expires.Before(soonest) {
+			evictKey, soonest = k, c.expires
+		}
+	}
+	delete(t.cache, evictKey)
 }
 
 func (t *TokenExchangeTransport) exchange(ctx context.Context, subject string) (string, time.Duration, error) {
