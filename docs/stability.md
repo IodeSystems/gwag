@@ -96,9 +96,13 @@ so a new variant is also additive.
 the *output* of these functions (e.g. SDL formatting) are not
 considered API breaks — see the SDL note below.
 
-The standalone `RenderGraphQL` SDL string-renderer was **removed**
-pre-1.0 (it duplicated and silently diverged from the served schema).
-The served SDL is `PrintSchemaSDL(RenderGraphQLRuntime(...))`.
+The standalone `RenderGraphQL` SDL string-renderer was **removed in
+v1.1.0** — a deliberate SemVer deviation. It shipped `stable` in v1.0.0
+but had zero non-test callers and silently diverged from the served
+schema (flat output, no namespace/version projection), so it was dropped
+in a minor rather than carried to a 2.0. The served SDL is
+`PrintSchemaSDL(RenderGraphQLRuntime(...))`. If you imported it, that's
+the replacement; pin to v1.0.x if you need the old flat renderer.
 
 **Middleware primitives.** `Transform.Schema` (`[]SchemaRewrite`),
 `Transform.Runtime` (`Middleware`), `Handler` (`func(ctx, req)

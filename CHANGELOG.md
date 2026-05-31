@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.1.0 — 2026-05-31
+
 ### Added
 - Admin UI "Sign Token" panel — a GUI for `gwag sign`. A form (channel,
   TTL, optional kid) calls the existing `signSubscriptionToken` admin op
@@ -129,14 +131,17 @@ changes on MINOR, drops on MAJOR.
   trace headers included.
 
 ### Removed
-- `ir.RenderGraphQL(svcs) string` — the standalone IR→SDL string
-  renderer. It had no non-test callers and silently disagreed with the
-  served schema: it rendered operations flat on `Query` and skipped the
-  namespace/version projection (and descriptions, hence `@ref`) that the
-  runtime path applies. The served `/schema/graphql` SDL has always come
-  from the runtime schema. **Migration:** build the schema with
-  `ir.RenderGraphQLRuntime(svcs, registry, opts)` and serialize it with
-  `ir.PrintSchemaSDL(schema)` — the same path the gateway already serves.
+- **BREAKING (SemVer deviation):** `ir.RenderGraphQL(svcs) string` is
+  removed. It shipped `// Stability: stable` in v1.0.0, so strictly this
+  is a 2.0 change — we are making a deliberate exception in this minor
+  because it had **zero non-test callers** and silently disagreed with
+  the served schema (flat output on `Query`, skipping the
+  namespace/version projection and descriptions the runtime path
+  applies). The served `/schema/graphql` SDL has always come from the
+  runtime path, not this function. **Migration:** build the schema with
+  `ir.RenderGraphQLRuntime(svcs, registry, opts)` and serialize with
+  `ir.PrintSchemaSDL(schema)`. If you need the old flat renderer, pin to
+  `v1.0.x`.
 
 ### Fixed
 - gat embedded dispatch — in-process huma handler results are now
