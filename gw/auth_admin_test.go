@@ -276,3 +276,47 @@ func TestForwardOpenAPIHeaders_NoInboundCtx(t *testing.T) {
 	}
 }
 
+
+func TestAdminMiddleware_DestructiveReads(t *testing.T) {
+	tok := []byte("supersecret")
+	tokHex := hex.EncodeToString(tok)
+	gw := New(WithAdminToken(tok), WithDestructiveReads("/admin/export", "/admin/dump/*"))
+	authed := false
+	h := gw.AdminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authed = isAdminAuth(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		bearer     bool
+		wantStatus int
+		wantAuthed bool
+	}{
+		{"ordinary read stays public", http.MethodGet, "/admin/peers", false, 200, false},
+		{"destructive GET gated without bearer", http.MethodGet, "/admin/export", false, 401, false},
+		{"destructive GET allowed with bearer", http.MethodGet, "/admin/export", true, 200, true},
+		{"destructive HEAD also gated", http.MethodHead, "/admin/export", false, 401, false},
+		{"prefix match gated", http.MethodGet, "/admin/dump/everything", false, 401, false},
+		{"prefix non-match stays public", http.MethodGet, "/admin/dumpster", false, 200, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authed = false
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.bearer {
+				req.Header.Set("Authorization", "Bearer "+tokHex)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rr.Code, tc.wantStatus)
+			}
+			if authed != tc.wantAuthed {
+				t.Fatalf("isAdminAuth = %v, want %v", authed, tc.wantAuthed)
+			}
+		})
+	}
+}

@@ -46,8 +46,9 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 //  2. Boot-token Bearer check (the unconditional fallback).
 //
 // GraphQL reads of admin_* fields (which dispatch GET to /admin/*)
-// stay public for the UI; mutations require auth end-to-end. Future
-// destructive reads will need explicit opt-in once they exist.
+// stay public for the UI; mutations require auth end-to-end. Paths
+// registered via WithDestructiveReads are the exception — their GET is
+// gated like a mutation.
 //
 // Authenticated requests carry isAdminAuth(ctx) == true on the way
 // through.
@@ -56,7 +57,7 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	tok := g.cfg.adminToken
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isAdminPublicMethod(r.Method) {
+		if isAdminPublicMethod(r.Method) && !g.isDestructiveRead(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -92,6 +93,22 @@ func isAdminPublicMethod(method string) bool {
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
+	}
+	return false
+}
+
+// isDestructiveRead reports whether path was opted into admin gating via
+// WithDestructiveReads. Exact match, or prefix when the registered entry
+// ends with "*".
+func (g *Gateway) isDestructiveRead(path string) bool {
+	for _, p := range g.cfg.destructiveReads {
+		if strings.HasSuffix(p, "*") {
+			if strings.HasPrefix(path, p[:len(p)-1]) {
+				return true
+			}
+		} else if path == p {
+			return true
+		}
 	}
 	return false
 }

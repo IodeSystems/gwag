@@ -16,6 +16,14 @@ Wire it as standard `Authorization: Bearer <hex>`. Reads (GETs on
 `/api/admin/*`, `admin_listPeers` / `admin_listServices` queries)
 are public so the UI works unauthenticated; writes require the token.
 
+**Destructive reads.** A GET that has side effects or exposes
+sensitive data isn't really a safe read. Opt those paths into the
+auth gate with `WithDestructiveReads("/admin/export", "/admin/dump/*")`
+(exact match, or prefix with a trailing `*`) — their GET/HEAD is then
+gated like a write, everywhere the path is reached (including the
+`admin_*` GraphQL field that dispatches a GET to it, so a UI reading
+that field must present the bearer).
+
 ```go
 gw := gateway.New(
     gateway.WithAdminDataDir("/var/lib/gateway"),

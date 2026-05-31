@@ -240,7 +240,12 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
-	signerSecret []byte
+	// destructiveReads are request paths whose GET/HEAD has side effects
+	// (or exposes sensitive data); AdminMiddleware gates them with admin
+	// auth instead of letting them through as public reads. A trailing
+	// "*" makes an entry a prefix match.
+	destructiveReads []string
+	signerSecret     []byte
 	openAPIHTTP  *http.Client
 	pprof        bool
 	requestLog   io.Writer
@@ -708,6 +713,21 @@ func WithAdminToken(token []byte) Option {
 // Stability: stable
 func WithAdminDataDir(dir string) Option {
 	return func(cfg *config) { cfg.adminDataDir = dir }
+}
+
+// WithDestructiveReads marks request paths whose GET / HEAD has side
+// effects or exposes sensitive data, so AdminMiddleware gates them with
+// admin auth instead of treating them as public reads. Match is exact
+// against the request URL path; a trailing "*" makes an entry a prefix
+// match (e.g. "/admin/export/*"). Repeatable.
+//
+// The gate applies wherever the path is reached, including the GraphQL
+// admin_* field that dispatches a GET to it — so a UI reading such a
+// field must present the admin bearer.
+//
+// Stability: experimental
+func WithDestructiveReads(paths ...string) Option {
+	return func(cfg *config) { cfg.destructiveReads = append(cfg.destructiveReads, paths...) }
 }
 
 // WithSignerSecret installs a sign-specific bearer for the gRPC

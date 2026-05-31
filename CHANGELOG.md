@@ -10,6 +10,13 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- `gateway.WithDestructiveReads(paths...)` — opt specific GET/HEAD paths
+  into the admin-auth gate (for reads that have side effects or expose
+  sensitive data), instead of `AdminMiddleware` treating every GET as a
+  public read. Exact match, or prefix with a trailing `*`. The gate
+  applies wherever the path is reached, including the `admin_*` GraphQL
+  field that dispatches a GET to it. See
+  [`docs/admin-auth.md`](./docs/admin-auth.md).
 - Global `gwag` context fallback. When a directory has no project-local
   `./.gw/credentials.json`, login resolution falls back to
   `~/.config/gwag/credentials.json` (XDG_CONFIG_HOME-aware) — kubectl-
