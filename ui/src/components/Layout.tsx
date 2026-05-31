@@ -23,6 +23,7 @@ import HistoryToggleOffIcon from '@mui/icons-material/HistoryToggleOff';
 import SchemaIcon from '@mui/icons-material/Schema';
 import InputIcon from '@mui/icons-material/Input';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import SettingsIcon from '@mui/icons-material/Settings';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
@@ -40,6 +41,7 @@ const nav = [
   { to: '/peers', label: 'Peers', icon: <HubIcon /> },
   { to: '/schema', label: 'Schema', icon: <SchemaIcon /> },
   { to: '/mcp', label: 'MCP', icon: <SmartToyIcon /> },
+  { to: '/token-signer', label: 'Sign Token', icon: <VpnKeyIcon /> },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

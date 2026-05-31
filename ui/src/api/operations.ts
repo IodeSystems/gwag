@@ -160,6 +160,22 @@ export const RetractStableMutation = graphql(`
   }
 `);
 
+export const SignSubscriptionTokenMutation = graphql(`
+  mutation SignSubscriptionToken($channel: String!, $ttlSeconds: Long!, $kid: String) {
+    admin {
+      signSubscriptionToken(
+        body: { channel: $channel, ttlSeconds: $ttlSeconds, kid: $kid }
+      ) {
+        code
+        hmac
+        kid
+        reason
+        timestampUnix
+      }
+    }
+  }
+`);
+
 export const PeersQuery = graphql(`
   query Peers {
     admin {

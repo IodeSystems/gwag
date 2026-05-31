@@ -10,6 +10,10 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- Admin UI "Sign Token" panel — a GUI for `gwag sign`. A form (channel,
+  TTL, optional kid) calls the existing `signSubscriptionToken` admin op
+  and shows the returned hmac / timestamp / kid for an operator to hand
+  to a subscription client. Bearer-gated like the other admin writes.
 - `gateway.WithDestructiveReads(paths...)` — opt specific GET/HEAD paths
   into the admin-auth gate (for reads that have side effects or expose
   sensitive data), instead of `AdminMiddleware` treating every GET as a
