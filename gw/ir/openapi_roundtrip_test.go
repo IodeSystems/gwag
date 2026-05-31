@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -556,5 +557,117 @@ func TestOpenAPIRoundtripSynthesis_OneOf(t *testing.T) {
 	}
 	if got := animalRef.Value.Discriminator.PropertyName; got != "kind" {
 		t.Errorf("discriminator.propertyName = %q, want %q", got, "kind")
+	}
+}
+
+// TestOpenAPIIngest_InlineUnionVariants: an inline (non-$ref) object
+// variant in a oneOf is now synthesised as a named object Type and
+// becomes a real union member (previously the whole union was dropped to
+// a scalar).
+func TestOpenAPIIngest_InlineUnionVariants(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {
+    "/kennel": {
+      "get": {
+        "operationId": "getKennel",
+        "responses": {"200": {"description": "ok",
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Kennel"}}}}}
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Kennel": {
+        "type": "object",
+        "properties": {
+          "occupant": {
+            "oneOf": [
+              {"$ref": "#/components/schemas/Cat"},
+              {"type": "object", "properties": {"bark": {"type": "boolean"}}}
+            ]
+          }
+        }
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+	svc.Namespace = "zoo"
+	svc.Version = "v1"
+
+	// The inline variant is synthesised as KennelOccupantVariant2 (2nd
+	// variant of the property hinted "KennelOccupant").
+	v2, ok := svc.Types["KennelOccupantVariant2"]
+	if !ok {
+		keys := []string{}
+		for k := range svc.Types {
+			keys = append(keys, k)
+		}
+		t.Fatalf("missing synthesised inline variant; types = %v", keys)
+	}
+	if v2.TypeKind != TypeObject {
+		t.Errorf("inline variant kind = %v, want TypeObject", v2.TypeKind)
+	}
+	if len(v2.Fields) != 1 || v2.Fields[0].Name != "bark" {
+		t.Errorf("inline variant fields = %+v, want [bark]", v2.Fields)
+	}
+
+	// The union mixes the $ref'd and the synthesised variant.
+	union, ok := svc.Types["CatOrKennelOccupantVariant2"]
+	if !ok {
+		t.Fatal("missing synthesised union CatOrKennelOccupantVariant2")
+	}
+	if want := []string{"Cat", "KennelOccupantVariant2"}; len(union.Variants) != 2 ||
+		union.Variants[0] != want[0] || union.Variants[1] != want[1] {
+		t.Errorf("union variants = %v, want %v", union.Variants, want)
+	}
+
+	// End-to-end: both the union and the synthesised member render to SDL.
+	sdl := runtimeSDL(t, svc)
+	for _, want := range []string{"union", "Cat", "KennelOccupantVariant2"} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("SDL missing %q\n--- SDL ---\n%s", want, sdl)
+		}
+	}
+}
+
+// TestOpenAPIIngest_InlineUnionScalarVariantUnsupported: a oneOf with a
+// scalar variant can't be a GraphQL union, so no union is synthesised
+// and the field falls back (unchanged behavior).
+func TestOpenAPIIngest_InlineUnionScalarVariantUnsupported(t *testing.T) {
+	const spec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "zoo", "version": "1.0.0"},
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Cat": {"type": "object", "properties": {"meow": {"type": "boolean"}}},
+      "Box": {
+        "type": "object",
+        "properties": {
+          "thing": {"oneOf": [{"$ref": "#/components/schemas/Cat"}, {"type": "string"}]}
+        }
+      }
+    }
+  }
+}`
+	loader := openapi3.NewLoader()
+	doc, _ := loader.LoadFromData([]byte(spec))
+	svc := IngestOpenAPI(doc)
+	for name, ty := range svc.Types {
+		if ty.TypeKind == TypeUnion {
+			t.Errorf("unexpected union %q synthesised from a scalar-bearing oneOf", name)
+		}
 	}
 }

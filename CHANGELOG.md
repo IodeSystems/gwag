@@ -104,6 +104,12 @@ changes on MINOR, drops on MAJOR.
   only — a dynamic `PeerProvider` is a followup.
 
 ### Changed
+- OpenAPI ingest now maps inline (non-`$ref`) object variants in a
+  `oneOf` / `anyOf` to real GraphQL union members instead of collapsing
+  the union to a JSON scalar. Each inline object variant is synthesised
+  as a named type (`<hint>VariantN`), so it also round-trips back out as
+  a named OpenAPI component. Non-object variants (scalars) still fall
+  back, since a GraphQL union can only hold objects.
 - Outbound dispatches now propagate distributed-tracing / correlation
   headers (W3C `traceparent` / `tracestate` / `baggage`, B3,
   `x-request-id`, AWS / GCP trace headers) from the inbound request, so

@@ -2,6 +2,7 @@ package ir
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -90,25 +91,15 @@ func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Ty
 	// inline objects naming themselves "<name>_<field>" don't see the
 	// containing type as missing and re-enter ingest.
 	svc.Types[name] = t
-	// oneOf / anyOf at the schema root → TypeUnion with named
-	// variants. Inline (non-$ref) variants are skipped since the IR
-	// has no native synthesized-name story for them — operators
-	// hitting that case should declare a named component schema.
-	// Discriminator metadata stays accessible via Origin (the
-	// *openapi3.SchemaRef) when the renderer needs it.
+	// oneOf / anyOf at the schema root → TypeUnion. $ref'd variants use
+	// their leaf name; inline object variants are synthesised as
+	// "<name>VariantN" object Types. Non-object variants (scalars) can't
+	// be GraphQL union members and are skipped. Discriminator metadata
+	// stays accessible via Origin (the *openapi3.SchemaRef) when the
+	// renderer needs it.
 	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
-		variants := s.OneOf
-		if len(variants) == 0 {
-			variants = s.AnyOf
-		}
 		t.TypeKind = TypeUnion
-		for _, v := range variants {
-			if v == nil || v.Ref == "" {
-				continue
-			}
-			parts := strings.Split(v.Ref, "/")
-			t.Variants = append(t.Variants, parts[len(parts)-1])
-		}
+		t.Variants, _ = openapiUnionVariants(svc, name, s.OneOf, s.AnyOf)
 		if s.Discriminator != nil {
 			t.DiscriminatorProperty = s.Discriminator.PropertyName
 			if len(s.Discriminator.Mapping) > 0 {
@@ -182,13 +173,13 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 	f.Annotations = extAnnotations(s.Extensions)
 	f.Format = s.Format
 	f.Pattern = s.Pattern
-	// Inline oneOf / anyOf with $ref'd variants: synthesise a
-	// deterministic union Type ("AOrB") in svc.Types and point the
-	// field at it. Anonymous (non-$ref) variants fall through to the
-	// scalar fallback below — IR has no synthesised-name story for
-	// them yet, so the renderer-side projection is JSON-shaped.
-	if name := synthesizeInlineUnion(svc, s); name != "" {
-		f.Type = TypeRef{Named: name}
+	// Inline oneOf / anyOf: synthesise a deterministic union Type
+	// ("AOrB") in svc.Types and point the field at it. $ref'd and inline
+	// *object* variants are named (inline ones as "<hint>VariantN");
+	// non-object variants (scalars) fall through to the scalar fallback
+	// below, since a GraphQL union can't hold them.
+	if union := synthesizeInlineUnion(svc, pathHint, s); union != "" {
+		f.Type = TypeRef{Named: union}
 		return f
 	}
 	if pt := primaryOpenAPIType(s); pt != "" {
@@ -339,48 +330,70 @@ func sanitizeIdent(s string) string {
 	return string(out)
 }
 
-// synthesizeInlineUnion examines an inline schema for oneOf/anyOf
-// with $ref'd named variants. When all variants resolve to bare
-// schema names, registers a TypeUnion entry under a deterministic
-// "AOrB"-shaped synthesised name and returns that name; the caller
-// uses it as a TypeRef.Named. Returns "" when the schema isn't an
-// inline union, has no variants, or has any anonymous (non-$ref)
-// variant that the IR can't safely name.
-func synthesizeInlineUnion(svc *Service, s *openapi3.Schema) string {
+// openapiUnionVariants resolves a oneOf/anyOf variant list into IR
+// variant Type names. $ref'd variants use their leaf schema name;
+// inline object variants are synthesised as "<hint>VariantN" object
+// Types (registered in svc.Types). allRepresentable is false when a
+// variant is a non-object schema (scalar / array / nested union) — a
+// GraphQL union can only hold objects, so the caller may fall back to a
+// JSON-shaped projection. oneOf is preferred; anyOf is the fallback.
+func openapiUnionVariants(svc *Service, hint string, oneOf, anyOf []*openapi3.SchemaRef) (names []string, allRepresentable bool) {
+	variants := oneOf
+	if len(variants) == 0 {
+		variants = anyOf
+	}
+	allRepresentable = true
+	for i, v := range variants {
+		switch {
+		case v != nil && v.Ref != "":
+			segs := strings.Split(v.Ref, "/")
+			names = append(names, segs[len(segs)-1])
+		case v != nil && v.Value != nil && isOpenAPIObjectSchema(v.Value):
+			vname := hint + "Variant" + strconv.Itoa(i+1)
+			openapiSchemaToType(svc, vname, v)
+			names = append(names, vname)
+		default:
+			allRepresentable = false
+		}
+	}
+	return names, allRepresentable
+}
+
+// isOpenAPIObjectSchema reports whether s describes an object shape (so
+// it can be a GraphQL union member).
+func isOpenAPIObjectSchema(s *openapi3.Schema) bool {
+	return len(s.Properties) > 0 || primaryOpenAPIType(s) == "object"
+}
+
+// synthesizeInlineUnion examines an inline schema for oneOf/anyOf and,
+// when every variant is representable (a $ref'd object or an inline
+// object — see openapiUnionVariants), registers a TypeUnion under a
+// deterministic "AOrB"-shaped name and returns it for use as a
+// TypeRef.Named. hint names any inline object variants. Returns "" when
+// the schema isn't an inline union, has no variants, or has a
+// non-object variant the IR can't model as a union member.
+func synthesizeInlineUnion(svc *Service, hint string, s *openapi3.Schema) string {
 	if s == nil || svc == nil {
 		return ""
 	}
 	if len(s.OneOf) == 0 && len(s.AnyOf) == 0 {
 		return ""
 	}
-	variants := s.OneOf
-	if len(variants) == 0 {
-		variants = s.AnyOf
-	}
-	parts := make([]string, 0, len(variants))
-	for _, v := range variants {
-		if v == nil || v.Ref == "" {
-			return ""
-		}
-		segs := strings.Split(v.Ref, "/")
-		parts = append(parts, segs[len(segs)-1])
-	}
-	if len(parts) == 0 {
+	names, allRepresentable := openapiUnionVariants(svc, hint, s.OneOf, s.AnyOf)
+	if !allRepresentable || len(names) == 0 {
 		return ""
 	}
-	name := strings.Join(parts, "Or")
-	if existing, ok := svc.Types[name]; ok {
-		// Already synthesised (or a real component schema collides
-		// with the synthesised name — rare; defer to the existing
-		// entry rather than overwrite).
-		_ = existing
+	name := strings.Join(names, "Or")
+	if _, ok := svc.Types[name]; ok {
+		// Already synthesised (or a real component schema collides with
+		// the synthesised name — rare; defer to the existing entry).
 		return name
 	}
 	t := &Type{
 		Name:       name,
 		TypeKind:   TypeUnion,
 		OriginKind: KindOpenAPI,
-		Variants:   parts,
+		Variants:   names,
 	}
 	if s.Discriminator != nil {
 		t.DiscriminatorProperty = s.Discriminator.PropertyName
