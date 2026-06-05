@@ -174,6 +174,20 @@ func assignValue(dst reflect.Value, v any) error {
 		}
 	}
 
+	// Pointer destination (e.g. an optional/nullable input field typed
+	// *int64): a nil source leaves it nil, otherwise allocate and assign
+	// into the element so the coercions below also reach pointer fields.
+	if dst.Kind() == reflect.Ptr {
+		if v == nil {
+			dst.Set(reflect.Zero(dst.Type()))
+			return nil
+		}
+		if dst.IsNil() {
+			dst.Set(reflect.New(dst.Type().Elem()))
+		}
+		return assignValue(dst.Elem(), v)
+	}
+
 	// (1) protojson-encoded number landing in a numeric Go field.
 	if s, ok := v.(string); ok && isNumericKind(dst.Kind()) {
 		return assignNumericFromString(dst, s)

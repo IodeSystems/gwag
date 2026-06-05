@@ -98,6 +98,54 @@ func TestAssignValue_NestedBodyStruct(t *testing.T) {
 	}
 }
 
+// TestAssignValue_StringIntoPtrInt64 — an optional/nullable body field
+// typed *int64 (GraphQL Long, nullable) receives a protojson-stringified
+// number; allocate the pointer and coerce into its element.
+func TestAssignValue_StringIntoPtrInt64(t *testing.T) {
+	var dst *int64
+	if err := assignValue(reflect.ValueOf(&dst).Elem(), "1"); err != nil {
+		t.Fatalf("assignValue: %v", err)
+	}
+	if dst == nil || *dst != 1 {
+		t.Errorf("dst = %v; want *1", dst)
+	}
+}
+
+// TestAssignValue_NilIntoPtrLeavesNil — a null source leaves a pointer
+// field nil rather than allocating a zero value.
+func TestAssignValue_NilIntoPtrLeavesNil(t *testing.T) {
+	dst := new(int64)
+	*dst = 7
+	v := reflect.ValueOf(&dst).Elem()
+	if err := assignValue(v, nil); err != nil {
+		t.Fatalf("assignValue: %v", err)
+	}
+	if !v.IsNil() {
+		t.Errorf("dst = %v; want nil", v.Interface())
+	}
+}
+
+// TestAssignValue_PtrFieldsInBodyStruct — nullable numeric body fields
+// (the optional-id pattern: programId/fundraiserId/userId all *int64)
+// coerce from protojson strings; an absent key stays nil.
+func TestAssignValue_PtrFieldsInBodyStruct(t *testing.T) {
+	type body struct {
+		ProgramID    *int64 `json:"programId"`
+		FundraiserID *int64 `json:"fundraiserId"`
+	}
+	var dst body
+	src := map[string]any{"programId": "1"}
+	if err := assignValue(reflect.ValueOf(&dst).Elem(), src); err != nil {
+		t.Fatalf("assignValue: %v", err)
+	}
+	if dst.ProgramID == nil || *dst.ProgramID != 1 {
+		t.Errorf("ProgramID = %v; want *1", dst.ProgramID)
+	}
+	if dst.FundraiserID != nil {
+		t.Errorf("FundraiserID = %v; want nil", dst.FundraiserID)
+	}
+}
+
 // TestAssignValue_SliceOfStructs — repeated body fields land as
 // []any whose elements are map[string]any; recurse on each.
 func TestAssignValue_SliceOfStructs(t *testing.T) {
