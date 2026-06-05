@@ -201,7 +201,7 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 
-		ctx := r.Context()
+		ctx, cookies := withCookieSink(r.Context())
 		result := graphql.Do(graphql.Params{
 			Schema:         *g.schema,
 			RequestString:  query,
@@ -210,6 +210,9 @@ func (g *Gateway) Handler() http.Handler {
 			Context:        ctx,
 		})
 
+		// Emit any Set-Cookie a handler produced (login/logout) before the
+		// body — GraphQL transport otherwise drops per-op response headers.
+		cookies.emit(w)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if len(result.Errors) > 0 {
 			w.WriteHeader(http.StatusBadRequest)

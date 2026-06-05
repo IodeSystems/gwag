@@ -45,6 +45,11 @@ func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 	if err != nil {
 		return nil, err
 	}
+	// Capture any Set-Cookie the handler emitted so the GraphQL HTTP layer
+	// can write it to the response (no-op on transports without a sink).
+	if sink := cookieSinkFrom(ctx); sink != nil {
+		sink.addFromOutput(out)
+	}
 	return normalizeJSON(extractBody(out))
 }
 
