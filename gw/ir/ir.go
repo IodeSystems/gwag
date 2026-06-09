@@ -366,7 +366,9 @@ type Field struct {
 	Repeated     bool
 	Required     bool
 	ItemRequired bool // when Repeated, each list element is non-null
-	Description  string
+	Nullable     bool // OpenAPI `nullable:true` / 3.1 type "null": present-but-null
+	//             allowed. GraphQL non-null requires Required && !Nullable.
+	Description string
 	Deprecated   string
 	Ref          string       // `@ref` source-of-truth marker (see Operation.Ref)
 	Annotations  []Annotation // SDL-visible directives (see Operation.Annotations)

@@ -446,7 +446,7 @@ func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 				if !isValidGraphQLIdent(key) {
 					continue
 				}
-				ft, err := b.Output(f.Type, f.Repeated, f.Required, f.ItemRequired)
+				ft, err := b.Output(f.Type, f.Repeated, f.Required && !f.Nullable, f.ItemRequired)
 				if err != nil {
 					continue
 				}
@@ -483,7 +483,7 @@ func (b *IRTypeBuilder) inputObjectFor(t *Type) *graphql.InputObject {
 				if !isValidGraphQLIdent(key) {
 					continue
 				}
-				ft, err := b.Input(f.Type, f.Repeated, f.Required, f.ItemRequired)
+				ft, err := b.Input(f.Type, f.Repeated, f.Required && !f.Nullable, f.ItemRequired)
 				if err != nil {
 					continue
 				}

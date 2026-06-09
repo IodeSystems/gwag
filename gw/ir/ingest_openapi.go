@@ -175,6 +175,9 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 	f.Annotations = extAnnotations(s.Extensions)
 	f.Format = s.Format
 	f.Pattern = s.Pattern
+	// A field that may be null (3.0 `nullable:true`, or 3.1 `type` list
+	// containing "null") must render nullable in GraphQL even when required.
+	f.Nullable = s.Nullable || openapiTypeHasNull(s)
 	// Inline oneOf / anyOf: synthesise a deterministic union Type
 	// ("AOrB") in svc.Types and point the field at it. $ref'd and inline
 	// *object* variants are named (inline ones as "<hint>VariantN");
@@ -416,6 +419,20 @@ func synthesizeInlineUnion(svc *Service, hint string, s *openapi3.Schema) string
 // primaryOpenAPIType pulls the single non-null type out of an
 // OpenAPI 3.1 multi-type list (Schema.Type is now []string-shaped).
 // Mirrors gw/openapi.go's primaryType but local to the ir package.
+// openapiTypeHasNull reports whether an OpenAPI 3.1 type list includes
+// "null" (the 3.1 spelling of nullability).
+func openapiTypeHasNull(s *openapi3.Schema) bool {
+	if s == nil || s.Type == nil {
+		return false
+	}
+	for _, t := range *s.Type {
+		if t == "null" {
+			return true
+		}
+	}
+	return false
+}
+
 func primaryOpenAPIType(s *openapi3.Schema) string {
 	if s == nil || s.Type == nil {
 		return ""
