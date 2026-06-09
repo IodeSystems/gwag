@@ -9,6 +9,24 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Fixed
+- OpenAPI / MCP ingest now numbers synthesised enum values 0-based in
+  declaration order instead of leaving every value at `0`. The proto
+  renderer reads `EnumValue.Number` verbatim, so the old all-zero
+  numbering failed `FileDescriptorSet` construction ("conflicting
+  non-aliased values on number 0") and kept a gat server from starting
+  whenever an ingested schema had a string enum field.
+- OpenAPI `nullable: true` (and the 3.1 `type: [..., "null"]` spelling)
+  now maps onto GraphQL nullability: a field is rendered non-null only
+  when it is required *and* not nullable. A required-but-nullable field
+  previously rendered `T!` and errored at query time when its value was
+  null.
+- `{prefix}/schema/graphql` now answers introspection `POST` queries by
+  delegating to the GraphQL execution handler (the `GET` view still
+  serves SDL / `?format=json`). graphql-codegen and similar tools
+  introspect via `POST`, so they can target the documented schema URL
+  instead of getting a 405.
+
 ## v1.1.0 — 2026-05-31
 
 ### Added
