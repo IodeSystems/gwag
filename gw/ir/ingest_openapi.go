@@ -122,7 +122,9 @@ func openapiSchemaToType(svc *Service, name string, ref *openapi3.SchemaRef) *Ty
 		t.TypeKind = TypeEnum
 		for _, v := range s.Enum {
 			if str, ok := v.(string); ok {
-				t.Enum = append(t.Enum, EnumValue{Name: str})
+				// 0-based sequential numbers (per EnumValue.Number contract);
+				// len(t.Enum) stays correct when non-string entries are skipped.
+				t.Enum = append(t.Enum, EnumValue{Name: str, Number: int32(len(t.Enum))})
 			}
 		}
 		return t
@@ -293,7 +295,9 @@ func synthesizeInlineEnum(svc *Service, name string, s *openapi3.Schema) string 
 	}
 	for _, v := range s.Enum {
 		if str, ok := v.(string); ok {
-			t.Enum = append(t.Enum, EnumValue{Name: str})
+			// 0-based sequential numbers (per EnumValue.Number contract);
+			// len(t.Enum) stays correct when non-string entries are skipped.
+			t.Enum = append(t.Enum, EnumValue{Name: str, Number: int32(len(t.Enum))})
 		}
 	}
 	svc.Types[name] = t
