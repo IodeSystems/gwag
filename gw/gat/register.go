@@ -214,4 +214,15 @@ func mountSchemaEndpoints(api huma.API, g *Gateway, prefix string) {
 	mount("/schema/graphql", schemaGraphQLHandler(g))
 	mount("/schema/proto", schemaProtoHandler(g))
 	mount("/schema/openapi", schemaOpenAPIHandler(g))
+
+	// Also answer introspection POSTs on /schema/graphql by delegating to the
+	// GraphQL handler (same as {prefix}/graphql). graphql-codegen introspects
+	// via POST, so pointing it at the documented schema URL then works instead
+	// of 405-ing. (The GET op above stays the SDL / ?format=json view.)
+	api.Adapter().Handle(&huma.Operation{
+		Method: http.MethodPost,
+		Path:   prefix + "/schema/graphql",
+	}, func(ctx huma.Context) {
+		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+	})
 }

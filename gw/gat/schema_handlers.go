@@ -15,6 +15,13 @@ import (
 // point straight at this URL.
 func schemaGraphQLHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// POST → delegate to the GraphQL execution handler. graphql-codegen
+		// and similar tools introspect via a POST query; pointing them at
+		// this documented schema URL then "just works" instead of 405-ing.
+		if r.Method == http.MethodPost {
+			g.Handler().ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

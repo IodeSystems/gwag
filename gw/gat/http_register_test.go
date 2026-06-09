@@ -52,6 +52,17 @@ func TestRegisterHTTP_MountsAllFour(t *testing.T) {
 		}
 	})
 
+	// graphql-codegen introspects with a POST query. The schema URL must
+	// answer it (delegating to the GraphQL handler) so codegen can point at
+	// the documented schema endpoint instead of 405-ing on it.
+	t.Run("schema_graphql_introspection_post", func(t *testing.T) {
+		resp := mustGraphQL(t, srv.URL+"/api/schema/graphql",
+			`{ __schema { queryType { name } } }`)
+		if name := digPath(resp, "data", "__schema", "queryType", "name"); name == nil {
+			t.Fatalf("POST introspection to schema URL returned no queryType: %v", resp)
+		}
+	})
+
 	t.Run("schema_proto", func(t *testing.T) {
 		resp, err := http.Get(srv.URL + "/api/schema/proto")
 		if err != nil {

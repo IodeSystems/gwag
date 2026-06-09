@@ -132,6 +132,16 @@ func TestPairedRegister_GraphQLAndREST(t *testing.T) {
 			t.Errorf("introspection result missing data: %v", doc)
 		}
 	})
+
+	// graphql-codegen introspects via POST. The schema URL must answer it
+	// (RegisterHuma path) so codegen can target the documented endpoint.
+	t.Run("schema_graphql_introspect_post", func(t *testing.T) {
+		resp := mustGraphQL(t, srv.URL+"/api/schema/graphql",
+			`{ __schema { queryType { name } } }`)
+		if name := digPath(resp, "data", "__schema", "queryType", "name"); name == nil {
+			t.Fatalf("POST introspection to schema URL returned no queryType: %v", resp)
+		}
+	})
 }
 
 func TestRegister_AfterFinalizeIsNoOp(t *testing.T) {
