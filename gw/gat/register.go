@@ -151,6 +151,14 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 			continue
 		}
 		c.irOp = op
+		// @derived: declare the codegen provenance of this generated SDL field — it
+		// derives from the Go huma operation with this OperationID. Lets a consumer
+		// (poly-lsp-mcp) follow the real edge to the source instead of guessing the
+		// field↔OperationID mapping by replicating gat's naming rule.
+		op.Annotations = append(op.Annotations, ir.Annotation{
+			Name: "derived",
+			Args: []ir.AnnotationArg{{Name: "operationId", Kind: ir.AnnString, Value: op.Name}},
+		})
 		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op))
 	}
 

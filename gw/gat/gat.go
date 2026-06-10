@@ -228,6 +228,13 @@ func (g *Gateway) Schema() *graphql.Schema {
 	return g.schema
 }
 
+// GraphQLSDL renders the gateway's schema as SDL WITH its annotation index (@derived,
+// @deprecated, etc.). Prefer this over ir.PrintSchemaSDL(g.Schema()), which omits the
+// annotations — the SDL/graphql HTTP view uses this same path.
+func (g *Gateway) GraphQLSDL() string {
+	return ir.PrintSchemaSDL(g.schema, g.annotations)
+}
+
 // Services returns the registered IR services.
 //
 // Stability: experimental
