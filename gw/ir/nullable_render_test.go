@@ -178,3 +178,47 @@ func TestOpenAPIArrayItemNonNull(t *testing.T) {
 		t.Errorf("expected `maybeTags: [String]!` (nullable elements) in SDL:\n%s", sdl)
 	}
 }
+
+// nullableArraySpec: required arrays typed `["array","null"]` — exactly what Huma
+// emits for a Go `[]T` (a nil slice can serialize to null). Default rendering
+// keeps the list nullable (`[T!]`); NonNullRequiredLists renders it non-null
+// (`[T!]!`), relied upon together with a dispatch that coerces nil → `[]`.
+const nullableArraySpec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "na", "version": "1.0.0", "description": "nullable array"},
+  "paths": {"/box": {"get": {"operationId": "getBox", "responses": {"200": {"description": "ok",
+    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Box"}}}}}}}},
+  "components": {"schemas": {
+    "Item": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+    "Box": {"type": "object", "required": ["items"],
+      "properties": {"items": {"type": "array", "nullable": true, "items": {"$ref": "#/components/schemas/Item"}}}}
+  }}
+}`
+
+func TestNonNullRequiredListsOption(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(nullableArraySpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	render := func(nonNull bool) string {
+		svc := IngestOpenAPI(doc)
+		svc.Namespace, svc.Version, svc.ServiceName = "box", "v1", "BoxService"
+		schema, err := RenderGraphQLRuntime([]*Service{svc}, NewDispatchRegistry(), RuntimeOptions{NonNullRequiredLists: nonNull})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		return PrintSchemaSDL(schema)
+	}
+	// Default (off): nullable list, non-null elements.
+	if sdl := render(false); !strings.Contains(sdl, "items: [box_Item!]\n") {
+		t.Errorf("default: expected `items: [box_Item!]` (nullable list), got:\n%s", sdl)
+	}
+	// On: non-null list.
+	if sdl := render(true); !strings.Contains(sdl, "items: [box_Item!]!") {
+		t.Errorf("NonNullRequiredLists: expected `items: [box_Item!]!`, got:\n%s", sdl)
+	}
+}

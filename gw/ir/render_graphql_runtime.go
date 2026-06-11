@@ -29,6 +29,11 @@ type RuntimeOptions struct {
 	// the directives + their declarations. Nil disables annotation
 	// carriage into the GraphQL egress.
 	AnnotationSink *AnnotationIndex
+
+	// NonNullRequiredLists renders required *output* list fields as `[T!]!`
+	// (see IRTypeBuilderOptions.NonNullRepeatedRequired). Pair with a
+	// dispatch that coerces nil slices to `[]`.
+	NonNullRequiredLists bool
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
@@ -142,7 +147,7 @@ func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opt
 			if stableSvc != latest {
 				autoReason = latestReason
 			}
-	depReason := CombineDepReason(stableSvc.Deprecated, autoReason)
+			depReason := CombineDepReason(stableSvc.Deprecated, autoReason)
 			if err := addSubscriptionFlat(subs, stableSvc, builders[stableSvc], ns+"_stable_", depReason, registry); err != nil {
 				return nil, nil, nil, fmt.Errorf("runtime: ns %s stable subscription: %w", ns, err)
 			}
@@ -664,8 +669,9 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			InputName:  func(s string) string { return exportedName(s) + "_Input" },
 			FieldName:  lowerCamel,
 		}, IRTypeBuilderOptions{
-			UploadType:     opts.UploadType,
-			AnnotationSink: opts.AnnotationSink,
+			UploadType:              opts.UploadType,
+			AnnotationSink:          opts.AnnotationSink,
+			NonNullRepeatedRequired: opts.NonNullRequiredLists,
 		}), nil
 
 	case KindOpenAPI:
@@ -687,12 +693,13 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			Int64Type:      opts.LongType,
-			UInt64Type:     opts.LongType,
-			MapType:        opts.JSONType,
-			JSONType:       opts.JSONType,
-			UploadType:     opts.UploadType,
-			AnnotationSink: opts.AnnotationSink,
+			Int64Type:               opts.LongType,
+			UInt64Type:              opts.LongType,
+			MapType:                 opts.JSONType,
+			JSONType:                opts.JSONType,
+			UploadType:              opts.UploadType,
+			AnnotationSink:          opts.AnnotationSink,
+			NonNullRepeatedRequired: opts.NonNullRequiredLists,
 		}), nil
 
 	case KindGraphQL:
@@ -712,10 +719,11 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			MapType:        opts.JSONType,
-			JSONType:       opts.JSONType,
-			UploadType:     opts.UploadType,
-			AnnotationSink: opts.AnnotationSink,
+			MapType:                 opts.JSONType,
+			JSONType:                opts.JSONType,
+			UploadType:              opts.UploadType,
+			AnnotationSink:          opts.AnnotationSink,
+			NonNullRepeatedRequired: opts.NonNullRequiredLists,
 		}), nil
 
 	case KindMCP:
@@ -737,10 +745,11 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			FieldName:     identityName,
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
-			MapType:        opts.JSONType,
-			JSONType:       opts.JSONType,
-			UploadType:     opts.UploadType,
-			AnnotationSink: opts.AnnotationSink,
+			MapType:                 opts.JSONType,
+			JSONType:                opts.JSONType,
+			UploadType:              opts.UploadType,
+			AnnotationSink:          opts.AnnotationSink,
+			NonNullRepeatedRequired: opts.NonNullRequiredLists,
 		}), nil
 
 	default:

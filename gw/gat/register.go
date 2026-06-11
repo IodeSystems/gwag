@@ -159,7 +159,7 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 			Name: "derived",
 			Args: []ir.AnnotationArg{{Name: "operationId", Kind: ir.AnnString, Value: op.Name}},
 		})
-		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op))
+		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices))
 	}
 
 	g.services = append(g.services, svc)

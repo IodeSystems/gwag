@@ -57,6 +57,13 @@ type Gateway struct {
 	// RegisterHuma on the empty-gateway path). Input stays lenient either way.
 	longAsNumber bool
 
+	// emptyNilSlices (default true) makes required output list fields render
+	// non-null (`[T!]!`) and coerces nil Go slices to `[]` at dispatch, so an
+	// empty/absent slice serializes as `[]` rather than null — clients never
+	// see a null list (better DX). Set EmptyNilSlices(false) for the legacy
+	// behavior (nullable lists, nil → JSON null).
+	emptyNilSlices bool
+
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
 	// cross-node fanout layer — nil until EnablePeerMesh is called.
@@ -72,8 +79,8 @@ type Gateway struct {
 //
 // Stability: experimental
 type ServiceRegistration struct {
-	Service   *ir.Service
-	BaseURL   string // upstream HTTP base URL for OpenAPI dispatch
+	Service     *ir.Service
+	BaseURL     string                        // upstream HTTP base URL for OpenAPI dispatch
 	Dispatchers map[ir.SchemaID]ir.Dispatcher // custom dispatchers keyed by SchemaID
 }
 
@@ -102,8 +109,9 @@ type ServiceRegistration struct {
 // Stability: experimental
 func New(regs ...ServiceRegistration) (*Gateway, error) {
 	g := &Gateway{
-		registry: ir.NewDispatchRegistry(),
-		pubsub:   newPubSub(),
+		registry:       ir.NewDispatchRegistry(),
+		pubsub:         newPubSub(),
+		emptyNilSlices: true,
 	}
 	if len(regs) == 0 {
 		// Empty gateway — adopter will populate via gat.Register and
@@ -125,6 +133,16 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 // Returns g for chaining; a no-op once built. Input is lenient (number or string) either way.
 func (g *Gateway) LongAsNumber(b bool) *Gateway {
 	g.longAsNumber = b
+	return g
+}
+
+// EmptyNilSlices toggles the empty-list contract (default on). When on, required
+// output list fields render non-null (`[T!]!`) and the dispatch coerces nil Go
+// slices to `[]`, so clients never receive a null list. Off restores the legacy
+// behavior (nullable lists; a nil slice serializes to JSON null). Call before the
+// schema builds. Returns g for chaining; a no-op once built.
+func (g *Gateway) EmptyNilSlices(b bool) *Gateway {
+	g.emptyNilSlices = b
 	return g
 }
 
@@ -163,9 +181,10 @@ func (g *Gateway) build() error {
 	longScalar, jsonScalar := ir.StandardScalarsWith(g.longAsNumber)
 	annotations := ir.NewAnnotationIndex()
 	schema, err := ir.RenderGraphQLRuntime(g.services, g.registry, ir.RuntimeOptions{
-		LongType:       longScalar,
-		JSONType:       jsonScalar,
-		AnnotationSink: annotations,
+		LongType:             longScalar,
+		JSONType:             jsonScalar,
+		AnnotationSink:       annotations,
+		NonNullRequiredLists: g.emptyNilSlices,
 	})
 	if err != nil {
 		return fmt.Errorf("gat: build schema: %w", err)

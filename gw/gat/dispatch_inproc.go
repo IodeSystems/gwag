@@ -17,12 +17,13 @@ import (
 // handler's typed output is unwrapped (huma convention: the JSON body
 // lives in a field named `Body`).
 type inprocDispatcher struct {
-	captured *capturedOp
-	op       *ir.Operation
-	bodyArg  string // name of the body Arg, if any; empty when none
+	captured       *capturedOp
+	op             *ir.Operation
+	bodyArg        string // name of the body Arg, if any; empty when none
+	emptyNilSlices bool   // coerce nil slices to `[]` before serializing
 }
 
-func newInprocDispatcher(c *capturedOp, op *ir.Operation) ir.Dispatcher {
+func newInprocDispatcher(c *capturedOp, op *ir.Operation, emptyNilSlices bool) ir.Dispatcher {
 	var bodyArg string
 	for _, a := range op.Args {
 		if strings.EqualFold(a.OpenAPILocation, "body") {
@@ -30,7 +31,7 @@ func newInprocDispatcher(c *capturedOp, op *ir.Operation) ir.Dispatcher {
 			break
 		}
 	}
-	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArg}
+	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArg, emptyNilSlices: emptyNilSlices}
 }
 
 func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
@@ -50,7 +51,45 @@ func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 	if sink := cookieSinkFrom(ctx); sink != nil {
 		sink.addFromOutput(out)
 	}
+	if d.emptyNilSlices {
+		// Replace nil slices with empty ones in place (the output is ephemeral)
+		// so they serialize as `[]` not null — required by the non-null list
+		// rendering, and a cleaner contract regardless.
+		coerceNilSlices(reflect.ValueOf(out))
+	}
 	return normalizeJSON(extractBody(out))
+}
+
+// coerceNilSlices walks an output value and replaces every nil slice with an
+// empty (non-nil) slice of the same type, so json.Marshal emits `[]` not null.
+// Recurses through pointers, interfaces, structs, slice elements, and map
+// values. Mutates in place — safe because the handler output is used once.
+func coerceNilSlices(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if !v.IsNil() {
+			coerceNilSlices(v.Elem())
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if f := v.Field(i); f.CanSet() {
+				coerceNilSlices(f)
+			}
+		}
+	case reflect.Slice:
+		if v.IsNil() {
+			if v.CanSet() {
+				v.Set(reflect.MakeSlice(v.Type(), 0, 0))
+			}
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			coerceNilSlices(v.Index(i))
+		}
+	case reflect.Map:
+		// Map values aren't addressable; nested nil slices inside map values
+		// stay nil (rare in output bodies — maps render as the JSON scalar).
+	}
 }
 
 // normalizeJSON round-trips v through encoding/json so the GraphQL

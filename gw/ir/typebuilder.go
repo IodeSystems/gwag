@@ -118,6 +118,14 @@ type IRTypeBuilderOptions struct {
 	// type/field this builder materializes, keyed by the final printed
 	// name. See RuntimeOptions.AnnotationSink.
 	AnnotationSink *AnnotationIndex
+
+	// NonNullRepeatedRequired renders a required *output* list field as a
+	// non-null list (`[T!]!`) even when its schema is nullable. A nil/absent
+	// Go slice serializes to JSON null (so the schema is honestly nullable),
+	// but the paired dispatch coerces nil slices to `[]`, making the non-null
+	// contract safe and giving clients a cleaner "lists are never null" DX.
+	// Output-only; input list fields keep their schema nullability.
+	NonNullRepeatedRequired bool
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
@@ -446,7 +454,14 @@ func (b *IRTypeBuilder) objectFor(t *Type) *graphql.Object {
 				if !isValidGraphQLIdent(key) {
 					continue
 				}
-				ft, err := b.Output(f.Type, f.Repeated, f.Required && !f.Nullable, f.ItemRequired)
+				required := f.Required && !f.Nullable
+				// A required list renders non-null when the gateway coerces nil
+				// slices to `[]` at dispatch (so the non-null contract can't be
+				// violated by an empty result).
+				if b.options.NonNullRepeatedRequired && f.Repeated && f.Required {
+					required = true
+				}
+				ft, err := b.Output(f.Type, f.Repeated, required, f.ItemRequired)
 				if err != nil {
 					continue
 				}
