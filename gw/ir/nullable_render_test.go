@@ -90,3 +90,91 @@ func TestOpenAPINullableRequiredRendersNullable(t *testing.T) {
 		t.Errorf("expected `note: String` (nullable) in SDL:\n%s", sdl)
 	}
 }
+
+// arrayItemSpec: a $ref-item array and a scalar-item array (both non-null
+// elements → `[T!]`), plus a nullable-element array (`items.nullable:true` →
+// `[T]`). Before the fix, ingest set Repeated but never ItemRequired, so every
+// list rendered `[T]` (nullable elements) regardless of the item schema.
+const arrayItemSpec = `{
+  "openapi": "3.0.0",
+  "info": {"title": "arr", "version": "1.0.0", "description": "array item nullability"},
+  "paths": {
+    "/box": {
+      "get": {
+        "operationId": "getBox",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Box"}}}
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Item": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+      "Box": {
+        "type": "object",
+        "required": ["items", "tags", "maybeTags"],
+        "properties": {
+          "items":     {"type": "array", "items": {"$ref": "#/components/schemas/Item"}},
+          "tags":      {"type": "array", "items": {"type": "string"}},
+          "maybeTags": {"type": "array", "items": {"type": "string", "nullable": true}}
+        }
+      }
+    }
+  }
+}`
+
+func TestOpenAPIArrayItemNonNull(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(arrayItemSpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	svc := IngestOpenAPI(doc)
+	svc.Namespace = "box"
+	svc.Version = "v1"
+	svc.ServiceName = "BoxService"
+
+	box := svc.Types["Box"]
+	if box == nil {
+		t.Fatal("Box type missing")
+	}
+	byName := map[string]*Field{}
+	for _, f := range box.Fields {
+		byName[f.Name] = f
+	}
+	// $ref item and non-nullable scalar item → ItemRequired; nullable item → not.
+	if f := byName["items"]; f == nil || !f.Repeated || !f.ItemRequired {
+		t.Errorf("items: want repeated & item-required, got %#v", f)
+	}
+	if f := byName["tags"]; f == nil || !f.Repeated || !f.ItemRequired {
+		t.Errorf("tags: want repeated & item-required, got %#v", f)
+	}
+	if f := byName["maybeTags"]; f == nil || !f.Repeated || f.ItemRequired {
+		t.Errorf("maybeTags: want repeated & NOT item-required, got %#v", f)
+	}
+
+	schema, err := RenderGraphQLRuntime([]*Service{svc}, NewDispatchRegistry(), RuntimeOptions{})
+	if err != nil {
+		t.Fatalf("RenderGraphQLRuntime: %v", err)
+	}
+	sdl := PrintSchemaSDL(schema)
+	// Required + ItemRequired → `[T!]!`. The element `!` is the fix; the outer `!`
+	// follows from the field being in `required`.
+	if !strings.Contains(sdl, "items: [box_Item!]!") {
+		t.Errorf("expected `items: [box_Item!]!` (non-null elements) in SDL:\n%s", sdl)
+	}
+	if !strings.Contains(sdl, "tags: [String!]!") {
+		t.Errorf("expected `tags: [String!]!` (non-null elements) in SDL:\n%s", sdl)
+	}
+	// nullable item → no inner `!` (list still non-null since required).
+	if !strings.Contains(sdl, "maybeTags: [String]!") {
+		t.Errorf("expected `maybeTags: [String]!` (nullable elements) in SDL:\n%s", sdl)
+	}
+}

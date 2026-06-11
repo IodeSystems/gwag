@@ -221,12 +221,19 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 			}
 		case "array":
 			f.Repeated = true
+			// Element non-nullability: a direct $ref item is a non-null named type
+			// (a nullable element surfaces as an inline `nullable` schema, caught by
+			// the inline branch's item.Nullable). This is what makes a list render
+			// `[T!]` rather than `[T]` — without it every element is nullable, which
+			// is wrong for the common `[]T` (non-pointer Go slice) case.
 			if s.Items != nil && s.Items.Ref != "" {
 				parts := strings.Split(s.Items.Ref, "/")
 				f.Type = TypeRef{Named: parts[len(parts)-1]}
+				f.ItemRequired = true
 			} else if s.Items != nil {
 				item := openapiPropToField(svc, pathHint+"Item", "item", s.Items, false)
 				f.Type = item.Type
+				f.ItemRequired = !item.Nullable
 			} else {
 				f.Type = TypeRef{Builtin: ScalarString}
 			}
