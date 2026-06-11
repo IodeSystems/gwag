@@ -50,6 +50,13 @@ type Gateway struct {
 	// rejected.
 	built bool
 
+	// longAsNumber opts the Long scalar into honest number|string output —
+	// a JSON number when JS-safe (|v| <= 2^53-1), a decimal string when
+	// larger. Default false = legacy always-string. Set via LongAsNumber()
+	// before the schema builds (i.e. before New(regs...) returns or before
+	// RegisterHuma on the empty-gateway path). Input stays lenient either way.
+	longAsNumber bool
+
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
 	// cross-node fanout layer — nil until EnablePeerMesh is called.
@@ -112,6 +119,15 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 	return g, nil
 }
 
+// LongAsNumber opts this gateway's Long scalar into honest number|string output —
+// a JSON number when JS-safe (|v| <= 2^53-1), a decimal string when larger. Call it
+// before the schema builds (empty New() → LongAsNumber(true) → Register… → RegisterHuma).
+// Returns g for chaining; a no-op once built. Input is lenient (number or string) either way.
+func (g *Gateway) LongAsNumber(b bool) *Gateway {
+	g.longAsNumber = b
+	return g
+}
+
 // addRegistrations attaches BYO-IR services and wires their
 // dispatchers onto g. Caller is responsible for invoking g.build()
 // once all registrations are in.
@@ -144,7 +160,7 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 // are added between rounds (RegisterHuma does this when paired
 // captured ops are present).
 func (g *Gateway) build() error {
-	longScalar, jsonScalar := ir.StandardScalars()
+	longScalar, jsonScalar := ir.StandardScalarsWith(g.longAsNumber)
 	annotations := ir.NewAnnotationIndex()
 	schema, err := ir.RenderGraphQLRuntime(g.services, g.registry, ir.RuntimeOptions{
 		LongType:       longScalar,
