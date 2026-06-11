@@ -370,8 +370,15 @@ func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
 	ep := &descriptorpb.EnumDescriptorProto{Name: &name}
 	for _, ev := range t.Enum {
 		num := ev.Number
+		// Proto scopes enum *value* names to the enclosing package, so two distinct
+		// enums sharing a value (e.g. PENDING on both an input status and an output
+		// status) would collide as a duplicate descriptor at files-registry build.
+		// Prefix the proto value name with the enum type to disambiguate it. The
+		// GraphQL/REST/MCP surfaces render from the IR EnumValue.Name (unprefixed),
+		// not this descriptor, so the externally-visible value is unaffected; this
+		// name only identifies the value within the internal proto FileDescriptor.
 		evp := &descriptorpb.EnumValueDescriptorProto{
-			Name:   stringPtr(ev.Name),
+			Name:   stringPtr(name + "_" + ev.Name),
 			Number: &num,
 		}
 		ep.Value = append(ep.Value, evp)
