@@ -44,7 +44,10 @@ func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 
 	out, err := d.captured.invoke(ctx, inPtr.Interface())
 	if err != nil {
-		return nil, err
+		// Surface the handler's HTTP status as GraphQL error extensions so
+		// clients can classify (e.g. 401/403 → login, 5xx → error dialog).
+		// Transparent to gRPC/REST (Error/Unwrap/GetStatus preserved).
+		return nil, withStatusExtensions(err)
 	}
 	// Capture any Set-Cookie the handler emitted so the GraphQL HTTP layer
 	// can write it to the response (no-op on transports without a sink).
