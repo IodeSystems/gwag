@@ -68,7 +68,7 @@ func TestGenClient_WritesTypesAndRuntime(t *testing.T) {
 		t.Fatalf("types file: %v / %s", err, types)
 	}
 	rt, err := os.ReadFile(filepath.Join(dir, RuntimeFile))
-	if err != nil || !strings.Contains(string(rt), "export function useWs") {
+	if err != nil || !strings.Contains(string(rt), "export function useSub") {
 		t.Fatalf("runtime file: %v", err)
 	}
 }
