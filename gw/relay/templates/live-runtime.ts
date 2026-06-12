@@ -110,6 +110,5 @@ export function useWs<TEvent>(sub: SubResponse<TEvent> | null, handler: (e: TEve
   useEffect(() => {
     if (!token || !sub) return
     return subscribeRaw(sub, (e) => ref.current(e))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
+  }, [token, sub])
 }
