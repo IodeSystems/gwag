@@ -144,15 +144,62 @@ func TestRelay_DisconnectCancelsAllSubs(t *testing.T) {
 	src := newFakeSource()
 	c, done := dialRelay(t, secret, src)
 
-	for _, id := range []string{"1", "2"} {
-		cp, _ := Sign(secret, Cap{Channel: "chA"})
-		writeFrame(t, c, inFrame{Op: "sub", ID: id, Token: cp})
+	// Distinct channels so the count reflects all subs (same-channel subs would
+	// coalesce to one upstream — see TestRelay_CoalescesSameChannel).
+	for _, ch := range []string{"chA", "chB"} {
+		cp, _ := Sign(secret, Cap{Channel: ch})
+		writeFrame(t, c, inFrame{Op: "sub", ID: ch, Token: cp})
 		readFrame(t, c)
 	}
-	waitFor(t, func() bool { return src.count("chA") == 2 })
+	waitFor(t, func() bool { return src.count("chA") == 1 && src.count("chB") == 1 })
 
 	done()
-	waitFor(t, func() bool { return src.count("chA") == 0 })
+	waitFor(t, func() bool { return src.count("chA") == 0 && src.count("chB") == 0 })
+}
+
+// TestRelay_CoalescesSameChannel: two WS clients on ONE relay, same channel,
+// share a single upstream subscription; both receive each event; the upstream
+// drops only when the last client leaves. (Coalescing is per relay instance —
+// across a pool each relay holds one upstream sub per channel for its locals.)
+func TestRelay_CoalescesSameChannel(t *testing.T) {
+	secret := []byte("k")
+	src := newFakeSource()
+	srv := httptest.NewServer(New(secret, src).Handler())
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	dial := func() *websocket.Conn {
+		c, _, err := websocket.Dial(context.Background(), url, nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		return c
+	}
+
+	c1, c2 := dial(), dial()
+	defer func() { _ = c1.CloseNow() }()
+	cp, _ := Sign(secret, Cap{Channel: "hot"})
+	writeFrame(t, c1, inFrame{Op: "sub", ID: "1", Token: cp})
+	readFrame(t, c1)
+	writeFrame(t, c2, inFrame{Op: "sub", ID: "1", Token: cp})
+	readFrame(t, c2)
+
+	// One upstream subscription serves both clients.
+	waitFor(t, func() bool { return src.count("hot") == 1 })
+
+	src.publish("hot", []byte(`{"v":1}`))
+	if f := readFrame(t, c1); string(f.Payload) != `{"v":1}` {
+		t.Fatalf("c1 payload = %s", f.Payload)
+	}
+	if f := readFrame(t, c2); string(f.Payload) != `{"v":1}` {
+		t.Fatalf("c2 payload = %s", f.Payload)
+	}
+
+	// One client leaves → upstream stays (the other still wants it).
+	_ = c2.CloseNow()
+	waitFor(t, func() bool { return src.count("hot") == 1 })
+	// Last client leaves → upstream drops.
+	_ = c1.CloseNow()
+	waitFor(t, func() bool { return src.count("hot") == 0 })
 }
 
 func waitFor(t *testing.T, cond func() bool) {

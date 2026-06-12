@@ -30,11 +30,12 @@ type outFrame struct {
 // It is identity-agnostic: a client may subscribe to any channel it presents a
 // valid Cap for, and the relay re-derives nothing about who the client is.
 type Relay struct {
-	secret  []byte
-	src     Source
-	now     func() time.Time
-	queue   int
-	writeTO time.Duration
+	secret   []byte
+	src      Source
+	now      func() time.Time
+	queue    int
+	writeTO  time.Duration
+	coalesce bool
 }
 
 // Option configures a Relay.
@@ -56,12 +57,23 @@ func WithQueue(n int) Option {
 // WithWriteTimeout caps how long a single frame write may take before teardown.
 func WithWriteTimeout(d time.Duration) Option { return func(r *Relay) { r.writeTO = d } }
 
+// WithoutCoalescing disables the default per-channel subscription coalescing, so
+// each client subscription opens its own upstream subscription. Rarely wanted —
+// only if a Source has per-subscriber semantics that must not be shared.
+func WithoutCoalescing() Option { return func(r *Relay) { r.coalesce = false } }
+
 // New builds a relay that verifies caps with secret and fans events from src.
+// By default the source is wrapped in Coalesce, so the relay holds one upstream
+// subscription per channel regardless of how many local clients watch it.
 func New(secret []byte, src Source, opts ...Option) *Relay {
-	r := &Relay{secret: secret, src: src, now: time.Now, queue: 64, writeTO: 5 * time.Second}
+	r := &Relay{secret: secret, now: time.Now, queue: 64, writeTO: 5 * time.Second, coalesce: true}
 	for _, o := range opts {
 		o(r)
 	}
+	if r.coalesce {
+		src = Coalesce(src)
+	}
+	r.src = src
 	return r
 }
 
