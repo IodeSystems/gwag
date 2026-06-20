@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/IodeSystems/graphql-go"
 
@@ -63,6 +64,10 @@ type Gateway struct {
 	// see a null list (better DX). Set EmptyNilSlices(false) for the legacy
 	// behavior (nullable lists, nil → JSON null).
 	emptyNilSlices bool
+
+	// observe, when set (ObserveDispatch), is invoked after every in-process
+	// operation dispatch for per-operation metrics. nil = no observation.
+	observe DispatchObserver
 
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
@@ -143,6 +148,20 @@ func (g *Gateway) LongAsNumber(b bool) *Gateway {
 // schema builds. Returns g for chaining; a no-op once built.
 func (g *Gateway) EmptyNilSlices(b bool) *Gateway {
 	g.emptyNilSlices = b
+	return g
+}
+
+// DispatchObserver is called after every in-process operation dispatch with the operation id,
+// how long it took, and its error (nil on success). It is the per-operation join point — a
+// server-side timing hook around each resolver→handler call — so consumers can emit per-operation
+// metrics (rate/errors/latency) the way an AOP pointcut did. Keep it cheap; it runs on the hot path.
+type DispatchObserver func(operationID string, dur time.Duration, err error)
+
+// ObserveDispatch sets the per-operation dispatch observer (see DispatchObserver). Call before the
+// schema builds (the dispatchers capture it at build time). Returns g for chaining; a no-op once
+// built. nil disables observation. Stability: experimental.
+func (g *Gateway) ObserveDispatch(fn DispatchObserver) *Gateway {
+	g.observe = fn
 	return g
 }
 

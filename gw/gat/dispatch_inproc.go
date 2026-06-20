@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )
@@ -19,11 +20,12 @@ import (
 type inprocDispatcher struct {
 	captured       *capturedOp
 	op             *ir.Operation
-	bodyArg        string // name of the body Arg, if any; empty when none
-	emptyNilSlices bool   // coerce nil slices to `[]` before serializing
+	bodyArg        string           // name of the body Arg, if any; empty when none
+	emptyNilSlices bool             // coerce nil slices to `[]` before serializing
+	observe        DispatchObserver // per-operation timing hook; nil = off
 }
 
-func newInprocDispatcher(c *capturedOp, op *ir.Operation, emptyNilSlices bool) ir.Dispatcher {
+func newInprocDispatcher(c *capturedOp, op *ir.Operation, emptyNilSlices bool, observe DispatchObserver) ir.Dispatcher {
 	var bodyArg string
 	for _, a := range op.Args {
 		if strings.EqualFold(a.OpenAPILocation, "body") {
@@ -31,10 +33,23 @@ func newInprocDispatcher(c *capturedOp, op *ir.Operation, emptyNilSlices bool) i
 			break
 		}
 	}
-	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArg, emptyNilSlices: emptyNilSlices}
+	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArg, emptyNilSlices: emptyNilSlices, observe: observe}
 }
 
+// Dispatch is the per-operation join point: every in-process GraphQL/gRPC operation invocation
+// flows through here. When an observer is set it wraps the call with timing keyed by the
+// operation id, so consumers can emit per-operation metrics (the AOP-pointcut analog).
 func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	if d.observe == nil {
+		return d.dispatch(ctx, args)
+	}
+	start := time.Now()
+	out, err := d.dispatch(ctx, args)
+	d.observe(d.captured.op.OperationID, time.Since(start), err)
+	return out, err
+}
+
+func (d *inprocDispatcher) dispatch(ctx context.Context, args map[string]any) (any, error) {
 	inPtr := reflect.New(d.captured.inputType)
 	in := inPtr.Elem()
 
