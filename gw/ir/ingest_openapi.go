@@ -344,6 +344,29 @@ func sanitizeIdent(s string) string {
 	return string(out)
 }
 
+// isGraphQLName reports whether s is a valid GraphQL identifier — the /^[_A-Za-z][_0-9A-Za-z]*$/
+// constraint graphql.NewSchema enforces on type/field/argument names. Used to keep OpenAPI
+// parameters whose names can't be represented as GraphQL args (e.g. hyphenated headers) off the
+// GraphQL surface instead of panicking the schema build.
+func isGraphQLName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'):
+			// valid anywhere
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false // GraphQL names may not start with a digit
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // openapiUnionVariants resolves a oneOf/anyOf variant list into IR
 // variant Type names. $ref'd variants use their leaf schema name;
 // inline object variants are synthesised as "<hint>VariantN" object
@@ -506,6 +529,16 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 			continue
 		}
 		p := paramRef.Value
+		// GraphQL argument names must match /^[_A-Za-z][_0-9A-Za-z]*$/, the rule graphql.NewSchema
+		// enforces. Transport headers/cookies commonly carry hyphenated names (X-Forwarded-For,
+		// User-Agent) that aren't valid GraphQL identifiers; ingesting them as Args would panic the
+		// schema build. They're transport metadata rather than GraphQL inputs, so omit them from the
+		// GraphQL/gRPC surface — the REST (OpenAPI/huma) surface still serves them, and a handler that
+		// needs such a value can read it from middleware/context. (path/query params, which virtually
+		// always have identifier-safe names, are left untouched.)
+		if (p.In == "header" || p.In == "cookie") && !isGraphQLName(p.Name) {
+			continue
+		}
 		arg := &Arg{
 			Name:            p.Name,
 			Required:        p.Required,
