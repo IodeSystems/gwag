@@ -239,6 +239,11 @@ One character. Embedding is not the problem; **exportedness** is. The
 same rule silently drops an ordinary unexported field carrying a
 parameter tag.
 
+gat binds parameters promoted out of an exported embed correctly as of
+v1.3.2. Before that, the argument appeared in the GraphQL schema and the
+proto request but was never written to the field — the same silent
+zero-value failure one layer down.
+
 ### Why it is easy to misread
 
 The failure is quiet in the worst way. `?dir=/some/path` is accepted and

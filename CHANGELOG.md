@@ -9,6 +9,18 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.3.2 — 2026-07-26
+
+### Fixed
+- gat now binds request parameters promoted out of an **exported embedded
+  struct**. huma documents and binds them, and gat rendered them into the
+  GraphQL schema and the proto request message — but `bindInput` matched
+  tags against top-level field indices only, so the argument arrived and
+  was silently dropped. Same zero-value failure as the unexported-embed
+  trap, one layer down and on the GraphQL/gRPC path specifically. Tag
+  lookup now carries a field path and descends exported embeds (matching
+  huma), allocating pointer-embedded structs on the way.
+
 ## v1.3.1 — 2026-07-26
 
 ### Fixed

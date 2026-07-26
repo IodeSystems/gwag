@@ -139,25 +139,13 @@ func normalizeJSON(v any) (any, error) {
 func bindInput(in reflect.Value, op *ir.Operation, args map[string]any, bodyArg string) error {
 	t := in.Type()
 
-	tagLookup := map[string]int{} // location:name → field index
-	bodyIdx := -1
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		if f.Name == "Body" {
-			bodyIdx = i
-		}
-		for _, loc := range []string{"path", "query", "header", "cookie"} {
-			if v, ok := f.Tag.Lookup(loc); ok {
-				// huma allows `path:"id,required"` etc. — keep only
-				// the name before the first comma.
-				name := strings.SplitN(v, ",", 2)[0]
-				tagLookup[loc+":"+name] = i
-			}
-		}
-	}
+	// Paths, not indices: huma promotes parameters out of EXPORTED embedded
+	// structs, so a tag can sit several levels down and the binder has to follow
+	// it there. Unexported fields are skipped, matching huma — an unexported
+	// embed hides everything inside it (see embedded_params.go).
+	tagLookup := map[string][]int{} // location:name → field path
+	var bodyIdx []int
+	collect(t, nil, tagLookup, &bodyIdx)
 
 	for _, a := range op.Args {
 		if a.Name == bodyArg {
@@ -167,36 +155,93 @@ func bindInput(in reflect.Value, op *ir.Operation, args map[string]any, bodyArg 
 		if !present {
 			continue
 		}
-		idx, ok := tagLookup[strings.ToLower(a.OpenAPILocation)+":"+a.Name]
+		path, ok := tagLookup[strings.ToLower(a.OpenAPILocation)+":"+a.Name]
 		if !ok {
 			// Some huma inputs omit explicit tags for path params
 			// when the field name matches the param name. Fall back
-			// to case-insensitive field-name match.
-			for i := 0; i < t.NumField(); i++ {
-				if strings.EqualFold(t.Field(i).Name, a.Name) {
-					idx = i
-					ok = true
-					break
-				}
-			}
+			// to a case-insensitive field-name match.
+			path, ok = tagLookup["name:"+strings.ToLower(a.Name)]
 		}
 		if !ok {
 			continue // best-effort; ignore unmappable args
 		}
-		if err := assignValue(in.Field(idx), v); err != nil {
+		dst, err := fieldByPath(in, path)
+		if err != nil {
+			return fmt.Errorf("arg %q: %w", a.Name, err)
+		}
+		if err := assignValue(dst, v); err != nil {
 			return fmt.Errorf("arg %q: %w", a.Name, err)
 		}
 	}
 
-	if bodyArg != "" && bodyIdx >= 0 {
+	if bodyArg != "" && bodyIdx != nil {
 		if v, present := args[bodyArg]; present && v != nil {
-			if err := assignValue(in.Field(bodyIdx), v); err != nil {
+			dst, err := fieldByPath(in, bodyIdx)
+			if err != nil {
+				return fmt.Errorf("unmarshal body: %w", err)
+			}
+			if err := assignValue(dst, v); err != nil {
 				return fmt.Errorf("unmarshal body: %w", err)
 			}
 		}
 	}
 
 	return nil
+}
+
+// collect maps every reachable parameter tag to its field path, descending into
+// exported embedded structs the way huma does.
+func collect(t reflect.Type, prefix []int, tagLookup map[string][]int, bodyIdx *[]int) {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		path := append(append([]int{}, prefix...), i)
+		if f.Name == "Body" && *bodyIdx == nil {
+			*bodyIdx = path
+		}
+		for _, loc := range []string{"path", "query", "header", "cookie"} {
+			if v, ok := f.Tag.Lookup(loc); ok {
+				// huma allows `path:"id,required"` etc. — keep only the name
+				// before the first comma.
+				name := strings.SplitN(v, ",", 2)[0]
+				if _, seen := tagLookup[loc+":"+name]; !seen {
+					tagLookup[loc+":"+name] = path
+				}
+			}
+		}
+		// Untagged fallback for path params named after the field.
+		key := "name:" + strings.ToLower(f.Name)
+		if _, seen := tagLookup[key]; !seen {
+			tagLookup[key] = path
+		}
+		ft := f.Type
+		for ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if f.Anonymous && ft.Kind() == reflect.Struct {
+			collect(ft, path, tagLookup, bodyIdx)
+		}
+	}
+}
+
+// fieldByPath walks a field path, allocating any nil pointer-embedded struct on
+// the way so the leaf is addressable.
+func fieldByPath(v reflect.Value, path []int) (reflect.Value, error) {
+	for n, i := range path {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				if !v.CanSet() {
+					return reflect.Value{}, fmt.Errorf("cannot allocate embedded pointer at depth %d", n)
+				}
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+		v = v.Field(i)
+	}
+	return v, nil
 }
 
 // assignValue converts v to dst's type. It prefers direct

@@ -264,3 +264,43 @@ func TestHumaDropsUnexportedButHandlesExported(t *testing.T) {
 		t.Fatalf("an exported embed must bind, got %+v", ok)
 	}
 }
+
+// huma promotes parameters out of an exported embedded struct, so gat's binder
+// has to follow the field path there. Declaring the arg in the schema but never
+// binding it is the same silent zero-value failure, one layer down.
+func TestExportedEmbedBindsThroughGraphQL(t *testing.T) {
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Demo", "1.0.0"))
+	g := mustNewGat(t)
+
+	var got exportedEmbedInput
+	gat.Register(api, g, huma.Operation{
+		OperationID: "probe", Method: http.MethodGet, Path: "/probe",
+	}, func(ctx context.Context, in *exportedEmbedInput) (*okOutput, error) {
+		got = *in
+		out := &okOutput{}
+		out.Body.OK = true
+		return out, nil
+	})
+	if err := gat.RegisterHuma(api, g, "/api"); err != nil {
+		t.Fatalf("RegisterHuma: %v", err)
+	}
+
+	body := `{"query":"{ Demo { probe(dir:\"D\", now:\"N\", spec:\"S\") { ok } } }"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/graphql", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("graphql: %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"errors"`) {
+		t.Fatalf("graphql errors: %s", rec.Body.String())
+	}
+	if got.Spec != "S" {
+		t.Fatalf("directly-declared arg must bind, got %q", got.Spec)
+	}
+	if got.Dir != "D" || got.Now != "N" {
+		t.Fatalf("args promoted out of an exported embed must bind, got dir=%q now=%q", got.Dir, got.Now)
+	}
+}
