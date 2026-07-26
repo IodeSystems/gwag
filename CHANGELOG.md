@@ -9,9 +9,20 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
-## v1.2.1 — 2026-07-25
+## v1.2.1 — 2026-07-26
 
 ### Fixed
+- Enum values now survive a round-trip into a dynamic proto message.
+  `renderProtoEnum` prefixes the descriptor spelling with the enum type
+  (`ADMIN` → `Role_ADMIN`) because proto scopes enum *value* names to
+  the enclosing package, so two enums sharing a value would collide at
+  files-registry build. Every other surface speaks the bare name, but
+  both value converters looked the bare name up directly against the
+  prefixed descriptor and failed with `unknown enum value "ADMIN" for
+  pets.v1.Role` — any cross-format call carrying an enum into gRPC
+  errored. New `ir.EnumValueByExternalName` bridges the two spellings
+  (proto-origin enums keep verbatim names, so both are tried) and both
+  converters go through it.
 - Proto rendering of map fields. `map<K,V>` has no standalone type in
   proto3 — it is sugar for a nested `<Field>Entry` message marked
   `map_entry` plus a `repeated` field — and the canonical render path

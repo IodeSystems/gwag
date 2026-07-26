@@ -7,6 +7,8 @@ import (
 	"unicode"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/iodesystems/gwag/gw/ir"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -142,7 +144,9 @@ func toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoreflect.Value, 
 		case int:
 			return protoreflect.ValueOfEnum(protoreflect.EnumNumber(x)), nil
 		case string:
-			ev := fd.Enum().Values().ByName(protoreflect.Name(x))
+			// Rendered enums carry a type prefix on the descriptor; every other
+			// surface speaks the unprefixed name, so resolve both spellings.
+			ev := ir.EnumValueByExternalName(fd.Enum(), x)
 			if ev == nil {
 				return protoreflect.Value{}, fmt.Errorf("unknown enum value %q for %s", x, fd.Enum().FullName())
 			}

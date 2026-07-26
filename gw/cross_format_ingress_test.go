@@ -182,8 +182,18 @@ func TestCrossFormatIngressMatrix(t *testing.T) {
 		if roleEV == nil {
 			t.Fatalf("unknown role number %d", roleNum)
 		}
-		if got := string(roleEV.Name()); got != "ADMIN" {
-			t.Fatalf("user[0].role=%q want ADMIN", got)
+		// The descriptor spelling is prefixed with the enum type
+		// (`Role_ADMIN`), deliberately: proto scopes enum VALUE names to
+		// the package, so two enums sharing a value would collide at
+		// files-registry build. Every non-proto surface speaks the bare
+		// name, and ir.EnumValueByExternalName is the documented bridge.
+		if got, want := string(roleEV.Name()), ir.ProtoEnumValueName("Role", "ADMIN"); got != want {
+			t.Fatalf("user[0].role descriptor name=%q want %q", got, want)
+		}
+		if ev := ir.EnumValueByExternalName(roleFd.Enum(), "ADMIN"); ev == nil {
+			t.Fatal(`external name "ADMIN" must resolve against the rendered descriptor`)
+		} else if ev.Number() != roleNum {
+			t.Fatalf("external lookup gave number %d, field holds %d", ev.Number(), roleNum)
 		}
 	})
 }

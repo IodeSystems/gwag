@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -258,4 +260,74 @@ func keysOf(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Proto scopes enum VALUE names to the enclosing package, so two enums that
+// share a value name would collide as duplicate descriptors at files-registry
+// build. renderProtoEnum prefixes the descriptor spelling to prevent that; every
+// other surface keeps the bare name, and EnumValueByExternalName bridges them.
+func TestProtoEnumValueNamesArePrefixedToAvoidCollision(t *testing.T) {
+	in := &Type{Name: "InputStatus", Enum: []EnumValue{{Name: "PENDING"}, {Name: "DONE", Number: 1}}}
+	out := &Type{Name: "OutputStatus", Enum: []EnumValue{{Name: "PENDING"}, {Name: "FAILED", Number: 1}}}
+
+	seen := map[string]bool{}
+	for _, ty := range []*Type{in, out} {
+		for _, ev := range renderProtoEnum(ty).Value {
+			if seen[ev.GetName()] {
+				t.Fatalf("duplicate enum value name %q across two enums", ev.GetName())
+			}
+			seen[ev.GetName()] = true
+		}
+	}
+	if !seen["InputStatus_PENDING"] || !seen["OutputStatus_PENDING"] {
+		t.Fatalf("expected both prefixed spellings, got %v", keysOf(seen))
+	}
+}
+
+// A proto-origin enum keeps its descriptor names verbatim, so the bridge has to
+// accept the bare spelling too — not only the prefixed one.
+func TestEnumValueByExternalNameHandlesBothSpellings(t *testing.T) {
+	rendered := buildEnumDescriptor(t, "Role", map[string]int32{"Role_ADMIN": 0, "Role_MEMBER": 1})
+	if ev := EnumValueByExternalName(rendered, "ADMIN"); ev == nil || ev.Number() != 0 {
+		t.Fatalf("prefixed descriptor: external name ADMIN must resolve, got %v", ev)
+	}
+	verbatim := buildEnumDescriptor(t, "Role", map[string]int32{"ADMIN": 0, "MEMBER": 1})
+	if ev := EnumValueByExternalName(verbatim, "ADMIN"); ev == nil || ev.Number() != 0 {
+		t.Fatalf("verbatim descriptor: ADMIN must resolve, got %v", ev)
+	}
+	if ev := EnumValueByExternalName(rendered, "NOPE"); ev != nil {
+		t.Fatalf("an unknown value must not resolve, got %v", ev.Name())
+	}
+	if ev := EnumValueByExternalName(nil, "ADMIN"); ev != nil {
+		t.Fatal("a nil descriptor must not resolve")
+	}
+}
+
+func buildEnumDescriptor(t *testing.T, name string, values map[string]int32) protoreflect.EnumDescriptor {
+	t.Helper()
+	ep := &descriptorpb.EnumDescriptorProto{Name: stringPtr(name)}
+	names := make([]string, 0, len(values))
+	for n := range values {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		num := values[n]
+		ep.Value = append(ep.Value, &descriptorpb.EnumValueDescriptorProto{Name: stringPtr(n), Number: &num})
+	}
+	fd := &descriptorpb.FileDescriptorProto{
+		Name:     stringPtr("enumtest.proto"),
+		Package:  stringPtr("enumtest.v1"),
+		Syntax:   stringPtr("proto3"),
+		EnumType: []*descriptorpb.EnumDescriptorProto{ep},
+	}
+	files, err := protodesc.NewFiles(&descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{fd}})
+	if err != nil {
+		t.Fatalf("build descriptor: %v", err)
+	}
+	f, err := files.FindFileByPath("enumtest.proto")
+	if err != nil {
+		t.Fatalf("find file: %v", err)
+	}
+	return f.Enums().Get(0)
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -368,6 +369,37 @@ func sanitizeProtoIdentifier(s string) string {
 	return string(out)
 }
 
+// ProtoEnumValueName is the descriptor-level name renderProtoEnum gives an IR
+// enum value: the enum type, an underscore, then the external value name. Proto
+// scopes enum VALUE names to the enclosing package, so two enums sharing a value
+// (PENDING on an input status and an output status) would collide as duplicate
+// descriptors at files-registry build.
+//
+// Stability: experimental
+func ProtoEnumValueName(enum, value string) string {
+	return localName(enum) + "_" + value
+}
+
+// EnumValueByExternalName resolves an externally-visible enum value (the
+// unprefixed IR/GraphQL/REST spelling, e.g. "ADMIN") against a rendered proto
+// enum descriptor, where it is stored prefixed ("Role_ADMIN").
+//
+// Every non-proto surface speaks the unprefixed name, so any conversion INTO a
+// dynamic proto message has to undo the prefix. Looking up the bare name only
+// works for proto-origin enums, which keep their descriptor names verbatim —
+// hence both spellings are tried.
+//
+// Stability: experimental
+func EnumValueByExternalName(ed protoreflect.EnumDescriptor, name string) protoreflect.EnumValueDescriptor {
+	if ed == nil {
+		return nil
+	}
+	if ev := ed.Values().ByName(protoreflect.Name(name)); ev != nil {
+		return ev
+	}
+	return ed.Values().ByName(protoreflect.Name(ProtoEnumValueName(string(ed.Name()), name)))
+}
+
 func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
 	if t.OriginKind == KindProto {
 		if ep, ok := t.Origin.(*descriptorpb.EnumDescriptorProto); ok && ep != nil {
@@ -386,7 +418,7 @@ func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
 		// not this descriptor, so the externally-visible value is unaffected; this
 		// name only identifies the value within the internal proto FileDescriptor.
 		evp := &descriptorpb.EnumValueDescriptorProto{
-			Name:   stringPtr(name + "_" + ev.Name),
+			Name:   stringPtr(ProtoEnumValueName(name, ev.Name)),
 			Number: &num,
 		}
 		ep.Value = append(ep.Value, evp)
