@@ -175,7 +175,7 @@ type admin_BindingInfo {
 }
 
 type admin_BindingsOutBody {
-  bindings: [admin_BindingInfo]!
+  bindings: [admin_BindingInfo!]
 }
 
 type admin_CallerStatsRow {
@@ -194,7 +194,7 @@ type admin_ChannelInfo {
 }
 
 type admin_ChannelsOutBody {
-  channels: [admin_ChannelInfo]!
+  channels: [admin_ChannelInfo!]
 }
 
 input admin_DeprecateInBodyInput {
@@ -206,7 +206,7 @@ type admin_DeprecateOutBody {
 }
 
 type admin_DeprecatedMethodRow {
-  callers: [admin_CallerStatsRow]!
+  callers: [admin_CallerStatsRow!]
   count: Long!
   method: String!
   okCount: Long!
@@ -219,7 +219,7 @@ type admin_DeprecatedMethodRow {
 type admin_DeprecatedServiceRow {
   autoReason: String
   manualReason: String
-  methods: [admin_DeprecatedMethodRow]!
+  methods: [admin_DeprecatedMethodRow!]
   namespace: String!
   totalCount: Long!
   totalThroughput: Float!
@@ -227,7 +227,7 @@ type admin_DeprecatedServiceRow {
 }
 
 type admin_DeprecatedStatsOutBody {
-  services: [admin_DeprecatedServiceRow]!
+  services: [admin_DeprecatedServiceRow!]
   window: String!
 }
 
@@ -260,7 +260,7 @@ type admin_InjectorInfo {
   headerName: String
   hide: Boolean!
   kind: String!
-  landings: [admin_InjectorLandingInfo]!
+  landings: [admin_InjectorLandingInfo!]
   nullable: Boolean!
   path: String
   registeredAt: admin_RegisteredAtInfo!
@@ -280,7 +280,7 @@ type admin_InjectorLandingInfo {
 }
 
 type admin_InjectorsOutBody {
-  injectors: [admin_InjectorInfo]!
+  injectors: [admin_InjectorInfo!]
 }
 
 type admin_McpChannelEvent {
@@ -290,7 +290,7 @@ type admin_McpChannelEvent {
 }
 
 type admin_McpEventsBundle {
-  channels: [admin_McpChannelEvent]!
+  channels: [admin_McpChannelEvent!]
   level: String!
 }
 
@@ -304,8 +304,8 @@ input admin_McpIncludeInBodyInput {
 
 type admin_McpListOutBody {
   autoInclude: Boolean!
-  exclude: [String]!
-  include: [String]!
+  exclude: [String!]
+  include: [String!]
 }
 
 input admin_McpQueryInBodyInput {
@@ -332,7 +332,7 @@ type admin_McpSchemaExpandOutBody {
 }
 
 type admin_McpSchemaListOutBody {
-  entries: [admin_SchemaListEntry]!
+  entries: [admin_SchemaListEntry!]
 }
 
 input admin_McpSchemaSearchInBodyInput {
@@ -341,7 +341,7 @@ input admin_McpSchemaSearchInBodyInput {
 }
 
 type admin_McpSchemaSearchOutBody {
-  entries: [admin_SchemaSearchEntry]!
+  entries: [admin_SchemaSearchEntry!]
 }
 
 input admin_McpSetAutoIncludeInBodyInput {
@@ -366,7 +366,7 @@ type admin_PeerInfo {
 }
 
 type admin_PeersOutBody {
-  peers: [admin_PeerInfo]!
+  peers: [admin_PeerInfo!]
 }
 
 type admin_RegisteredAtInfo {
@@ -409,7 +409,7 @@ type admin_SchemaExpandField {
 }
 
 type admin_SchemaExpandOp {
-  args: [admin_SchemaSearchArg]!
+  args: [admin_SchemaSearchArg!]
   deprecated: String
   description: String
   kind: String!
@@ -423,16 +423,16 @@ type admin_SchemaExpandResult {
   op: admin_SchemaExpandOp
   path: String
   type: admin_SchemaExpandType
-  types: [admin_SchemaExpandType]!
+  types: [admin_SchemaExpandType!]
 }
 
 type admin_SchemaExpandType {
   description: String
-  enumValues: [admin_SchemaExpandEnumValue]
-  fields: [admin_SchemaExpandField]
+  enumValues: [admin_SchemaExpandEnumValue!]
+  fields: [admin_SchemaExpandField!]
   kind: String!
   name: String!
-  variants: [String]
+  variants: [String!]
 }
 
 type admin_SchemaListEntry {
@@ -451,7 +451,7 @@ type admin_SchemaSearchArg {
 }
 
 type admin_SchemaSearchEntry {
-  args: [admin_SchemaSearchArg]!
+  args: [admin_SchemaSearchArg!]
   description: String
   kind: String!
   namespace: String!
@@ -461,7 +461,7 @@ type admin_SchemaSearchEntry {
 }
 
 type admin_ServiceHistoryRow {
-  buckets: [admin_HistoryBucketOut]!
+  buckets: [admin_HistoryBucketOut!]
   namespace: String!
   version: String!
 }
@@ -476,7 +476,7 @@ type admin_ServiceInfo {
 }
 
 type admin_ServiceStatsOutBody {
-  methods: [admin_MethodStatsOut]!
+  methods: [admin_MethodStatsOut!]
   window: String!
 }
 
@@ -492,17 +492,17 @@ type admin_ServiceStatsRow {
 }
 
 type admin_ServicesHistoryOutBody {
-  services: [admin_ServiceHistoryRow]!
+  services: [admin_ServiceHistoryRow!]
   window: String!
 }
 
 type admin_ServicesOutBody {
-  services: [admin_ServiceInfo]!
-  stableVN: [admin_StableVNEntry]!
+  services: [admin_ServiceInfo!]
+  stableVN: [admin_StableVNEntry!]
 }
 
 type admin_ServicesStatsOutBody {
-  services: [admin_ServiceStatsRow]!
+  services: [admin_ServiceStatsRow!]
   window: String!
 }
 

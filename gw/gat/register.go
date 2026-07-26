@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 	"strings"
@@ -88,6 +89,18 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 		return fmt.Errorf("gat: gateway already finalized")
 	}
 	prefix = strings.TrimRight(prefix, "/")
+
+	// Parameters on an anonymous embedded struct are invisible to huma, so the
+	// schema would ship with holes and the request would silently bind zero
+	// values. Report before building rather than after shipping.
+	if found := g.embeddedParams(); len(found) > 0 {
+		if !g.allowEmbeddedParams {
+			return embeddedParamError(found)
+		}
+		for _, e := range found {
+			log.Printf("gat: warning: %s", e)
+		}
+	}
 
 	if len(g.captured) > 0 {
 		if err := g.ingestHuma(api); err != nil {

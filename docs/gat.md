@@ -204,6 +204,75 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
+## Trap: request parameters on an embedded struct
+
+**huma does not read parameters declared on an anonymous embedded
+struct.** Not into the OpenAPI document, and not into its runtime
+binder. This does not work:
+
+```go
+type scope struct {
+    Dir string `query:"dir"`
+    Now string `query:"now"`
+}
+
+type statusInput struct {
+    scope                          // ← dir and now are invisible
+    Spec string `query:"spec"`     // ← this one is fine
+}
+```
+
+The failure is silent in the worst way. `?dir=/some/path` is accepted
+and ignored, the handler reads `""`, and whatever default it falls back
+to looks like correct behaviour. The OpenAPI document omits the
+parameter entirely, so a generated client cannot send it even if it
+wants to.
+
+**Write the fields out on each input struct instead:**
+
+```go
+type statusInput struct {
+    Dir  string `query:"dir"`
+    Now  string `query:"now"`
+    Spec string `query:"spec"`
+}
+```
+
+Verbose, and the duplication is annoying across a dozen operations, but
+it is the only spelling huma actually reads. Sharing the *handler* logic
+is fine — it is only the struct that has to be flat.
+
+### How you find out
+
+gat refuses to mount, naming every lost parameter:
+
+```
+gat: 2 request parameter(s) declared on an anonymous embedded struct:
+  status: statusInput.scope.Dir has `query:"dir"`, which huma will not see
+  status: statusInput.scope.Now has `query:"now"`, which huma will not see
+
+huma does not read parameters from embedded structs — they are absent from the
+OpenAPI document and are not bound at runtime, so the request silently receives
+the zero value. Declare these fields directly on each input struct instead.
+```
+
+gat cannot repair this — huma owns parameter discovery — but it is the
+layer that notices, because it builds GraphQL and proto from that same
+document and the parameter is simply absent. Plain huma users get no
+warning at all.
+
+To unblock an existing codebase while the inputs are being flattened:
+
+```go
+g.AllowEmbeddedParams(true)   // before RegisterHuma; logs instead of failing
+```
+
+Treat that as temporary. Every occurrence seen so far has been a bug.
+
+**Embedding is only a problem for parameter tags.** A struct with no
+`query` / `path` / `header` / `cookie` tags embeds normally, and `Body`
+fields are unaffected.
+
 ## Constraints (current shape)
 
 - One huma API per gat gateway. Multi-huma is doable (BYO-IR path)

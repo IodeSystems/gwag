@@ -65,6 +65,12 @@ type Gateway struct {
 	// behavior (nullable lists, nil → JSON null).
 	emptyNilSlices bool
 
+	// allowEmbeddedParams downgrades the embedded-parameter check from a
+	// mount-time error to a log warning. Off by default: the condition
+	// silently drops request parameters, so failing loudly is the safer
+	// default.
+	allowEmbeddedParams bool
+
 	// observe, when set (ObserveDispatch), is invoked after every in-process
 	// operation dispatch for per-operation metrics. nil = no observation.
 	observe DispatchObserver
