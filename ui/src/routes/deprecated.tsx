@@ -133,10 +133,16 @@ function Deprecated() {
   );
 }
 
+// `services` is `T[] | null`, so null has to be stripped from the ARRAY before
+// `[number]` can index it — `NonNullable<X['services']>[number]`, not
+// `NonNullable<X['services'][number]>`. The outer wrap then drops null from the
+// element itself.
 type ServiceRow = NonNullable<
   NonNullable<
-    NonNullable<ResultOf<typeof DeprecatedStatsQuery>['admin']>['deprecatedStats']
-  >['services'][number]
+    NonNullable<
+      NonNullable<ResultOf<typeof DeprecatedStatsQuery>['admin']>['deprecatedStats']
+    >['services']
+  >[number]
 >;
 
 function ServiceCard({ service }: { service: ServiceRow }) {

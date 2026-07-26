@@ -9,6 +9,33 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.3.0 — 2026-07-26
+
+### Added
+- gat now **refuses to mount** when an operation declares request
+  parameters on an anonymous embedded struct, naming every lost
+  parameter and the fix. huma does not read `query` / `path` / `header`
+  / `cookie` tags from an embedded struct — they are absent from the
+  OpenAPI document *and* are never bound at runtime, so the handler
+  silently receives zero values and any default it falls back to looks
+  like correct behaviour. gat cannot repair it (huma owns parameter
+  discovery) but it is the layer that notices, because GraphQL and proto
+  are built from that same document. `g.AllowEmbeddedParams(true)`
+  downgrades the check to a log warning while an existing codebase is
+  flattened. Documented in `docs/gat.md` with a pointer from the README.
+
+  This can newly fail a gateway that previously started — hence a minor,
+  not a patch. If it fires, those parameters were already being dropped.
+
+### Fixed
+- UI build (`bin/build`) no longer falls back to `ui/fallback/`. Two
+  generated-type aliases indexed `[number]` into a nullable array
+  (`NonNullable<X['services'][number]>` instead of
+  `NonNullable<X['services']>[number]`), which failed `tsc` and cascaded
+  into implicit-`any` errors; fixing the types then surfaced a genuinely
+  unguarded `inj.landings` (nullable in the schema) on the injectors
+  page, which now renders the same placeholder for null as for empty.
+
 ## v1.2.1 — 2026-07-26
 
 ### Fixed

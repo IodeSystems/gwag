@@ -22,13 +22,16 @@ export const Route = createFileRoute('/injectors')({
   component: Injectors,
 });
 
+// Strip null from the array before indexing it; see the note in deprecated.tsx.
 type Injector = NonNullable<
   NonNullable<
-    NonNullable<ResultOf<typeof InjectorsQuery>['admin']>['listInjectors']
-  >['injectors'][number]
+    NonNullable<
+      NonNullable<ResultOf<typeof InjectorsQuery>['admin']>['listInjectors']
+    >['injectors']
+  >[number]
 >;
 
-type Landing = NonNullable<Injector['landings'][number]>;
+type Landing = NonNullable<NonNullable<Injector['landings']>[number]>;
 
 function landingLabel(l: Landing): string {
   switch (l.kind) {
@@ -116,6 +119,11 @@ function Injectors() {
           <TableBody>
             {injectors.map((inj, i) => {
               const reg = inj.registeredAt;
+              // `landings` is nullable in the schema; a null array renders the
+              // same "—" placeholder as an empty one.
+              const landings = (inj.landings ?? []).filter(
+                (l): l is Landing => l !== null,
+              );
               const regTitle = reg.function ? reg.function : '';
               const regLabel =
                 reg.file && reg.line !== null && reg.line !== undefined
@@ -138,7 +146,7 @@ function Injectors() {
                     />
                   </TableCell>
                   <TableCell>
-                    {inj.landings.length === 0 ? (
+                    {landings.length === 0 ? (
                       <Typography variant="body2" color="text.secondary">
                         —
                       </Typography>
@@ -146,16 +154,14 @@ function Injectors() {
                       <Box
                         sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}
                       >
-                        {inj.landings
-                          .filter((l): l is Landing => l !== null)
-                          .map((l, j) => (
-                            <Chip
-                              key={j}
-                              label={landingLabel(l)}
-                              size="small"
-                              variant="outlined"
-                            />
-                          ))}
+                        {landings.map((l, j) => (
+                          <Chip
+                            key={j}
+                            label={landingLabel(l)}
+                            size="small"
+                            variant="outlined"
+                          />
+                        ))}
                       </Box>
                     )}
                   </TableCell>

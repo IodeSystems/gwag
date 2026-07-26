@@ -14,12 +14,12 @@ export type DashboardQueryVariables = Exact<{
 }>;
 
 
-export type DashboardQuery = { admin: { servicesHistory: { window: string, services: Array<{ namespace: string, version: string, buckets: Array<{ startUnixSec: unknown, durationSec: unknown, count: unknown, okCount: unknown, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null> } | null } };
+export type DashboardQuery = { admin: { servicesHistory: { window: string, services: Array<{ namespace: string, version: string, buckets: Array<{ startUnixSec: unknown, durationSec: unknown, count: unknown, okCount: unknown, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown }> | null }> | null } | null } };
 
 export type ServicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number, manualDeprecationReason: string | null } | null>, stableVN: Array<{ namespace: string, vN: number } | null> } | null, servicesStats: { window: string, services: Array<{ namespace: string, version: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null } };
+export type ServicesQuery = { admin: { listServices: { services: Array<{ namespace: string, version: string, hashHex: string, replicaCount: number, manualDeprecationReason: string | null }> | null, stableVN: Array<{ namespace: string, vN: number }> | null } | null, servicesStats: { window: string, services: Array<{ namespace: string, version: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown }> | null } | null } };
 
 export type ServiceStatsQueryVariables = Exact<{
   namespace: string;
@@ -27,12 +27,12 @@ export type ServiceStatsQueryVariables = Exact<{
 }>;
 
 
-export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null } };
+export type ServiceStatsQuery = { admin: { serviceStats: { window: string, methods: Array<{ method: string, caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown }> | null } | null } };
 
 export type DeprecatedStatsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DeprecatedStatsQuery = { admin: { deprecatedStats: { window: string, services: Array<{ namespace: string, version: string, manualReason: string | null, autoReason: string | null, totalCount: unknown, totalThroughput: number, methods: Array<{ method: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown, callers: Array<{ caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown } | null> } | null> } | null> } | null } };
+export type DeprecatedStatsQuery = { admin: { deprecatedStats: { window: string, services: Array<{ namespace: string, version: string, manualReason: string | null, autoReason: string | null, totalCount: unknown, totalThroughput: number, methods: Array<{ method: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown, callers: Array<{ caller: string, count: unknown, okCount: unknown, throughput: number, p50Millis: unknown, p95Millis: unknown, p99Millis: unknown }> | null }> | null }> | null } | null } };
 
 export type DeprecateMutationVariables = Exact<{
   namespace: string;
@@ -71,12 +71,12 @@ export type SignSubscriptionTokenMutation = { admin: { signSubscriptionToken: { 
 export type PeersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type PeersQuery = { admin: { listPeers: { peers: Array<{ nodeId: string, name: string | null, joinedUnixMs: unknown } | null> } | null } };
+export type PeersQuery = { admin: { listPeers: { peers: Array<{ nodeId: string, name: string | null, joinedUnixMs: unknown }> | null } | null } };
 
 export type InjectorsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type InjectorsQuery = { admin: { listInjectors: { injectors: Array<{ kind: string, typeName: string | null, path: string | null, headerName: string | null, hide: boolean, nullable: boolean, state: string, registeredAt: { file: string | null, line: unknown, function: string | null }, landings: Array<{ kind: string, namespace: string | null, version: string | null, op: string | null, typeName: string | null, fieldName: string | null, argName: string | null, headerName: string | null } | null> } | null> } | null } };
+export type InjectorsQuery = { admin: { listInjectors: { injectors: Array<{ kind: string, typeName: string | null, path: string | null, headerName: string | null, hide: boolean, nullable: boolean, state: string, registeredAt: { file: string | null, line: unknown, function: string | null }, landings: Array<{ kind: string, namespace: string | null, version: string | null, op: string | null, typeName: string | null, fieldName: string | null, argName: string | null, headerName: string | null }> | null }> | null } | null } };
 
 export type ForgetPeerMutationVariables = Exact<{
   nodeId: string;
@@ -88,42 +88,42 @@ export type ForgetPeerMutation = { admin: { forgetPeer: { removed: boolean, newR
 export type McpConfigQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type McpConfigQuery = { admin: { mcpList: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null, mcpSchemaList: { entries: Array<{ path: string, kind: string, namespace: string, version: string, description: string | null } | null> } | null } };
+export type McpConfigQuery = { admin: { mcpList: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null, mcpSchemaList: { entries: Array<{ path: string, kind: string, namespace: string, version: string, description: string | null }> | null } | null } };
 
 export type McpIncludeMutationVariables = Exact<{
   path: string;
 }>;
 
 
-export type McpIncludeMutation = { admin: { mcpInclude: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null } };
+export type McpIncludeMutation = { admin: { mcpInclude: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null } };
 
 export type McpExcludeMutationVariables = Exact<{
   path: string;
 }>;
 
 
-export type McpExcludeMutation = { admin: { mcpExclude: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null } };
+export type McpExcludeMutation = { admin: { mcpExclude: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null } };
 
 export type McpIncludeRemoveMutationVariables = Exact<{
   path: string;
 }>;
 
 
-export type McpIncludeRemoveMutation = { admin: { mcpIncludeRemove: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null } };
+export type McpIncludeRemoveMutation = { admin: { mcpIncludeRemove: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null } };
 
 export type McpExcludeRemoveMutationVariables = Exact<{
   path: string;
 }>;
 
 
-export type McpExcludeRemoveMutation = { admin: { mcpExcludeRemove: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null } };
+export type McpExcludeRemoveMutation = { admin: { mcpExcludeRemove: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null } };
 
 export type McpSetAutoIncludeMutationVariables = Exact<{
   autoInclude: boolean;
 }>;
 
 
-export type McpSetAutoIncludeMutation = { admin: { mcpSetAutoInclude: { autoInclude: boolean, include: Array<string | null>, exclude: Array<string | null> } | null } };
+export type McpSetAutoIncludeMutation = { admin: { mcpSetAutoInclude: { autoInclude: boolean, include: Array<string> | null, exclude: Array<string> | null } | null } };
 
 export type AdminEventsSubscriptionVariables = Exact<{
   namespace: string | null | undefined;
