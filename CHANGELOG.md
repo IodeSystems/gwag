@@ -9,6 +9,29 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.3.1 — 2026-07-26
+
+### Fixed
+- **The v1.3.0 embedded-parameter check was over-broad and rejected
+  working code.** The real huma rule is *exportedness*, not embedding:
+  `_findInType` skips `!f.IsExported()` before it reads a tag, and an
+  embedded field takes its name from its type — so embedding an
+  **unexported** type (`scope`) hides every parameter inside it, while an
+  **exported** embed (`Scope`) is documented and bound correctly. v1.3.0
+  refused to mount on both. It now reports only what huma genuinely
+  cannot reach: a parameter on an unexported field, or one sitting inside
+  an unexported embedded struct (exportedness does not recover below an
+  unexported embed). Error text and `docs/gat.md` corrected — the fix is
+  to export the type, not to flatten the struct.
+
+### Added
+- `gat.CheckEmbeddedParams(types...)` — the same detector, exported, for
+  inputs gat never captures: operations registered with plain
+  `huma.Register`, or a huma codebase not using gat at all. gat cannot
+  recover those Go types from the OpenAPI document precisely because the
+  parameter is missing from it, so this is a test assertion you call
+  yourself.
+
 ## v1.3.0 — 2026-07-26
 
 ### Added

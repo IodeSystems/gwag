@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,14 +14,43 @@ import (
 	"github.com/iodesystems/gwag/gw/gat"
 )
 
-// huma does not read request parameters declared on an anonymous embedded
-// struct — not into the OpenAPI document, and not into its runtime binder. The
-// request silently binds zero values and the schema ships with holes, so gat
-// refuses to mount rather than let that reach production.
+// huma skips UNEXPORTED fields when it discovers request parameters, and an
+// embedded field takes its name from its type — so embedding an unexported type
+// hides every parameter inside it. Embedding is fine; exportedness is the rule.
+// The hidden parameter is absent from the OpenAPI document and never bound, so
+// gat refuses to mount rather than let that reach production.
 
+// unexported type name ⇒ unexported embedded field ⇒ invisible to huma
 type embeddedScope struct {
 	Dir string `query:"dir"`
 	Now string `query:"now"`
+}
+
+// ExportedScope embeds cleanly: huma walks exported embedded structs.
+type ExportedScope struct {
+	Dir string `query:"dir"`
+	Now string `query:"now"`
+}
+
+type exportedEmbedInput struct {
+	ExportedScope
+	Spec string `query:"spec"`
+}
+
+// An exported embed nested inside another exported embed is still reachable.
+type OuterExported struct{ ExportedScope }
+
+type deepExportedInput struct {
+	OuterExported
+	Spec string `query:"spec"`
+}
+
+// An exported embed underneath an UNexported one is still unreachable.
+type hiddenOuter struct{ ExportedScope }
+
+type hiddenOuterInput struct {
+	hiddenOuter
+	Spec string `query:"spec"`
 }
 
 type embeddedParamInput struct {
@@ -80,12 +110,12 @@ func mountWith[I any](t *testing.T, tweak func(*gat.Gateway)) error {
 	return gat.RegisterHuma(api, g, "/api")
 }
 
-func TestEmbeddedParamsRefuseToMount(t *testing.T) {
+func TestUnexportedEmbedRefusesToMount(t *testing.T) {
 	err := mountWith[embeddedParamInput](t, nil)
 	if err == nil {
-		t.Fatal("an embedded query parameter must not mount silently")
+		t.Fatal("a parameter inside an unexported embed must not mount silently")
 	}
-	for _, want := range []string{"embeddedScope", "dir", "now", "Declare these fields directly"} {
+	for _, want := range []string{"embeddedScope", "dir", "now", "export the type or field"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should mention %q:\n%s", want, err)
 		}
@@ -102,13 +132,35 @@ func TestFlatParamsMountCleanly(t *testing.T) {
 }
 
 // An embed inside an embed is just as invisible to huma.
-func TestNestedEmbeddedParamsAreFound(t *testing.T) {
+func TestNestedUnexportedEmbedIsFound(t *testing.T) {
 	err := mountWith[deepEmbedInput](t, nil)
 	if err == nil {
-		t.Fatal("a parameter two embeds deep must still be reported")
+		t.Fatal("a parameter two unexported embeds deep must still be reported")
 	}
 	if !strings.Contains(err.Error(), "deepEmbedOuter.embeddedScope") {
 		t.Errorf("error should name the embed path:\n%s", err)
+	}
+}
+
+// The rule is exportedness, not embedding: huma walks exported embeds, so gat
+// must not reject them. Rejecting working code is worse than the original trap.
+func TestExportedEmbedMountsCleanly(t *testing.T) {
+	if err := mountWith[exportedEmbedInput](t, nil); err != nil {
+		t.Fatalf("an exported embed is handled by huma and must mount: %v", err)
+	}
+	if err := mountWith[deepExportedInput](t, nil); err != nil {
+		t.Fatalf("nested exported embeds must mount: %v", err)
+	}
+}
+
+// Exportedness does not recover once the walk passes through an unexported embed.
+func TestExportedEmbedBeneathUnexportedIsStillHidden(t *testing.T) {
+	err := mountWith[hiddenOuterInput](t, nil)
+	if err == nil {
+		t.Fatal("an exported embed under an unexported one is still unreachable")
+	}
+	if !strings.Contains(err.Error(), "unexported embedded struct") {
+		t.Errorf("error should say why it is unreachable:\n%s", err)
 	}
 }
 
@@ -127,6 +179,26 @@ func TestEmbeddedStructWithoutParamTagsIsFine(t *testing.T) {
 	}
 }
 
+// An ordinary unexported field with a param tag is dropped by the same rule.
+func TestUnexportedFieldParamIsFound(t *testing.T) {
+	err := gat.CheckEmbeddedParams(reflect.TypeFor[struct {
+		hidden string `query:"hidden"`
+		Spec   string `query:"spec"`
+	}]())
+	if err == nil || !strings.Contains(err.Error(), "the field is unexported") {
+		t.Fatalf("an unexported field with a param tag must be reported, got %v", err)
+	}
+}
+
+func TestCheckEmbeddedParamsPassesCleanInputs(t *testing.T) {
+	if err := gat.CheckEmbeddedParams(
+		reflect.TypeFor[flatParamInput](),
+		reflect.TypeFor[exportedEmbedInput](),
+	); err != nil {
+		t.Fatalf("clean inputs must pass: %v", err)
+	}
+}
+
 func TestAllowEmbeddedParamsDowngradesToWarning(t *testing.T) {
 	err := mountWith[embeddedParamInput](t, func(g *gat.Gateway) { g.AllowEmbeddedParams(true) })
 	if err != nil {
@@ -134,10 +206,10 @@ func TestAllowEmbeddedParamsDowngradesToWarning(t *testing.T) {
 	}
 }
 
-// The check is a diagnostic for a real defect, so prove the defect: huma neither
-// documents nor binds the embedded parameter. If huma ever fixes this, this test
-// fails and the check can be dropped.
-func TestHumaItselfDropsEmbeddedParams(t *testing.T) {
+// The check is a diagnostic for a real defect, so prove the defect from both
+// sides: huma drops the UNEXPORTED embed and handles the EXPORTED one. If huma
+// ever starts reading unexported fields, this test fails and the check can go.
+func TestHumaDropsUnexportedButHandlesExported(t *testing.T) {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("Demo", "1.0.0"))
 	var got embeddedParamInput
@@ -165,7 +237,30 @@ func TestHumaItselfDropsEmbeddedParams(t *testing.T) {
 		t.Fatalf("directly-declared param must bind, got %q", got.Spec)
 	}
 	if got.Dir != "" || got.Now != "" {
-		t.Fatalf("huma now binds embedded params (dir=%q now=%q) — the gat check can be removed",
+		t.Fatalf("huma now binds params under an unexported embed (dir=%q now=%q) — the gat check can be removed",
 			got.Dir, got.Now)
+	}
+
+	// And the exported spelling works, which is the documented fix.
+	mux2 := http.NewServeMux()
+	api2 := humago.New(mux2, huma.DefaultConfig("Demo", "1.0.0"))
+	var ok exportedEmbedInput
+	huma.Register(api2, huma.Operation{
+		OperationID: "probe2", Method: http.MethodGet, Path: "/probe2",
+	}, func(ctx context.Context, in *exportedEmbedInput) (*okOutput, error) {
+		ok = *in
+		return &okOutput{}, nil
+	})
+	doc2, err := api2.OpenAPI().MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(doc2), `"dir"`) {
+		t.Fatal("an exported embed must be documented")
+	}
+	rec2 := httptest.NewRecorder()
+	mux2.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/probe2?dir=D&now=N&spec=S", nil))
+	if ok.Dir != "D" || ok.Now != "N" || ok.Spec != "S" {
+		t.Fatalf("an exported embed must bind, got %+v", ok)
 	}
 }

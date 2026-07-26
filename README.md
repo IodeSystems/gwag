@@ -182,14 +182,15 @@ service-to-service clients use **buf / ts-proto** off
 ports.
 
 > ⚠ **One trap worth knowing before you write your first input
-> struct:** huma does not read `query` / `path` / `header` / `cookie`
-> parameters declared on an **anonymous embedded struct** — they are
-> missing from the OpenAPI document and are never bound at runtime, so
-> the handler silently sees zero values. Declare parameter fields
-> directly on each input struct. gat refuses to mount and names the
-> lost parameters; plain huma gives you no warning at all.
-> Details: [`docs/gat.md` — Trap: request parameters on an embedded
-> struct](./docs/gat.md#trap-request-parameters-on-an-embedded-struct).
+> struct:** huma skips **unexported** fields when it discovers request
+> parameters, and an embedded field takes its name from its type — so
+> embedding an unexported type (`scope`) silently drops every `query` /
+> `path` / `header` / `cookie` parameter inside it. Nothing errors; the
+> handler just reads zero values and the OpenAPI document omits the
+> parameter. Export the type (`Scope`) and it works. gat refuses to mount
+> and names each lost parameter; plain huma gives you no warning at all.
+> Details: [`docs/gat.md` — Trap: parameters on an unexported
+> field](./docs/gat.md#trap-parameters-on-an-unexported-field).
 
 Concept doc: [`docs/gat.md`](./docs/gat.md). Runnable end-to-end
 demo with React + Vite + graphql-codegen: [`examples/gat/`](./examples/gat/README.md).

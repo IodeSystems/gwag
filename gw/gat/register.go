@@ -90,12 +90,13 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 	}
 	prefix = strings.TrimRight(prefix, "/")
 
-	// Parameters on an anonymous embedded struct are invisible to huma, so the
-	// schema would ship with holes and the request would silently bind zero
-	// values. Report before building rather than after shipping.
-	if found := g.embeddedParams(); len(found) > 0 {
+	// huma skips unexported fields during parameter discovery, so a parameter on
+	// an unexported field — or inside an embedded unexported type — is absent
+	// from the schema and never bound. Report before building, not after
+	// shipping.
+	if found := g.hiddenParams(); len(found) > 0 {
 		if !g.allowEmbeddedParams {
-			return embeddedParamError(found)
+			return hiddenParamError(found)
 		}
 		for _, e := range found {
 			log.Printf("gat: warning: %s", e)

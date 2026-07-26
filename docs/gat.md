@@ -204,74 +204,117 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
-## Trap: request parameters on an embedded struct
+## Trap: parameters on an unexported field
 
-**huma does not read parameters declared on an anonymous embedded
-struct.** Not into the OpenAPI document, and not into its runtime
-binder. This does not work:
+**huma skips unexported fields when it discovers request parameters.**
+An embedded field takes its name from its type, so embedding an
+*unexported* type hides every parameter inside it:
 
 ```go
-type scope struct {
-    Dir string `query:"dir"`
-    Now string `query:"now"`
-}
+type scope struct {                // lowercase type name ⇒
+    Dir string `query:"dir"`       // unexported FIELD name ⇒
+}                                  // invisible to huma
 
 type statusInput struct {
-    scope                          // ← dir and now are invisible
+    scope                          // ← dir is dropped
     Spec string `query:"spec"`     // ← this one is fine
 }
 ```
 
-The failure is silent in the worst way. `?dir=/some/path` is accepted
-and ignored, the handler reads `""`, and whatever default it falls back
-to looks like correct behaviour. The OpenAPI document omits the
-parameter entirely, so a generated client cannot send it even if it
-wants to.
-
-**Write the fields out on each input struct instead:**
+**Export the type and it works** — huma walks exported embedded structs
+normally:
 
 ```go
+type Scope struct {
+    Dir string `query:"dir"`
+}
+
 type statusInput struct {
-    Dir  string `query:"dir"`
-    Now  string `query:"now"`
+    Scope                          // ← dir is documented and bound
     Spec string `query:"spec"`
 }
 ```
 
-Verbose, and the duplication is annoying across a dozen operations, but
-it is the only spelling huma actually reads. Sharing the *handler* logic
-is fine — it is only the struct that has to be flat.
+One character. Embedding is not the problem; **exportedness** is. The
+same rule silently drops an ordinary unexported field carrying a
+parameter tag.
+
+### Why it is easy to misread
+
+The failure is quiet in the worst way. `?dir=/some/path` is accepted and
+ignored, the handler reads `""`, and whatever default it falls back to
+looks like correct behaviour. The OpenAPI document omits the parameter
+entirely, so a generated client cannot send it even if it wants to.
+Nothing errors, nothing logs.
+
+Because it is silent, it is easy to conclude the wrong thing — that
+embedded params are unsupported and every input struct must be flattened.
+They are supported. Check the case of the type name first.
 
 ### How you find out
 
-gat refuses to mount, naming every lost parameter:
+gat refuses to mount, naming every unreachable parameter:
 
 ```
-gat: 2 request parameter(s) declared on an anonymous embedded struct:
-  status: statusInput.scope.Dir has `query:"dir"`, which huma will not see
-  status: statusInput.scope.Now has `query:"now"`, which huma will not see
+gat: 2 request parameter(s) unreachable by huma:
+  status: statusInput.scope.Dir has `query:"dir"` — it sits inside an unexported embedded struct, so huma will not see it
+  status: statusInput.scope.Now has `query:"now"` — it sits inside an unexported embedded struct, so huma will not see it
 
-huma does not read parameters from embedded structs — they are absent from the
-OpenAPI document and are not bound at runtime, so the request silently receives
-the zero value. Declare these fields directly on each input struct instead.
+huma skips unexported fields when it discovers parameters, and an embedded field
+takes its name from its type — so embedding an unexported type hides everything
+inside it. The parameter is absent from the OpenAPI document and is never bound,
+so the handler silently reads the zero value.
+
+Fix: export the type or field (`scope` -> `Scope`). Exported embeds work fine.
 ```
 
-gat cannot repair this — huma owns parameter discovery — but it is the
-layer that notices, because it builds GraphQL and proto from that same
-document and the parameter is simply absent. Plain huma users get no
-warning at all.
+gat cannot apply the fix — huma owns parameter discovery, and Go has no
+way to promote a field's visibility — but gat is the layer that notices,
+because it builds GraphQL and proto from that same document and the
+parameter is simply absent. Plain huma gives you no warning at all.
 
-To unblock an existing codebase while the inputs are being flattened:
+There is related upstream discussion, though it is about *generic* /
+interface-typed inputs rather than this visibility rule:
+
+- [huma#617 — Allow anonymous fields to be used as request input
+  parameters](https://github.com/danielgtaylor/huma/issues/617)
+- [huma#870 — Enabling recursive process structs for
+  parameters](https://github.com/danielgtaylor/huma/issues/870)
+
+To unblock an existing codebase while types are being exported:
 
 ```go
 g.AllowEmbeddedParams(true)   // before RegisterHuma; logs instead of failing
 ```
 
-Treat that as temporary. Every occurrence seen so far has been a bug.
-
-**Embedding is only a problem for parameter tags.** A struct with no
-`query` / `path` / `header` / `cookie` tags embeds normally, and `Body`
+**Only parameter tags are affected.** A struct with no `query` / `path` /
+`header` / `cookie` tags embeds normally whatever its case, and `Body`
 fields are unaffected.
+
+### Checking inputs gat does not capture
+
+The mount-time check only sees operations registered through
+`gat.Register`. Anything registered with plain `huma.Register` — the
+incremental-adoption path above — is invisible to gat, and gat cannot
+recover the Go type from the OpenAPI document precisely because the
+parameter is missing from it.
+
+`gat.CheckEmbeddedParams` is the same detector, exported, so those
+inputs can be asserted in your own tests:
+
+```go
+func TestNoHiddenParams(t *testing.T) {
+    if err := gat.CheckEmbeddedParams(
+        reflect.TypeFor[listThingsInput](),
+        reflect.TypeFor[getThingInput](),
+    ); err != nil {
+        t.Fatal(err)
+    }
+}
+```
+
+Worth doing even in a codebase with no gat at all: it is a five-line
+test against a failure mode that otherwise ships silently.
 
 ## Constraints (current shape)
 
