@@ -266,7 +266,9 @@ func synthRequestMessage(name string, args []*Arg, pkg string) *descriptorpb.Des
 			Repeated: a.Repeated,
 			Required: a.Required,
 		}
-		mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
+		fd, nested := renderProtoField(f, num, pkg, name)
+		mp.Field = append(mp.Field, fd)
+		mp.NestedType = append(mp.NestedType, nested...)
 	}
 	return mp
 }
@@ -286,7 +288,9 @@ func synthResponseMessage(name string, output *TypeRef, repeated bool, pkg strin
 		Type:     *output,
 		Repeated: repeated,
 	}
-	mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
+	fd, nested := renderProtoField(f, num, pkg, name)
+	mp.Field = append(mp.Field, fd)
+	mp.NestedType = append(mp.NestedType, nested...)
 	return mp
 }
 
@@ -309,7 +313,11 @@ func renderProtoMessage(t *Type, pkg string) *descriptorpb.DescriptorProto {
 			continue
 		}
 		num++
-		mp.Field = append(mp.Field, renderProtoField(f, num, pkg))
+		fd, nested := renderProtoField(f, num, pkg, name)
+		mp.Field = append(mp.Field, fd)
+		// Map fields carry synthesised entry (and wrapper) messages that
+		// must live inside the parent, per the proto3 map encoding.
+		mp.NestedType = append(mp.NestedType, nested...)
 	}
 	return mp
 }
@@ -386,7 +394,12 @@ func renderProtoEnum(t *Type) *descriptorpb.EnumDescriptorProto {
 	return ep
 }
 
-func renderProtoField(f *Field, defaultNumber int32, pkg string) *descriptorpb.FieldDescriptorProto {
+// renderProtoField renders one field. A map field additionally
+// returns the synthesised `<Field>Entry` message the caller must
+// nest inside the parent — proto3 has no standalone map type, so
+// `map<K,V> foo` is sugar for `repeated FooEntry foo` plus a nested
+// entry message marked `map_entry`.
+func renderProtoField(f *Field, defaultNumber int32, pkg, parent string) (*descriptorpb.FieldDescriptorProto, []*descriptorpb.DescriptorProto) {
 	num := f.ProtoNumber
 	if num == 0 {
 		num = defaultNumber
@@ -424,10 +437,10 @@ func renderProtoField(f *Field, defaultNumber int32, pkg string) *descriptorpb.F
 		out.TypeName = stringPtr("." + qualified)
 		out.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
 	case f.Type.IsMap():
-		// Maps render as a synthesised entry message — not yet
-		// implemented in the canonical render path. Same-kind
-		// shortcut handles maps via Origin; cross-kind drops them
-		// for v1.
+		entry, extra := renderProtoMapEntry(f, pkg, parent)
+		out.TypeName = stringPtr("." + qualifyNested(entry.GetName(), pkg, parent))
+		out.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
+		return out, append([]*descriptorpb.DescriptorProto{entry}, extra...)
 	default:
 		// Cross-kind shapes the proto can't represent (unconstrained
 		// JSON, oneOf-without-discriminator, etc.) land here.
@@ -435,7 +448,139 @@ func renderProtoField(f *Field, defaultNumber int32, pkg string) *descriptorpb.F
 		// resolves. Lossy by design — proto3 has no JSON type.
 		out.Type = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()
 	}
-	return out
+	return out, nil
+}
+
+// renderProtoMapEntry builds the nested `<Field>Entry` message for a
+// map field: `key` = 1, `value` = 2, `options.map_entry = true`.
+//
+// proto3 forbids a map as a map VALUE, so a nested map is boxed in a
+// synthesised `<Field>Value` wrapper holding a single field —
+// rendered recursively, so nesting depth is arbitrary.
+// The wrapper and anything it in turn needs come back as `extra` for
+// the parent message to host: a map_entry message is synthetic and
+// must not itself carry nested types.
+func renderProtoMapEntry(f *Field, pkg, parent string) (entry *descriptorpb.DescriptorProto, extra []*descriptorpb.DescriptorProto) {
+	name := protoMapEntryName(f.Name)
+	mapEntry := true
+	entry = &descriptorpb.DescriptorProto{
+		Name:    &name,
+		Options: &descriptorpb.MessageOptions{MapEntry: &mapEntry},
+	}
+	// proto restricts map keys to integral and string types; anything
+	// else becomes a string key.
+	keyKind := descriptorpb.FieldDescriptorProto_TYPE_STRING
+	if f.Type.Map.KeyType.IsBuiltin() {
+		if k := scalarToProtoKind(f.Type.Map.KeyType.Builtin); validProtoMapKey(k) {
+			keyKind = k
+		}
+	}
+	entry.Field = append(entry.Field, mapEntryField("key", 1, keyKind, ""))
+
+	val := f.Type.Map.ValueType
+	switch {
+	case val.IsMap():
+		// Box the inner map. The wrapper's own field recurses, so
+		// map<string, map<string, map<string, T>>> renders correctly.
+		wrapper := protoMapValueName(f.Name)
+		inner := &Field{Name: "value", Type: val}
+		fd, nested := renderProtoField(inner, 1, pkg, qualifyLocal(wrapper, parent))
+		box := &descriptorpb.DescriptorProto{Name: stringPtr(wrapper)}
+		box.Field = append(box.Field, fd)
+		box.NestedType = append(box.NestedType, nested...)
+		extra = append(extra, box)
+		entry.Field = append(entry.Field,
+			mapEntryField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+				"."+qualifyNested(wrapper, pkg, parent)))
+	case val.IsNamed():
+		entry.Field = append(entry.Field,
+			mapEntryField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+				"."+qualifyTop(val.Named, pkg)))
+	case val.IsBuiltin():
+		entry.Field = append(entry.Field, mapEntryField("value", 2, scalarToProtoKind(val.Builtin), ""))
+	default:
+		// An unconstrained value (no builtin, no name, no map). Lossy by
+		// design, same as the scalar fallback elsewhere in this file.
+		entry.Field = append(entry.Field,
+			mapEntryField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, ""))
+	}
+	return entry, extra
+}
+
+// qualifyLocal joins a nested message name onto its parent scope.
+func qualifyLocal(name, parent string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
+}
+
+// qualifyNested fully qualifies a message nested inside `parent`.
+func qualifyNested(name, pkg, parent string) string {
+	q := qualifyLocal(name, parent)
+	return qualifyTop(q, pkg)
+}
+
+// qualifyTop prefixes the file package unless the name already carries it.
+func qualifyTop(name, pkg string) string {
+	if pkg != "" && !looksFullyQualified(name, pkg) {
+		return pkg + "." + name
+	}
+	return name
+}
+
+func mapEntryField(name string, num int32, kind descriptorpb.FieldDescriptorProto_Type, typeName string) *descriptorpb.FieldDescriptorProto {
+	label := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	f := &descriptorpb.FieldDescriptorProto{
+		Name:   stringPtr(name),
+		Number: &num,
+		Label:  &label,
+		Type:   kind.Enum(),
+	}
+	if typeName != "" {
+		f.TypeName = stringPtr(typeName)
+	}
+	return f
+}
+
+func validProtoMapKey(k descriptorpb.FieldDescriptorProto_Type) bool {
+	switch k {
+	case descriptorpb.FieldDescriptorProto_TYPE_STRING,
+		descriptorpb.FieldDescriptorProto_TYPE_INT32,
+		descriptorpb.FieldDescriptorProto_TYPE_INT64,
+		descriptorpb.FieldDescriptorProto_TYPE_UINT32,
+		descriptorpb.FieldDescriptorProto_TYPE_UINT64,
+		descriptorpb.FieldDescriptorProto_TYPE_BOOL:
+		return true
+	}
+	return false
+}
+
+// protoMapValueName names the wrapper that boxes a map value proto3
+// cannot hold directly. `sets` → `SetsValue`.
+func protoMapValueName(field string) string {
+	return strings.TrimSuffix(protoMapEntryName(field), "Entry") + "Value"
+}
+
+// protoMapEntryName mirrors protoc: the field name in UpperCamelCase
+// with "Entry" appended. `current` → `CurrentEntry`,
+// `output_text` → `OutputTextEntry`.
+func protoMapEntryName(field string) string {
+	var b strings.Builder
+	upper := true
+	for _, r := range field {
+		if r == '_' {
+			upper = true
+			continue
+		}
+		if upper && r >= 'a' && r <= 'z' {
+			r = r - 'a' + 'A'
+		}
+		upper = false
+		b.WriteRune(r)
+	}
+	b.WriteString("Entry")
+	return b.String()
 }
 
 // looksFullyQualified reports whether `name` already starts with a

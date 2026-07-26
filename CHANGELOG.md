@@ -9,6 +9,29 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.2.1 — 2026-07-25
+
+### Fixed
+- Proto rendering of map fields. `map<K,V>` has no standalone type in
+  proto3 — it is sugar for a nested `<Field>Entry` message marked
+  `map_entry` plus a `repeated` field — and the canonical render path
+  left that arm unimplemented. Because the empty `case` shadowed the
+  `default` arm, a map produced a field with **no type at all** and
+  `FileDescriptorSet` construction failed with `cannot resolve type:
+  invalid name reference: ""`, so a gat server with a Go `map` anywhere
+  in a request or response body would not start. Every other shape
+  proto cannot express degrades to `string`; maps were the one that
+  turned that into a hard failure.
+
+  Maps now render properly, including **arbitrary nesting**:
+  `map<string, map<string, map<string, T>>>` boxes each inner map in a
+  synthesised `<Field>Value` wrapper, since proto3 forbids a map as a
+  map value. Non-integral map keys degrade to `string` (proto restricts
+  keys to integral and string types), and a value shape proto still
+  cannot express degrades to `string` rather than to nothing.
+
+## v1.2.0 — 2026-07-13
+
 ### Fixed
 - OpenAPI / MCP ingest now numbers synthesised enum values 0-based in
   declaration order instead of leaving every value at `0`. The proto
