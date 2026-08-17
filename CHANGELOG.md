@@ -27,20 +27,35 @@ changes on MINOR, drops on MAJOR.
   Measured on a 25-row list: 535µs → 119µs, 2180 → 462 allocs; a point
   lookup goes 271µs → 25µs, 1041 → 89 allocs. GraphQL error `extensions`
   (`status` / `code`) still reach the response envelope.
-- **gat's Connect/gRPC ingress converts in both directions without a JSON
-  round trip.** Requests were marshalled to JSON text with `protojson`
-  and parsed back into a `map[string]any`; responses went the other way,
-  `json.Marshal` then `protojson.Unmarshal`. Four serialization passes,
-  two of them only to cross between in-memory shapes. A direct
-  protoreflect walk (`messageToArgs`) handles requests, and a
-  mount-time-built encode plan handles responses. Both are held against
-  the old path by differential tests, because `bindInput` silently skips
-  keys it cannot map and a divergence would surface as a handler reading
-  a zero value rather than as an error. The response plan refuses to form
-  — falling back to the JSON path — for any type whose encoding it cannot
-  prove identical, notably anything implementing `json.Marshaler` or
-  `encoding.TextMarshaler` (`time.Time`, `json.RawMessage`). Measured on
-  a 25-row list over the binary codec: 154µs → 87µs, 646 → 438 allocs.
+- **gat's Connect/gRPC ingress no longer routes through JSON or an
+  intermediate map.** Requests were marshalled to JSON text with
+  `protojson` and parsed back into a `map[string]any`, which was then
+  bound into the handler's input struct by tag; responses went the other
+  way, `json.Marshal` then `protojson.Unmarshal`. Three mount-time plans
+  replace all of it: `bindPlan` writes proto fields straight into the
+  input struct through cached field paths, `messageToArgs` walks a
+  message directly when the bind plan declines, and an encode plan
+  writes the response.
+
+  Dropping the map also drops the repair work it required — `assignValue`
+  existed largely to undo protojson's encoding, parsing a 64-bit integer
+  back out of the string `"5"`. Reading the message directly means an
+  int64 is an int64 the whole way.
+
+  Each plan refuses to form for anything it cannot prove it handles
+  identically — enums, proto maps, and any Go type with a custom
+  JSON/text marshaler or unmarshaler (`time.Time`, `json.RawMessage`) —
+  and that operation keeps the older path. Correctness never depends on
+  the analysis being clever; only speed does. All three are held against
+  their predecessors by differential tests, because `bindInput` silently
+  skips what it cannot map and a divergence would surface as a handler
+  reading a zero value rather than as an error.
+
+  Gains are shape-dependent, since the request plans scale with field
+  count. A 25-row list response over the binary codec: 154µs → 96µs,
+  646 → 429 allocs. A 25-row request body: 146µs → 96µs, 632 → 394
+  allocs. A request carrying one scalar saves 9 allocs and little time.
+
   The per-request scan for the body argument also moved to mount time.
 - **The maintainer benchmark directory `perf/` is now `compare/`.**
   `bench/` and `perf/` are synonyms and neither name said which was

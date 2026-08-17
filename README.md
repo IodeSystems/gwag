@@ -165,9 +165,9 @@ with (no network; ratios travel, absolutes don't):
 <!-- BEGIN gat-headline -->
 | Surface | gat | hand-written | Ratio |
 |---|---:|---:|---:|
-| REST | 20.1µs (huma, unmodified) | 83.2µs (grpc-gateway) | 0.24× |
-| gRPC | 102.8µs (binary codec) | 22.2µs (connect-go) | 4.63× |
-| GraphQL | 112.4µs | 256.8µs (gqlgen) | 0.44× |
+| REST | 19.4µs (huma, unmodified) | 81.2µs (grpc-gateway) | 0.24× |
+| gRPC | 100.2µs (binary codec) | 20.7µs (connect-go) | 4.84× |
+| GraphQL | 111.1µs | 246.0µs (gqlgen) | 0.45× |
 
 gat's REST path *is* huma — `gat.Register` wraps `huma.Register`
 and adds nothing to it. GraphQL comes out ahead of gqlgen: the
