@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/IodeSystems/graphql-go"
@@ -41,6 +42,12 @@ type Gateway struct {
 	annotations *ir.AnnotationIndex
 	registry    *ir.DispatchRegistry
 	services    []*ir.Service
+
+	// planCache holds parsed + validated + planned query state so a
+	// repeated query skips straight to execution. Built by build();
+	// nil only on a gateway whose schema never assembled, which the
+	// handler treats as "not ready".
+	planCache *graphql.PlanCache
 
 	// captured holds ops registered via gat.Register for paired huma
 	// dispatch. Empty when only the BYO-IR path is used.
@@ -216,6 +223,12 @@ func (g *Gateway) build() error {
 	}
 	g.schema = schema
 	g.annotations = annotations
+	// The cache is keyed on (schema, query, operationName), so it is
+	// safe to build once here — the schema is immutable after build.
+	// Defaults mirror gw/'s: gat has no knobs to expose them through.
+	g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
+		MaxEntries: planCacheEntries,
+	})
 	g.built = true
 	return nil
 }
@@ -262,22 +275,76 @@ func (g *Gateway) Handler() http.Handler {
 		}
 
 		ctx, cookies := withCookieSink(r.Context())
-		result := graphql.Do(graphql.Params{
-			Schema:         *g.schema,
-			RequestString:  query,
-			VariableValues: variables,
-			OperationName:  operationName,
-			Context:        ctx,
-		})
+		pr := g.planCache.Get(g.schema, query, operationName)
 
 		// Emit any Set-Cookie a handler produced (login/logout) before the
 		// body — GraphQL transport otherwise drops per-op response headers.
+		//
+		// Status is 200 whatever the query did, matching gw/ and the
+		// GraphQL-over-HTTP spec: a query that resolved to errors is a
+		// successful transport exchange carrying an errors envelope, not a
+		// failed request. The two 400s above are transport-level (the body
+		// wasn't JSON, or carried no query at all) and stay 400.
 		cookies.emit(w)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if len(result.Errors) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusOK)
+
+		switch {
+		case len(pr.Errors) > 0:
+			// Parse / validate failed, so there is no plan to run. Rare
+			// path with a small payload — the encoder is fine here.
+			_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: pr.Errors})
+		case pr.Plan != nil:
+			args := variables
+			if len(pr.SynthArgs) > 0 {
+				merged := make(map[string]any, len(args)+len(pr.SynthArgs))
+				for k, v := range args {
+					merged[k] = v
+				}
+				for k, v := range pr.SynthArgs {
+					merged[k] = v
+				}
+				args = merged
+			}
+			// Hot path: walk the cached plan and emit response JSON
+			// straight into a pooled buffer, skipping the
+			// map[string]any result tree and the final Encode.
+			buf := graphqlBufPool.Get().(*[]byte)
+			body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
+				Schema:        *g.schema,
+				OperationName: operationName,
+				Args:          args,
+				Context:       ctx,
+			}, (*buf)[:0])
+			if len(errs) > 0 {
+				// Spec-level failures (variable coercion and friends) that
+				// happened before any data was assembled. Emit a clean
+				// errors envelope rather than the partial bytes.
+				_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: errs})
+			} else {
+				// Field-level errors are already inside body's `errors`
+				// array — ExecutePlanAppend writes them there.
+				_, _ = w.Write(body)
+			}
+			// Recycle the (possibly grown) backing array unless it
+			// ballooned; a one-off large response shouldn't pin a fat
+			// allocation for the process lifetime.
+			if cap(body) <= graphqlBufPoolMax {
+				*buf = body[:0]
+				graphqlBufPool.Put(buf)
+			}
+		default:
+			// No plan and no errors shouldn't happen, but fall back to
+			// the full parse-and-execute path rather than serving an
+			// empty body.
+			_ = json.NewEncoder(w).Encode(graphql.Do(graphql.Params{
+				Schema:         *g.schema,
+				RequestString:  query,
+				VariableValues: variables,
+				OperationName:  operationName,
+				Context:        ctx,
+			}))
 		}
-		json.NewEncoder(w).Encode(result)
 	})
 }
 
@@ -361,6 +428,25 @@ func (g *Gateway) publish(channel string, payload []byte) {
 	if g.mesh != nil {
 		g.mesh.fanout(channel, payload)
 	}
+}
+
+// planCacheEntries bounds the parsed-query cache. gat fronts one
+// binary's own operations, so the realistic working set is the query
+// set that binary's clients ship — small. Matches gw/'s default.
+const planCacheEntries = 1000
+
+// graphqlBufPool reuses []byte buffers across GraphQL responses to
+// keep allocs off the hot path. New buffers start at 4 KB — enough
+// for most responses; ExecutePlanAppend grows the slice as needed.
+// graphqlBufPoolMax caps what we hand back so a one-off megabyte
+// response doesn't pin a fat allocation.
+const graphqlBufPoolMax = 64 * 1024
+
+var graphqlBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
 }
 
 func writeError(w http.ResponseWriter, msg string, status int) {
