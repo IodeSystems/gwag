@@ -56,7 +56,7 @@ ui/                  React + MUI + TanStack Router admin UI; consumes
                      GraphQL only via graphql-codegen-typed SDK
 bench/               Local benchmark + demo stack (compose, scripts,
                      cmd/traffic). bin/bench dispatches everything.
-perf/                Competitor matrix harness (vs graphql-mesh / Apollo)
+compare/             Competitor matrix harness (vs graphql-mesh / Apollo / gqlgen)
 examples/            Example services that register against the gateway
 docs/                User and maintainer documentation
 bin/                 Top-level shell scripts (build, bench)

@@ -1,5 +1,5 @@
-# perf/Dockerfile — bundles every gateway under comparison plus the
-# bench/cmd/traffic load generator and the perf/cmd/compare
+# compare/Dockerfile — bundles every gateway under comparison plus the
+# bench/cmd/traffic load generator and the compare/cmd/compare
 # orchestrator. Built on ubuntu:latest per the README's spec.
 #
 # Multi-stage so each toolchain layer caches independently:
@@ -35,7 +35,7 @@ COPY . /src
 # The gateway's `ui/embed.go` uses `//go:embed all:dist` which fails
 # if ui/dist/ is empty. .dockerignore strips the host's built bundle
 # to keep the context small; stub a placeholder so the embed pattern
-# matches. None of the perf-comparison endpoints serve the UI, so
+# matches. None of the comparison endpoints serve the UI, so
 # the stub is sufficient.
 RUN mkdir -p /src/ui/dist && echo '<!-- placeholder for go:embed -->' > /src/ui/dist/index.html
 RUN mkdir -p /out/bin && \
@@ -44,7 +44,7 @@ RUN mkdir -p /out/bin && \
     go build -o /out/bin/hello-openapi  ./examples/multi/cmd/hello-openapi && \
     go build -o /out/bin/hello-graphql  ./examples/multi/cmd/hello-graphql && \
     go build -o /out/bin/traffic        ./bench/cmd/traffic && \
-    go build -o /out/bin/compare        ./perf/cmd/compare
+    go build -o /out/bin/compare        ./compare/cmd/compare
 
 # ---------------------------------------------------------------------
 # Stage 2 — Node + graphql-mesh
@@ -59,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /mesh
-COPY perf/configs/mesh/package.json perf/configs/mesh/.meshrc.yaml ./
+COPY compare/configs/mesh/package.json compare/configs/mesh/.meshrc.yaml ./
 RUN npm install --no-audit --no-fund
 
 # ---------------------------------------------------------------------
@@ -91,32 +91,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /perf
+WORKDIR /compare
 
 # Repo layout (configs + scripts; binaries land under bench/.run/bin/
-# and perf/.run/bin/ to match what the orchestrator expects).
-COPY perf/             /perf/perf/
-COPY bench/perf-scenarios.yaml /perf/bench/perf-scenarios.yaml
+# and compare/.run/bin/ to match what the orchestrator expects).
+COPY compare/             /compare/compare/
+COPY bench/perf-scenarios.yaml /compare/bench/perf-scenarios.yaml
 
 # hello-proto reads protos/hello.proto from CWD at startup. Mirror
 # the host layout (examples/multi/protos/) so the orchestrator's
 # cmd.Dir works the same way in-container and on the host.
-COPY examples/multi/protos /perf/examples/multi/protos
+COPY examples/multi/protos /compare/examples/multi/protos
 
 # Go-built artifacts.
-RUN mkdir -p /perf/bench/.run/bin /perf/perf/.run/bin
-COPY --from=builder-go /out/bin/gateway        /perf/bench/.run/bin/gateway
-COPY --from=builder-go /out/bin/hello-proto    /perf/bench/.run/bin/hello-proto
-COPY --from=builder-go /out/bin/hello-openapi  /perf/bench/.run/bin/hello-openapi
-COPY --from=builder-go /out/bin/hello-graphql  /perf/bench/.run/bin/hello-graphql
-COPY --from=builder-go /out/bin/traffic        /perf/bench/.run/bin/traffic
-COPY --from=builder-go /out/bin/compare        /perf/perf/.run/bin/compare
+RUN mkdir -p /compare/bench/.run/bin /compare/compare/.run/bin
+COPY --from=builder-go /out/bin/gateway        /compare/bench/.run/bin/gateway
+COPY --from=builder-go /out/bin/hello-proto    /compare/bench/.run/bin/hello-proto
+COPY --from=builder-go /out/bin/hello-openapi  /compare/bench/.run/bin/hello-openapi
+COPY --from=builder-go /out/bin/hello-graphql  /compare/bench/.run/bin/hello-graphql
+COPY --from=builder-go /out/bin/traffic        /compare/bench/.run/bin/traffic
+COPY --from=builder-go /out/bin/compare        /compare/compare/.run/bin/compare
 
 # graphql-mesh + npm dependency tree.
-COPY --from=builder-node /mesh /perf/perf/configs/mesh
+COPY --from=builder-node /mesh /compare/compare/configs/mesh
 
 # Apollo Router.
-COPY --from=fetch-apollo /out/router /perf/perf/.run/bin/router
+COPY --from=fetch-apollo /out/router /compare/compare/.run/bin/router
 
 # Expose ports for any caller that wants to attach a profiler / curl.
 EXPOSE 18080 50090 14000 14100 50053 50054 50055
@@ -126,10 +126,10 @@ EXPOSE 18080 50090 14000 14100 50053 50054 50055
 VOLUME ["/out"]
 
 # Run the comparator. Override CMD to drop into bash for debugging:
-#   docker run --rm -it --entrypoint bash gwag-perf
+#   docker run --rm -it --entrypoint bash gwag-compare
 #
 # Pass HOST_UID/HOST_GID (e.g. `-e HOST_UID=$(id -u) -e HOST_GID=$(id -g)`)
 # to chown the output back to the invoking host user — otherwise the
 # container's root identity bleeds into the bind mount and host-side
-# `perf/.out/` ends up unwritable on the next host-local run.
-CMD ["bash", "-c", "set -e; /perf/perf/run.sh && cp -r /perf/perf/.out/. /out/ && if [ -n \"${HOST_UID:-}\" ]; then chown -R \"${HOST_UID}:${HOST_GID:-${HOST_UID}}\" /out; fi"]
+# `compare/.out/` ends up unwritable on the next host-local run.
+CMD ["bash", "-c", "set -e; /compare/compare/run.sh && cp -r /compare/compare/.out/. /out/ && if [ -n \"${HOST_UID:-}\" ]; then chown -R \"${HOST_UID}:${HOST_GID:-${HOST_UID}}\" /out; fi"]

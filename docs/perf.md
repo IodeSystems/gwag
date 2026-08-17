@@ -12,7 +12,7 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 > **Looking for "how does gwag compare to X?"** This page is gwag's
 > own throughput on your hardware. For a head-to-head against
 > graphql-mesh and Apollo Router on the same backends, see
-> [`perf/comparison.md`](../perf/comparison.md).
+> [`compare/comparison.md`](../compare/comparison.md).
 
 ## Machine
 

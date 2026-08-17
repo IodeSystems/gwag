@@ -6,13 +6,13 @@
 # without doing real federation work (which our other backends
 # don't support).
 #
-# Listens on :14100. Config at perf/configs/apollo/router.yaml +
-# perf/configs/apollo/supergraph.graphql.
+# Listens on :14100. Config at compare/configs/apollo/router.yaml +
+# compare/configs/apollo/supergraph.graphql.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-APOLLO_DIR="$REPO/perf/configs/apollo"
-APOLLO_BIN="$REPO/perf/.run/bin/router"
+APOLLO_DIR="$REPO/compare/configs/apollo"
+APOLLO_BIN="$REPO/compare/.run/bin/router"
 APOLLO_VERSION="1.55.0"
 PID_FILE="/tmp/perf-apollo.pid"
 LOG_FILE="/tmp/perf-apollo.log"

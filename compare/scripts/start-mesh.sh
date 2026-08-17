@@ -3,13 +3,13 @@
 #
 # graphql-mesh is the closest peer to gwag (multi-format ingest →
 # unified GraphQL surface). Installed via npm; serves on :14000.
-# Reads its config from perf/configs/mesh/.meshrc.yaml.
+# Reads its config from compare/configs/mesh/.meshrc.yaml.
 #
 # First-run npm install can be slow (multi-minute on cold cache).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MESH_DIR="$REPO/perf/configs/mesh"
+MESH_DIR="$REPO/compare/configs/mesh"
 PID_FILE="/tmp/perf-mesh.pid"
 LOG_FILE="/tmp/perf-mesh.log"
 

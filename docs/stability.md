@@ -206,13 +206,13 @@ reflection tricks; don't rely on observable side-effects of internal
 state. These will change without notice.
 
 **Tests, benchmarks, examples.** `gw/*_test.go`, `bench/*`,
-`perf/*`, `examples/*`. Useful as templates, not as API. The
+`compare/*`, `examples/*`. Useful as templates, not as API. The
 example wiring in `examples/multi/cmd/gateway/main.go` is the
 canonical reference, but the wiring is example code, not a library
 constraint.
 
 **Build- or runtime-internal artifacts.** `bin/build`,
-`bin/bench`, `bench/.run/`, `perf/.run/`. Tooling for maintainers
+`bin/bench`, `bench/.run/`, `compare/.run/`. Tooling for maintainers
 and adopters; their flags and layout are not part of the import
 surface.
 

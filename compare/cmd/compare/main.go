@@ -1,6 +1,6 @@
 // compare — head-to-head perf comparison orchestrator.
 //
-// Reads perf/competitors.yaml, boots the hello-* upstream backends
+// Reads compare/competitors.yaml, boots the hello-* upstream backends
 // once, then for each enabled gateway: starts it, waits for /health,
 // runs the configured sweep at every scenario the gateway supports,
 // captures the JSON sidecar, stops the gateway, moves on.
@@ -8,7 +8,7 @@
 // All sweeps share the same bench/cmd/traffic binary so the gateway-
 // side numbers are directly comparable.
 //
-// Final output: perf/.out/comparison.md — markdown matrix of each
+// Final output: compare/.out/comparison.md — markdown matrix of each
 // gateway × scenario, sweep table per row, with the per-scenario
 // recommended-ceiling RPS + p99 + gateway-self-time for the headline
 // table at the top.
@@ -73,8 +73,8 @@ func (g gatewayCfg) enabled() bool {
 }
 
 func main() {
-	configPath := flag.String("config", "perf/competitors.yaml", "competitors YAML")
-	outDir := flag.String("out", "perf/.out", "output directory for per-gateway JSON + final comparison.md")
+	configPath := flag.String("config", "compare/competitors.yaml", "competitors YAML")
+	outDir := flag.String("out", "compare/.out", "output directory for per-gateway JSON + final comparison.md")
 	repoRoot := flag.String("repo", ".", "path to repo root (so we can find bench/cmd/traffic + start scripts)")
 	skipBackends := flag.Bool("skip-backends", false, "assume backends already running (debug)")
 	only := flag.String("only", "", "comma-separated gateway names to run; default = all enabled")
@@ -328,7 +328,7 @@ func listening(port string) bool {
 }
 
 // runGateway is the per-gateway entry point. It invokes the gateway-
-// specific start script (perf/scripts/start-<name>.sh), waits for the
+// specific start script (compare/scripts/start-<name>.sh), waits for the
 // target endpoint to respond, runs the sweep, then runs the stop
 // script (start-<name>.sh stop) before returning.
 //
@@ -388,13 +388,13 @@ func pickGwag(picked []gatewayCfg) *gatewayCfg {
 	return nil
 }
 
-// startGateway shells to perf/scripts/start-<name>.sh and returns a
+// startGateway shells to compare/scripts/start-<name>.sh and returns a
 // stop-function the caller invokes when done. Separated from
 // runGateway so main() can manage gwag's lifecycle across all
 // gateway iterations (gwag stays up for the duration; mesh + apollo
 // start and stop per-iteration).
 func startGateway(repoRoot string, gw gatewayCfg) (func() error, error) {
-	startScript := filepath.Join(repoRoot, "perf", "scripts", "start-"+gw.Name+".sh")
+	startScript := filepath.Join(repoRoot, "compare", "scripts", "start-"+gw.Name+".sh")
 	if _, err := os.Stat(startScript); err != nil {
 		return nil, fmt.Errorf("no start script at %s", startScript)
 	}
@@ -598,7 +598,7 @@ func summariseSweep(path, name string) (*scenarioOutcome, error) {
 func renderComparison(outDir string, cfg *config, picked []gatewayCfg, results map[string]*gatewayResults) error {
 	var b strings.Builder
 	b.WriteString("# Perf comparison — gwag vs peers\n\n")
-	fmt.Fprintf(&b, "_Generated %s. Run via `docker run gwag-perf` or `perf/run.sh local`._\n\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "_Generated %s. Run via `docker run gwag-perf` or `compare/run.sh local`._\n\n", time.Now().UTC().Format(time.RFC3339))
 	b.WriteString("Each gateway runs the same `bench/cmd/traffic` sweep against the same `hello-*` backends on the same host (serial; no concurrent gateways). Knee = highest rung where p99 stays under 50ms.\n\n")
 
 	// Headline matrix table: rows = scenarios, columns = gateways.

@@ -66,5 +66,5 @@ entity identity. See [`federation.md`](./federation.md).
 ## Benchmarks
 
 Measured numbers vs graphql-mesh and Apollo Router on the same
-hardware: [`perf/comparison.md`](../perf/comparison.md). Harness:
-[`perf/`](../perf).
+hardware: [`compare/comparison.md`](../compare/comparison.md). Harness:
+[`compare/`](../compare).

@@ -1,7 +1,7 @@
-# perf/competitors.yaml — declarative list of gateways under comparison.
+# compare/competitors.yaml — declarative list of gateways under comparison.
 #
 # Each entry boots independently (no concurrent gateways) so they don't
-# fight for CPU. The orchestrator at perf/cmd/compare/main.go reads this
+# fight for CPU. The orchestrator at compare/cmd/compare/main.go reads this
 # file, starts each gateway in turn, sweeps it, captures the result,
 # stops it, moves on.
 
@@ -31,25 +31,36 @@ scenarios:
     # graphql-mesh + Apollo Router don't natively wire a proto upstream
     # the way gwag does. They appear in this scenario only when the
     # gateway's config explicitly bridges proto → graphql.
-    supported_by: [gwag]
+    supported_by: [gwag, gat]
 
   - name: openapi
     query: 'mutation { hello_openapi { Hello(body: { name: "world" }) { greeting } } }'
     # graphql-mesh supports OpenAPI sources natively. Apollo Router
     # doesn't; needs a connector or sidecar.
-    supported_by: [gwag, mesh]
+    supported_by: [gwag, gat, mesh]
 
   - name: graphql
     query: '{ hello_graphql { hello(name: "world") { greeting } } }'
     # GraphQL-in / GraphQL-out is the universal scenario every peer
     # supports. The most apples-to-apples row.
     supported_by: [gwag, mesh, apollo]
+  # gat has no GraphQL-upstream ingest (AddGraphQL is a full-gwag
+  # feature), so it sits this scenario out rather than faking it.
 
 gateways:
   - name: gwag
     description: "this repo — multi-format ingest, dynamic registration, reflection dispatch"
     # gwag's bench infra is already wired; just point at the gateway
     # endpoint and reuse the sweep.
+    target_template: "http://localhost:18080/api/graphql"
+
+  - name: gat
+    description: "this repo, embedded — gat fronting the same upstreams in-process; no NATS, no cluster, no admin"
+    # compare/cmd/gat-gateway registers hello-proto + hello-openapi with
+    # gwag's namespace names, so gat answers the canonical queries
+    # unmodified. The delta to the gwag row is what the full gateway's
+    # machinery (metrics, backpressure, control plane, cluster) costs
+    # per request over the embedded path.
     target_template: "http://localhost:18080/api/graphql"
 
   - name: mesh
