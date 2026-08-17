@@ -9,11 +9,35 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/iodesystems/gwag/gw/ir"
 )
+
+// outboundIdleConnsPerHost is how many keep-alive connections gat
+// holds open per upstream. Go's http.DefaultClient ships
+// MaxIdleConnsPerHost=2, which collapses into a fresh TCP connection
+// (and handshake) per request the moment concurrency exceeds two —
+// the upstream stops being the bottleneck and connection churn takes
+// over. gw/ pre-bakes the same default for exactly this reason.
+const outboundIdleConnsPerHost = 1024
+
+// outboundHTTP is the client every OpenAPI dispatch forwards through.
+// Package-level so all dispatchers share one connection pool: a
+// per-dispatcher client would partition keep-alives by operation and
+// defeat the point. Adopters needing a custom transport (proxy, mTLS)
+// supply their own dispatcher via ServiceRegistration.Dispatchers.
+var outboundHTTP = newOutboundHTTPClient()
+
+func newOutboundHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = outboundIdleConnsPerHost * 4
+	tr.MaxIdleConnsPerHost = outboundIdleConnsPerHost
+	tr.IdleConnTimeout = 90 * time.Second
+	return &http.Client{Transport: tr}
+}
 
 // openAPIDispatcher implements ir.Dispatcher for one OpenAPI operation.
 type openAPIDispatcher struct {
@@ -108,7 +132,7 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 		}
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := outboundHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("gat: %s %s: %w", d.method, full, err)
 	}
