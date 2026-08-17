@@ -30,7 +30,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":18080", "HTTP listen address")
+	addr := flag.String("addr", ":18085", "HTTP listen address")
 	prefix := flag.String("prefix", "/api", "mount prefix for /graphql + /schema/*")
 	protoFile := flag.String("proto", "protos/hello.proto", "path to the hello-proto .proto")
 	protoTarget := flag.String("proto-target", "localhost:50055", "hello-proto gRPC target")

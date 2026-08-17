@@ -61,7 +61,11 @@ gateways:
     # unmodified. The delta to the gwag row is what the full gateway's
     # machinery (metrics, backpressure, control plane, cluster) costs
     # per request over the embedded path.
-    target_template: "http://localhost:18080/api/graphql"
+    #
+    # Its own port, NOT gwag's :18080 — gwag stays up for the whole run
+    # to hold the backends' registrations, so sharing the port means gat
+    # never binds and gwag silently answers in its place.
+    target_template: "http://localhost:18085/api/graphql"
 
   - name: mesh
     description: "graphql-mesh (Node, npm-distributed; multi-format ingest peer)"
