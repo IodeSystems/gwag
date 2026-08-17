@@ -36,8 +36,9 @@ type HandleMux interface {
 // grpc-web (browser-friendly) — all hit the same handlers.
 //
 // Dispatch round-trip: incoming proto (dynamic message) →
-// protojson → map[string]any → bindInput → captured huma handler →
-// extracted Body → JSON → protojson → outgoing proto.
+// map[string]any (walked directly, see connect_args.go) → bindInput →
+// captured huma handler → extracted Body → JSON → protojson →
+// outgoing proto.
 //
 // Must be called AFTER RegisterHuma — RegisterGRPC reads the
 // FileDescriptorSet projection of g.services, which only exists
@@ -177,22 +178,36 @@ func httpStatusToConnectCode(status int) connect.Code {
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
 func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
-	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
-		args, err := dynamicToArgs(req.Msg)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	// Resolve the body arg once, at mount time. It is a property of the
+	// operation, not of the request, and scanning Args per call put
+	// mount-time work in the hot loop.
+	bodyArg := ""
+	if cap.irOp != nil {
+		for _, a := range cap.irOp.Args {
+			if strings.EqualFold(a.OpenAPILocation, "body") {
+				bodyArg = a.Name
+				break
+			}
 		}
+	}
+
+	// Try to plan the response encoding against the handler's output
+	// type. A nil plan is the normal outcome for anything the walker
+	// can't prove it renders identically (custom marshalers, maps,
+	// enums) and simply keeps the JSON round trip for that operation.
+	outPlan := planResponse(cap, md)
+
+	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
+		// Walk the message straight into the args map. This used to go
+		// protojson.Marshal → json.Unmarshal — two serialization passes
+		// to cross between two in-memory shapes. messageToArgs
+		// reproduces that output exactly; connect_args_test.go pins it
+		// against protojson.
+		args := messageToArgs(req.Msg)
 
 		inPtr := reflect.New(cap.inputType)
 		in := inPtr.Elem()
-		bodyArg := ""
 		if cap.irOp != nil {
-			for _, a := range cap.irOp.Args {
-				if strings.EqualFold(a.OpenAPILocation, "body") {
-					bodyArg = a.Name
-					break
-				}
-			}
 			if err := bindInput(in, cap.irOp, args, bodyArg); err != nil {
 				return nil, connect.NewError(connect.CodeInvalidArgument,
 					fmt.Errorf("bind %s: %w", cap.op.OperationID, err))
@@ -210,37 +225,19 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		body := extractBody(out)
 
 		respMsg := dynamicpb.NewMessage(md.Output())
+		if outPlan != nil {
+			if err := outPlan.encode(reflect.ValueOf(body), respMsg); err != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("encode response: %w", err))
+			}
+			return connect.NewResponse(respMsg), nil
+		}
 		if err := jsonToDynamic(body, respMsg); err != nil {
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("encode response: %w", err))
 		}
 		return connect.NewResponse(respMsg), nil
 	}
-}
-
-// dynamicToArgs marshals the dynamic proto to canonical JSON, then
-// decodes that JSON into a map[string]any keyed by the field's JSON
-// name. This matches how IR Args land on the wire (one Arg per
-// top-level field).
-func dynamicToArgs(msg *dynamicpb.Message) (map[string]any, error) {
-	if msg == nil {
-		return map[string]any{}, nil
-	}
-	b, err := protojson.MarshalOptions{
-		UseProtoNames:   true,
-		EmitUnpopulated: false,
-	}.Marshal(msg)
-	if err != nil {
-		return nil, fmt.Errorf("protojson encode: %w", err)
-	}
-	var out map[string]any
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("decode args: %w", err)
-	}
-	if out == nil {
-		out = map[string]any{}
-	}
-	return out, nil
 }
 
 // jsonToDynamic encodes body as JSON and decodes that into the
