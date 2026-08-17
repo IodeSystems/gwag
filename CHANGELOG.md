@@ -51,12 +51,35 @@ changes on MINOR, drops on MAJOR.
   skips what it cannot map and a divergence would surface as a handler
   reading a zero value rather than as an error.
 
-  Gains are shape-dependent, since the request plans scale with field
-  count. A 25-row list response over the binary codec: 154µs → 96µs,
-  646 → 429 allocs. A 25-row request body: 146µs → 96µs, 632 → 394
-  allocs. A request carrying one scalar saves 9 allocs and little time.
-
   The per-request scan for the body argument also moved to mount time.
+- **gat writes Connect responses straight to proto wire bytes.** The
+  response was assembled as a `dynamicpb` message and handed to
+  `proto.Marshal`. A memory profile of a 25-row response put roughly
+  four fifths of the request's allocations in that arrangement:
+  `dynamicpb.NewMessage` once per row, `protoreflect.Value` boxing per
+  field, and proto's reflective `marshalMessageSlow`, which is the only
+  marshaller available because `dynamicpb` carries no generated fast
+  path. The encode plan already knows which Go field feeds which proto
+  field, so the bytes are now emitted directly and no message is built.
+
+  gat also mounts its own binary codec, which passes `AllowPartial` to
+  `proto.Marshal` on the paths that still need it. proto3 has no
+  required fields, so the initialization check it skips could only ever
+  succeed while walking the whole message to find that out.
+
+  Emitting the wire format means owning its rules — implicit presence,
+  packed versus unpacked repeated fields, length-prefixed nested
+  messages, sign-extended negative 32-bit varints. Each is asserted
+  byte-for-byte against `proto.Marshal` rather than reasoned about,
+  since a mistake yields output that still parses but means something
+  else. Responses whose encode plan declines still take the old path.
+
+  On a 25-row list: **Connect binary 100µs → 30µs, 429 → 129 allocs;
+  gRPC-Web 87µs → 32µs, 390 → 137 allocs.** That moves gat from ~4.8×
+  a hand-written connect-go service to ~1.4×. The JSON codec is
+  unchanged — protojson needs a real message, so that path still
+  materialises one.
+
 - **The maintainer benchmark directory `perf/` is now `compare/`.**
   `bench/` and `perf/` are synonyms and neither name said which was
   which. `bench/` measures gwag against itself (renders `docs/perf.md`,

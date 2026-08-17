@@ -82,6 +82,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 					connectUnary(cap, md),
 					connect.WithSchema(md),
 					connect.WithRequestInitializer(newDynamicInitializer()),
+					connect.WithCodec(fastProtoCodec{}),
 				)
 				mux.Handle(prefix+procedure, handler)
 			}
@@ -178,7 +179,7 @@ func httpStatusToConnectCode(status int) connect.Code {
 
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
-func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
+func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
 	// Resolve the body arg once, at mount time. It is a property of the
 	// operation, not of the request, and scanning Args per call put
 	// mount-time work in the hot loop.
@@ -199,7 +200,13 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 	inPlan := buildBindPlan(cap.inputType, cap.irOp, bodyArg, md.Input())
 	outPlan := planResponse(cap, md)
 
-	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
+	if outPlan != nil {
+		// Ascending field order matches what proto.Marshal emits, which
+		// is what the emitter is checked against.
+		outPlan.sortFields()
+	}
+
+	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
 		inPtr := reflect.New(cap.inputType)
 		in := inPtr.Elem()
 		switch {
@@ -233,19 +240,17 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		}
 		body := extractBody(out)
 
-		respMsg := dynamicpb.NewMessage(md.Output())
 		if outPlan != nil {
-			if err := outPlan.encode(reflect.ValueOf(body), respMsg); err != nil {
-				return nil, connect.NewError(connect.CodeInternal,
-					fmt.Errorf("encode response: %w", err))
-			}
-			return connect.NewResponse(respMsg), nil
+			// Hand over the value, not a message: the codec encodes it.
+			return connect.NewResponse(newPlannedResult(md.Output(), outPlan, body)), nil
 		}
+
+		respMsg := dynamicpb.NewMessage(md.Output())
 		if err := jsonToDynamic(body, respMsg); err != nil {
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("encode response: %w", err))
 		}
-		return connect.NewResponse(respMsg), nil
+		return connect.NewResponse(newBuiltResult(md.Output(), respMsg)), nil
 	}
 }
 
