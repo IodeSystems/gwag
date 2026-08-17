@@ -36,7 +36,8 @@ type HandleMux interface {
 // grpc-web (browser-friendly) — all hit the same handlers.
 //
 // Dispatch round-trip: incoming proto (dynamic message) →
-// map[string]any (walked directly, see connect_args.go) → bindInput →
+// a cached field plan (connect_bind.go), or the map walk in
+// connect_args.go when the plan declines →
 // captured huma handler → extracted Body → JSON → protojson →
 // outgoing proto.
 //
@@ -191,30 +192,38 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		}
 	}
 
-	// Try to plan the response encoding against the handler's output
-	// type. A nil plan is the normal outcome for anything the walker
-	// can't prove it renders identically (custom marshalers, maps,
-	// enums) and simply keeps the JSON round trip for that operation.
+	// Plan both directions against the operation's types. A nil plan is
+	// the normal outcome for anything the walkers can't prove they
+	// handle identically (custom marshalers, maps, enums); that
+	// operation simply keeps the older path.
+	inPlan := buildBindPlan(cap.inputType, cap.irOp, bodyArg, md.Input())
 	outPlan := planResponse(cap, md)
 
 	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[dynamicpb.Message], error) {
-		// Walk the message straight into the args map. This used to go
-		// protojson.Marshal → json.Unmarshal — two serialization passes
-		// to cross between two in-memory shapes. messageToArgs
-		// reproduces that output exactly; connect_args_test.go pins it
-		// against protojson.
-		args := messageToArgs(req.Msg)
-
 		inPtr := reflect.New(cap.inputType)
 		in := inPtr.Elem()
-		if cap.irOp != nil {
+		switch {
+		case inPlan != nil:
+			// Fast path: proto fields written straight into the input
+			// struct through the cached field plan. No intermediate map,
+			// and no protojson representations to undo.
+			if err := inPlan.bind(in, req.Msg); err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("bind %s: %w", cap.op.OperationID, err))
+			}
+		case cap.irOp != nil:
+			// Walk the message into the args map, then bind by tag. This
+			// used to go protojson.Marshal → json.Unmarshal;
+			// messageToArgs reproduces that output exactly, pinned
+			// against protojson in connect_args_test.go.
+			args := messageToArgs(req.Msg)
 			if err := bindInput(in, cap.irOp, args, bodyArg); err != nil {
 				return nil, connect.NewError(connect.CodeInvalidArgument,
 					fmt.Errorf("bind %s: %w", cap.op.OperationID, err))
 			}
-		} else {
+		default:
 			// Best-effort JSON-into-input for ops never ingested.
-			raw, _ := json.Marshal(args)
+			raw, _ := json.Marshal(messageToArgs(req.Msg))
 			_ = json.Unmarshal(raw, inPtr.Interface())
 		}
 

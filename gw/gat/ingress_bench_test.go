@@ -59,6 +59,28 @@ func benchListProjects(ctx context.Context, in *listProjectsInput) (*listProject
 	return out, nil
 }
 
+// benchCreateInput carries a 25-element body — the shape where request
+// binding actually costs something. The list benchmarks above send a
+// one-scalar request, so they say nothing about how the binder scales
+// with body size.
+type benchCreateInput struct {
+	Body struct {
+		Projects []project `json:"projects"`
+	}
+}
+
+type benchCreateOutput struct {
+	Body struct {
+		Created int `json:"created"`
+	}
+}
+
+func benchCreateProjects(ctx context.Context, in *benchCreateInput) (*benchCreateOutput, error) {
+	out := &benchCreateOutput{}
+	out.Body.Created = len(in.Body.Projects)
+	return out, nil
+}
+
 // benchGateway builds the mux/gat pair the ingress benchmarks share.
 // Both operations are registered on every path so the schema shape is
 // identical regardless of which ingress a given benchmark drives.
@@ -80,6 +102,11 @@ func benchGateway(tb testing.TB) *http.ServeMux {
 		Method:      http.MethodGet,
 		Path:        "/projects",
 	}, benchListProjects)
+	gat.Register(api, g, huma.Operation{
+		OperationID: "createProjects",
+		Method:      http.MethodPost,
+		Path:        "/projects",
+	}, benchCreateProjects)
 
 	if err := gat.RegisterHuma(api, g, "/api"); err != nil {
 		tb.Fatalf("RegisterHuma: %v", err)
@@ -250,6 +277,54 @@ func BenchmarkGatIngressList_ConnectJSON(b *testing.B) {
 	mux := benchGateway(b)
 	proc := connectProcedure(b, mux, "listProjects")
 	const body = `{"limit":25}`
+	serveOK(b, mux, newConnectReq(proc, body))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		serveOK(b, mux, newConnectReq(proc, body))
+	}
+}
+
+// --- body-heavy request: createProjects (25 rows in) --------------------
+//
+// The point-lookup and list benchmarks both send a tiny request, so they
+// measure response cost almost exclusively. This one inverts that: 25
+// rows go IN and a single count comes back, which is where the Connect
+// ingress's request binding is actually on the hook.
+
+func benchCreateBody() string {
+	var b strings.Builder
+	b.WriteString(`{"body":{"projects":[`)
+	for i := 0; i < 25; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"id":"p%d","name":"Project %d"}`, i, i)
+	}
+	b.WriteString(`]}}`)
+	return b.String()
+}
+
+func BenchmarkGatIngressCreate_REST(b *testing.B) {
+	mux := benchGateway(b)
+	body := `{"projects":[` + strings.TrimSuffix(strings.Repeat(`{"id":"p","name":"n"},`, 25), ",") + `]}`
+	newReq := func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/projects", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		return r
+	}
+	serveOK(b, mux, newReq())
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		serveOK(b, mux, newReq())
+	}
+}
+
+func BenchmarkGatIngressCreate_ConnectJSON(b *testing.B) {
+	mux := benchGateway(b)
+	proc := connectProcedure(b, mux, "createProjects")
+	body := benchCreateBody()
 	serveOK(b, mux, newConnectReq(proc, body))
 	b.ReportAllocs()
 	b.ResetTimer()
