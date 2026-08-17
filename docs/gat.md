@@ -25,6 +25,25 @@ Use full gwag when multiple service binaries register at runtime,
 when you need NATS-backed pub/sub or cluster KV, or when the admin
 UI / MCP tools / self-introspecting admin OpenAPI is load-bearing.
 
+## What it costs
+
+Each surface, measured against the tool you'd otherwise hand-write it
+with, on the same huma handler and the same payload:
+[`compare/gatbench/`](../compare/gatbench/README.md).
+
+Short version: the REST path is huma unmodified, so it costs nothing
+extra. GraphQL lands ahead of a hand-written gqlgen server — gat runs
+the same plan cache + append-mode executor `gw/` uses, which appends
+response JSON straight into a pooled buffer. Connect/gRPC is the
+surface that costs: ~1.7-3× a hand-written connect-go service,
+because gat binds through dynamicpb and reflection where connect-go
+uses generated message types.
+
+The GraphQL ingress answers **200** for any query that reached
+execution, including one that resolved to errors — an errors envelope
+is a successful exchange, per GraphQL-over-HTTP. A malformed request
+(body isn't JSON, or carries no query) is still a 400.
+
 ## Mental model
 
 Huma is the source of truth. You register each operation with huma

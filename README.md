@@ -155,8 +155,32 @@ of a direct dial in the matching wire format):
 Each active middleware rule on the hot path adds ~15–20 µs at p50.
 Full numbers + reproduce recipe: [`docs/perf.md`](./docs/perf.md).
 Head-to-head vs graphql-mesh + Apollo Router on the same backends:
-[`perf/comparison.md`](./perf/comparison.md) (harness + reproduce
-recipe: [`perf/`](./perf)).
+[`compare/comparison.md`](./compare/comparison.md) (harness + reproduce
+recipe: [`compare/`](./compare)).
+
+**Embedded (`gat`)**, in-process — same huma handler, same 25-row
+payload, each surface against the tool you'd otherwise hand-write it
+with (no network; ratios travel, absolutes don't):
+
+<!-- BEGIN gat-headline -->
+| Surface | gat | hand-written | Ratio |
+|---|---:|---:|---:|
+| REST | 20.1µs (huma, unmodified) | 83.2µs (grpc-gateway) | 0.24× |
+| gRPC | 102.8µs (binary codec) | 22.2µs (connect-go) | 4.63× |
+| GraphQL | 112.4µs | 256.8µs (gqlgen) | 0.44× |
+
+gat's REST path *is* huma — `gat.Register` wraps `huma.Register`
+and adds nothing to it. GraphQL comes out ahead of gqlgen: the
+executor walks a cached plan and appends response JSON straight
+into a pooled buffer, where gqlgen assembles an intermediate
+first. gRPC is the surface translation costs — gat allocates a
+dynamicpb message per element and walks it by reflection, where
+connect-go has generated structs. The ratio is worst on the
+binary codec shown here; a JSON-codec caller narrows it, but only
+because JSON penalises connect-go more than it penalises gat.
+Per-caller numbers and method:
+[`compare/gatbench/`](./compare/gatbench).
+<!-- END gat-headline -->
 
 ## Embedded mode (`gat`)
 
@@ -223,7 +247,7 @@ with a client driver: [`examples/multi/cmd/mcp-demo`](./examples/multi/cmd/mcp-d
   schemas or emit clients.
 - **graphql-mesh / Apollo Router (single-subgraph mode)** — closest
   peers on multi-format ingest. Head-to-head numbers:
-  [`perf/comparison.md`](./perf/comparison.md).
+  [`compare/comparison.md`](./compare/comparison.md).
 - **[gqlgen](https://github.com/99designs/gqlgen)** — Go GraphQL
   server framework. You write SDL, gqlgen generates resolver stubs,
   you implement them. Different layer: gqlgen builds one Go service's
@@ -243,8 +267,8 @@ emits JSON straight to a buffer is the next perf lever (in flight,
 not gating any release).
 
 Self-measurement: [`docs/perf.md`](./docs/perf.md). Head-to-head vs
-peers: [`perf/comparison.md`](./perf/comparison.md) (harness:
-[`perf/`](./perf)).
+peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
+[`compare/`](./compare)).
 
 ## Documentation
 
@@ -264,8 +288,9 @@ peers: [`perf/comparison.md`](./perf/comparison.md) (harness:
 
 - [`docs/perf.md`](./docs/perf.md) — throughput sweep on your hardware
 - [`docs/comparison.md`](./docs/comparison.md) — gwag vs service discovery / mesh / Kong / Federation
-- [`perf/comparison.md`](./perf/comparison.md) — head-to-head numbers vs graphql-mesh + Apollo Router
-- [`perf/`](./perf) — competitor matrix harness (Dockerfile + orchestrator)
+- [`compare/comparison.md`](./compare/comparison.md) — head-to-head numbers vs gat, graphql-mesh, Apollo Router
+- [`compare/gatbench/`](./compare/gatbench) — what `gat` costs vs gqlgen / connect-go / grpc-gateway
+- [`compare/`](./compare) — both harnesses, with the headline matrices inline
 
 **Pub/Sub & subscriptions** — `ps.pub` / `ps.sub` primitives with
 per-pattern auth (`ChannelAuthOpen` / `HMAC` / `Delegate`) and a

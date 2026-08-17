@@ -5,6 +5,19 @@ runtime, Prometheus + Grafana scraping `/api/metrics`, and a
 traffic generator that hammers the GraphQL surface and reports
 client-side latency quantiles.
 
+> **`bench/` or `compare/`?** The names are synonyms; the split is not.
+>
+> - **`bench/` (here)** measures gwag *against itself* — how fast is
+>   it on your hardware, where does it knee, where does the time go.
+>   Output: [`docs/perf.md`](../docs/perf.md). Driven by `bin/bench`.
+> - **[`compare/`](../compare)** measures gwag *against other tools* —
+>   Apollo Router, graphql-mesh, gqlgen, connect-go, grpc-gateway.
+>   Output: [`compare/comparison.md`](../compare/comparison.md) and
+>   [`compare/gatbench/results.md`](../compare/gatbench/results.md).
+>
+> `compare/` drives its sweeps with this directory's `cmd/traffic`, so
+> the load generator is shared and the two are directly comparable.
+
 ## Prereqs
 
 - Go (whatever the repo's toolchain wants).

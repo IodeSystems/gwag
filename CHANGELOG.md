@@ -9,6 +9,68 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Changed
+- **gat's GraphQL ingress answers `200` for a query that resolved to
+  errors**, where it previously answered `400`. An errors envelope is a
+  successful transport exchange under GraphQL-over-HTTP, and this is
+  what the full `gw/` gateway has always done — gat was the outlier.
+  Transport-level rejections are unaffected: a body that isn't JSON, or
+  one carrying no query, is still a `400`. Clients that branch on the
+  HTTP status to detect a failed query must read the `errors` key
+  instead.
+- **gat's GraphQL ingress runs on a plan cache + append-mode executor.**
+  It served every request through `graphql.Do` — re-parsing, re-validating
+  and re-planning the query each time, then building a `map[string]any`
+  result tree to encode. It now looks the query up in a
+  `graphql.PlanCache` and runs `ExecutePlanAppend`, writing response JSON
+  straight into a pooled buffer, the same path `gw/` moved to in v1.0.0.
+  Measured on a 25-row list: 535µs → 119µs, 2180 → 462 allocs; a point
+  lookup goes 271µs → 25µs, 1041 → 89 allocs. GraphQL error `extensions`
+  (`status` / `code`) still reach the response envelope.
+- **gat's Connect/gRPC ingress converts in both directions without a JSON
+  round trip.** Requests were marshalled to JSON text with `protojson`
+  and parsed back into a `map[string]any`; responses went the other way,
+  `json.Marshal` then `protojson.Unmarshal`. Four serialization passes,
+  two of them only to cross between in-memory shapes. A direct
+  protoreflect walk (`messageToArgs`) handles requests, and a
+  mount-time-built encode plan handles responses. Both are held against
+  the old path by differential tests, because `bindInput` silently skips
+  keys it cannot map and a divergence would surface as a handler reading
+  a zero value rather than as an error. The response plan refuses to form
+  — falling back to the JSON path — for any type whose encoding it cannot
+  prove identical, notably anything implementing `json.Marshaler` or
+  `encoding.TextMarshaler` (`time.Time`, `json.RawMessage`). Measured on
+  a 25-row list over the binary codec: 154µs → 87µs, 646 → 438 allocs.
+  The per-request scan for the body argument also moved to mount time.
+- **The maintainer benchmark directory `perf/` is now `compare/`.**
+  `bench/` and `perf/` are synonyms and neither name said which was
+  which. `bench/` measures gwag against itself (renders `docs/perf.md`,
+  driven by `bin/bench`); `compare/` measures gwag and gat against other
+  tools (renders `compare/comparison.md` and
+  `compare/gatbench/results.md`, driven by `compare/run.sh`). No shipped
+  artefact moves — `docs/perf.md`, `bench/perf-scenarios.yaml` and the
+  `bin/bench perf` subcommand keep their names.
+
+### Fixed
+- **gat's OpenAPI dispatch reused Go's `http.DefaultClient`**, whose
+  `MaxIdleConnsPerHost` is 2. Past two concurrent in-flight requests it
+  fell back to a fresh connection and TCP handshake per dispatch, so
+  connection churn — not the upstream — became the ceiling. In the
+  competitor sweep gat's OpenAPI scenario walled at 20k RPS with p99
+  74ms where gwag, which has always pre-baked a tuned client for this
+  exact reason, reached 50k. gat now uses the same defaults
+  (`MaxIdleConnsPerHost` 1024, 90s idle timeout), shared package-wide
+  so every dispatcher draws on one pool.
+
+### Added
+- `compare/gatbench/` — a separate Go module benchmarking gat's three
+  surfaces against the tools you'd otherwise hand-write each with
+  (gqlgen, connect-go, grpc-gateway) on one shared workload. Kept out
+  of the root module so those dependencies stay out of every downstream
+  `go.sum`. Results are spliced into `compare/README.md` and the root
+  README by `compare/gatbench/report.sh`, so the published tables can't
+  drift from the numbers.
+
 ## v1.3.2 — 2026-07-26
 
 ### Fixed

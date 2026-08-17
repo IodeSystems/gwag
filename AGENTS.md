@@ -139,7 +139,22 @@ Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
 - Fixtures: httptest for OpenAPI/GraphQL forwarding; in-process `grpc.Server`
   for gRPC; in-process `grpc.ClientConnInterface` fakes for delegate testing.
 
-## Bench / Perf
+## Measuring
+
+Two directories, two questions. The names used to be `bench/` and
+`compare/`, which are synonyms and told you nothing:
+
+- **`bench/`** — gwag *against itself*. Load generator, RPS sweep with
+  knee detection, Prometheus + Grafana, pprof capture. Renders
+  `docs/perf.md`. Driven by `bin/bench`.
+- **`compare/`** — gwag and gat *against other tools*. Renders
+  `compare/comparison.md` (Apollo Router, graphql-mesh, gat vs gwag,
+  process to process) and `compare/gatbench/results.md` (in-process
+  microbenchmarks vs gqlgen, connect-go, grpc-gateway). Driven by
+  `compare/run.sh`.
+
+`compare/` drives its sweeps with `bench/cmd/traffic`, so the load
+generator is shared and the two sets of numbers line up.
 
 ```
 bin/bench up [--build] [--raw]    # boot benchmark stack
@@ -147,10 +162,18 @@ bin/bench down                    # tear down
 bin/bench gw add                  # add cluster node
 bin/bench service add greeter     # register managed service
 bin/bench traffic                 # run load generator
-bin/bench perf                    # competitor comparison (regenerates docs/perf.md)
+bin/bench perf                    # self sweep — regenerates docs/perf.md
+
+compare/run.sh local              # competitor sweep — regenerates comparison.md
+compare/run.sh local --only gat   # one gateway
+compare/gatbench/report.sh        # microbenchmark matrix
 ```
 
-State lives under `bench/.run/` (gitignored).
+State lives under `bench/.run/` and `compare/.run/` (both gitignored).
+
+`compare/gatbench/` is its own Go module: gat's pitch includes a small
+dependency tree, so gqlgen and grpc-gateway must not land in the root
+`go.mod`. It is unreachable from `go build ./...` at the root.
 
 ## Don't Commit
 
