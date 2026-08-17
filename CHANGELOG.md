@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.4.0 — 2026-08-17
+
 ### Changed
 - **gat's GraphQL ingress answers `200` for a query that resolved to
   errors**, where it previously answered `400`. An errors envelope is a
