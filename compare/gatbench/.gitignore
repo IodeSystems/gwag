@@ -1,0 +1,2 @@
+# protoc plugin binaries, installed by the regenerate recipe in README.md
+.bin/

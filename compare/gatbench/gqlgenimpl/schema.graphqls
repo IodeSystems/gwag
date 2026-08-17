@@ -1,0 +1,21 @@
+# The hand-written GraphQL surface for the gatbench workload.
+#
+# Deliberately shaped to match what gat projects from the two huma
+# operations: same field names, same argument names, same nullability.
+# A different shape would make the benchmark measure schema size
+# rather than framework cost.
+
+type Project {
+  id: String!
+  name: String!
+  tags: [String!]
+}
+
+type ListProjectsBody {
+  projects: [Project!]!
+}
+
+type Query {
+  getProject(id: String!): Project
+  listProjects(limit: Int): ListProjectsBody!
+}

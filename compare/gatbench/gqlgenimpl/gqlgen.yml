@@ -1,0 +1,37 @@
+# gqlgen config for the hand-written GraphQL baseline.
+#
+# Regenerate after editing schema.graphqls:
+#
+#   cd compare/gatbench/gqlgenimpl && go run github.com/99designs/gqlgen generate
+#
+# Everything under generated/ is machine-written — don't edit it.
+# Project maps onto the shared model type so gqlgen and gat serve the
+# exact same Go values.
+
+schema:
+  - schema.graphqls
+
+exec:
+  package: generated
+  layout: single-file
+  filename: generated/generated.go
+
+model:
+  package: generated
+  filename: generated/models_gen.go
+
+resolver:
+  package: gqlgenimpl
+  layout: follow-schema
+  dir: .
+  filename_template: "{name}.resolvers.go"
+
+models:
+  Project:
+    model: github.com/iodesystems/gwag/compare/gatbench/model.Project
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int
+  String:
+    model:
+      - github.com/99designs/gqlgen/graphql.String

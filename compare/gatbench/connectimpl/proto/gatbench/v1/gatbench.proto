@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// The hand-written gRPC surface for the gatbench workload.
+//
+// Shaped to match what gat projects from the same two huma
+// operations: same message field names, same types, same
+// request/response split. Divergence here would make the benchmark
+// measure message size rather than framework cost.
+package gatbench.v1;
+
+import "google/api/annotations.proto";
+
+option go_package = "github.com/iodesystems/gwag/compare/gatbench/connectimpl/gen/gatbench/v1;gatbenchv1";
+
+message Project {
+  string id = 1;
+  string name = 2;
+  repeated string tags = 3;
+}
+
+message GetProjectRequest {
+  string id = 1;
+}
+
+message GetProjectResponse {
+  Project project = 1;
+}
+
+message ListProjectsRequest {
+  int32 limit = 1;
+}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+service ProjectService {
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse) {
+    option (google.api.http) = {get: "/projects/{id}"};
+  }
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {
+    option (google.api.http) = {get: "/projects"};
+  }
+}
