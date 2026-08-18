@@ -25,6 +25,10 @@
 #   bin/perf --wait                # block until the machine is quiet, then run
 #   bin/perf --force               # run even when the machine looks busy
 #
+# "Quiet" means under 10% of the box's cores are busy with something
+# else, sampled from /proc/stat at startup. Override the fraction with
+# PERF_MAX_BUSY_FRAC (e.g. 0.25 to tolerate a quarter of the machine).
+#
 # --quick is for checking the plumbing, not for numbers. It shortens
 # gatbench and restricts compare to gwag alone. It does NOT shorten
 # `self`, which has no documented short mode — that stage is skipped
@@ -130,25 +134,57 @@ if [ -f "$LOCKFILE" ]; then
 fi
 echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
+cores=$(nproc 2>/dev/null || echo 4)
+
+# busy_cores samples /proc/stat over an interval and echoes how many
+# cores' worth of CPU are in use right now.
+#
+# This deliberately does not read /proc/loadavg. Load average is an
+# exponentially decayed mean over a minute, so it both lags load that
+# just arrived and stays elevated long after load that just left —
+# neither of which is the question being asked here, which is "is
+# something else on this box eating CPU *now*". It also counts tasks
+# blocked in uninterruptible I/O, which do not compete for the CPU a
+# benchmark needs.
+busy_cores() {
+    local iv=${1:-2} a b
+    a=$(awk '/^cpu /{busy=$2+$3+$4+$7+$8+$9; print busy, busy+$5+$6}' /proc/stat)
+    sleep "$iv"
+    b=$(awk '/^cpu /{busy=$2+$3+$4+$7+$8+$9; print busy, busy+$5+$6}' /proc/stat)
+    awk -v a="$a" -v b="$b" -v c="$cores" 'BEGIN{
+        split(a, x, " "); split(b, y, " ")
+        db = y[1] - x[1]; dt = y[2] - x[2]
+        if (dt <= 0) { print "0.00"; exit }
+        printf "%.2f", (db / dt) * c
+    }'
+}
+
+# The box may host a benchmark when under PERF_MAX_BUSY_FRAC of its
+# cores are busy with something else. 10% of 24 cores is 2.4 — enough
+# headroom for an idling editor or language server, tight enough to
+# catch the compile jobs that actually skew a sweep. The floor of one
+# core keeps small machines from failing on rounding.
+frac=${PERF_MAX_BUSY_FRAC:-0.10}
+budget=$(awk -v c="$cores" -v f="$frac" 'BEGIN{b=c*f; if (b<1) b=1; printf "%.2f", b}')
+over_budget() { awk -v u="$1" -v b="$budget" 'BEGIN{exit !(u > b)}'; }
+
 if [ "$FORCE" = "0" ]; then
-    cores=$(nproc 2>/dev/null || echo 4)
-    busy() { awk -v l="$(cut -d' ' -f1 /proc/loadavg)" -v c="$cores" 'BEGIN{exit !(l > c/4)}'; }
-    if busy; then
+    used=$(busy_cores)
+    if over_budget "$used"; then
         if [ "$WAIT_QUIET" = "1" ]; then
-            # Load average decays over minutes, so a sweep that has just
-            # finished leaves the box looking busy long after it is idle.
-            # Back-to-back runs (an A/B across two versions, say) need to
-            # wait rather than either failing or forcing bad numbers.
-            err "machine busy (load $(cut -d' ' -f1 /proc/loadavg) on $cores cores) — waiting for it to settle"
+            err "machine busy (${used} of $cores cores in use, budget ${budget}) — waiting for it to settle"
             waited=0
-            while busy && [ "$waited" -lt 900 ]; do sleep 15; waited=$((waited + 15)); done
-            if busy; then
-                die "still busy after ${waited}s (load $(cut -d' ' -f1 /proc/loadavg)). Giving up."
+            while over_budget "$used" && [ "$waited" -lt 900 ]; do
+                sleep 13; waited=$((waited + 15)); used=$(busy_cores)
+            done
+            if over_budget "$used"; then
+                die "still busy after ${waited}s (${used} of $cores cores). Giving up."
             fi
-            err "settled after ${waited}s (load $(cut -d' ' -f1 /proc/loadavg))"
+            err "settled after ${waited}s (${used} of $cores cores in use)"
         else
-            err "machine looks busy: 1-min load $(cut -d' ' -f1 /proc/loadavg) on ${cores} cores."
+            err "machine looks busy: ${used} of ${cores} cores in use, budget ${budget}."
             err "Benchmarking now produces numbers you cannot trust."
+            err "Raise the bar with PERF_MAX_BUSY_FRAC=0.25 if that is deliberate."
             die "Wait for it to settle, pass --wait to block until quiet, or --force."
         fi
     fi
