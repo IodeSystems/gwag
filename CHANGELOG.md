@@ -9,6 +9,35 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v1.4.1 — 2026-08-18
+
+### Security
+- **The GraphQL parser now caps nesting depth.** Via
+  `github.com/IodeSystems/graphql-go` v1.1.0 → v1.2.0. The parser
+  descended one Go stack frame per nesting level with no limit, and a
+  stack overflow in Go is a fatal runtime error that `recover` cannot
+  catch — so a deeply enough nested document killed the gateway process
+  rather than failing the request. Roughly three million levels (a ~6 MB
+  body) were needed to reach it.
+
+  `WithUploadLimit` did not stand in the way: it defaults to unlimited,
+  and it gates the multipart and tus paths, not a plain
+  `application/json` GraphQL POST. A stock gateway was exposed.
+
+  The cap is `parser.DefaultMaxDepth` (1000), and gwag picks it up with
+  no configuration — it parses with zero-valued `ParseOptions`, which
+  selects the default. The limit counts *descent* only: sibling fields,
+  list elements and object fields cost no depth, so wide documents are
+  unaffected, and 1000 sits far above any real query. Selection sets,
+  list values, input-object values and list types each recurse
+  independently and all four are capped. Set `ParseOptions.MaxDepth`
+  negative to disable the check for trusted input.
+- **Three more hostile-query blow-ups are closed** in the same bump:
+  syntax-error formatting is linear rather than quadratic,
+  abstract-field selections plan lazily instead of exponentially, and
+  the overlapping-fields validator terminates on cyclic fragment
+  spreads. Each is driven by the query document alone.
+
 ## v1.4.0 — 2026-08-17
 
 ### Changed

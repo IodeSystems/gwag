@@ -5,9 +5,9 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 # Performance
 
-> _Generated 2026-08-18T01:49:00Z from 3 scenario sweeps via `bin/bench perf report`._
+> _Generated 2026-08-18T21:56:56Z from 3 scenario sweeps via `bin/bench perf report`._
 
-**Headline (proto scenario, last healthy rung):** **49583 RPS** at p95 **18.92ms** with gateway self-time mean **176µs**.
+**Headline (proto scenario, last healthy rung):** **49263 RPS** at p95 **23.02ms** with gateway self-time mean **672µs**.
 
 > **Looking for "how does gwag compare to X?"** This page is gwag's
 > own throughput on your hardware. For a head-to-head against
@@ -20,7 +20,7 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 | Field | Value |
 |---|---|
-| Captured at | 2026-08-18T01:46:49Z |
+| Captured at | 2026-08-18T21:54:46Z |
 | CPU | AMD Ryzen 9 3900X 12-Core Processor |
 | Cores (logical) | 24 |
 | RAM | 125.7 GiB |
@@ -28,7 +28,7 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 | Kernel | 6.8.0-137-generic |
 | Arch | amd64 |
 | Go | go1.26.2 |
-| Gateway rev | 3dcce21 (dirty) |
+| Gateway rev | d7af8fe |
 
 
 ## Scenario: `graphql`
@@ -38,19 +38,19 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 | Target RPS | Achieved | Client mean | p50 | p95 | p99 | Gateway self (mean) | Dispatch (mean) |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1000 | 999 | 459µs | 462µs | 529µs | 659µs | 36µs | 227µs |
-| 5000 | 4992 | 559µs | 535µs | 771µs | 1.11ms | 40µs | 284µs |
-| 10000 | 9981 | 767µs | 686µs | 1.30ms | 2.38ms | 41µs | 389µs |
-| 20000 | 19969 | 770µs | 680µs | 1.40ms | 2.78ms | 30µs | 339µs |
-| 30000 | 29971 | 1.06ms | 897µs | 2.42ms | 3.92ms | 36µs | 373µs |
-| 40000 | 39902 | 1.86ms | 1.35ms | 5.04ms | 8.94ms | 53µs | 606µs |
-| 50000 | 47903 | 14.99ms | 9.74ms | 43.68ms | 60.57ms | 1.38ms | 2.20ms |
+| 1000 | 999 | 466µs | 465µs | 537µs | 687µs | 37µs | 231µs |
+| 5000 | 4991 | 584µs | 551µs | 819µs | 1.30ms | 41µs | 298µs |
+| 10000 | 9978 | 763µs | 680µs | 1.30ms | 2.42ms | 41µs | 385µs |
+| 20000 | 19964 | 775µs | 684µs | 1.43ms | 2.91ms | 31µs | 333µs |
+| 30000 | 29969 | 1.16ms | 962µs | 2.74ms | 4.43ms | 38µs | 415µs |
+| 40000 | 39581 | 2.62ms | 1.54ms | 8.07ms | 18.04ms | 173µs | 959µs |
+| 50000 | 45552 | 34.12ms | 36.94ms | 64.99ms | 85.48ms | 12.03ms | 4.17ms |
 
-**Knee detected at 50000 RPS** (latency_above_50ms): p99 60572µs (60.6ms) exceeds 50ms SLA ceiling. Recommended ceiling: **40000 RPS** on this host.
+**Knee detected at 50000 RPS** (latency_above_50ms): p99 85484µs (85.5ms) exceeds 50ms SLA ceiling. Recommended ceiling: **40000 RPS** on this host.
 
 ### Interpretation
 
-**~1663 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **53µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
+**~1649 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **173µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
 
 ### Where time + allocs go (40000 RPS, 20s CPU window)
 
@@ -58,45 +58,45 @@ Run 'bin/bench perf all' to refresh the inputs under bench/.run/perf/.
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: cpu
-Time: 2026-08-17 18:48:37 PDT
-Duration: 20s, Total samples = 160.74s (803.65%)
-Showing nodes accounting for 103.80s, 64.58% of 160.74s total
-Dropped 1105 nodes (cum <= 0.80s)
+Time: 2026-08-18 14:56:34 PDT
+Duration: 20s, Total samples = 159.51s (797.51%)
+Showing nodes accounting for 100.78s, 63.18% of 159.51s total
+Dropped 1099 nodes (cum <= 0.80s)
       flat  flat%   sum%        cum   cum%
-     0.28s  0.17%  0.17%     87.63s 54.52%  net/http.(*conn).serve
-     0.01s 0.0062%  0.18%     50.55s 31.45%  net/http.serverHandler.ServeHTTP
-     0.10s 0.062%  0.24%     50.54s 31.44%  net/http.(*ServeMux).ServeHTTP
-     0.06s 0.037%  0.28%     49.63s 30.88%  net/http.HandlerFunc.ServeHTTP
-     0.27s  0.17%  0.45%     49.57s 30.84%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-     0.27s  0.17%  0.62%     47.06s 29.28%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-     0.18s  0.11%  0.73%     40.98s 25.49%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-     0.02s 0.012%  0.74%     40.79s 25.38%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-     0.29s  0.18%  0.92%     40.75s 25.35%  github.com/IodeSystems/graphql-go.writePlannedSelection
-     0.98s  0.61%  1.53%     40.49s 25.19%  github.com/IodeSystems/graphql-go.writePlannedField
+     0.32s   0.2%   0.2%     93.01s 58.31%  net/http.(*conn).serve
+     0.05s 0.031%  0.23%     58.90s 36.93%  net/http.serverHandler.ServeHTTP
+     0.03s 0.019%  0.25%     58.85s 36.89%  net/http.(*ServeMux).ServeHTTP
+     0.04s 0.025%  0.28%     57.84s 36.26%  net/http.HandlerFunc.ServeHTTP
+     0.41s  0.26%  0.53%     57.80s 36.24%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+     0.36s  0.23%  0.76%     55.20s 34.61%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+     0.17s  0.11%  0.87%     46.83s 29.36%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+     0.01s 0.0063%  0.87%     46.65s 29.25%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+     0.29s  0.18%  1.05%     46.60s 29.21%  github.com/IodeSystems/graphql-go.writePlannedSelection
+     1.14s  0.71%  1.77%     46.26s 29.00%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 **Top allocs (cumulative alloc_space):**
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: alloc_space
-Time: 2026-08-17 18:48:57 PDT
-Showing nodes accounting for 133813.68MB, 89.31% of 149828.62MB total
-Dropped 629 nodes (cum <= 749.14MB)
+Time: 2026-08-18 14:56:54 PDT
+Showing nodes accounting for 132144.97MB, 89.22% of 148103.31MB total
+Dropped 665 nodes (cum <= 740.52MB)
       flat  flat%   sum%        cum   cum%
-  188.50MB  0.13%  0.13% 131954.37MB 88.07%  net/http.(*conn).serve
-         0     0%  0.13% 113603.31MB 75.82%  net/http.(*ServeMux).ServeHTTP
-         0     0%  0.13% 113603.31MB 75.82%  net/http.HandlerFunc.ServeHTTP
-         0     0%  0.13% 113603.31MB 75.82%  net/http.serverHandler.ServeHTTP
- 2126.89MB  1.42%  1.55% 113416.51MB 75.70%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-         0     0%  1.55% 107854.97MB 71.99%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-         0     0%  1.55% 92252.13MB 61.57%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-         0     0%  1.55% 92250.63MB 61.57%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-  564.03MB  0.38%  1.92% 92250.63MB 61.57%  github.com/IodeSystems/graphql-go.writePlannedSelection
- 1509.11MB  1.01%  2.93% 91686.60MB 61.19%  github.com/IodeSystems/graphql-go.writePlannedField
+     167MB  0.11%  0.11% 130552.72MB 88.15%  net/http.(*conn).serve
+         0     0%  0.11% 112583.07MB 76.02%  net/http.(*ServeMux).ServeHTTP
+         0     0%  0.11% 112583.07MB 76.02%  net/http.HandlerFunc.ServeHTTP
+         0     0%  0.11% 112583.07MB 76.02%  net/http.serverHandler.ServeHTTP
+ 2180.90MB  1.47%  1.59% 112396.71MB 75.89%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+         0     0%  1.59% 106837.66MB 72.14%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+         0     0%  1.59% 91233.41MB 61.60%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+         0     0%  1.59% 91232.91MB 61.60%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+  514.52MB  0.35%  1.93% 91232.91MB 61.60%  github.com/IodeSystems/graphql-go.writePlannedSelection
+ 1563.61MB  1.06%  2.99% 90718.39MB 61.25%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 Raw pprof files: `profile-graphql.cpu.pprof` + `profile-graphql.allocs.pprof` under the sweep out-dir; inspect interactively with `go tool pprof`.
@@ -110,20 +110,20 @@ pure OpenAPI/HTTP backend (hello_openapi); same Hello shape via HTTP/JSON.
 
 | Target RPS | Achieved | Client mean | p50 | p95 | p99 | Gateway self (mean) | Dispatch (mean) |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1000 | 999 | 441µs | 443µs | 502µs | 639µs | 38µs | 207µs |
-| 5000 | 4994 | 535µs | 517µs | 680µs | 984µs | 42µs | 251µs |
-| 10000 | 9975 | 704µs | 646µs | 1.10ms | 2.22ms | 45µs | 316µs |
-| 20000 | 19940 | 691µs | 619µs | 1.21ms | 2.81ms | 32µs | 260µs |
-| 30000 | 29980 | 967µs | 845µs | 2.10ms | 3.24ms | 37µs | 298µs |
-| 40000 | 39968 | 1.53ms | 1.22ms | 3.85ms | 6.13ms | 43µs | 439µs |
-| 50000 | 48716 | 3.92ms | 2.53ms | 11.98ms | 19.95ms | 246µs | 929µs |
-| 60000 | 56655 | 33.73ms | 46.77ms | 66.52ms | 108.73ms | 669µs | 1.56ms |
+| 1000 | 999 | 444µs | 445µs | 509µs | 660µs | 38µs | 209µs |
+| 5000 | 4995 | 542µs | 520µs | 691µs | 1.11ms | 43µs | 254µs |
+| 10000 | 9986 | 711µs | 653µs | 1.12ms | 2.19ms | 45µs | 320µs |
+| 20000 | 19938 | 684µs | 620µs | 1.21ms | 2.56ms | 32µs | 258µs |
+| 30000 | 29984 | 1.00ms | 872µs | 2.22ms | 3.44ms | 37µs | 315µs |
+| 40000 | 39951 | 1.53ms | 1.22ms | 3.85ms | 5.93ms | 41µs | 434µs |
+| 50000 | 48885 | 5.05ms | 3.20ms | 16.42ms | 25.33ms | 228µs | 978µs |
+| 60000 | 56461 | 34.07ms | 46.37ms | 69.49ms | 110.53ms | 1.05ms | 1.69ms |
 
-**Knee detected at 60000 RPS** (latency_above_50ms): p99 108728µs (108.7ms) exceeds 50ms SLA ceiling. Recommended ceiling: **50000 RPS** on this host.
+**Knee detected at 60000 RPS** (latency_above_50ms): p99 110533µs (110.5ms) exceeds 50ms SLA ceiling. Recommended ceiling: **50000 RPS** on this host.
 
 ### Interpretation
 
-**~2030 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **246µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
+**~2037 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **228µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
 
 ### Where time + allocs go (50000 RPS, 20s CPU window)
 
@@ -131,45 +131,45 @@ pure OpenAPI/HTTP backend (hello_openapi); same Hello shape via HTTP/JSON.
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: cpu
-Time: 2026-08-17 18:46:27 PDT
-Duration: 20s, Total samples = 188.61s (943.02%)
-Showing nodes accounting for 121.26s, 64.29% of 188.61s total
-Dropped 1139 nodes (cum <= 0.94s)
+Time: 2026-08-18 14:54:23 PDT
+Duration: 20s, Total samples = 183.95s (919.73%)
+Showing nodes accounting for 118.30s, 64.31% of 183.95s total
+Dropped 1170 nodes (cum <= 0.92s)
       flat  flat%   sum%        cum   cum%
-     0.59s  0.31%  0.31%    108.52s 57.54%  net/http.(*conn).serve
-     0.05s 0.027%  0.34%     66.73s 35.38%  net/http.serverHandler.ServeHTTP
-     0.14s 0.074%  0.41%     66.68s 35.35%  net/http.(*ServeMux).ServeHTTP
-     0.08s 0.042%  0.46%     65.54s 34.75%  net/http.HandlerFunc.ServeHTTP
-     0.45s  0.24%  0.69%     65.45s 34.70%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-     0.41s  0.22%  0.91%     62.35s 33.06%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-     0.15s  0.08%  0.99%     52.46s 27.81%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-     0.03s 0.016%  1.01%     52.27s 27.71%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-     0.47s  0.25%  1.26%     52.21s 27.68%  github.com/IodeSystems/graphql-go.writePlannedSelection
-     1.24s  0.66%  1.91%     51.72s 27.42%  github.com/IodeSystems/graphql-go.writePlannedField
+     0.58s  0.32%  0.32%    108.58s 59.03%  net/http.(*conn).serve
+     0.07s 0.038%  0.35%     65.91s 35.83%  net/http.serverHandler.ServeHTTP
+     0.07s 0.038%  0.39%     65.84s 35.79%  net/http.(*ServeMux).ServeHTTP
+     0.07s 0.038%  0.43%     64.99s 35.33%  net/http.HandlerFunc.ServeHTTP
+     0.38s  0.21%  0.64%     64.91s 35.29%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+     0.26s  0.14%  0.78%     62.34s 33.89%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+     0.20s  0.11%  0.89%        54s 29.36%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+     0.09s 0.049%  0.94%     53.78s 29.24%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+     0.45s  0.24%  1.18%     53.65s 29.17%  github.com/IodeSystems/graphql-go.writePlannedSelection
+     1.44s  0.78%  1.96%     53.28s 28.96%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 **Top allocs (cumulative alloc_space):**
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: alloc_space
-Time: 2026-08-17 18:46:47 PDT
-Showing nodes accounting for 95580.16MB, 90.75% of 105326.68MB total
-Dropped 569 nodes (cum <= 526.63MB)
+Time: 2026-08-18 14:54:43 PDT
+Showing nodes accounting for 94050.80MB, 90.11% of 104378.34MB total
+Dropped 604 nodes (cum <= 521.89MB)
       flat  flat%   sum%        cum   cum%
-     134MB  0.13%  0.13% 91929.23MB 87.28%  net/http.(*conn).serve
-         0     0%  0.13% 78728.64MB 74.75%  net/http.(*ServeMux).ServeHTTP
-         0     0%  0.13% 78728.64MB 74.75%  net/http.HandlerFunc.ServeHTTP
-         0     0%  0.13% 78728.64MB 74.75%  net/http.serverHandler.ServeHTTP
- 1536.28MB  1.46%  1.59% 78599.69MB 74.62%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-         0     0%  1.59% 74600.80MB 70.83%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-         0     0%  1.59% 63248.25MB 60.05%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-         0     0%  1.59% 63247.25MB 60.05%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-  403.02MB  0.38%  1.97% 63247.25MB 60.05%  github.com/IodeSystems/graphql-go.writePlannedSelection
-  956.57MB  0.91%  2.88% 62844.23MB 59.67%  github.com/IodeSystems/graphql-go.writePlannedField
+     123MB  0.12%  0.12% 91178.74MB 87.35%  net/http.(*conn).serve
+         0     0%  0.12% 78136.61MB 74.86%  net/http.(*ServeMux).ServeHTTP
+         0     0%  0.12% 78136.61MB 74.86%  net/http.HandlerFunc.ServeHTTP
+         0     0%  0.12% 78136.61MB 74.86%  net/http.serverHandler.ServeHTTP
+ 1564.29MB  1.50%  1.62% 78009.30MB 74.74%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+         0     0%  1.62% 74040.40MB 70.93%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+         0     0%  1.62% 62779.20MB 60.15%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+         0     0%  1.62% 62778.70MB 60.15%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+  374.02MB  0.36%  1.97% 62778.70MB 60.15%  github.com/IodeSystems/graphql-go.writePlannedSelection
+ 1022.57MB  0.98%  2.95% 62404.68MB 59.79%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 Raw pprof files: `profile-openapi.cpu.pprof` + `profile-openapi.allocs.pprof` under the sweep out-dir; inspect interactively with `go tool pprof`.
@@ -183,20 +183,20 @@ pure proto/gRPC backend (greeter); baseline for native-format dispatch cost.
 
 | Target RPS | Achieved | Client mean | p50 | p95 | p99 | Gateway self (mean) | Dispatch (mean) |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1000 | 1000 | 504µs | 508µs | 577µs | 764µs | 38µs | 255µs |
-| 5000 | 4997 | 666µs | 620µs | 1.08ms | 1.35ms | 40µs | 337µs |
-| 10000 | 9994 | 917µs | 796µs | 1.70ms | 2.28ms | 41µs | 393µs |
-| 20000 | 19989 | 903µs | 799µs | 1.76ms | 2.40ms | 29µs | 337µs |
-| 30000 | 29984 | 1.14ms | 1.01ms | 2.39ms | 3.40ms | 31µs | 433µs |
-| 40000 | 39932 | 1.83ms | 1.39ms | 4.24ms | 10.30ms | 75µs | 633µs |
-| 50000 | 49584 | 5.26ms | 3.25ms | 18.92ms | 27.02ms | 176µs | 1.21ms |
-| 60000 | 57878 | 33.42ms | 45.12ms | 67.45ms | 106.66ms | 1.88ms | 2.02ms |
+| 1000 | 999 | 507µs | 508µs | 590µs | 808µs | 37µs | 256µs |
+| 5000 | 4997 | 671µs | 626µs | 1.08ms | 1.34ms | 41µs | 342µs |
+| 10000 | 9995 | 906µs | 789µs | 1.66ms | 2.25ms | 41µs | 389µs |
+| 20000 | 19990 | 770µs | 708µs | 1.42ms | 2.05ms | 29µs | 346µs |
+| 30000 | 29983 | 1.11ms | 986µs | 2.28ms | 3.21ms | 32µs | 436µs |
+| 40000 | 39952 | 1.69ms | 1.37ms | 4.05ms | 6.11ms | 34µs | 608µs |
+| 50000 | 49263 | 6.37ms | 3.20ms | 23.02ms | 39.36ms | 672µs | 1.38ms |
+| 60000 | 57636 | 33.76ms | 45.77ms | 67.72ms | 107.41ms | 1.34ms | 2.10ms |
 
-**Knee detected at 60000 RPS** (latency_above_50ms): p99 106657µs (106.7ms) exceeds 50ms SLA ceiling. Recommended ceiling: **50000 RPS** on this host.
+**Knee detected at 60000 RPS** (latency_above_50ms): p99 107407µs (107.4ms) exceeds 50ms SLA ceiling. Recommended ceiling: **50000 RPS** on this host.
 
 ### Interpretation
 
-**~2066 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **176µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
+**~2053 RPS / core** across 24 logical cores at the recommended ceiling. Gateway self-time mean is **672µs** at the recommended ceiling — this is the per-request overhead the gateway adds on top of whatever the upstream takes.
 
 ### Where time + allocs go (50000 RPS, 20s CPU window)
 
@@ -204,45 +204,45 @@ pure proto/gRPC backend (greeter); baseline for native-format dispatch cost.
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: cpu
-Time: 2026-08-17 18:44:01 PDT
-Duration: 20s, Total samples = 175.47s (877.32%)
-Showing nodes accounting for 114.73s, 65.38% of 175.47s total
-Dropped 1208 nodes (cum <= 0.88s)
+Time: 2026-08-18 14:51:57 PDT
+Duration: 20s, Total samples = 173.29s (866.39%)
+Showing nodes accounting for 110.70s, 63.88% of 173.29s total
+Dropped 1188 nodes (cum <= 0.87s)
       flat  flat%   sum%        cum   cum%
-     0.49s  0.28%  0.28%    105.85s 60.32%  net/http.(*conn).serve
-     0.09s 0.051%  0.33%     62.16s 35.42%  net/http.serverHandler.ServeHTTP
-     0.10s 0.057%  0.39%     62.07s 35.37%  net/http.(*ServeMux).ServeHTTP
-     0.08s 0.046%  0.43%     61.13s 34.84%  net/http.HandlerFunc.ServeHTTP
-     0.33s  0.19%  0.62%     61.02s 34.78%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-     0.26s  0.15%  0.77%     58.32s 33.24%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-     0.14s  0.08%  0.85%     50.58s 28.83%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-     0.04s 0.023%  0.87%     50.36s 28.70%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-     0.33s  0.19%  1.06%     50.25s 28.64%  github.com/IodeSystems/graphql-go.writePlannedSelection
-     0.87s   0.5%  1.56%     49.92s 28.45%  github.com/IodeSystems/graphql-go.writePlannedField
+     0.38s  0.22%  0.22%    108.19s 62.43%  net/http.(*conn).serve
+     0.05s 0.029%  0.25%     64.18s 37.04%  net/http.serverHandler.ServeHTTP
+     0.05s 0.029%  0.28%     64.13s 37.01%  net/http.(*ServeMux).ServeHTTP
+     0.07s  0.04%  0.32%     63.21s 36.48%  net/http.HandlerFunc.ServeHTTP
+     0.36s  0.21%  0.53%     63.13s 36.43%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+     0.32s  0.18%  0.71%     59.83s 34.53%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+     0.20s  0.12%  0.83%     51.77s 29.87%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+     0.04s 0.023%  0.85%     51.54s 29.74%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+     0.34s   0.2%  1.04%     51.49s 29.71%  github.com/IodeSystems/graphql-go.writePlannedSelection
+     0.83s  0.48%  1.52%     51.17s 29.53%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 **Top allocs (cumulative alloc_space):**
 
 ```
 File: gateway
-Build ID: 54b2c8c4f700c66cdb23e4d0f7323b75a00d3de0
+Build ID: 0d39df041e80e25f240f8608e4e38de1d2b84c6c
 Type: alloc_space
-Time: 2026-08-17 18:44:21 PDT
-Showing nodes accounting for 47194.91MB, 92.87% of 50816.07MB total
-Dropped 446 nodes (cum <= 254.08MB)
+Time: 2026-08-18 14:52:17 PDT
+Showing nodes accounting for 46759.14MB, 92.38% of 50614.20MB total
+Dropped 477 nodes (cum <= 253.07MB)
       flat  flat%   sum%        cum   cum%
-      63MB  0.12%  0.12% 43121.42MB 84.86%  net/http.(*conn).serve
-         0     0%  0.12% 36537.74MB 71.90%  net/http.(*ServeMux).ServeHTTP
-         0     0%  0.12% 36537.74MB 71.90%  net/http.HandlerFunc.ServeHTTP
-         0     0%  0.12% 36537.74MB 71.90%  net/http.serverHandler.ServeHTTP
-  750.14MB  1.48%  1.60% 36474.34MB 71.78%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
-         0     0%  1.60% 34505.65MB 67.90%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
-         0     0%  1.60% 28911.09MB 56.89%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
-         0     0%  1.60% 28910.59MB 56.89%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
-  213.01MB  0.42%  2.02% 28910.59MB 56.89%  github.com/IodeSystems/graphql-go.writePlannedSelection
-  292.02MB  0.57%  2.59% 28697.58MB 56.47%  github.com/IodeSystems/graphql-go.writePlannedField
+      60MB  0.12%  0.12% 43050.86MB 85.06%  net/http.(*conn).serve
+         0     0%  0.12% 36550.74MB 72.21%  net/http.(*ServeMux).ServeHTTP
+         0     0%  0.12% 36550.74MB 72.21%  net/http.HandlerFunc.ServeHTTP
+         0     0%  0.12% 36550.74MB 72.21%  net/http.serverHandler.ServeHTTP
+  805.65MB  1.59%  1.71% 36489.37MB 72.09%  github.com/iodesystems/gwag/gw.(*Gateway).Handler.func1
+         0     0%  1.71% 34446.67MB 68.06%  github.com/iodesystems/gwag/gw.(*Gateway).serveGraphQLJSON
+         0     0%  1.71% 28851.62MB 57.00%  github.com/IodeSystems/graphql-go.ExecutePlanAppend
+         0     0%  1.71% 28851.62MB 57.00%  github.com/IodeSystems/graphql-go.ExecutePlanAppend.func1
+  189.51MB  0.37%  2.08% 28851.62MB 57.00%  github.com/IodeSystems/graphql-go.writePlannedSelection
+  303.52MB   0.6%  2.68% 28662.11MB 56.63%  github.com/IodeSystems/graphql-go.writePlannedField
 ```
 
 Raw pprof files: `profile-proto.cpu.pprof` + `profile-proto.allocs.pprof` under the sweep out-dir; inspect interactively with `go tool pprof`.
