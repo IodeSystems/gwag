@@ -22,6 +22,7 @@
 #   bin/perf --list                # what each stage runs; runs nothing
 #   bin/perf --quick               # smoke test; see the note below
 #   bin/perf --keep-going          # continue after a stage fails
+#   bin/perf --wait                # block until the machine is quiet, then run
 #   bin/perf --force               # run even when the machine looks busy
 #
 # --quick is for checking the plumbing, not for numbers. It shortens
@@ -40,7 +41,7 @@ err() { echo "perf: $*" >&2; }
 die() { err "$*"; exit 2; }
 
 STAGES=(gatbench self compare)
-ONLY=""; QUICK=0; FORCE=0; DO_LIST=0; KEEP_GOING=0
+ONLY=""; QUICK=0; FORCE=0; DO_LIST=0; KEEP_GOING=0; WAIT_QUIET=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -48,6 +49,7 @@ while [ $# -gt 0 ]; do
         --list)       DO_LIST=1 ;;
         --quick)      QUICK=1 ;;
         --force)      FORCE=1 ;;
+        --wait)       WAIT_QUIET=1 ;;
         --keep-going) KEEP_GOING=1 ;;
         -h|--help)    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
         *)            die "unknown option $1 — see bin/perf --help" ;;
@@ -106,22 +108,49 @@ fi
 # Benchmark numbers from a loaded machine look authoritative and are
 # wrong. The lock also stops two suites (or another agent session) from
 # running at once, which is how results got silently corrupted before.
-LOCKFILE="${TMPDIR:-/tmp}/gwag-perf.lock"
-exec 9>"$LOCKFILE" || die "cannot open lock $LOCKFILE"
-if ! flock -n 9; then
-    if [ "$FORCE" = "1" ]; then
-        err "another bin/perf holds the lock; continuing anyway (--force)"
-    else
-        die "another bin/perf is already running (lock: $LOCKFILE). Wait, or --force."
+# A PID file, deliberately not flock. The stages spawn long-lived
+# daemons (greeter, hello-*), and a child inherits every open file
+# descriptor — including the one an `exec 9>lock; flock 9` guard holds.
+# Those daemons outlive this script, so the flock stayed held after the
+# run finished and refused every later run. A PID file has nothing to
+# inherit: staleness is decided by asking whether the recorded process
+# is still alive.
+LOCKFILE="${TMPDIR:-/tmp}/gwag-perf.pid"
+if [ -f "$LOCKFILE" ]; then
+    other=$(cat "$LOCKFILE" 2>/dev/null || echo "")
+    if [ -n "$other" ] && [ "$other" != "$$" ] && kill -0 "$other" 2>/dev/null; then
+        if [ "$FORCE" = "1" ]; then
+            err "bin/perf may already be running as pid $other; continuing (--force)"
+        else
+            die "another bin/perf is running (pid $other, $LOCKFILE). Wait, or --force."
+        fi
+    elif [ -n "$other" ]; then
+        err "clearing stale lock from pid $other"
     fi
 fi
+echo $$ > "$LOCKFILE"
+trap 'rm -f "$LOCKFILE"' EXIT
 if [ "$FORCE" = "0" ]; then
     cores=$(nproc 2>/dev/null || echo 4)
-    load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
-    if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c/4)}'; then
-        err "machine looks busy: 1-min load ${load} on ${cores} cores."
-        err "Benchmarking now produces numbers you cannot trust."
-        die "Wait for it to settle, or pass --force."
+    busy() { awk -v l="$(cut -d' ' -f1 /proc/loadavg)" -v c="$cores" 'BEGIN{exit !(l > c/4)}'; }
+    if busy; then
+        if [ "$WAIT_QUIET" = "1" ]; then
+            # Load average decays over minutes, so a sweep that has just
+            # finished leaves the box looking busy long after it is idle.
+            # Back-to-back runs (an A/B across two versions, say) need to
+            # wait rather than either failing or forcing bad numbers.
+            err "machine busy (load $(cut -d' ' -f1 /proc/loadavg) on $cores cores) — waiting for it to settle"
+            waited=0
+            while busy && [ "$waited" -lt 900 ]; do sleep 15; waited=$((waited + 15)); done
+            if busy; then
+                die "still busy after ${waited}s (load $(cut -d' ' -f1 /proc/loadavg)). Giving up."
+            fi
+            err "settled after ${waited}s (load $(cut -d' ' -f1 /proc/loadavg))"
+        else
+            err "machine looks busy: 1-min load $(cut -d' ' -f1 /proc/loadavg) on ${cores} cores."
+            err "Benchmarking now produces numbers you cannot trust."
+            die "Wait for it to settle, pass --wait to block until quiet, or --force."
+        fi
     fi
 fi
 
