@@ -391,8 +391,13 @@ EOF
             )
             ;;
     esac
+    # exec so the subshell is *replaced* by the service binary and $!
+    # is the binary's own PID. Without it bash forks the binary as a
+    # child of the subshell, down.sh kills the subshell, and the
+    # service survives reparented to init — holding its port against
+    # the next `up` preflight.
     (cd "$REPO_DIR/examples/multi" && \
-        "$BIN_DIR/$kind" "${launch_args[@]}" \
+        exec "$BIN_DIR/$kind" "${launch_args[@]}" \
         > "$LOG_DIR/$name.log" 2>&1) &
     local pid=$!
     sed -i "s/^PID=.*/PID=$pid/" "$BE_DIR/$name.env"
