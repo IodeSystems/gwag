@@ -149,6 +149,22 @@ preflight() {
         warn=1
     fi
 
+    # Leftover stack registry. bin/bench up refuses to start when
+    # .run/{gateways,backends} still hold entries from an earlier run,
+    # even when those PIDs are long dead. Catching it here costs a
+    # directory listing; missing it costs a stack bringup that fails
+    # after the cheap stages have already passed.
+    local stale=()
+    for d in bench/.run/gateways bench/.run/backends; do
+        if [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]; then stale+=("$d"); fi
+    done
+    if [ ${#stale[@]} -gt 0 ]; then
+        err "leftover bench state in: ${stale[*]}"
+        err "  'bin/bench down' clears it — note that wipes .run/ including"
+        err "  any sweep JSONs and pprof profiles under bench/.run/perf."
+        warn=1
+    fi
+
     # Ephemeral ports. Every non-keepalive connection holds one for
     # tcp_fin_timeout seconds after close, so the ceiling is
     # range / fin_timeout connections per second.
