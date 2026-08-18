@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+#
+# bin/perf — one command for gwag's whole performance suite.
+#
+# Three harnesses answer three different questions. This runs them in
+# increasing order of cost, so a cheap failure surfaces before an
+# expensive one starts.
+#
+#   gatbench   What gat's abstraction costs against hand-written
+#              gqlgen / connect-go / grpc-gateway. In-process
+#              microbenchmarks, no network, no stack. Seconds.
+#   self       gwag's own throughput on this hardware: RPS sweeps with
+#              knee detection. Boots the bench stack (gateway, greeter,
+#              NATS, Prometheus, Grafana) and renders docs/perf.md.
+#   compare    gwag vs Apollo Router / graphql-mesh / WunderGraph,
+#              process to process against the same backends. Each
+#              gateway sweeps in turn. Renders compare/comparison.md.
+#
+# Usage:
+#   bin/perf                       # all three, cheapest first
+#   bin/perf --only gatbench       # comma-separated subset (see --list)
+#   bin/perf --list                # what each stage runs; runs nothing
+#   bin/perf --quick               # smoke test; see the note below
+#   bin/perf --keep-going          # continue after a stage fails
+#   bin/perf --force               # run even when the machine looks busy
+#
+# --quick is for checking the plumbing, not for numbers. It shortens
+# gatbench and restricts compare to gwag alone. It does NOT shorten
+# `self`, which has no documented short mode — that stage is skipped
+# under --quick and says so rather than pretending it ran.
+#
+# Requires: go, docker (for self and compare).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+err() { echo "perf: $*" >&2; }
+die() { err "$*"; exit 2; }
+
+STAGES=(gatbench self compare)
+ONLY=""; QUICK=0; FORCE=0; DO_LIST=0; KEEP_GOING=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --only)       [ $# -ge 2 ] || die "--only needs a value"; ONLY=$2; shift ;;
+        --list)       DO_LIST=1 ;;
+        --quick)      QUICK=1 ;;
+        --force)      FORCE=1 ;;
+        --keep-going) KEEP_GOING=1 ;;
+        -h|--help)    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+        *)            die "unknown option $1 — see bin/perf --help" ;;
+    esac
+    shift
+done
+
+stage_desc() {
+    case "$1" in
+        gatbench) echo "gat abstraction cost vs gqlgen/connect-go/grpc-gateway (in-process)" ;;
+        self)     echo "gwag throughput sweeps on this hardware -> docs/perf.md" ;;
+        compare)  echo "gwag vs Apollo Router/graphql-mesh/WunderGraph -> compare/comparison.md" ;;
+    esac
+}
+stage_cmd() {
+    case "$1" in
+        gatbench) if [ "$QUICK" = "1" ]; then
+                      echo "(cd compare/gatbench && go test -bench=. -benchmem -benchtime=10x -count=1 ./...)"
+                  else
+                      echo "(cd compare/gatbench && go test -bench=. -benchmem ./...)"
+                  fi ;;
+        self)     echo "bin/bench perf" ;;
+        compare)  if [ "$QUICK" = "1" ]; then
+                      echo "compare/run.sh local --only gwag"
+                  else
+                      echo "compare/run.sh local"
+                  fi ;;
+    esac
+}
+
+# Selection
+SELECTED=()
+if [ -n "$ONLY" ]; then
+    IFS=',' read -ra want <<<"$ONLY"
+    for w in "${want[@]}"; do
+        ok=0
+        for s in "${STAGES[@]}"; do [ "$s" = "$w" ] && { SELECTED+=("$w"); ok=1; }; done
+        [ "$ok" = "1" ] || die "unknown stage '$w' — see bin/perf --list"
+    done
+else
+    SELECTED=("${STAGES[@]}")
+fi
+
+if [ "$DO_LIST" = "1" ]; then
+    printf 'gwag performance suite — %d stage(s), run cheapest first\n\n' "${#STAGES[@]}"
+    for s in "${STAGES[@]}"; do
+        printf '  %-10s %s\n' "$s" "$(stage_desc "$s")"
+        printf '  %-10s $ %s\n\n' "" "$(stage_cmd "$s")"
+    done
+    echo "Run a subset with --only <stage>[,<stage>...]"
+    exit 0
+fi
+
+# --- guards -----------------------------------------------------------
+#
+# Benchmark numbers from a loaded machine look authoritative and are
+# wrong. The lock also stops two suites (or another agent session) from
+# running at once, which is how results got silently corrupted before.
+LOCKFILE="${TMPDIR:-/tmp}/gwag-perf.lock"
+exec 9>"$LOCKFILE" || die "cannot open lock $LOCKFILE"
+if ! flock -n 9; then
+    if [ "$FORCE" = "1" ]; then
+        err "another bin/perf holds the lock; continuing anyway (--force)"
+    else
+        die "another bin/perf is already running (lock: $LOCKFILE). Wait, or --force."
+    fi
+fi
+if [ "$FORCE" = "0" ]; then
+    cores=$(nproc 2>/dev/null || echo 4)
+    load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+    if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c/4)}'; then
+        err "machine looks busy: 1-min load ${load} on ${cores} cores."
+        err "Benchmarking now produces numbers you cannot trust."
+        die "Wait for it to settle, or pass --force."
+    fi
+fi
+
+# --- preflight ----------------------------------------------------------
+#
+# The load stages drive tens of thousands of requests per second. The
+# ways that goes wrong do not announce themselves: an exhausted ephemeral
+# port range or a full conntrack table shows up as the gateway looking
+# slow, not as an error. Check the limits that bound the run and say what
+# was found, so a degraded run is never mistaken for a result.
+preflight() {
+    local target_rps=${PERF_TARGET_RPS:-50000}
+    local warn=0
+
+    # Stack ports. These are gwag's own, deliberately off the defaults:
+    # bench/docker-compose.yml puts Prometheus on 19090 and Grafana on
+    # 3001 precisely because :9090 and :3000 are commonly taken.
+    local busy=()
+    for p in 19090 3001 18080 15101 4222 6222; do
+        if ss -ltn "sport = :$p" 2>/dev/null | tail -n +2 | grep -q .; then busy+=("$p"); fi
+    done
+    if [ ${#busy[@]} -gt 0 ]; then
+        err "stack ports already in use: ${busy[*]}"
+        err "  a previous stack may still be up — try 'bin/bench down'"
+        warn=1
+    fi
+
+    # Ephemeral ports. Every non-keepalive connection holds one for
+    # tcp_fin_timeout seconds after close, so the ceiling is
+    # range / fin_timeout connections per second.
+    local lo hi range fin ceiling
+    read -r lo hi < /proc/sys/net/ipv4/ip_local_port_range
+    range=$((hi - lo + 1))
+    fin=$(cat /proc/sys/net/ipv4/tcp_fin_timeout 2>/dev/null || echo 60)
+    ceiling=$((range / fin))
+    local tw; tw=$(ss -tan state time-wait 2>/dev/null | wc -l)
+    local reuse; reuse=$(cat /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || echo 0)
+    err "ports: $range ephemeral, fin_timeout=${fin}s -> ~$ceiling conn/s without keep-alive"
+    err "       TIME_WAIT now $tw, tcp_tw_reuse=$reuse"
+    if [ "$ceiling" -lt "$target_rps" ] && [ "$reuse" = "0" ]; then
+        err "  target ${target_rps} RPS exceeds that ceiling and tw_reuse is off."
+        err "  A load generator opening fresh connections will exhaust the range;"
+        err "  the run will look like gateway slowness rather than failing."
+        warn=1
+    fi
+
+    # conntrack, when loaded. Same arithmetic, different table.
+    if [ -r /proc/sys/net/netfilter/nf_conntrack_max ]; then
+        local cmax ccount
+        cmax=$(cat /proc/sys/net/netfilter/nf_conntrack_max)
+        ccount=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+        err "conntrack: $ccount / $cmax in use"
+        if [ "$cmax" -lt "$target_rps" ]; then
+            err "  table smaller than target RPS; sustained load may drop connections"
+            warn=1
+        fi
+    fi
+
+    # File descriptors: one per in-flight connection, both ends.
+    local nofile; nofile=$(ulimit -Sn)
+    err "fds: soft limit $nofile"
+    if [ "$nofile" -lt 65536 ]; then
+        err "  low for a load test; raise with 'ulimit -n 65536'"
+        warn=1
+    fi
+
+    if [ "$warn" = "1" ]; then
+        if [ "$FORCE" = "1" ]; then
+            err "preflight raised concerns; continuing anyway (--force)"
+        else
+            die "preflight failed. Fix the above, or pass --force to run regardless."
+        fi
+    fi
+}
+[ "$DO_LIST" = "1" ] || preflight
+
+# --- run --------------------------------------------------------------
+declare -A RESULT ELAPSED
+overall=0
+for s in "${SELECTED[@]}"; do
+    if [ "$QUICK" = "1" ] && [ "$s" = "self" ]; then
+        RESULT[$s]="skipped"; ELAPSED[$s]=0
+        err "==> $s: SKIPPED under --quick (no documented short mode; run without --quick)"
+        continue
+    fi
+    cmd=$(stage_cmd "$s")
+    err "==> $s: $cmd"
+    start=$SECONDS
+    if eval "$cmd"; then
+        RESULT[$s]="ok"
+    else
+        RESULT[$s]="FAILED"
+        overall=1
+        if [ "$KEEP_GOING" = "0" ]; then
+            ELAPSED[$s]=$((SECONDS - start))
+            err "$s failed; stopping (use --keep-going to continue)"
+            break
+        fi
+    fi
+    ELAPSED[$s]=$((SECONDS - start))
+done
+
+# --- summary ----------------------------------------------------------
+echo
+echo "=== perf suite summary ==="
+for s in "${SELECTED[@]}"; do
+    r=${RESULT[$s]:-"not run"}
+    printf '  %-10s %-8s %s\n' "$s" "$r" \
+        "$([ -n "${ELAPSED[$s]:-}" ] && [ "${ELAPSED[$s]}" -gt 0 ] && printf '%dm%02ds' $((ELAPSED[$s]/60)) $((ELAPSED[$s]%60)))"
+done
+[ "$QUICK" = "1" ] && echo "  (--quick: numbers are smoke-test only, not results)"
+echo "  outputs: docs/perf.md (self), compare/comparison.md (compare)"
+exit $overall
