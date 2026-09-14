@@ -9,6 +9,26 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.1.0 — 2026-09-02
+
+### Changed
+- **mcp-go v0.52.0 → v1.0.0, kin-openapi 0.138 → 0.149.** Both are
+  0.x-major bumps and needed one-line source changes inside gwag. No
+  gwag API changed.
+
+## v2.0.1 — 2026-09-02
+
+### Fixed
+- **`gat` GraphQL responses set cookies again.** The handler emitted
+  the cookie sink before it executed the plan, so the sink was always
+  empty and every `Set-Cookie` was dropped. The request still returned
+  200 with its data; only the header was missing, so a login mutation
+  reported success and set no session. The REST surface was not
+  affected. Present from v1.4.1 through v2.0.0.
+
+### Changed
+- Go and UI dependencies updated to current minor/patch versions.
+
 ## v2.0.0 — 2026-09-01
 
 ### Changed
