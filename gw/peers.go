@@ -210,16 +210,26 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	g.peers = t
 	g.mu.Unlock()
 
+	// fail unpublishes t. Its loops never started, so nothing closes
+	// t.done and Close would block in t.stop forever.
+	fail := func(err error) (*peerTracker, error) {
+		cancel()
+		g.mu.Lock()
+		if g.peers == t {
+			g.peers = nil
+		}
+		g.mu.Unlock()
+		return nil, err
+	}
+
 	// Initial put of self before launching loops, so reconcile sees us.
 	if _, err := peers.Put(ctx, cl.NodeID, selfBytes); err != nil {
-		cancel()
-		return nil, fmt.Errorf("put self: %w", err)
+		return fail(fmt.Errorf("put self: %w", err))
 	}
 
 	rec, err := g.startReconciler(tctx, reg)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("start reconciler: %w", err)
+		return fail(fmt.Errorf("start reconciler: %w", err))
 	}
 	t.rec = rec
 

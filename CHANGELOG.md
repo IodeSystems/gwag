@@ -14,6 +14,12 @@ changes on MINOR, drops on MAJOR.
   graphql-go v2.0.0 → v2.0.1. `runSubscription` stops reading once its
   context is cancelled; graphql-go's producer then blocked forever on
   its next result send, and its result channel never closed.
+- **Cluster tracking retries after a failed start, and `Close` no longer
+  hangs.** If the initial self-registration Put failed (for example,
+  timing out while JetStream settles at boot), the half-started tracker
+  stayed installed. The boot retry loop saw it and stopped, so the
+  gateway ran without peer refresh, the reconciler or KV watches, and
+  `Close` blocked forever waiting on loops that never started.
 
 ## v2.1.0 — 2026-09-02
 
