@@ -9,6 +9,12 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Fixed
+- **Subscriptions no longer leak a goroutine per cancelled subscriber.**
+  graphql-go v2.0.0 → v2.0.1. `runSubscription` stops reading once its
+  context is cancelled; graphql-go's producer then blocked forever on
+  its next result send, and its result channel never closed.
+
 ## v2.1.0 — 2026-09-02
 
 ### Changed
