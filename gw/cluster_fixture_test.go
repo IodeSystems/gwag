@@ -41,7 +41,13 @@ var testCluster sharedCluster
 func getSharedCluster(t *testing.T) (a, b *Cluster) {
 	t.Helper()
 	testCluster.once.Do(func() {
-		testCluster.dataDir = t.TempDir()
+		// Not t.TempDir: that is removed when the first cluster test
+		// ends, while both servers keep writing JetStream state into it.
+		dir, err := os.MkdirTemp("", "gwag-cluster-test-")
+		if err != nil {
+			t.Fatalf("shared cluster data dir: %v", err)
+		}
+		testCluster.dataDir = dir
 		addrA := freeAddr(t)
 		addrB := freeAddr(t)
 
@@ -50,7 +56,6 @@ func getSharedCluster(t *testing.T) (a, b *Cluster) {
 		os.MkdirAll(dirA, 0755)
 		os.MkdirAll(dirB, 0755)
 
-		var err error
 		testCluster.a, err = startSharedClusterNode(t, "A", addrA, []string{addrB}, dirA)
 		if err != nil {
 			t.Fatalf("shared cluster node A: %v", err)
@@ -228,6 +233,9 @@ func TestMain(m *testing.M) {
 	}
 	if testCluster.b != nil {
 		testCluster.b.Close()
+	}
+	if testCluster.dataDir != "" {
+		os.RemoveAll(testCluster.dataDir)
 	}
 	testCluster.mu.Unlock()
 	os.Exit(code)
