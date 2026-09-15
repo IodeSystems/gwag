@@ -210,8 +210,10 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	g.peers = t
 	g.mu.Unlock()
 
-	// fail unpublishes t. Its loops never started, so nothing closes
-	// t.done and Close would block in t.stop forever.
+	// fail unpublishes t and closes the done channels its loops would
+	// have closed. A Close that took t off g.peers while this start was
+	// in flight is already waiting in t.stop; without the closes it
+	// blocks forever. Safe: fail runs at most once, before any loop starts.
 	fail := func(err error) (*peerTracker, error) {
 		cancel()
 		g.mu.Lock()
@@ -219,11 +221,16 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 			g.peers = nil
 		}
 		g.mu.Unlock()
+		close(t.done)
+		close(t.stableDone)
+		close(t.deprecatedDone)
+		close(t.mcpConfigDone)
 		return nil, err
 	}
 
 	// Initial put of self before launching loops, so reconcile sees us.
-	if _, err := peers.Put(ctx, cl.NodeID, selfBytes); err != nil {
+	// tctx, not ctx: a Close during this Put cancels it via t.stop.
+	if _, err := peers.Put(tctx, cl.NodeID, selfBytes); err != nil {
 		return fail(fmt.Errorf("put self: %w", err))
 	}
 

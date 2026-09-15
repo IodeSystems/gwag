@@ -19,7 +19,9 @@ changes on MINOR, drops on MAJOR.
   timing out while JetStream settles at boot), the half-started tracker
   stayed installed. The boot retry loop saw it and stopped, so the
   gateway ran without peer refresh, the reconciler or KV watches, and
-  `Close` blocked forever waiting on loops that never started.
+  `Close` blocked forever waiting on loops that never started. `Close`
+  also no longer hangs when it runs while that start is still in flight,
+  as it can against the background start `ControlPlane` launches.
 
 ## v2.1.0 — 2026-09-02
 
