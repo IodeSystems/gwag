@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.1.1 — 2026-09-15
+
 ### Fixed
 - **Subscriptions no longer leak a goroutine per cancelled subscriber.**
   graphql-go v2.0.0 → v2.0.1. `runSubscription` stops reading once its
