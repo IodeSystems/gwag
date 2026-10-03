@@ -9,9 +9,9 @@
 // want it across reloads still benefit because sessionStorage survives
 // page refresh; full logout = close tab.
 //
-// Subscribers are notified via a window-level CustomEvent so the
-// Authorization header in graphql-request's lazy headers callback
-// always reads the current value (the callback fires per request).
+// Subscribers are notified via a window-level CustomEvent. The
+// GraphQL client in ./client reads the token per request, so it
+// always sends the current value.
 
 const KEY = 'gwag:admin-token';
 const EVENT = 'gwag:admin-token-changed';
