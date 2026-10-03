@@ -212,8 +212,12 @@ func writeDescription(b *strings.Builder, indent, desc string) {
 	}
 	body := strings.Join(trimmed, "\n")
 	// Escape any embedded `"""` so the block-string remains parseable.
-	body = strings.ReplaceAll(body, "\"\"\"", "\\\"\\\"\\\"")
-	if strings.Contains(body, "\n") {
+	// `\"""` is the only escape a block string has; `\"\"\"` would
+	// survive into the parsed value verbatim.
+	body = strings.ReplaceAll(body, `"""`, `\"""`)
+	// A body ending in `"` would run into the closing `"""` (`"x""""`
+	// closes early), so put the closing delimiter on its own line.
+	if strings.Contains(body, "\n") || strings.HasSuffix(body, `"`) {
 		b.WriteString(indent)
 		b.WriteString("\"\"\"\n")
 		for _, line := range strings.Split(body, "\n") {

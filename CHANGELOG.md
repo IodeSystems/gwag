@@ -9,6 +9,14 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Fixed
+- **SDL descriptions ending in `"` now parse.** A one-line description
+  like `e.g. "match 0.97"` rendered as `"""…"match 0.97""""`, which
+  closes the block string early; graphql-js and codegen rejected the
+  whole schema. Such descriptions now use the multi-line form. An
+  embedded `"""` is now escaped as `\"""` (was `\"\"\"`, which put
+  the backslashes into the parsed description).
+
 ## v2.1.1 — 2026-09-15
 
 ### Fixed
