@@ -816,7 +816,9 @@ func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStab
 	}
 
 	if t != nil && t.stable != nil {
-		kctx, cancel := kvCtx(ctx)
+		// Two call timeouts: room for writeStableForced to retry a
+		// put lost to a replica change.
+		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
 		err := writeStableForced(kctx, t.stable, ns, target)
 		cancel()
 		if err != nil {
