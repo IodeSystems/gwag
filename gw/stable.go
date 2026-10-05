@@ -183,35 +183,18 @@ var errStableNotHigher = errors.New("stable: KV already at >= vN")
 // stable forward; retract is idempotent on the KV until the next
 // register lands).
 //
-// The put is retried until ctx ends. A put sent while the bucket's
-// replica count changes (reconcileReplicas raises it as peers join)
-// can get no ack: the stream elects a new leader and the publish
-// waits out its whole deadline. Each attempt gets
-// stableForcedAttemptTimeout so a lost put costs that long, not all
-// of ctx. Retrying is safe: every attempt writes the same value.
+// The put goes through kvPutRetry, so a put lost to a replica change
+// is retried until ctx ends.
 func writeStableForced(ctx context.Context, kv jetstream.KeyValue, ns string, vN int) error {
 	payload, err := json.Marshal(stableKVValue{VN: vN})
 	if err != nil {
 		return fmt.Errorf("stable: marshal: %w", err)
 	}
-	for {
-		actx, cancel := context.WithTimeout(ctx, stableForcedAttemptTimeout)
-		_, err = kv.Put(actx, ns, payload)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("stable: forced put %s: %w", ns, err)
-		case <-time.After(250 * time.Millisecond):
-		}
+	if err := kvPutRetry(ctx, kv, ns, payload); err != nil {
+		return fmt.Errorf("stable: forced put %s: %w", ns, err)
 	}
+	return nil
 }
-
-// stableForcedAttemptTimeout bounds one put in writeStableForced. A
-// healthy put acks in milliseconds.
-const stableForcedAttemptTimeout = 2 * time.Second
 
 func tryWriteStable(ctx context.Context, kv jetstream.KeyValue, ns string, vN int) error {
 	entry, err := kv.Get(ctx, ns)

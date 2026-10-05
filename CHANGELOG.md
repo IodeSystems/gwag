@@ -16,11 +16,13 @@ changes on MINOR, drops on MAJOR.
   whole schema. Such descriptions now use the multi-line form. An
   embedded `"""` is now escaped as `\"""` (was `\"\"\"`, which put
   the backslashes into the parsed description).
-- **`RetractStable` survives a stable-KV replica change.** The gateway
-  raises the stable bucket's replica count as peers join; a retract
-  put sent during that change could get no ack and fail after 5s,
-  leaving the local retract applied but not persisted. The put now
-  retries with a 2s per-attempt timeout inside a 10s budget.
+- **`RetractStable` and cluster `Register` survive a KV replica
+  change.** The gateway raises the KV buckets' replica count as peers
+  join; a put sent during that change could get no ack and fail after
+  5s. For a retract, the local retract stayed applied but was not
+  persisted; for a registration, the call failed. Both puts now retry
+  with a 2s per-attempt timeout inside a 10s budget. Heartbeat TTL
+  refreshes retry inside their existing 5s budget.
 
 ## v2.1.1 — 2026-09-15
 

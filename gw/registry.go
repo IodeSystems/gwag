@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -92,25 +91,6 @@ func newReplicaID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// putRegistryValue serialises v and writes it under its replica key.
-func putRegistryValue(ctx context.Context, kv jetstream.KeyValue, v registryValue) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshal registry value: %w", err)
-	}
-	if _, err := kv.Put(ctx, replicaKey(v.Namespace, v.Version, v.ReplicaID), b); err != nil {
-		return fmt.Errorf("kv put: %w", err)
-	}
-	return nil
-}
-
-func deleteRegistryKey(ctx context.Context, kv jetstream.KeyValue, ns, ver, replicaID string) error {
-	if err := kv.Delete(ctx, replicaKey(ns, ver, replicaID)); err != nil {
-		return fmt.Errorf("kv delete: %w", err)
-	}
-	return nil
-}
-
 // kvCallTimeout is the per-call deadline for KV operations. Kept short
 // so a wedged JS meta election doesn't block client RPCs indefinitely.
 const kvCallTimeout = 5 * time.Second
@@ -118,3 +98,29 @@ const kvCallTimeout = 5 * time.Second
 func kvCtx(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, kvCallTimeout)
 }
+
+// kvPutRetry puts value under key, retrying until ctx ends. A put
+// sent while a bucket's replica count changes (reconcileReplicas
+// raises it as peers join) can get no ack: the stream elects a new
+// leader and the publish waits out its whole deadline. Each attempt
+// gets kvPutAttemptTimeout, so a lost put costs that long, not all of
+// ctx. Only for writes where repeating the same put is safe.
+func kvPutRetry(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) error {
+	for {
+		actx, cancel := context.WithTimeout(ctx, kvPutAttemptTimeout)
+		_, err := kv.Put(actx, key, value)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// kvPutAttemptTimeout bounds one put in kvPutRetry. A healthy put
+// acks in milliseconds.
+const kvPutAttemptTimeout = 2 * time.Second

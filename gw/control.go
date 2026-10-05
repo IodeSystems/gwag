@@ -363,8 +363,11 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
 				return nil, fmt.Errorf("controlplane: marshal kv value: %w", mErr)
 			}
-			kctx, kcancel := kvCtx(ctx)
-			_, pErr := clusterKV.Put(kctx, replicaKey(p.namespace, p.version, replicaID), b)
+			// Two call timeouts: room for kvPutRetry to retry a put
+			// lost to a replica change. The replica ID is new, so a
+			// repeated put writes the same key and value.
+			kctx, kcancel := context.WithTimeout(ctx, 2*kvCallTimeout)
+			pErr := kvPutRetry(kctx, clusterKV, replicaKey(p.namespace, p.version, replicaID), b)
 			kcancel()
 			if pErr != nil {
 				cp.deleteKVKeys(ctx, clusterKV, kvKeys)
@@ -512,7 +515,7 @@ func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatReques
 	if kv := cp.gw.registryKV(); kv != nil {
 		for _, r := range reg.kvKeys {
 			kctx, cancel := kvCtx(ctx)
-			_, _ = kv.Put(kctx, replicaKey(r.namespace, r.version, r.replicaID), r.value)
+			_ = kvPutRetry(kctx, kv, replicaKey(r.namespace, r.version, r.replicaID), r.value)
 			cancel()
 		}
 	}
@@ -816,8 +819,8 @@ func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStab
 	}
 
 	if t != nil && t.stable != nil {
-		// Two call timeouts: room for writeStableForced to retry a
-		// put lost to a replica change.
+		// Two call timeouts: room for kvPutRetry to retry a put lost
+		// to a replica change.
 		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
 		err := writeStableForced(kctx, t.stable, ns, target)
 		cancel()
