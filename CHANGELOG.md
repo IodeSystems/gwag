@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.1.2 — 2026-10-11
+
 ### Fixed
 - **SDL descriptions ending in `"` now parse.** A one-line description
   like `e.g. "match 0.97"` rendered as `"""…"match 0.97""""`, which
@@ -23,6 +25,14 @@ changes on MINOR, drops on MAJOR.
   persisted; for a registration, the call failed. Both puts now retry
   with a 2s per-attempt timeout inside a 10s budget. Heartbeat TTL
   refreshes retry inside their existing 5s budget.
+
+### Changed
+- Go dependencies updated to current minor/patch versions: nats-server
+  v2.15.1, nats.go v1.54.0, grpc v1.84.0, otel v1.47.0, mcp-go v1.2.1,
+  prometheus client_golang v1.25.0, protoreflect v1.19.0 (v2 module
+  v2.0.0 stable), golang.org/x/net v0.61.0. No source changes.
+- UI: graphql 17; graphql-request replaced by a fetch client. GraphQL
+  errors now read as the error text joined with "; ".
 
 ## v2.1.1 — 2026-09-15
 
