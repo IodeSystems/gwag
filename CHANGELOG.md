@@ -9,6 +9,18 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Security
+- **gat: huma middlewares now run on GraphQL and gRPC dispatch.** An op
+  registered with `gat.Register` called its handler directly over
+  `/graphql` and gRPC ingress, skipping both `api.UseMiddleware` and
+  `huma.Operation.Middlewares`. An op guarded only by a huma middleware
+  (auth, role check) was open on those surfaces. The chain now runs in
+  huma's order; a middleware that writes an error instead of calling
+  `next` becomes a GraphQL error (with `extensions.status`) or the
+  mapped Connect code. Middlewares see the transport request's headers,
+  `Method()` is the op's method, `Param()` returns `""`, and
+  `BodyReader()` is empty.
+
 ## v2.1.2 — 2026-10-11
 
 ### Fixed

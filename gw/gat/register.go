@@ -27,7 +27,11 @@ type capturedOp struct {
 	inputType  reflect.Type // I (the value type behind *I)
 	outputType reflect.Type // O (the value type behind *O)
 	invoke     func(ctx context.Context, in any) (any, error)
-	irOp       *ir.Operation // assigned during ingestHuma; nil until then
+	// hasMiddleware is true when invoke runs a huma middleware chain;
+	// transports without an *http.Request (gRPC ingress) build one only
+	// then.
+	hasMiddleware bool
+	irOp          *ir.Operation // assigned during ingestHuma; nil until then
 }
 
 // Register is the paired drop-in for huma.Register. It registers the
@@ -53,16 +57,28 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 	if g.built {
 		return
 	}
+	// Same chain, same order, captured at the same moment huma.Register
+	// captures it: API stack first, then the op's own.
+	var chain huma.Middlewares
+	chain = append(chain, api.Middlewares()...)
+	chain = append(chain, op.Middlewares...)
+	opRef := op
 	g.captured = append(g.captured, &capturedOp{
-		op:         op,
-		inputType:  reflect.TypeOf((*I)(nil)).Elem(),
-		outputType: reflect.TypeOf((*O)(nil)).Elem(),
+		op:            op,
+		inputType:     reflect.TypeOf((*I)(nil)).Elem(),
+		outputType:    reflect.TypeOf((*O)(nil)).Elem(),
+		hasMiddleware: len(chain) > 0,
 		invoke: func(ctx context.Context, in any) (any, error) {
 			typed, ok := in.(*I)
 			if !ok {
 				return nil, fmt.Errorf("gat: input type mismatch for %s: got %T", op.OperationID, in)
 			}
-			return handler(ctx, typed)
+			if len(chain) == 0 {
+				return handler(ctx, typed)
+			}
+			return runHumaMiddlewares(ctx, chain, &opRef, func(ctx context.Context) (any, error) {
+				return handler(ctx, typed)
+			})
 		},
 	})
 }

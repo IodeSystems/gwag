@@ -274,7 +274,7 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 
-		ctx, cookies := withCookieSink(r.Context())
+		ctx, cookies := withCookieSink(withInboundRequest(r.Context(), r))
 		pr := g.planCache.Get(g.schema, query, operationName)
 
 		// Emit any Set-Cookie a handler produced (login/logout) before the

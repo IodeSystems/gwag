@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -234,6 +235,9 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 			_ = json.Unmarshal(raw, inPtr.Interface())
 		}
 
+		if cap.hasMiddleware {
+			ctx = withInboundRequest(ctx, connectInboundRequest(req))
+		}
 		out, err := cap.invoke(ctx, inPtr.Interface())
 		if err != nil {
 			return nil, handlerErrorToConnect(err)
@@ -267,4 +271,16 @@ func jsonToDynamic(body any, msg *dynamicpb.Message) error {
 		return fmt.Errorf("protojson decode: %w", err)
 	}
 	return nil
+}
+
+// connectInboundRequest gives huma middlewares on a gRPC-ingress call
+// the request view they need: the call's headers, peer address, and
+// procedure path. Connect does not expose the *http.Request itself.
+func connectInboundRequest(req connect.AnyRequest) *http.Request {
+	return &http.Request{
+		Method:     http.MethodPost,
+		URL:        &url.URL{Path: req.Spec().Procedure},
+		Header:     req.Header(),
+		RemoteAddr: req.Peer().Addr,
+	}
 }

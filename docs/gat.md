@@ -349,6 +349,12 @@ test against a failure mode that otherwise ships silently.
   publish/subscribe primitive with best-effort cross-node fanout and
   an SSE delivery stream; see [`gat-pubsub.md`](./gat-pubsub.md). The
   NATS-backed, durable pub/sub stack remains gwag-only.
-- gat doesn't manage auth. Whatever middleware the adopter wraps
-  the huma router with applies to gat's GraphQL/gRPC routes too,
-  since they ride on the same handler chain.
+- gat doesn't manage auth. `net/http` middleware wrapped around the
+  router applies to gat's GraphQL/gRPC routes, since they ride on the
+  same handler chain. huma middlewares (`api.UseMiddleware` and
+  `huma.Operation.Middlewares`) captured by `gat.Register` run on every
+  in-process call, in huma's order. On those calls the middleware sees
+  the transport request's headers (GraphQL HTTP request, or the gRPC
+  call's headers), the op's `Method()`, an empty `Param()` and an
+  empty `BodyReader()`. A middleware that writes an error instead of
+  calling `next` becomes the field's GraphQL error or the gRPC status.
