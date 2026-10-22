@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.3.0 — 2026-10-22
+
 ### Added
 - **gat: `RegisterSSE`, the paired drop-in for huma's `sse.Register`.**
   One handler serves REST (Server-Sent Events), a GraphQL subscription
