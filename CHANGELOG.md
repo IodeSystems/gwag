@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.2.0 — 2026-10-21
+
 ### Added
 - **gat: `Subscribe` registers GraphQL subscriptions.** `gat.Subscribe[I, O]`
   takes a huma operation and a source `func(ctx, *I) (<-chan *O, error)`;
