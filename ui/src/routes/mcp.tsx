@@ -60,7 +60,7 @@ function McpConfig() {
   const includeAdd = useMutation({
     mutationFn: (path: string) => client.request(McpIncludeMutation, { path }),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setIncludeDraft('');
       setToast('include added');
     },
@@ -71,7 +71,7 @@ function McpConfig() {
     mutationFn: (path: string) =>
       client.request(McpIncludeRemoveMutation, { path }),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setToast('include removed');
     },
     onError: (e: Error) => setToast(e.message),
@@ -80,7 +80,7 @@ function McpConfig() {
   const excludeAdd = useMutation({
     mutationFn: (path: string) => client.request(McpExcludeMutation, { path }),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setExcludeDraft('');
       setToast('exclude added');
     },
@@ -91,7 +91,7 @@ function McpConfig() {
     mutationFn: (path: string) =>
       client.request(McpExcludeRemoveMutation, { path }),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setToast('exclude removed');
     },
     onError: (e: Error) => setToast(e.message),
@@ -101,7 +101,7 @@ function McpConfig() {
     mutationFn: (autoInclude: boolean) =>
       client.request(McpSetAutoIncludeMutation, { autoInclude }),
     onSuccess: (_resp, v) => {
-      invalidate();
+      void invalidate();
       setToast(v ? 'auto-include on' : 'auto-include off');
     },
     onError: (e: Error) => setToast(e.message),
@@ -109,7 +109,7 @@ function McpConfig() {
 
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error)
-    return <Typography color="error">{(error as Error).message}</Typography>;
+    return <Typography color="error">{error.message}</Typography>;
 
   const cfg = data?.admin?.mcpList;
   const entries = data?.admin?.mcpSchemaList?.entries ?? [];

@@ -42,7 +42,7 @@ function Deprecated() {
 
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error)
-    return <Typography color="error">{(error as Error).message}</Typography>;
+    return <Typography color="error">{error.message}</Typography>;
 
   const services = data?.admin?.deprecatedStats?.services ?? [];
 

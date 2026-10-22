@@ -18,7 +18,12 @@ const config: CodegenConfig = {
       config: {
         avoidOptionals: true,
         useTypeImports: true,
-        scalars: { JSON: 'unknown' },
+        // Long is a decimal string on output (64-bit safe); inputs
+        // accept a number or a string.
+        scalars: {
+          JSON: 'unknown',
+          Long: { input: 'string | number', output: 'string' },
+        },
       },
     },
   },

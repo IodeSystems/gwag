@@ -45,7 +45,7 @@ export const Route = createFileRoute('/services')({
 // Unknown shapes — shouldn't appear given parseVersion canonicalisation —
 // fall through to the raw string so operators see something rather than
 // silently mislabelling.
-function tierOf(version: string): 'unstable' | 'vN' | string {
+function tierOf(version: string): string {
   if (version === 'unstable') return 'unstable';
   if (/^v[1-9][0-9]*$/.test(version)) return 'vN';
   return version;
@@ -94,7 +94,7 @@ function Services() {
     mutationFn: (vars: { namespace: string; targetVN: number }) =>
       client.request(RetractStableMutation, vars),
     onSuccess: (resp) => {
-      qc.invalidateQueries({ queryKey: ['services'] });
+      void qc.invalidateQueries({ queryKey: ['services'] });
       const r = resp.admin.retractStable;
       setToast(`stable v${r?.priorVN} → v${r?.newVN}`);
       setRetractTarget(null);
@@ -109,7 +109,7 @@ function Services() {
       reason: string;
     }) => client.request(DeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
-      qc.invalidateQueries({ queryKey: ['services'] });
+      void qc.invalidateQueries({ queryKey: ['services'] });
       setToast(`deprecated ${vars.namespace} ${vars.version}`);
       setDeprecateTarget(null);
       setReasonDraft('');
@@ -121,7 +121,7 @@ function Services() {
     mutationFn: (vars: { namespace: string; version: string }) =>
       client.request(UndeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
-      qc.invalidateQueries({ queryKey: ['services'] });
+      void qc.invalidateQueries({ queryKey: ['services'] });
       setToast(`undeprecated ${vars.namespace} ${vars.version}`);
     },
     onError: (e: Error) => setToast(e.message),
@@ -129,7 +129,7 @@ function Services() {
 
   if (isLoading) return <Typography>Loading…</Typography>;
   if (error)
-    return <Typography color="error">{(error as Error).message}</Typography>;
+    return <Typography color="error">{error.message}</Typography>;
 
   const services = data?.admin?.listServices?.services ?? [];
   const stableEntries = data?.admin?.listServices?.stableVN ?? [];
@@ -573,7 +573,7 @@ function ServiceDrawer({
         </Typography>
         {isLoading && <Typography>Loading…</Typography>}
         {error && (
-          <Typography color="error">{(error as Error).message}</Typography>
+          <Typography color="error">{error.message}</Typography>
         )}
         {!isLoading && !error && methods.length === 0 && (
           <Typography color="text.secondary" variant="body2">

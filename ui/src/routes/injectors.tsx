@@ -74,7 +74,7 @@ function Injectors() {
   });
 
   if (isLoading) return <Typography>Loading…</Typography>;
-  if (error) return <Typography color="error">{(error as Error).message}</Typography>;
+  if (error) return <Typography color="error">{error.message}</Typography>;
 
   const injectors = (data?.admin?.listInjectors?.injectors ?? []).filter(
     (x): x is Injector => x !== null,

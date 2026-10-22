@@ -84,7 +84,7 @@ function TokenSigner() {
       </Card>
 
       {sign.error && (
-        <Alert severity="error">{(sign.error as Error).message}</Alert>
+        <Alert severity="error">{sign.error.message}</Alert>
       )}
 
       {denied && (

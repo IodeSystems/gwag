@@ -1,4 +1,4 @@
-import { useSyncExternalStore, useState, useEffect } from 'react';
+import { useSyncExternalStore, useState } from 'react';
 import {
   Box,
   Button,
@@ -40,10 +40,13 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const [draft, setDraft] = useState(current ?? '');
 
   // Keep the draft in sync when the drawer opens against a changed
-  // value (e.g. another tab cleared it).
-  useEffect(() => {
+  // value (e.g. another tab cleared it). Adjusted during render, not in
+  // an effect, so it does not cost a second render.
+  const [synced, setSynced] = useState({ open, current });
+  if (synced.open !== open || synced.current !== current) {
+    setSynced({ open, current });
     if (open) setDraft(current ?? '');
-  }, [open, current]);
+  }
 
   const save = () => {
     setAdminToken(draft.trim() || null);

@@ -33,14 +33,14 @@ function Peers() {
   const forget = useMutation({
     mutationFn: (nodeId: string) => client.request(ForgetPeerMutation, { nodeId }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['peers'] });
+      void qc.invalidateQueries({ queryKey: ['peers'] });
       setToast('peer forgotten');
     },
     onError: (e: Error) => setToast(e.message),
   });
 
   if (isLoading) return <Typography>Loading…</Typography>;
-  if (error) return <Typography color="error">{(error as Error).message}</Typography>;
+  if (error) return <Typography color="error">{error.message}</Typography>;
 
   const peers = data?.admin?.listPeers?.peers ?? [];
 

@@ -197,7 +197,7 @@ function Schema() {
       >
         {isLoading && <Typography>Loading…</Typography>}
         {error && (
-          <Typography color="error">{(error as Error).message}</Typography>
+          <Typography color="error">{error.message}</Typography>
         )}
         {!isLoading && !error && data?.text}
       </Box>
@@ -266,7 +266,7 @@ function FilterDialog({
       <DialogContent dividers>
         {isLoading && <Typography>Loading…</Typography>}
         {error && (
-          <Typography color="error">{(error as Error).message}</Typography>
+          <Typography color="error">{error.message}</Typography>
         )}
         {!isLoading && !error && all.length === 0 && (
           <Typography color="text.secondary">

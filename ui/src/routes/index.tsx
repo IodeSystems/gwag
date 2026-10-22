@@ -71,7 +71,7 @@ function Dashboard() {
             labelId="window-label"
             label="Window"
             value={windowVal}
-            onChange={(e) => setWindow(e.target.value as Window)}
+            onChange={(e) => setWindow(e.target.value)}
           >
             {windowOptions.map((o) => (
               <MenuItem key={o.value} value={o.value}>
@@ -98,7 +98,7 @@ function Dashboard() {
 
       {isLoading && <Typography>Loading…</Typography>}
       {error && (
-        <Typography color="error">{(error as Error).message}</Typography>
+        <Typography color="error">{error.message}</Typography>
       )}
 
       {!isLoading && !error && services.length === 0 && (

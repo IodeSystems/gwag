@@ -129,7 +129,6 @@ export function EventsProvider({ children }: { children: ReactNode }) {
           // Silenced from the UI feed; log to console for diagnostics.
           // Likely cause: deployment without AddAdminEvents, or a
           // subscription auth misconfiguration.
-          // eslint-disable-next-line no-console
           console.warn('admin_events subscription error:', e);
         },
         complete: () => {},
@@ -242,10 +241,14 @@ export function useSubscribe<T = unknown>(opts: SubscribeOpts<T>): void {
     onErrorRef.current = onError;
   });
 
+  // Resubscribe when the variables change by value, not by identity:
+  // callers pass a fresh object literal every render.
+  const variablesKey = JSON.stringify(variables ?? null);
   useEffect(() => {
     if (!enabled) return;
+    const vars = JSON.parse(variablesKey) as SubscribeOpts<T>['variables'] | null;
     const dispose = ctx.client.subscribe<{ data: T }>(
-      { query, variables },
+      { query, variables: vars ?? undefined },
       {
         next: (msg) => {
           const payload = (msg as { data?: T }).data ?? msg;
@@ -260,5 +263,5 @@ export function useSubscribe<T = unknown>(opts: SubscribeOpts<T>): void {
       },
     );
     return () => dispose();
-  }, [id, query, JSON.stringify(variables ?? null), enabled, ctx]);
+  }, [id, query, variablesKey, enabled, ctx]);
 }
