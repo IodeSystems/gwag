@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.3.1 — 2026-10-22
+
 ### Security
 - **gat runs huma's input checks on GraphQL and gRPC calls.** Parameter
   and body schema validation (`maxLength`, `pattern`, `minimum`, `enum`,
