@@ -26,14 +26,20 @@ type inprocDispatcher struct {
 }
 
 func newInprocDispatcher(c *capturedOp, op *ir.Operation, emptyNilSlices bool, observe DispatchObserver) ir.Dispatcher {
-	var bodyArg string
+	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArgOf(op), emptyNilSlices: emptyNilSlices, observe: observe}
+}
+
+// bodyArgOf is the name of op's body Arg, or "" when it has none.
+func bodyArgOf(op *ir.Operation) string {
+	if op == nil {
+		return ""
+	}
 	for _, a := range op.Args {
 		if strings.EqualFold(a.OpenAPILocation, "body") {
-			bodyArg = a.Name
-			break
+			return a.Name
 		}
 	}
-	return &inprocDispatcher{captured: c, op: op, bodyArg: bodyArg, emptyNilSlices: emptyNilSlices, observe: observe}
+	return ""
 }
 
 // Dispatch is the per-operation join point: every in-process GraphQL/gRPC operation invocation
@@ -57,7 +63,7 @@ func (d *inprocDispatcher) dispatch(ctx context.Context, args map[string]any) (a
 		return nil, fmt.Errorf("gat: bind input for %s: %w", d.op.Name, err)
 	}
 
-	out, err := d.captured.invoke(ctx, inPtr.Interface())
+	out, err := d.captured.invoke(ctx, inPtr.Interface(), args)
 	if err != nil {
 		// Surface the handler's HTTP status as GraphQL error extensions so
 		// clients can classify (e.g. 401/403 → login, 5xx → error dialog).

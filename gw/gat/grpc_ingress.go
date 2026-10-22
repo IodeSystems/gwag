@@ -214,10 +214,14 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		if err != nil {
 			return nil, err
 		}
-		if cap.hasMiddleware {
+		var args map[string]any
+		if cap.check != nil {
+			args = messageToArgs(req.Msg)
+		}
+		if cap.needsRequest {
 			ctx = withInboundRequest(ctx, connectInboundRequest(req))
 		}
-		out, err := cap.invoke(ctx, in)
+		out, err := cap.invoke(ctx, in, args)
 		if err != nil {
 			return nil, handlerErrorToConnect(err)
 		}
@@ -242,15 +246,7 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 // field plan are properties of the operation, not the request, so
 // they are resolved once here rather than per call.
 func newConnectBinder(inputType reflect.Type, irOp *ir.Operation, md protoreflect.MethodDescriptor) func(*dynamicpb.Message) (any, error) {
-	bodyArg := ""
-	if irOp != nil {
-		for _, a := range irOp.Args {
-			if strings.EqualFold(a.OpenAPILocation, "body") {
-				bodyArg = a.Name
-				break
-			}
-		}
-	}
+	bodyArg := bodyArgOf(irOp)
 	inPlan := buildBindPlan(inputType, irOp, bodyArg, md.Input())
 	opName := md.Name()
 	return func(msg *dynamicpb.Message) (any, error) {

@@ -57,17 +57,23 @@ func Subscribe[I, O any](api huma.API, g *Gateway, op huma.Operation, source fun
 	op.Method = http.MethodGet
 	op.Path = subscriptionPathPrefix + op.OperationID
 	op.Middlewares = nil
-	huma.Register(g.subscriptionAPI(api), op, func(context.Context, *I) (*subscriptionOutput[O], error) {
+	side := g.subscriptionAPI(api)
+	huma.Register(side, op, func(context.Context, *I) (*subscriptionOutput[O], error) {
 		return nil, huma.Error501NotImplemented("subscription")
 	})
 
 	opRef := op
-	run := func(ctx context.Context, in any, started func(), emit func(any) error) error {
+	inputType := reflect.TypeOf((*I)(nil)).Elem()
+	check := newInputCheck(side, op, inputType)
+	run := func(ctx context.Context, in any, args map[string]any, started func(), emit func(any) error) error {
 		typed, ok := in.(*I)
 		if !ok {
 			return fmt.Errorf("gat: input type mismatch for %s: got %T", op.OperationID, in)
 		}
 		return runChain(ctx, chain, &opRef, func(ctx context.Context) error {
+			if err := check.apply(ctx, &opRef, typed, args); err != nil {
+				return err
+			}
 			src, err := source(ctx, typed)
 			if err != nil {
 				return err
@@ -90,8 +96,9 @@ func Subscribe[I, O any](api huma.API, g *Gateway, op huma.Operation, source fun
 	}
 	g.subs = append(g.subs, &streamOp{
 		op:        op,
-		inputType: reflect.TypeOf((*I)(nil)).Elem(),
+		inputType: inputType,
 		run:       run,
+		check:     check,
 	})
 }
 

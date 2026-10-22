@@ -9,6 +9,15 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Security
+- **gat runs huma's input checks on GraphQL and gRPC calls.** Parameter
+  and body schema validation (`maxLength`, `pattern`, `minimum`, `enum`,
+  formats, ...) and input `Resolve` methods ran over REST only; GraphQL
+  and gRPC-ingress calls (unary, `RegisterSSE`, `Subscribe`) reached the
+  handler with input REST rejects. A failure is now a 422, or the status
+  a Resolver error carries, as GraphQL `extensions.status` or the mapped
+  gRPC code.
+
 ## v2.3.0 — 2026-10-22
 
 ### Added

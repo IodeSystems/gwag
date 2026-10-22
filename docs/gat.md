@@ -167,7 +167,9 @@ With one event type the field and the stream message are that type.
 - GraphQL and gRPC middlewares see the WebSocket upgrade request or the
   gRPC call's headers. For credentials a browser cannot send on a
   WebSocket, read `gat.ConnectionInitPayload(ctx)` or take a token as
-  an argument and check it in the handler.
+  an argument and check it in a `Resolve` method on the input type
+  (see input checks below): a rejection there fails the request before
+  the stream starts, with its status, on every surface.
 - `gat.PubSub()` can feed a handler; it is best-effort with no history
   (see [`gat-pubsub.md`](./gat-pubsub.md)).
 
@@ -432,3 +434,11 @@ test against a failure mode that otherwise ships silently.
   call's headers), the op's `Method()`, an empty `Param()` and an
   empty `BodyReader()`. A middleware that writes an error instead of
   calling `next` becomes the field's GraphQL error or the gRPC status.
+- huma's input checks run on in-process calls too, after the
+  middlewares, as over REST: parameter and body schema validation
+  (`maxLength`, `pattern`, `minimum`, `enum`, formats, ...) and input
+  `Resolve` methods (`huma.Resolver`, `huma.ResolverWithPath`, nested
+  ones included). A failure is a 422 (or the status a Resolver error
+  carries) in GraphQL `extensions.status`, and the mapped gRPC code.
+  An argument the client did not send is not validated unless it is
+  required; over gRPC an unset proto3 field counts as not sent.

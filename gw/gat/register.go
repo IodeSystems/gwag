@@ -26,12 +26,17 @@ type capturedOp struct {
 	op         huma.Operation
 	inputType  reflect.Type // I (the value type behind *I)
 	outputType reflect.Type // O (the value type behind *O)
-	invoke     func(ctx context.Context, in any) (any, error)
-	// hasMiddleware is true when invoke runs a huma middleware chain;
-	// transports without an *http.Request (gRPC ingress) build one only
-	// then.
-	hasMiddleware bool
-	irOp          *ir.Operation // assigned during ingestHuma; nil until then
+	// invoke runs the middlewares, the input checks, then the handler.
+	// args are the transport args in was bound from (see inputCheck).
+	invoke func(ctx context.Context, in any, args map[string]any) (any, error)
+	// check is nil when the op has nothing to check; transports skip
+	// building args for it then.
+	check *inputCheck
+	// needsRequest is true when invoke runs a huma middleware chain or
+	// input checks; transports without an *http.Request (gRPC ingress)
+	// build one only then.
+	needsRequest bool
+	irOp         *ir.Operation // assigned during ingestHuma; nil until then
 }
 
 // Register is the paired drop-in for huma.Register. It registers the
@@ -63,22 +68,29 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 	chain = append(chain, api.Middlewares()...)
 	chain = append(chain, op.Middlewares...)
 	opRef := op
+	inputType := reflect.TypeOf((*I)(nil)).Elem()
+	check := newInputCheck(api, op, inputType)
 	g.captured = append(g.captured, &capturedOp{
-		op:            op,
-		inputType:     reflect.TypeOf((*I)(nil)).Elem(),
-		outputType:    reflect.TypeOf((*O)(nil)).Elem(),
-		hasMiddleware: len(chain) > 0,
-		invoke: func(ctx context.Context, in any) (any, error) {
+		op:           op,
+		inputType:    inputType,
+		outputType:   reflect.TypeOf((*O)(nil)).Elem(),
+		check:        check,
+		needsRequest: len(chain) > 0 || check != nil,
+		invoke: func(ctx context.Context, in any, args map[string]any) (any, error) {
 			typed, ok := in.(*I)
 			if !ok {
 				return nil, fmt.Errorf("gat: input type mismatch for %s: got %T", op.OperationID, in)
 			}
-			if len(chain) == 0 {
+			call := func(ctx context.Context) (any, error) {
+				if err := check.apply(ctx, &opRef, typed, args); err != nil {
+					return nil, err
+				}
 				return handler(ctx, typed)
 			}
-			return runHumaMiddlewares(ctx, chain, &opRef, func(ctx context.Context) (any, error) {
-				return handler(ctx, typed)
-			})
+			if len(chain) == 0 {
+				return call(ctx)
+			}
+			return runHumaMiddlewares(ctx, chain, &opRef, call)
 		},
 	})
 }
@@ -183,6 +195,9 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 			continue
 		}
 		c.irOp = op
+		if c.check != nil {
+			c.check.bodyArg = bodyArgOf(op)
+		}
 		// @derived: declare the codegen provenance of this generated SDL field — it
 		// derives from the Go huma operation with this OperationID. Lets a consumer
 		// (poly-lsp-mcp) follow the real edge to the source instead of guessing the

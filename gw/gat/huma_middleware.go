@@ -66,16 +66,17 @@ func runHumaMiddlewares(ctx context.Context, chain huma.Middlewares, op *huma.Op
 	return out, err
 }
 
-// middlewareRejection is the error a short-circuiting middleware turns
-// into. GetStatus carries the status it wrote, so GraphQL extensions
-// and the gRPC code map it like any handler status error.
-type middlewareRejection struct {
+// requestRejection is the error a short-circuiting middleware, or a
+// failed input check (inputCheck), turns into. GetStatus carries the
+// status, so GraphQL extensions and the gRPC code map it like any
+// handler status error.
+type requestRejection struct {
 	status int
 	msg    string
 }
 
-func (e *middlewareRejection) Error() string  { return e.msg }
-func (e *middlewareRejection) GetStatus() int { return e.status }
+func (e *requestRejection) Error() string  { return e.msg }
+func (e *requestRejection) GetStatus() int { return e.status }
 
 // inprocHumaContext is the huma.Context a middleware sees on an
 // in-process call. Request accessors read the inbound transport
@@ -122,7 +123,7 @@ func (c *inprocHumaContext) shortCircuitError() error {
 			msg = string(raw)
 		}
 	}
-	return &middlewareRejection{status: status, msg: fmt.Sprintf("%s: %s", c.op.OperationID, msg)}
+	return &requestRejection{status: status, msg: fmt.Sprintf("%s: %s", c.op.OperationID, msg)}
 }
 
 func (c *inprocHumaContext) Operation() *huma.Operation { return c.op }

@@ -35,7 +35,11 @@ import (
 // returns an error, as it does when an SSE client goes away.
 //
 // I takes query: and header: parameters; path: parameters work over
-// REST but GraphQL and gRPC bind them as plain arguments.
+// REST but GraphQL and gRPC bind them as plain arguments. To reject a
+// request on its input, implement huma.Resolver on I: as over REST,
+// the input checks run after the middlewares and before f, so a
+// rejection fails the request with its status instead of opening the
+// stream.
 //
 // Must be called before RegisterHuma.
 //
@@ -64,12 +68,17 @@ func RegisterSSE[I any](api huma.API, g *Gateway, op huma.Operation, eventTypeMa
 
 	chain := opChain(api, op)
 	opRef := op
-	run := func(ctx context.Context, in any, started func(), emit func(any) error) error {
+	inputType := reflect.TypeOf((*I)(nil)).Elem()
+	check := newInputCheck(api, op, inputType)
+	run := func(ctx context.Context, in any, args map[string]any, started func(), emit func(any) error) error {
 		typed, ok := in.(*I)
 		if !ok {
 			return fmt.Errorf("gat: input type mismatch for %s: got %T", op.OperationID, in)
 		}
 		return runChain(ctx, chain, &opRef, func(ctx context.Context) error {
+			if err := check.apply(ctx, &opRef, typed, args); err != nil {
+				return err
+			}
 			started()
 			f(ctx, typed, func(m sse.Message) error {
 				if m.Data == nil {
@@ -85,8 +94,9 @@ func RegisterSSE[I any](api huma.API, g *Gateway, op huma.Operation, eventTypeMa
 	}
 	g.subs = append(g.subs, &streamOp{
 		op:        op,
-		inputType: reflect.TypeOf((*I)(nil)).Elem(),
+		inputType: inputType,
 		events:    events,
 		run:       run,
+		check:     check,
 	})
 }

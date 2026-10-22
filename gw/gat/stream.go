@@ -34,7 +34,9 @@ type streamOp struct {
 	// then emit per event; emit returns an error once the consumer is
 	// gone. An error returned before started is a rejection or setup
 	// failure and is reported to the client.
-	run func(ctx context.Context, in any, started func(), emit func(any) error) error
+	// args are the transport args in was bound from (see inputCheck).
+	run   func(ctx context.Context, in any, args map[string]any, started func(), emit func(any) error) error
+	check *inputCheck // nil when there is nothing to check
 
 	irOp  *ir.Operation
 	union string // IR union type name; "" unless len(events) > 1
@@ -151,7 +153,7 @@ func (d *streamDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 	}
 	go func() {
 		defer close(out)
-		doneCh <- d.s.run(ctx, inPtr.Interface(), func() { close(startedCh) }, emit)
+		doneCh <- d.s.run(ctx, inPtr.Interface(), args, func() { close(startedCh) }, emit)
 	}()
 
 	// The resolver must hand back the channel, but a rejection has to
@@ -212,6 +214,10 @@ func connectStream(s *streamOp, md protoreflect.MethodDescriptor) func(context.C
 			return err
 		}
 		ctx = withInboundRequest(ctx, connectInboundRequest(req))
+		var args map[string]any
+		if s.check != nil {
+			args = messageToArgs(req.Msg)
+		}
 		started := false
 		emit := func(v any) error {
 			body := v
@@ -230,7 +236,7 @@ func connectStream(s *streamOp, md protoreflect.MethodDescriptor) func(context.C
 			}
 			return stream.Send(msg)
 		}
-		err = s.run(ctx, in, func() { started = true }, emit)
+		err = s.run(ctx, in, args, func() { started = true }, emit)
 		if err == nil || (started && errors.Is(err, context.Canceled)) {
 			return nil
 		}
