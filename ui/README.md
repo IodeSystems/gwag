@@ -135,10 +135,12 @@ In production, subscription args (`hmac`, `timestamp`) come from
 ## Useful pnpm scripts
 
 ```
-pnpm run dev      # vite dev server with HMR
-pnpm run build    # tsc -b && vite build → dist/
-pnpm run preview  # vite preview against dist/
-pnpm run schema   # refresh schema.graphql from the running gateway
-pnpm run codegen  # graphql-codegen against schema.graphql
-pnpm run gen      # schema + codegen
+pnpm run dev        # vite dev server with HMR
+pnpm run build      # vite build && tsc --noEmit → dist/
+pnpm run typecheck  # tsc --noEmit (TypeScript 7)
+pnpm run lint       # oxlint --type-aware (.oxlintrc.json)
+pnpm run preview    # vite preview against dist/
+pnpm run schema     # refresh schema.graphql from the running gateway
+pnpm run codegen    # graphql-codegen against schema.graphql
+pnpm run gen        # schema + codegen
 ```

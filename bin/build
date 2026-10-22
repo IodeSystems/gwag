@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Single-entry build for the repo. Pipeline:
 #   1. UI deps + GraphQL codegen (uses gateway --gen, no live server)
-#   2. UI Vite build → ui/dist/  (embedded by ui/embed.go)
+#   2. UI Vite build + typecheck → ui/dist/  (embedded by ui/embed.go),
+#      then type-aware lint (oxlint); a lint error fails the build
 #   3. Go build of every package (vet ↔ build is implicit)
 #
 # Idempotent. Skip-flags below let CI / dev re-runs avoid retreading
@@ -48,6 +49,10 @@ if [[ $DO_UI == 1 ]]; then
         mkdir -p ui/dist
         cp ui/fallback/index.html ui/dist/index.html
     fi
+    # After the build, so a lint error fails the run without swapping
+    # the real bundle for the fallback.
+    echo "==> ui: pnpm run lint"
+    (cd ui && pnpm run lint)
 fi
 # Ensure dist/ is non-empty even on first-run / --no-ui builds, so the
 # embed succeeds without forcing a pnpm install on every Go iteration.
