@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.1.3 — 2026-10-21
+
 ### Security
 - **gat: huma middlewares now run on GraphQL and gRPC dispatch.** An op
   registered with `gat.Register` called its handler directly over
