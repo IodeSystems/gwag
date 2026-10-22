@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
@@ -52,6 +53,12 @@ type Gateway struct {
 	// captured holds ops registered via gat.Register for paired huma
 	// dispatch. Empty when only the BYO-IR path is used.
 	captured []*capturedOp
+
+	// subs holds subscriptions registered via gat.Subscribe; subAPI is
+	// the side huma API their synthetic ops are described on (nil
+	// until the first Subscribe).
+	subs   []*capturedSub
+	subAPI huma.API
 
 	// built is true once the schema has been assembled (either by
 	// New(regs...) or by RegisterHuma). Subsequent registrations are
@@ -234,14 +241,19 @@ func (g *Gateway) build() error {
 }
 
 // Handler returns an http.Handler that serves GraphQL queries and
-// mutations. POST /graphql with JSON body; GET with ?query= param.
-// WebSocket subscriptions are not supported in gat mode.
+// mutations (POST /graphql with JSON body; GET with ?query= param) and
+// subscriptions registered with Subscribe (a WebSocket upgrade on the
+// same path, graphql-transport-ws subprotocol).
 //
 // Stability: experimental
 func (g *Gateway) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
 			http.Error(w, "upgrade not supported", http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodGet && isWebSocketUpgrade(r) {
+			g.serveGraphQLWS(w, r)
 			return
 		}
 

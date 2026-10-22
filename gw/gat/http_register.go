@@ -14,6 +14,7 @@ import (
 // Endpoints:
 //
 //	POST {prefix}/graphql           GraphQL queries + mutations
+//	GET  {prefix}/graphql           graphql-transport-ws upgrade (Subscribe fields)
 //	GET  {prefix}/schema/graphql    SDL (or ?format=json introspection)
 //	GET  {prefix}/schema/proto      FileDescriptorSet (binary)
 //	GET  {prefix}/schema/openapi    Re-emitted OpenAPI document

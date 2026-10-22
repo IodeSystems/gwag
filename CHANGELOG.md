@@ -9,6 +9,13 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **gat: `Subscribe` registers GraphQL subscriptions.** `gat.Subscribe[I, O]`
+  takes a huma operation and a source `func(ctx, *I) (<-chan *O, error)`;
+  the field is served over `graphql-transport-ws` on `{prefix}/graphql`
+  (WebSocket upgrade on `GET`), with the op's huma middlewares applied.
+  `gat.ConnectionInitPayload(ctx)` exposes the `connection_init` payload.
+
 ## v2.1.3 — 2026-10-21
 
 ### Security

@@ -92,6 +92,8 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 // Routes registered (prefix prepended):
 //
 //	POST {prefix}/graphql              — GraphQL queries / mutations
+//	GET  {prefix}/graphql              — ?query= requests; graphql-transport-ws
+//	                                     upgrade for Subscribe fields
 //	GET  {prefix}/schema/graphql       — SDL (default) or introspection JSON
 //	GET  {prefix}/schema/proto         — FileDescriptorSet (binary)
 //	GET  {prefix}/schema/openapi       — re-emitted OpenAPI document
@@ -119,7 +121,7 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 		}
 	}
 
-	if len(g.captured) > 0 {
+	if len(g.captured) > 0 || len(g.subs) > 0 {
 		if err := g.ingestHuma(api); err != nil {
 			return err
 		}
@@ -142,7 +144,7 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 // into a fresh IR service, and wires an in-process dispatcher for each
 // captured operation (matched by OperationID).
 func (g *Gateway) ingestHuma(api huma.API) error {
-	specBytes, err := json.Marshal(api.OpenAPI())
+	specBytes, err := json.Marshal(g.mergedOpenAPI(api))
 	if err != nil {
 		return fmt.Errorf("gat: marshal huma OpenAPI: %w", err)
 	}
@@ -192,22 +194,30 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices, g.observe))
 	}
 
+	if err := g.bindSubscriptions(svc); err != nil {
+		return err
+	}
+
 	g.services = append(g.services, svc)
 	return nil
 }
 
-// mountGraphQLEndpoint registers POST {prefix}/graphql on api as a
-// huma operation that delegates to g.Handler.
+// mountGraphQLEndpoint registers POST and GET {prefix}/graphql on api
+// as huma adapter handlers that delegate to g.Handler. GET carries
+// ?query= requests and the graphql-transport-ws upgrade; the upgrade
+// relies on adapterResponseWriter forwarding Hijack.
 func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
-	api.Adapter().Handle(&huma.Operation{
-		Method: http.MethodPost,
-		Path:   prefix + "/graphql",
-	}, func(ctx huma.Context) {
-		// Adapter-level handler: bypass huma's body codec since
-		// GraphQL has its own request shape, and reuse g.Handler
-		// which already understands query/mutation envelopes.
-		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
-	})
+	for _, method := range []string{http.MethodPost, http.MethodGet} {
+		api.Adapter().Handle(&huma.Operation{
+			Method: method,
+			Path:   prefix + "/graphql",
+		}, func(ctx huma.Context) {
+			// Adapter-level handler: bypass huma's body codec since
+			// GraphQL has its own request shape, and reuse g.Handler
+			// which already understands query/mutation envelopes.
+			g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+		})
+	}
 }
 
 // mountSubscribe registers GET {prefix}/_gat/subscribe as a huma

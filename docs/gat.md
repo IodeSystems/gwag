@@ -92,6 +92,7 @@ setup, the endpoints are:
 | URL                                            | What                                        |
 | ---------------------------------------------- | ------------------------------------------- |
 | `POST /api/graphql`                            | GraphQL queries + mutations                 |
+| `GET  /api/graphql` (WebSocket upgrade)        | `graphql-transport-ws` subscriptions        |
 | `GET  /api/schema/graphql`                     | SDL (default), `?format=json` introspection |
 | `GET  /api/schema/proto`                       | `descriptorpb.FileDescriptorSet` (binary)   |
 | `GET  /api/schema/openapi`                     | Re-emitted OpenAPI document                 |
@@ -99,6 +100,56 @@ setup, the endpoints are:
 
 Plus huma's own routes — REST per the operation paths, and huma's
 default `/openapi.json` for huma's spec.
+
+## Subscriptions
+
+`gat.Subscribe` is the streaming counterpart of `gat.Register`. The
+adopter supplies a source that returns a channel of events; gat
+provides the Subscription field, the `graphql-transport-ws` transport
+on `{prefix}/graphql`, and the huma middleware chain.
+
+```go
+type SessionEventsInput struct {
+    Session string `query:"session" required:"true"`
+    After   int64  `query:"after"`
+}
+
+gat.Subscribe(api, g, huma.Operation{
+    OperationID: "sessionEvents",
+    Middlewares: huma.Middlewares{auth.Required()},
+}, func(ctx context.Context, in *SessionEventsInput) (<-chan *Event, error) {
+    return log.Subscribe(ctx, in.Session, in.After) // replay, then live
+})
+```
+
+```graphql
+subscription { Demo_sessionEvents(session: "s1", after: 41) { seq kind } }
+```
+
+- The field is `Subscription.{Namespace}_{OperationID}`, the same flat
+  naming gwag uses for subscriptions.
+- `I` takes `query:` and `header:` tags. There is no route, so `path:`
+  tags are rejected by huma at registration.
+- The source runs after the middleware chain passes. Its ctx carries
+  what the middlewares attached and is cancelled when the client sends
+  `complete` or disconnects. The source must close the channel when
+  the stream ends and stop sending once ctx is done.
+- Replay is the source's job. gat does not buffer or persist events.
+  For an "events after seq N" field, read history and switch to live
+  inside the one channel.
+- Middlewares see the WebSocket upgrade request, so cookie auth works
+  from a browser. For credentials a browser cannot send on a
+  WebSocket, read `gat.ConnectionInitPayload(ctx)` (the
+  `connection_init` payload), or take a token as a field argument and
+  check it in the source.
+- A source or middleware error before the first event is an `error`
+  frame with `extensions.status` / `extensions.code`.
+- The event type's schema is derived through huma's registry, shared
+  with the adopter API, so it appears in `/openapi.json` components.
+  The subscription itself is not a REST route and is not in the REST
+  paths.
+- `gat.PubSub()` can feed a source; it is best-effort with no
+  history (see [`gat-pubsub.md`](./gat-pubsub.md)).
 
 ## Incremental adoption
 
@@ -344,11 +395,11 @@ test against a failure mode that otherwise ships silently.
 
 - One huma API per gat gateway. Multi-huma is doable (BYO-IR path)
   but not the recommended path.
-- GraphQL subscriptions (server-streaming over WebSocket) are not in
-  gat — bring full gwag for those. gat does have a separate
-  publish/subscribe primitive with best-effort cross-node fanout and
-  an SSE delivery stream; see [`gat-pubsub.md`](./gat-pubsub.md). The
-  NATS-backed, durable pub/sub stack remains gwag-only.
+- GraphQL subscriptions in gat are adopter-sourced (`gat.Subscribe`,
+  above): single node, no broker. gat also has a separate
+  publish/subscribe primitive with best-effort cross-node fanout; see
+  [`gat-pubsub.md`](./gat-pubsub.md). The NATS-backed, durable pub/sub
+  stack and proto server-streaming subscriptions remain gwag-only.
 - gat doesn't manage auth. `net/http` middleware wrapped around the
   router applies to gat's GraphQL/gRPC routes, since they ride on the
   same handler chain. huma middlewares (`api.UseMiddleware` and
