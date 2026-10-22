@@ -64,6 +64,10 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 	for _, c := range g.captured {
 		capturedByName[c.op.OperationID] = c
 	}
+	streamsByName := make(map[string]*streamOp, len(g.subs))
+	for _, st := range g.subs {
+		streamsByName[st.op.OperationID] = st
+	}
 
 	prefix = strings.TrimRight(prefix, "/")
 
@@ -73,11 +77,21 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 			for j := 0; j < sd.Methods().Len(); j++ {
 				md := sd.Methods().Get(j)
 				name := string(md.Name())
+				procedure := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+				if st, ok := streamsByName[name]; ok && md.IsStreamingServer() {
+					mux.Handle(prefix+procedure, connect.NewServerStreamHandler(
+						procedure,
+						connectStream(st, md),
+						connect.WithSchema(md),
+						connect.WithRequestInitializer(newDynamicInitializer()),
+						connect.WithCodec(fastProtoCodec{}),
+					))
+					continue
+				}
 				cap, ok := capturedByName[name]
 				if !ok {
 					continue
 				}
-				procedure := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
 				handler := connect.NewUnaryHandler(
 					procedure,
 					connectUnary(cap, md),
@@ -181,24 +195,12 @@ func httpStatusToConnectCode(status int) connect.Code {
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
 func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
-	// Resolve the body arg once, at mount time. It is a property of the
-	// operation, not of the request, and scanning Args per call put
-	// mount-time work in the hot loop.
-	bodyArg := ""
-	if cap.irOp != nil {
-		for _, a := range cap.irOp.Args {
-			if strings.EqualFold(a.OpenAPILocation, "body") {
-				bodyArg = a.Name
-				break
-			}
-		}
-	}
+	bind := newConnectBinder(cap.inputType, cap.irOp, md)
 
-	// Plan both directions against the operation's types. A nil plan is
-	// the normal outcome for anything the walkers can't prove they
-	// handle identically (custom marshalers, maps, enums); that
+	// Plan the response against the operation's types. A nil plan is
+	// the normal outcome for anything the walker can't prove it
+	// handles identically (custom marshalers, maps, enums); that
 	// operation simply keeps the older path.
-	inPlan := buildBindPlan(cap.inputType, cap.irOp, bodyArg, md.Input())
 	outPlan := planResponse(cap, md)
 
 	if outPlan != nil {
@@ -208,37 +210,14 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 	}
 
 	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
-		inPtr := reflect.New(cap.inputType)
-		in := inPtr.Elem()
-		switch {
-		case inPlan != nil:
-			// Fast path: proto fields written straight into the input
-			// struct through the cached field plan. No intermediate map,
-			// and no protojson representations to undo.
-			if err := inPlan.bind(in, req.Msg); err != nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument,
-					fmt.Errorf("bind %s: %w", cap.op.OperationID, err))
-			}
-		case cap.irOp != nil:
-			// Walk the message into the args map, then bind by tag. This
-			// used to go protojson.Marshal → json.Unmarshal;
-			// messageToArgs reproduces that output exactly, pinned
-			// against protojson in connect_args_test.go.
-			args := messageToArgs(req.Msg)
-			if err := bindInput(in, cap.irOp, args, bodyArg); err != nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument,
-					fmt.Errorf("bind %s: %w", cap.op.OperationID, err))
-			}
-		default:
-			// Best-effort JSON-into-input for ops never ingested.
-			raw, _ := json.Marshal(messageToArgs(req.Msg))
-			_ = json.Unmarshal(raw, inPtr.Interface())
+		in, err := bind(req.Msg)
+		if err != nil {
+			return nil, err
 		}
-
 		if cap.hasMiddleware {
 			ctx = withInboundRequest(ctx, connectInboundRequest(req))
 		}
-		out, err := cap.invoke(ctx, inPtr.Interface())
+		out, err := cap.invoke(ctx, in)
 		if err != nil {
 			return nil, handlerErrorToConnect(err)
 		}
@@ -255,6 +234,52 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 				fmt.Errorf("encode response: %w", err))
 		}
 		return connect.NewResponse(newBuiltResult(md.Output(), respMsg)), nil
+	}
+}
+
+// newConnectBinder returns the request binder for one method: proto
+// request message → a fresh *I for the handler. The body arg and the
+// field plan are properties of the operation, not the request, so
+// they are resolved once here rather than per call.
+func newConnectBinder(inputType reflect.Type, irOp *ir.Operation, md protoreflect.MethodDescriptor) func(*dynamicpb.Message) (any, error) {
+	bodyArg := ""
+	if irOp != nil {
+		for _, a := range irOp.Args {
+			if strings.EqualFold(a.OpenAPILocation, "body") {
+				bodyArg = a.Name
+				break
+			}
+		}
+	}
+	inPlan := buildBindPlan(inputType, irOp, bodyArg, md.Input())
+	opName := md.Name()
+	return func(msg *dynamicpb.Message) (any, error) {
+		inPtr := reflect.New(inputType)
+		in := inPtr.Elem()
+		switch {
+		case inPlan != nil:
+			// Fast path: proto fields written straight into the input
+			// struct through the cached field plan. No intermediate map,
+			// and no protojson representations to undo.
+			if err := inPlan.bind(in, msg); err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("bind %s: %w", opName, err))
+			}
+		case irOp != nil:
+			// Walk the message into the args map, then bind by tag. This
+			// used to go protojson.Marshal → json.Unmarshal;
+			// messageToArgs reproduces that output exactly, pinned
+			// against protojson in connect_args_test.go.
+			if err := bindInput(in, irOp, messageToArgs(msg), bodyArg); err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("bind %s: %w", opName, err))
+			}
+		default:
+			// Best-effort JSON-into-input for ops never ingested.
+			raw, _ := json.Marshal(messageToArgs(msg))
+			_ = json.Unmarshal(raw, inPtr.Interface())
+		}
+		return inPtr.Interface(), nil
 	}
 }
 

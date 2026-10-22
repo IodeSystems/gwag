@@ -194,7 +194,7 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices, g.observe))
 	}
 
-	if err := g.bindSubscriptions(svc); err != nil {
+	if err := g.bindStreams(svc); err != nil {
 		return err
 	}
 

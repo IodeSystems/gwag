@@ -10,8 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"nhooyr.io/websocket"
 
 	"github.com/iodesystems/gwag/v2/gw/gat"
@@ -94,6 +100,9 @@ func newSubscribeGat(t *testing.T) (*httptest.Server, chan sessionEvent, chan st
 
 	if err := gat.RegisterHuma(api, g, "/api"); err != nil {
 		t.Fatalf("RegisterHuma: %v", err)
+	}
+	if err := gat.RegisterGRPC(mux, g, "/api/grpc"); err != nil {
+		t.Fatalf("RegisterGRPC: %v", err)
 	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -247,5 +256,52 @@ func TestSubscribe_SchemaAndREST(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("synthetic path is routed: %d", resp.StatusCode)
+	}
+}
+
+// Subscribe ops are server-streaming methods in /schema/proto; v2.2.0
+// listed them but RegisterGRPC did not mount them.
+func TestSubscribe_GRPCStream(t *testing.T) {
+	srv, _, _ := newSubscribeGat(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fds := &descriptorpb.FileDescriptorSet{}
+	if err := proto.Unmarshal(mustGET(t, srv.URL+"/api/schema/proto"), fds); err != nil {
+		t.Fatal(err)
+	}
+	files, err := protodesc.NewFiles(fds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := findMethod(t, files, "sessionEvents")
+	procedure := "/" + string(md.Parent().(protoreflect.ServiceDescriptor).FullName()) + "/" + string(md.Name())
+	client := connect.NewClient[dynamicpb.Message, dynamicpb.Message](
+		srv.Client(), srv.URL+"/api/grpc"+procedure,
+		connect.WithSchema(md),
+		connect.WithResponseInitializer(func(spec connect.Spec, msg any) error {
+			*msg.(*dynamicpb.Message) = *dynamicpb.NewMessage(spec.Schema.(protoreflect.MethodDescriptor).Output())
+			return nil
+		}),
+	)
+	in := dynamicpb.NewMessage(md.Input())
+	in.Set(md.Input().Fields().ByName("session"), protoreflect.ValueOfString("s1"))
+	in.Set(md.Input().Fields().ByName("after"), protoreflect.ValueOfInt64(1))
+	req := connect.NewRequest(in)
+	req.Header().Set("X-User", "carol")
+	stream, err := client.CallServerStream(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	var seqs []int64
+	for len(seqs) < 2 && stream.Receive() {
+		msg := stream.Msg()
+		seqs = append(seqs, msg.Get(md.Output().Fields().ByName("seq")).Int())
+		if by := msg.Get(md.Output().Fields().ByName("by")).String(); by != "carol" {
+			t.Errorf("by = %q, want carol", by)
+		}
+	}
+	if fmt.Sprint(seqs) != "[2 3]" {
+		t.Errorf("seqs = %v (err %v), want [2 3]", seqs, stream.Err())
 	}
 }

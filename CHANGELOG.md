@@ -9,6 +9,26 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **gat: `RegisterSSE`, the paired drop-in for huma's `sse.Register`.**
+  One handler serves REST (Server-Sent Events), a GraphQL subscription
+  over `graphql-transport-ws`, and a gRPC server-streaming method on
+  `RegisterGRPC`, behind the op's huma middlewares. Several event types
+  render as a GraphQL union and a proto message with one `oneof`.
+
+### Deprecated
+- **gat: `Subscribe`.** Use `RegisterSSE`, which defines the stream in
+  huma and also serves it over REST.
+
+### Fixed
+- **Proto rendering of unions.** A service with a union type (OpenAPI
+  `oneOf`) produced a descriptor set that failed to build
+  (`"….AB" not found`), so gat's `RegisterGRPC` failed for it. A
+  union now renders as a message holding one `oneof value`.
+- **gat: `Subscribe` streams over gRPC.** v2.2.0 listed them as
+  server-streaming methods in `/schema/proto` but `RegisterGRPC` did
+  not mount them; they are now served.
+
 ## v2.2.0 — 2026-10-21
 
 ### Added

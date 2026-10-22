@@ -93,6 +93,7 @@ setup, the endpoints are:
 | ---------------------------------------------- | ------------------------------------------- |
 | `POST /api/graphql`                            | GraphQL queries + mutations                 |
 | `GET  /api/graphql` (WebSocket upgrade)        | `graphql-transport-ws` subscriptions        |
+| `POST /api/grpc/{Service.FullName}/{Method}` (stream) | Server streams for `RegisterSSE` ops   |
 | `GET  /api/schema/graphql`                     | SDL (default), `?format=json` introspection |
 | `GET  /api/schema/proto`                       | `descriptorpb.FileDescriptorSet` (binary)   |
 | `GET  /api/schema/openapi`                     | Re-emitted OpenAPI document                 |
@@ -101,55 +102,77 @@ setup, the endpoints are:
 Plus huma's own routes — REST per the operation paths, and huma's
 default `/openapi.json` for huma's spec.
 
-## Subscriptions
+## Streams (SSE, GraphQL subscriptions, gRPC server streams)
 
-`gat.Subscribe` is the streaming counterpart of `gat.Register`. The
-adopter supplies a source that returns a channel of events; gat
-provides the Subscription field, the `graphql-transport-ws` transport
-on `{prefix}/graphql`, and the huma middleware chain.
+`gat.RegisterSSE` is the paired drop-in for huma's `sse.Register`, as
+`gat.Register` is for `huma.Register`. The stream is defined once in
+huma; gat serves the same handler on three surfaces:
+
+| Surface | Shape |
+| ------- | ----- |
+| REST    | `text/event-stream` on the op's path (huma's own SSE) |
+| GraphQL | `Subscription.{Namespace}_{OperationID}` over `graphql-transport-ws` on `{prefix}/graphql` |
+| gRPC    | server-streaming method on `RegisterGRPC` |
 
 ```go
-type SessionEventsInput struct {
-    Session string `query:"session" required:"true"`
-    After   int64  `query:"after"`
-}
-
-gat.Subscribe(api, g, huma.Operation{
+gat.RegisterSSE(api, g, huma.Operation{
     OperationID: "sessionEvents",
+    Method:      http.MethodGet,
+    Path:        "/sessions/events",
     Middlewares: huma.Middlewares{auth.Required()},
-}, func(ctx context.Context, in *SessionEventsInput) (<-chan *Event, error) {
-    return log.Subscribe(ctx, in.Session, in.After) // replay, then live
+}, map[string]any{
+    "event":    SessionEvent{},
+    "snapshot": SessionSnapshot{},
+}, func(ctx context.Context, in *SessionEventsInput, send sse.Sender) {
+    // replay after in.After, then live, until ctx is done
 })
 ```
 
+With two or more event types the output is a union named
+`{OperationID}Event`:
+
 ```graphql
-subscription { Demo_sessionEvents(session: "s1", after: 41) { seq kind } }
+union Demo_SessionEventsEvent = Demo_SessionEvent | Demo_SessionSnapshot
+
+type Subscription {
+  Demo_sessionEvents(after: Long, session: String!): Demo_SessionEventsEvent!
+}
 ```
 
-- The field is `Subscription.{Namespace}_{OperationID}`, the same flat
-  naming gwag uses for subscriptions.
-- `I` takes `query:` and `header:` tags. There is no route, so `path:`
-  tags are rejected by huma at registration.
-- The source runs after the middleware chain passes. Its ctx carries
-  what the middlewares attached and is cancelled when the client sends
-  `complete` or disconnects. The source must close the channel when
-  the stream ends and stop sending once ctx is done.
-- Replay is the source's job. gat does not buffer or persist events.
-  For an "events after seq N" field, read history and switch to live
-  inside the one channel.
-- Middlewares see the WebSocket upgrade request, so cookie auth works
-  from a browser. For credentials a browser cannot send on a
-  WebSocket, read `gat.ConnectionInitPayload(ctx)` (the
-  `connection_init` payload), or take a token as a field argument and
-  check it in the source.
-- A source or middleware error before the first event is an `error`
-  frame with `extensions.status` / `extensions.code`.
-- The event type's schema is derived through huma's registry, shared
-  with the adopter API, so it appears in `/openapi.json` components.
-  The subscription itself is not a REST route and is not in the REST
-  paths.
-- `gat.PubSub()` can feed a source; it is best-effort with no
-  history (see [`gat-pubsub.md`](./gat-pubsub.md)).
+```proto
+message SessionEventsEvent {
+  oneof value {
+    SessionEvent session_event = 1;
+    SessionSnapshot session_snapshot = 2;
+  }
+}
+
+rpc sessionEvents ( sessionEventsRequest ) returns ( stream SessionEventsEvent );
+```
+
+With one event type the field and the stream message are that type.
+
+- Each sent value resolves to the variant of its Go type: the SSE
+  `event:` name over REST, `__typename` over GraphQL, the set oneof
+  member over gRPC. On GraphQL and gRPC, sending a value of an
+  undeclared type makes `send` return an error.
+- Only `Message.Data` reaches GraphQL and gRPC. `ID` and `Retry` are
+  SSE wire details; a comment-only message (heartbeat) is skipped.
+- The huma middleware chain wraps the handler on every surface. A
+  rejection is a 401/403 response over REST, an `error` frame with
+  `extensions.status` over GraphQL, and the mapped code over gRPC.
+- The handler's ctx is cancelled when the client sends `complete`,
+  cancels the gRPC call, or disconnects; `send` then returns an error.
+- Replay is the handler's job. gat does not buffer or persist events.
+- GraphQL and gRPC middlewares see the WebSocket upgrade request or the
+  gRPC call's headers. For credentials a browser cannot send on a
+  WebSocket, read `gat.ConnectionInitPayload(ctx)` or take a token as
+  an argument and check it in the handler.
+- `gat.PubSub()` can feed a handler; it is best-effort with no history
+  (see [`gat-pubsub.md`](./gat-pubsub.md)).
+
+`gat.Subscribe` (channel source, GraphQL + gRPC only, not on REST) is
+deprecated in favour of `RegisterSSE`.
 
 ## Incremental adoption
 
@@ -395,8 +418,8 @@ test against a failure mode that otherwise ships silently.
 
 - One huma API per gat gateway. Multi-huma is doable (BYO-IR path)
   but not the recommended path.
-- GraphQL subscriptions in gat are adopter-sourced (`gat.Subscribe`,
-  above): single node, no broker. gat also has a separate
+- Streams in gat are adopter-sourced (`gat.RegisterSSE`, above):
+  single node, no broker. gat also has a separate
   publish/subscribe primitive with best-effort cross-node fanout; see
   [`gat-pubsub.md`](./gat-pubsub.md). The NATS-backed, durable pub/sub
   stack and proto server-streaming subscriptions remain gwag-only.

@@ -54,10 +54,10 @@ type Gateway struct {
 	// dispatch. Empty when only the BYO-IR path is used.
 	captured []*capturedOp
 
-	// subs holds subscriptions registered via gat.Subscribe; subAPI is
-	// the side huma API their synthetic ops are described on (nil
-	// until the first Subscribe).
-	subs   []*capturedSub
+	// subs holds streaming ops from RegisterSSE and Subscribe. subAPI
+	// is the side huma API Subscribe's synthetic ops are described on
+	// (nil until the first Subscribe).
+	subs   []*streamOp
 	subAPI huma.API
 
 	// built is true once the schema has been assembled (either by
