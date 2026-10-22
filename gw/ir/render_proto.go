@@ -83,10 +83,14 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 			fp.MessageType = append(fp.MessageType, renderProtoMessage(t, pkg))
 		case TypeEnum:
 			fp.EnumType = append(fp.EnumType, renderProtoEnum(t))
+		case TypeUnion:
+			// proto3 has no top-level union; a message holding one
+			// oneof stands in, so fields and outputs that name the
+			// union resolve.
+			fp.MessageType = append(fp.MessageType, renderProtoUnion(svc, t, pkg))
 		}
-		// TypeUnion / TypeInterface / TypeScalar drop — proto3 has
-		// no direct equivalent. (oneof is per-message, not a
-		// top-level type.)
+		// TypeInterface / TypeScalar drop — proto3 has no direct
+		// equivalent.
 	}
 
 	// Build one ServiceDescriptorProto with all operations. For
@@ -128,7 +132,7 @@ func renderProtoService(svc *Service) (*descriptorpb.FileDescriptorProto, error)
 			// natural name the wrapper would otherwise claim).
 			fullResp := ""
 			if op.Output != nil && !op.OutputRepeated && op.Output.IsNamed() {
-				if existing, ok := svc.Types[op.Output.Named]; ok && (existing.TypeKind == TypeObject || existing.TypeKind == TypeInput) {
+				if existing, ok := svc.Types[op.Output.Named]; ok && (existing.TypeKind == TypeObject || existing.TypeKind == TypeInput || existing.TypeKind == TypeUnion) {
 					fullResp = pkg + "." + sanitizeProtoIdentifier(localName(op.Output.Named))
 				}
 			}
@@ -293,6 +297,65 @@ func synthResponseMessage(name string, output *TypeRef, repeated bool, pkg strin
 	mp.Field = append(mp.Field, fd)
 	mp.NestedType = append(mp.NestedType, nested...)
 	return mp
+}
+
+// renderProtoUnion renders a TypeUnion as a message with one oneof,
+// `value`, holding a field per object variant:
+//
+//	message SessionEvent { oneof value { Event event = 1; Snapshot snapshot = 2; } }
+//
+// Field names are the snake_case variant names. Variants that are not
+// objects in svc.Types (proto has no scalar oneof member to point at
+// for a non-message variant) are skipped.
+func renderProtoUnion(svc *Service, t *Type, pkg string) *descriptorpb.DescriptorProto {
+	name := sanitizeProtoIdentifier(localName(t.Name))
+	mp := &descriptorpb.DescriptorProto{Name: &name}
+	oneof := int32(0)
+	seen := map[string]bool{}
+	for _, v := range t.Variants {
+		vt, ok := svc.Types[v]
+		if !ok || (vt.TypeKind != TypeObject && vt.TypeKind != TypeInput) {
+			continue
+		}
+		fieldName := ProtoUnionFieldName(v)
+		for base, i := fieldName, 2; seen[fieldName]; i++ {
+			fieldName = fmt.Sprintf("%s_%d", base, i)
+		}
+		seen[fieldName] = true
+		f := &Field{Name: fieldName, Type: TypeRef{Named: v}}
+		fd, _ := renderProtoField(f, int32(len(mp.Field)+1), pkg, name)
+		fd.OneofIndex = &oneof
+		mp.Field = append(mp.Field, fd)
+	}
+	if len(mp.Field) > 0 {
+		mp.OneofDecl = []*descriptorpb.OneofDescriptorProto{{Name: stringPtr("value")}}
+	}
+	return mp
+}
+
+// ProtoUnionFieldName is the oneof field name renderProtoUnion gives a
+// union variant: the snake_case of its unqualified name
+// ("SessionEvent" → "session_event").
+//
+// Stability: experimental
+func ProtoUnionFieldName(variant string) string {
+	rs := []rune(sanitizeProtoIdentifier(localName(variant)))
+	upper := func(r rune) bool { return r >= 'A' && r <= 'Z' }
+	var b strings.Builder
+	for i, r := range rs {
+		if upper(r) {
+			// Break before an upper that starts a word: after a lower
+			// or digit ("sessionEvent"), or the last upper of an
+			// acronym run ("HTTPInfo" → "http_info").
+			if i > 0 && rs[i-1] != '_' && (!upper(rs[i-1]) || (i+1 < len(rs) && !upper(rs[i+1]) && rs[i+1] != '_')) {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + ('a' - 'A'))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func renderProtoMessage(t *Type, pkg string) *descriptorpb.DescriptorProto {
