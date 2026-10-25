@@ -26,6 +26,9 @@ type requestScope struct {
 	cookies *cookieSink // &sink on transports that emit cookies, else nil
 	own     Attrs
 	sink    cookieSink
+	// cache merges the operations' cache headers (GraphQL HTTP only,
+	// alongside the cookie sink).
+	cache cacheMerge
 	// inflight counts operations of this request running on their own
 	// goroutine (ParallelQueries); ops counts operations dispatched
 	// (MaxOperations).

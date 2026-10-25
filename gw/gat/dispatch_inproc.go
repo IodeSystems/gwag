@@ -52,16 +52,23 @@ func (d *inprocDispatcher) Dispatch(ctx context.Context, args map[string]any) (a
 	}
 
 	out, err := d.captured.invoke(ctx, inPtr.Interface(), args)
+	// Hand the output's response headers (Set-Cookie, cache headers) to
+	// the GraphQL HTTP layer, which combines them for the one response
+	// (no-op on transports without a sink).
+	if s := scopeFrom(ctx); s != nil && s.cookies != nil {
+		hdr := d.captured.hdr
+		if err == nil && hdr != nil && len(hdr.setCookie) > 0 {
+			if v, ok := structOf(out); ok {
+				s.cookies.add(hdr.cookies(v))
+			}
+		}
+		s.cache.observe(hdr, out, err)
+	}
 	if err != nil {
 		// Surface the handler's HTTP status as GraphQL error extensions so
 		// clients can classify (e.g. 401/403 → login, 5xx → error dialog).
 		// Transparent to gRPC/REST (Error/Unwrap/GetStatus preserved).
 		return nil, withStatusExtensions(err)
-	}
-	// Capture any Set-Cookie the handler emitted so the GraphQL HTTP layer
-	// can write it to the response (no-op on transports without a sink).
-	if sink := cookieSinkFrom(ctx); sink != nil {
-		sink.addFromOutput(out)
 	}
 	if d.emptyNilSlices {
 		// Replace nil slices with empty ones in place (the output is ephemeral)

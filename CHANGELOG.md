@@ -27,6 +27,11 @@ changes on MINOR, drops on MAJOR.
   extension, or `?documentId=` over GET; `enforce` refuses query text.
   `ParseTrustedDocuments` reads graphql-codegen's persisted-documents
   manifest.
+- **gat combines fused operations' cache headers.** `Cache-Control`,
+  `ETag`, `Last-Modified` and `Vary` from each operation's huma output
+  merge into the GraphQL response: identical values pass through,
+  otherwise the most restrictive combination; ETags combine into one
+  weak ETag. GET with a matching `If-None-Match` gets 304.
 - **gat `HookDispatch`.** A per-operation hook that receives the
   request context and returns the one the handler sees, plus a done
   callback with the error — for trace spans. No tracing dependency.

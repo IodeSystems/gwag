@@ -30,13 +30,20 @@ func cookieSinkFrom(ctx context.Context) *cookieSink {
 }
 
 // addFromOutput scans a huma output struct for fields tagged
-// `header:"Set-Cookie"` and records their cookie value(s).
+// `header:"Set-Cookie"` and records their cookie value(s). The dispatch
+// path uses add with the output type's precomputed plan instead.
 func (s *cookieSink) addFromOutput(out any) {
-	for _, c := range extractSetCookies(out) {
-		s.mu.Lock()
-		s.cookies = append(s.cookies, c)
-		s.mu.Unlock()
+	s.add(extractSetCookies(out))
+}
+
+// add records cookies a handler emitted.
+func (s *cookieSink) add(cookies []*http.Cookie) {
+	if len(cookies) == 0 {
+		return
 	}
+	s.mu.Lock()
+	s.cookies = append(s.cookies, cookies...)
+	s.mu.Unlock()
 }
 
 // emit writes the collected cookies onto w. Must be called before the response

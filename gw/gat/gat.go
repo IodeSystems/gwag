@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -374,14 +375,17 @@ func (g *Gateway) Handler() http.Handler {
 			documentID = params.Get("documentId")
 			// GET carries variables and extensions as JSON in the query
 			// string (GraphQL over HTTP); persisted documents over GET —
-			// the CDN-cacheable form — depend on it.
-			for name, dst := range map[string]*map[string]any{"variables": &variables, "extensions": &extensions} {
-				if raw := params.Get(name); raw != "" {
-					if err := json.Unmarshal([]byte(raw), dst); err != nil {
-						writeError(w, "invalid "+name+" JSON", http.StatusBadRequest)
-						return
-					}
-				}
+			// the CDN-cacheable form — depend on it. Decoded through
+			// jsonParam: taking &variables here would move it to the heap
+			// on every request, POST included.
+			var err error
+			if variables, err = jsonParam(params, "variables"); err != nil {
+				writeError(w, "invalid variables JSON", http.StatusBadRequest)
+				return
+			}
+			if extensions, err = jsonParam(params, "extensions"); err != nil {
+				writeError(w, "invalid extensions JSON", http.StatusBadRequest)
+				return
 			}
 		}
 
@@ -503,6 +507,16 @@ func (g *Gateway) Handler() http.Handler {
 		// produced. Emit before WriteHeader — after it the header map is
 		// already on the wire.
 		scope.cookies.emit(w)
+		etag := scope.cache.apply(w.Header(), query, variables)
+		if r.Method == http.MethodGet && etagMatches(r.Header.Get("If-None-Match"), etag) {
+			// The client holds this response already. The work ran (the
+			// ETag comes from the operations), but the body stays home.
+			w.WriteHeader(http.StatusNotModified)
+			if recycle != nil {
+				recycle()
+			}
+			return
+		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
@@ -616,6 +630,17 @@ var graphqlBufPool = sync.Pool{
 		b := make([]byte, 0, 4096)
 		return &b
 	},
+}
+
+// jsonParam decodes a JSON object query parameter; nil when absent.
+func jsonParam(params url.Values, name string) (map[string]any, error) {
+	raw := params.Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	var m map[string]any
+	err := json.Unmarshal([]byte(raw), &m)
+	return m, err
 }
 
 func writeError(w http.ResponseWriter, msg string, status int) {

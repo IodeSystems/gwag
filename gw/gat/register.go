@@ -36,6 +36,9 @@ type capturedOp struct {
 	// input checks; transports without an *http.Request (gRPC ingress)
 	// build one only then.
 	needsRequest bool
+	// hdr locates the output type's response-header fields; nil when it
+	// has none.
+	hdr          *outputHeaderPlan
 	irOp         *ir.Operation // assigned during ingestHuma; nil until then
 	instrumented bool          // invoke already wrapped by instrument
 }
@@ -75,6 +78,7 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 		op:           op,
 		inputType:    inputType,
 		outputType:   reflect.TypeOf((*O)(nil)).Elem(),
+		hdr:          newOutputHeaderPlan(reflect.TypeOf((*O)(nil)).Elem()),
 		check:        check,
 		needsRequest: len(chain) > 0 || check != nil,
 		invoke: func(ctx context.Context, in any, args map[string]any) (any, error) {

@@ -259,6 +259,30 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
   operation over REST. A declared `Content-Length` is checked for
   free; only chunked bodies pay for a limiting reader.
 
+## Response headers of fused operations
+
+Over REST each operation answers alone with its own headers. A GraphQL
+response carries several operations, so gat combines what their huma
+outputs set (`header:"..."` fields):
+
+- `Set-Cookie`: all of them are emitted.
+- `Cache-Control`: passed through when every operation sent the same
+  value; otherwise the most restrictive combination (`no-store` >
+  `no-cache` > `private` > `public`, the shortest `max-age` /
+  `s-maxage`, grace periods only when all grant them).
+- An operation without `Cache-Control` next to ones that set it, or
+  any field error, makes the response `no-store`.
+- `ETag`: one operation's passes through; several combine into a weak
+  ETag over all of them plus the query and variables. Any operation
+  without one: no ETag.
+- `Last-Modified`: the latest, when every operation sets one. `Vary`:
+  the union.
+- A GET whose `If-None-Match` matches gets 304 without a body.
+
+gat caches nothing itself; caching stays with clients and whatever sits
+in front of the server. The header fields are located once per output
+type, so operations without them cost nothing.
+
 ## Trusted documents
 
 Clients built with graphql-codegen can send a document id instead of
