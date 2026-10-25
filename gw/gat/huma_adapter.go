@@ -45,6 +45,45 @@ func adapterRequest(ctx huma.Context) *http.Request {
 	return r
 }
 
+// serveAdapter runs h for an adapter-level huma handler. When the
+// adapter exposes its net/http request and writer (humago, humachi,
+// humamux, humaflow) h gets them as they are; otherwise it gets a
+// request rebuilt from ctx and a writer forwarding to ctx. The rebuild
+// re-parses the URL and copies every header, so the fast path is most
+// of the per-request cost of mounting on a huma router.
+func serveAdapter(h http.Handler, ctx huma.Context) {
+	if r, w, ok := unwrapHTTP(ctx); ok {
+		// ctx.Context() carries what huma put on the request context;
+		// keep it without copying the request when it is unchanged.
+		if c := ctx.Context(); c != r.Context() {
+			r = r.WithContext(c)
+		}
+		h.ServeHTTP(w, r)
+		return
+	}
+	h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+}
+
+// unwrapHTTP finds the net/http request and writer behind ctx, through
+// any middleware wrappers. It matches the adapters' Unwrap method
+// shape instead of importing each adapter.
+func unwrapHTTP(ctx huma.Context) (*http.Request, http.ResponseWriter, bool) {
+	for {
+		c, ok := ctx.(interface{ Unwrap() huma.Context })
+		if !ok {
+			break
+		}
+		ctx = c.Unwrap()
+	}
+	if c, ok := ctx.(interface {
+		Unwrap() (*http.Request, http.ResponseWriter)
+	}); ok {
+		r, w := c.Unwrap()
+		return r, w, true
+	}
+	return nil, nil, false
+}
+
 // adapterResponseWriter wraps huma.Context as an http.ResponseWriter.
 // http.HandlerFunc-style handlers can write to it transparently; the
 // adapter forwards status, headers, and body bytes through huma's

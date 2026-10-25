@@ -222,15 +222,16 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 // ?query= requests and the graphql-transport-ws upgrade; the upgrade
 // relies on adapterResponseWriter forwarding Hijack.
 func mountGraphQLEndpoint(api huma.API, g *Gateway, prefix string) {
+	// Adapter-level handler: bypass huma's body codec since GraphQL has
+	// its own request shape, and reuse g.Handler which already
+	// understands query/mutation envelopes. Built once, not per request.
+	h := g.Handler()
 	for _, method := range []string{http.MethodPost, http.MethodGet} {
 		api.Adapter().Handle(&huma.Operation{
 			Method: method,
 			Path:   prefix + "/graphql",
 		}, func(ctx huma.Context) {
-			// Adapter-level handler: bypass huma's body codec since
-			// GraphQL has its own request shape, and reuse g.Handler
-			// which already understands query/mutation envelopes.
-			g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+			serveAdapter(h, ctx)
 		})
 	}
 }
@@ -246,7 +247,7 @@ func mountSubscribe(api huma.API, g *Gateway, prefix string) {
 		Method: http.MethodGet,
 		Path:   prefix + SubscribePath,
 	}, func(ctx huma.Context) {
-		h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+		serveAdapter(h, ctx)
 	})
 }
 
@@ -259,7 +260,7 @@ func mountPeerPublish(api huma.API, g *Gateway, prefix string) {
 		Method: http.MethodPost,
 		Path:   prefix + PeerPublishPath,
 	}, func(ctx huma.Context) {
-		h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+		serveAdapter(h, ctx)
 	})
 }
 
@@ -271,7 +272,7 @@ func mountSchemaEndpoints(api huma.API, g *Gateway, prefix string) {
 			Method: http.MethodGet,
 			Path:   prefix + path,
 		}, func(ctx huma.Context) {
-			h.ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+			serveAdapter(h, ctx)
 		})
 	}
 	mount("/schema/graphql", schemaGraphQLHandler(g))
@@ -282,10 +283,11 @@ func mountSchemaEndpoints(api huma.API, g *Gateway, prefix string) {
 	// GraphQL handler (same as {prefix}/graphql). graphql-codegen introspects
 	// via POST, so pointing it at the documented schema URL then works instead
 	// of 405-ing. (The GET op above stays the SDL / ?format=json view.)
+	gql := g.Handler()
 	api.Adapter().Handle(&huma.Operation{
 		Method: http.MethodPost,
 		Path:   prefix + "/schema/graphql",
 	}, func(ctx huma.Context) {
-		g.Handler().ServeHTTP(newAdapterResponseWriter(ctx), adapterRequest(ctx))
+		serveAdapter(gql, ctx)
 	})
 }
