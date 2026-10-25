@@ -259,6 +259,30 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
   operation over REST. A declared `Content-Length` is checked for
   free; only chunked bodies pay for a limiting reader.
 
+## Observing operations
+
+Both hooks fire for every in-process operation call, GraphQL field or
+gRPC unary call, around the huma middlewares, input checks and
+handler. Unset, they cost nothing.
+
+```go
+g.ObserveDispatch(func(op string, dur time.Duration, err error) {
+	opLatency.WithLabelValues(op).Observe(dur.Seconds())
+})
+g.HookDispatch(func(ctx context.Context, op string) (context.Context, func(error)) {
+	ctx, span := tracer.Start(ctx, op) // the handler sees this ctx
+	return ctx, func(err error) {
+		if err != nil {
+			span.RecordError(err)
+		}
+		span.End()
+	}
+})
+```
+
+gat takes no tracing or metrics dependency; these are the join
+points. Under `ParallelQueries` they run concurrently.
+
 ## Incremental adoption
 
 `gat.Register` is opt-in per operation. Plain `huma.Register`

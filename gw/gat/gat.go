@@ -89,6 +89,9 @@ type Gateway struct {
 	// observe, when set (ObserveDispatch), is invoked after every in-process
 	// operation dispatch for per-operation metrics. nil = no observation.
 	observe DispatchObserver
+	// hook, when set (HookDispatch), runs around every in-process
+	// operation call with its context. nil = off.
+	hook DispatchHook
 
 	// parallel caps how many query operations of one GraphQL request run
 	// concurrently (ParallelQueries). 0 = serial, the default. maxOps caps
@@ -181,10 +184,10 @@ func (g *Gateway) EmptyNilSlices(b bool) *Gateway {
 	return g
 }
 
-// DispatchObserver is called after every in-process operation dispatch with the operation id,
-// how long it took, and its error (nil on success). It is the per-operation join point — a
-// server-side timing hook around each resolver→handler call — so consumers can emit per-operation
-// metrics (rate/errors/latency) the way an AOP pointcut did. Keep it cheap; it runs on the hot path.
+// DispatchObserver is called after every in-process operation call — GraphQL field or gRPC
+// unary call — with the operation id, how long it took (huma middlewares, input checks and
+// handler), and its error (nil on success). Keep it cheap; it runs on the hot path, and
+// concurrently under ParallelQueries.
 type DispatchObserver func(operationID string, dur time.Duration, err error)
 
 // MaxRequestBytes caps the GraphQL request body (default 1 MiB, huma's
@@ -197,12 +200,53 @@ func (g *Gateway) MaxRequestBytes(n int64) *Gateway {
 	return g
 }
 
-// ObserveDispatch sets the per-operation dispatch observer (see DispatchObserver). Call before the
-// schema builds (the dispatchers capture it at build time). Returns g for chaining; a no-op once
-// built. nil disables observation. Stability: experimental.
+// ObserveDispatch sets the per-operation dispatch observer (see DispatchObserver). Call before
+// RegisterHuma. Returns g for chaining. nil disables observation. Stability: experimental.
 func (g *Gateway) ObserveDispatch(fn DispatchObserver) *Gateway {
 	g.observe = fn
 	return g
+}
+
+// DispatchHook runs before every in-process operation call — GraphQL field or gRPC unary
+// call — with the request context and operation id. The context it returns is the one the
+// huma middlewares and handler see, so a hook can start a trace span or tag a logger;
+// done, if non-nil, is called with the call's error when it returns. gat takes no tracing
+// dependency: wire OpenTelemetry (or anything else) here.
+type DispatchHook func(ctx context.Context, operationID string) (_ context.Context, done func(error))
+
+// HookDispatch sets the per-operation dispatch hook (see DispatchHook). Call before
+// RegisterHuma. Returns g for chaining. nil disables it. Stability: experimental.
+func (g *Gateway) HookDispatch(fn DispatchHook) *Gateway {
+	g.hook = fn
+	return g
+}
+
+// instrument wraps c.invoke with the observer and hook, once. Unset,
+// it leaves invoke alone, so they cost nothing when off.
+func (g *Gateway) instrument(c *capturedOp) {
+	if c.instrumented || (g.observe == nil && g.hook == nil) {
+		return
+	}
+	c.instrumented = true
+	inner, id, observe, hook := c.invoke, c.op.OperationID, g.observe, g.hook
+	c.invoke = func(ctx context.Context, in any, args map[string]any) (any, error) {
+		var done func(error)
+		if hook != nil {
+			ctx, done = hook(ctx, id)
+		}
+		var start time.Time
+		if observe != nil {
+			start = time.Now()
+		}
+		out, err := inner(ctx, in, args)
+		if observe != nil {
+			observe(id, time.Since(start), err)
+		}
+		if done != nil {
+			done(err)
+		}
+		return out, err
+	}
 }
 
 // addRegistrations attaches BYO-IR services and wires their

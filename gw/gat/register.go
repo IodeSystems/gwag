@@ -37,6 +37,7 @@ type capturedOp struct {
 	// build one only then.
 	needsRequest bool
 	irOp         *ir.Operation // assigned during ingestHuma; nil until then
+	instrumented bool          // invoke already wrapped by instrument
 }
 
 // Register is the paired drop-in for huma.Register. It registers the
@@ -206,7 +207,8 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 			Name: "derived",
 			Args: []ir.AnnotationArg{{Name: "operationId", Kind: ir.AnnString, Value: op.Name}},
 		})
-		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices, g.observe))
+		g.instrument(c)
+		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices))
 	}
 
 	if err := g.bindStreams(svc); err != nil {

@@ -22,6 +22,14 @@ changes on MINOR, drops on MAJOR.
 - **gat request limits.** `MaxOperations(n)` caps operations per GraphQL
   request (aliases included; excess ones fail with 400, not dispatched).
   `MaxRequestBytes(n)` caps the GraphQL body.
+- **gat `HookDispatch`.** A per-operation hook that receives the
+  request context and returns the one the handler sees, plus a done
+  callback with the error — for trace spans. No tracing dependency.
+
+### Fixed
+- **gat `ObserveDispatch` now fires for gRPC calls.** gRPC ingress
+  invoked handlers directly and was never observed; observation now
+  wraps the handler invocation both surfaces share.
 
 ### Changed
 - **gat refuses GraphQL bodies over 1 MiB with 413** (`MaxRequestBytes`
