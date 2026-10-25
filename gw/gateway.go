@@ -1840,6 +1840,17 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 	pr := g.planCache.Get(schema, opts.Query, opts.OperationName)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// GraphQL over HTTP forbids mutations on GET. Running one would let
+	// any page fire it with a visitor's cookies — forwarded upstream by
+	// ForwardHeaders — through a link or an <img src>.
+	if r.Method == http.MethodGet && pr.Plan != nil && pr.Plan.IsMutation() {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(&graphql.Result{
+			Errors: []gqlerrors.FormattedError{gqlerrors.NewFormattedError("mutations are not allowed over GET; use POST")},
+		})
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 
 	switch {

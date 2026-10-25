@@ -40,6 +40,10 @@ changes on MINOR, drops on MAJOR.
   callback with the error — for trace spans. No tracing dependency.
 
 ### Security
+- **gwag refuses mutations over GET.** `GET /graphql?query=mutation…`
+  ran the mutation upstream, cookies forwarded by `ForwardHeaders`
+  included. It now gets 405 before execution, as GraphQL over HTTP
+  requires.
 - **gat refuses mutations over GET.** `GET {prefix}/graphql?query=mutation…`
   ran the mutation, so any page could trigger one with a visitor's
   cookies (a link or an `<img src>`; `SameSite=Lax` still sends cookies

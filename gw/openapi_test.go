@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1045,5 +1046,33 @@ func TestOpenAPIE2E_OneOfUnresolvableFallsBackToJSON(t *testing.T) {
 	}
 	if !strings.Contains(sdl, "JSON") {
 		t.Errorf("SDL must reference the JSON scalar fallback type; SDL=%s", sdl)
+	}
+}
+
+// TestOpenAPIE2E_MutationOverGETRefused: GraphQL over HTTP forbids
+// mutations on GET. Running one would let any page fire it with a
+// visitor's cookies (forwarded upstream via ForwardHeaders).
+func TestOpenAPIE2E_MutationOverGETRefused(t *testing.T) {
+	f := newOpenAPIE2EFixture(t)
+	q := url.Values{"query": {`mutation { test { createThing(body:{name:"widget"}) { id } } }`}}
+	req := httptest.NewRequest(http.MethodGet, "/graphql?"+q.Encode(), nil)
+	req.Header.Set("Accept", "application/json")
+	rr := httptest.NewRecorder()
+	f.graphql.ServeHTTP(rr, req)
+	if rec := f.lastReq.Load(); rec != nil {
+		t.Fatalf("GET mutation reached the backend: %s %s", rec.Method, rec.Path)
+	}
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status=%d body=%s, want 405", rr.Code, rr.Body.String())
+	}
+
+	// A GET query still works.
+	q = url.Values{"query": {`{ test { getThing(id:"42") { id } } }`}}
+	req = httptest.NewRequest(http.MethodGet, "/graphql?"+q.Encode(), nil)
+	req.Header.Set("Accept", "application/json")
+	rr = httptest.NewRecorder()
+	f.graphql.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || f.lastReq.Load() == nil {
+		t.Errorf("GET query: status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
