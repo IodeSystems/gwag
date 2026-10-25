@@ -89,6 +89,9 @@ type Gateway struct {
 	// observe, when set (ObserveDispatch), is invoked after every in-process
 	// operation dispatch for per-operation metrics. nil = no observation.
 	observe DispatchObserver
+	// trusted holds the persisted documents (TrustedDocuments); nil =
+	// queries only.
+	trusted *trustedDocs
 	// hook, when set (HookDispatch), runs around every in-process
 	// operation call with its context. nil = off.
 	hook DispatchHook
@@ -326,6 +329,8 @@ func (g *Gateway) Handler() http.Handler {
 			query         string
 			variables     map[string]any
 			operationName string
+			documentID    string
+			extensions    map[string]any
 		)
 
 		if r.Method == http.MethodPost {
@@ -345,6 +350,8 @@ func (g *Gateway) Handler() http.Handler {
 				Query         string         `json:"query"`
 				Variables     map[string]any `json:"variables"`
 				OperationName string         `json:"operationName"`
+				DocumentID    string         `json:"documentId"`
+				Extensions    map[string]any `json:"extensions"`
 			}
 			if err := json.NewDecoder(body).Decode(&req); err != nil {
 				var tooLarge *http.MaxBytesError
@@ -358,18 +365,57 @@ func (g *Gateway) Handler() http.Handler {
 			query = req.Query
 			variables = req.Variables
 			operationName = req.OperationName
+			documentID = req.DocumentID
+			extensions = req.Extensions
 		} else {
-			query = r.URL.Query().Get("query")
-			operationName = r.URL.Query().Get("operationName")
+			params := r.URL.Query()
+			query = params.Get("query")
+			operationName = params.Get("operationName")
+			documentID = params.Get("documentId")
+			// GET carries variables and extensions as JSON in the query
+			// string (GraphQL over HTTP); persisted documents over GET —
+			// the CDN-cacheable form — depend on it.
+			for name, dst := range map[string]*map[string]any{"variables": &variables, "extensions": &extensions} {
+				if raw := params.Get(name); raw != "" {
+					if err := json.Unmarshal([]byte(raw), dst); err != nil {
+						writeError(w, "invalid "+name+" JSON", http.StatusBadRequest)
+						return
+					}
+				}
+			}
 		}
 
-		if query == "" {
+		var pr graphql.PlanResult
+		id := persistedID(documentID, extensions)
+		switch {
+		case id != "" && g.trusted == nil:
+			writeCodedError(w, "persisted documents are not enabled", "PERSISTED_QUERY_NOT_SUPPORTED", http.StatusBadRequest)
+			return
+		case id != "":
+			key, doc, ok := g.trusted.lookup(id)
+			switch {
+			case ok:
+				query = doc
+				pr = g.trusted.plan(g, key, doc, operationName)
+			case query != "" && !g.trusted.enforce:
+				// APQ sends the hash with the query on retry; without
+				// enforcement the query alone is enough.
+				pr = g.planCache.Get(g.schema, query, operationName)
+			default:
+				writeCodedError(w, "PersistedQueryNotFound", "PERSISTED_QUERY_NOT_FOUND", http.StatusOK)
+				return
+			}
+		case query == "":
 			writeError(w, "missing query", http.StatusBadRequest)
 			return
+		case g.trusted != nil && g.trusted.enforce:
+			writeCodedError(w, "only trusted documents are accepted", "TRUSTED_DOCUMENT_REQUIRED", http.StatusBadRequest)
+			return
+		default:
+			pr = g.planCache.Get(g.schema, query, operationName)
 		}
 
 		ctx, scope := newScope(r.Context(), r, true)
-		pr := g.planCache.Get(g.schema, query, operationName)
 
 		// Emit any Set-Cookie a handler produced (login/logout) before the
 		// body — GraphQL transport otherwise drops per-op response headers.

@@ -259,6 +259,38 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
   operation over REST. A declared `Content-Length` is checked for
   free; only chunked bodies pay for a limiting reader.
 
+## Trusted documents
+
+Clients built with graphql-codegen can send a document id instead of
+the query. Turn on `persistedDocuments` in the client preset; it writes
+`persisted-documents.json` (id → document) next to the generated code.
+
+```go
+docs, err := gat.ParseTrustedDocuments(manifestBytes)
+g.TrustedDocuments(docs, true) // true: ids only
+```
+
+Requests:
+
+```
+POST {"documentId": "<id>", "variables": {...}}
+POST {"extensions": {"persistedQuery": {"sha256Hash": "<id>"}}, ...}   (Apollo APQ)
+GET  ?documentId=<id>&variables=<json>                                 (CDN-cacheable)
+```
+
+- Enforced (`true`): a request with query text gets 400
+  `TRUSTED_DOCUMENT_REQUIRED`. Only the queries your apps shipped can
+  run, so arbitrary queries against a public endpoint are closed.
+- Not enforced (`false`): ids and query text both work, for a rollout
+  while older clients still send text.
+- Unknown id: 200 with `PERSISTED_QUERY_NOT_FOUND`, the code APQ
+  clients react to. gat does not register documents at runtime: the
+  manifest is the allowlist.
+- A known id skips reading and parsing the query; the plan is kept per
+  id. Ids match with or without an algorithm prefix (`sha256:`).
+- GET requests also read `variables` and `extensions` as JSON from the
+  query string (previously ignored).
+
 ## Observing operations
 
 Both hooks fire for every in-process operation call, GraphQL field or

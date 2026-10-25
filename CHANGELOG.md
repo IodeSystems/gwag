@@ -22,6 +22,11 @@ changes on MINOR, drops on MAJOR.
 - **gat request limits.** `MaxOperations(n)` caps operations per GraphQL
   request (aliases included; excess ones fail with 400, not dispatched).
   `MaxRequestBytes(n)` caps the GraphQL body.
+- **gat trusted documents.** `TrustedDocuments(docs, enforce)` serves
+  requests naming a document by `documentId`, the APQ `sha256Hash`
+  extension, or `?documentId=` over GET; `enforce` refuses query text.
+  `ParseTrustedDocuments` reads graphql-codegen's persisted-documents
+  manifest.
 - **gat `HookDispatch`.** A per-operation hook that receives the
   request context and returns the one the handler sees, plus a done
   callback with the error — for trace spans. No tracing dependency.
@@ -34,6 +39,8 @@ changes on MINOR, drops on MAJOR.
   on GET without running; GraphQL over HTTP forbids them there.
 
 ### Fixed
+- **gat GET requests read `variables` and `extensions`.** They were
+  ignored, so a GET query with variables failed.
 - **gat `ObserveDispatch` now fires for gRPC calls.** gRPC ingress
   invoked handlers directly and was never observed; observation now
   wraps the handler invocation both surfaces share.
