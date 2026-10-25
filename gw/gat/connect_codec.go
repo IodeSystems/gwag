@@ -50,6 +50,11 @@ func (fastProtoCodec) Marshal(msg any) ([]byte, error) {
 }
 
 func (fastProtoCodec) Unmarshal(data []byte, msg any) error {
+	// Fast path: a request decodes straight into the handler's input
+	// when its operation has a decode plan (connect_request.go).
+	if r, ok := msg.(*wireRequest); ok {
+		return r.unmarshalProto(data)
+	}
 	pm, ok := msg.(proto.Message)
 	if !ok {
 		return fmt.Errorf("gat: %T does not implement proto.Message", msg)

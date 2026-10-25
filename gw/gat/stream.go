@@ -205,18 +205,18 @@ func (d *streamDispatcher) normalize(v any) (any, error) {
 // connectStream builds the gRPC server-stream handler for a streamOp.
 // The run is synchronous here, so the middleware chain wraps the whole
 // stream, as it does over REST.
-func connectStream(s *streamOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message], *connect.ServerStream[dynamicpb.Message]) error {
+func connectStream(s *streamOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[wireRequest], *connect.ServerStream[dynamicpb.Message]) error {
 	bind := newConnectBinder(s.inputType, s.irOp, md)
 	out := md.Output()
-	return func(ctx context.Context, req *connect.Request[dynamicpb.Message], stream *connect.ServerStream[dynamicpb.Message]) error {
-		in, err := bind(req.Msg)
+	return func(ctx context.Context, req *connect.Request[wireRequest], stream *connect.ServerStream[dynamicpb.Message]) error {
+		in, err := bindRequest(req.Msg, bind)
 		if err != nil {
 			return err
 		}
 		ctx, _ = newScope(ctx, connectInboundRequest(req), false)
 		var args map[string]any
 		if s.check != nil {
-			args = messageToArgs(req.Msg)
+			args = messageToArgs(req.Msg.message())
 		}
 		started := false
 		emit := func(v any) error {

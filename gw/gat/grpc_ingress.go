@@ -36,8 +36,9 @@ type HandleMux interface {
 // grpc-go (HTTP/2 native), connect-go (Connect protocol), or
 // grpc-web (browser-friendly) — all hit the same handlers.
 //
-// Dispatch round-trip: incoming proto (dynamic message) →
-// a cached field plan (connect_bind.go), or the map walk in
+// Dispatch round-trip: incoming proto wire bytes decoded straight
+// into the input (connect_decode.go), or a dynamic message bound by a
+// cached field plan (connect_bind.go), or the map walk in
 // connect_args.go when the plan declines →
 // captured huma handler → extracted Body → JSON → protojson →
 // outgoing proto.
@@ -83,7 +84,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 						procedure,
 						connectStream(st, md),
 						connect.WithSchema(md),
-						connect.WithRequestInitializer(newDynamicInitializer()),
+						connect.WithRequestInitializer(newRequestInitializer(wireDecoderFor(st.inputType, st.irOp, st.check, md))),
 						connect.WithCodec(fastProtoCodec{}),
 					))
 					continue
@@ -96,7 +97,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 					procedure,
 					connectUnary(cap, md),
 					connect.WithSchema(md),
-					connect.WithRequestInitializer(newDynamicInitializer()),
+					connect.WithRequestInitializer(newRequestInitializer(wireDecoderFor(cap.inputType, cap.irOp, cap.check, md))),
 					connect.WithCodec(fastProtoCodec{}),
 				)
 				mux.Handle(prefix+procedure, handler)
@@ -108,26 +109,14 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 	return nil
 }
 
-// newDynamicInitializer returns a connect.WithRequestInitializer that
-// allocates a dynamicpb.Message of the right MethodDescriptor input
-// (or output, on the client side) shape.
-func newDynamicInitializer() func(connect.Spec, any) error {
-	return func(spec connect.Spec, msg any) error {
-		dyn, ok := msg.(*dynamicpb.Message)
-		if !ok {
-			return nil
-		}
-		md, ok := spec.Schema.(protoreflect.MethodDescriptor)
-		if !ok {
-			return fmt.Errorf("gat: spec.Schema is %T, want protoreflect.MethodDescriptor", spec.Schema)
-		}
-		if spec.IsClient {
-			*dyn = *dynamicpb.NewMessage(md.Output())
-		} else {
-			*dyn = *dynamicpb.NewMessage(md.Input())
-		}
+// wireDecoderFor is the operation's wire fast path, or nil. Input
+// checks need the request as args, which only the dynamicpb message
+// gives, so a checked operation keeps that path.
+func wireDecoderFor(inputType reflect.Type, irOp *ir.Operation, check *inputCheck, md protoreflect.MethodDescriptor) *requestDecoder {
+	if check != nil {
 		return nil
 	}
+	return newRequestDecoder(inputType, irOp, md.Input())
 }
 
 // handlerErrorToConnect maps a captured-handler error to a
@@ -194,7 +183,7 @@ func httpStatusToConnectCode(status int) connect.Code {
 
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
-func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
+func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[wireRequest]) (*connect.Response[wireResult], error) {
 	bind := newConnectBinder(cap.inputType, cap.irOp, md)
 
 	// Plan the response against the operation's types. A nil plan is
@@ -209,14 +198,14 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		outPlan.sortFields()
 	}
 
-	return func(ctx context.Context, req *connect.Request[dynamicpb.Message]) (*connect.Response[wireResult], error) {
-		in, err := bind(req.Msg)
+	return func(ctx context.Context, req *connect.Request[wireRequest]) (*connect.Response[wireResult], error) {
+		in, err := bindRequest(req.Msg, bind)
 		if err != nil {
 			return nil, err
 		}
 		var args map[string]any
 		if cap.check != nil {
-			args = messageToArgs(req.Msg)
+			args = messageToArgs(req.Msg.message())
 		}
 		var inbound *http.Request
 		if cap.needsRequest {
