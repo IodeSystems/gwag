@@ -26,6 +26,13 @@ changes on MINOR, drops on MAJOR.
   request context and returns the one the handler sees, plus a done
   callback with the error — for trace spans. No tracing dependency.
 
+### Security
+- **gat refuses mutations over GET.** `GET {prefix}/graphql?query=mutation…`
+  ran the mutation, so any page could trigger one with a visitor's
+  cookies (a link or an `<img src>`; `SameSite=Lax` still sends cookies
+  on top-level GETs). Mutation fields now fail with a 405 field error
+  on GET without running; GraphQL over HTTP forbids them there.
+
 ### Fixed
 - **gat `ObserveDispatch` now fires for gRPC calls.** gRPC ingress
   invoked handlers directly and was never observed; observation now

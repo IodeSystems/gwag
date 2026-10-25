@@ -47,17 +47,15 @@ func (g *Gateway) MaxOperations(n int) *Gateway {
 	return g
 }
 
-// wrapLimits puts a limitDispatcher in front of every operation's
-// dispatcher when ParallelQueries or MaxOperations is set. Run by
-// build(), which may run more than once, so already-wrapped
-// dispatchers are left alone.
+// wrapLimits puts a limitDispatcher in front of every mutation's
+// dispatcher, and every query's when ParallelQueries or MaxOperations
+// is set. Run by build(), which may run more than once, so
+// already-wrapped dispatchers are left alone.
 func (g *Gateway) wrapLimits() {
-	if g.parallel <= 0 && g.maxOps <= 0 {
-		return
-	}
+	limits := g.parallel > 0 || g.maxOps > 0
 	for _, svc := range g.services {
 		for _, op := range svc.FlatOperations() {
-			if op.Kind == ir.OpSubscription {
+			if op.Kind == ir.OpSubscription || (op.Kind == ir.OpQuery && !limits) {
 				continue
 			}
 			d := g.registry.Get(op.SchemaID)
@@ -68,8 +66,11 @@ func (g *Gateway) wrapLimits() {
 				continue
 			}
 			ld := &limitDispatcher{inner: d, maxOps: int32(max(g.maxOps, 0))}
-			if op.Kind == ir.OpQuery {
+			switch op.Kind {
+			case ir.OpQuery:
 				ld.parallel = int32(max(g.parallel, 0))
+			case ir.OpMutation:
+				ld.mutation = true
 			}
 			g.registry.Set(op.SchemaID, ld)
 		}
@@ -85,12 +86,19 @@ type limitDispatcher struct {
 	inner    ir.Dispatcher
 	maxOps   int32 // 0 = no cap
 	parallel int32 // 0 = serial
+	mutation bool  // refused over GET
 }
 
 func (d *limitDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	s := scopeFrom(ctx)
 	if s == nil {
 		return d.inner.Dispatch(ctx, args)
+	}
+	// GraphQL over HTTP forbids mutations on GET. Running them would let
+	// any page trigger one with the visitor's cookies (a link or an
+	// <img src>; SameSite=Lax still sends cookies on top-level GETs).
+	if d.mutation && s.inbound != nil && s.inbound.Method == http.MethodGet {
+		return nil, withStatusExtensions(errMutationOverGET)
 	}
 	if d.maxOps > 0 {
 		if n := s.ops.Add(1); n > d.maxOps {
@@ -112,6 +120,19 @@ func (d *limitDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 	go r.run(ctx, d.inner, args, s)
 	return r.await, nil
 }
+
+var errMutationOverGET = &httpStatusError{
+	status: http.StatusMethodNotAllowed,
+	msg:    "gat: mutations are not allowed over GET; use POST",
+}
+
+type httpStatusError struct {
+	status int
+	msg    string
+}
+
+func (e *httpStatusError) Error() string  { return e.msg }
+func (e *httpStatusError) GetStatus() int { return e.status }
 
 type opLimitError struct{ max int32 }
 

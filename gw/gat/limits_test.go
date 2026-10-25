@@ -2,9 +2,11 @@ package gat_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -94,5 +96,47 @@ func TestMaxRequestBytes(t *testing.T) {
 	small := `{"query":"query { Demo { opA(id: \"1\") { id } } }"}`
 	if code := post(strings.NewReader(small), int64(len(small))); code != http.StatusOK {
 		t.Errorf("small body: status %d, want 200", code)
+	}
+}
+
+func TestMutationOverGETIsRefused(t *testing.T) {
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Demo", "1.0.0"))
+	g := mustNewGat(t)
+	var ran atomic.Int32
+	gat.Register(api, g, huma.Operation{OperationID: "setA", Method: http.MethodPost, Path: "/a/{id}"},
+		func(ctx context.Context, in *getProjectInput) (*getProjectOutput, error) {
+			ran.Add(1)
+			return &getProjectOutput{Body: project{ID: in.ID}}, nil
+		})
+	gat.Register(api, g, huma.Operation{OperationID: "getA", Method: http.MethodGet, Path: "/a/{id}"},
+		func(ctx context.Context, in *getProjectInput) (*getProjectOutput, error) {
+			return &getProjectOutput{Body: project{ID: in.ID}}, nil
+		})
+	if err := gat.RegisterHuma(api, g, "/api"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var resp map[string]any
+	_ = json.Unmarshal(mustGET(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`mutation { Demo { setA(id: "1") { id } } }`)), &resp)
+	if n := ran.Load(); n != 0 {
+		t.Fatalf("mutation ran %d times over GET", n)
+	}
+	errs, _ := resp["errors"].([]any)
+	if len(errs) == 0 {
+		t.Fatalf("GET mutation returned no error: %v", resp)
+	}
+	if st := digPath(errs[0], "extensions", "status"); st != float64(http.StatusMethodNotAllowed) {
+		t.Errorf("extensions.status = %v, want 405", st)
+	}
+
+	if r := mustGraphQL(t, srv.URL+"/api/graphql", `mutation { Demo { setA(id: "1") { id } } }`); r["errors"] != nil || ran.Load() != 1 {
+		t.Errorf("POST mutation: ran=%d resp=%v", ran.Load(), r)
+	}
+	_ = json.Unmarshal(mustGET(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`query { Demo { getA(id: "1") { id } } }`)), &resp)
+	if digPath(resp, "data", "Demo", "getA", "id") != "1" {
+		t.Errorf("GET query broke: %v", resp)
 	}
 }
