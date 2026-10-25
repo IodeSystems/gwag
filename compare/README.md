@@ -133,7 +133,7 @@ Method, caveats and how to regenerate: [`gatbench/`](./gatbench).
 
 ```
 compare/
-  Dockerfile               ubuntu:latest + Go + Node + each gateway binary
+  Dockerfile               ubuntu:26.04 + Go + Node + each gateway binary
   competitors.yaml         declarative list of gateways to test
   cmd/compare/             Go orchestrator (boots backends, sweeps each gateway)
   cmd/gat-gateway/         gat fronting the same upstreams, for the gat row

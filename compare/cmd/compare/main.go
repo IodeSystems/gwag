@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -150,7 +151,7 @@ func main() {
 		results[gw.Name] = res
 	}
 
-	if err := renderComparison(*outDir, cfg, picked, results); err != nil {
+	if err := renderComparison(*outDir, *repoRoot, cfg, picked, results); err != nil {
 		die("render: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "\n==> wrote %s\n", filepath.Join(*outDir, "comparison.md"))
@@ -159,18 +160,18 @@ func main() {
 // gatewayResults captures one gateway's full sweep set — one entry
 // per scenario it supports. The renderer merges across gateways.
 type gatewayResults struct {
-	Name      string                       `json:"name"`
+	Name      string                      `json:"name"`
 	Scenarios map[string]*scenarioOutcome `json:"scenarios"`
-	Failure   string                       `json:"failure,omitempty"`
+	Failure   string                      `json:"failure,omitempty"`
 }
 
 type scenarioOutcome struct {
-	Scenario          string             `json:"scenario"`
-	SweepPath         string             `json:"sweep_path"`
-	RecommendedRPS    int                `json:"recommended_rps"`
-	AchievedAtCeiling float64            `json:"achieved_at_ceiling"`
-	P99AtCeilingUs    int64              `json:"p99_at_ceiling_us"`
-	SelfMeanUsAtCeil  int64              `json:"self_mean_us_at_ceiling"`
+	Scenario          string  `json:"scenario"`
+	SweepPath         string  `json:"sweep_path"`
+	RecommendedRPS    int     `json:"recommended_rps"`
+	AchievedAtCeiling float64 `json:"achieved_at_ceiling"`
+	P99AtCeilingUs    int64   `json:"p99_at_ceiling_us"`
+	SelfMeanUsAtCeil  int64   `json:"self_mean_us_at_ceiling"`
 }
 
 func loadConfig(p string) (*config, error) {
@@ -449,10 +450,10 @@ func runSweep(trafficBin, target, query string, sw sweepCfg, out string) error {
 		return err
 	}
 	type stepStats struct {
-		TargetRPS              int     `json:"target_rps"`
-		AchievedRPSMean        float64 `json:"achieved_rps_mean"`
-		ClientP99UsMedian      int64   `json:"client_p99_us_median"`
-		GatewaySelfMeanUs      int64   `json:"gateway_self_mean_us_median"`
+		TargetRPS         int     `json:"target_rps"`
+		AchievedRPSMean   float64 `json:"achieved_rps_mean"`
+		ClientP99UsMedian int64   `json:"client_p99_us_median"`
+		GatewaySelfMeanUs int64   `json:"gateway_self_mean_us_median"`
 	}
 	type sweepOut struct {
 		Schema string      `json:"schema"`
@@ -463,8 +464,8 @@ func runSweep(trafficBin, target, query string, sw sweepCfg, out string) error {
 		// Three reps; rep 1 warm-up discarded, reps 2+3 medianed
 		// (mean for achieved_rps).
 		var (
-			achieved  []float64
-			p99us     []int64
+			achieved   []float64
+			p99us      []int64
 			selfMeanUs []int64
 		)
 		for r := 1; r <= sw.Reps; r++ {
@@ -595,11 +596,12 @@ func summariseSweep(path, name string) (*scenarioOutcome, error) {
 	return out, nil
 }
 
-func renderComparison(outDir string, cfg *config, picked []gatewayCfg, results map[string]*gatewayResults) error {
+func renderComparison(outDir, repoRoot string, cfg *config, picked []gatewayCfg, results map[string]*gatewayResults) error {
 	var b strings.Builder
 	b.WriteString("# Perf comparison — gwag vs peers\n\n")
 	fmt.Fprintf(&b, "_Generated %s. Run via `docker run gwag-perf` or `compare/run.sh local`._\n\n", time.Now().UTC().Format(time.RFC3339))
 	b.WriteString("Each gateway runs the same `bench/cmd/traffic` sweep against the same `hello-*` backends on the same host (serial; no concurrent gateways). Knee = highest rung where p99 stays under 50ms.\n\n")
+	writeProvenance(&b, repoRoot, cfg, picked)
 
 	// Headline matrix table: rows = scenarios, columns = gateways.
 	b.WriteString("## Headline matrix\n\n")
@@ -659,6 +661,67 @@ func renderComparison(outDir string, cfg *config, picked []gatewayCfg, results m
 	}
 
 	return os.WriteFile(filepath.Join(outDir, "comparison.md"), []byte(b.String()), 0o644)
+}
+
+// writeProvenance records what the numbers were measured on: host,
+// toolchains, sweep shape, and each gateway's version as its start
+// script reports it (`start-<name>.sh version`). The pin lives in the
+// script, so this cannot drift from what actually ran.
+func writeProvenance(b *strings.Builder, repoRoot string, cfg *config, picked []gatewayCfg) {
+	b.WriteString("## Provenance\n\n")
+	fmt.Fprintf(b, "- **Host:** %s, %d threads, %s, kernel %s\n",
+		cpuModel(), runtime.NumCPU(), osName(), cmdOut(repoRoot, "uname", "-r"))
+	fmt.Fprintf(b, "- **Toolchains:** %s · node %s\n",
+		strings.TrimPrefix(cmdOut(repoRoot, "go", "env", "GOVERSION"), "go version "), cmdOut(repoRoot, "node", "--version"))
+	fmt.Fprintf(b, "- **Sweep:** rungs %v RPS, %s per rep, %d reps (rep 1 discarded as warm-up)\n",
+		cfg.Sweep.Steps, cfg.Sweep.Duration, cfg.Sweep.Reps)
+	b.WriteString("- **Versions:**")
+	for i, gw := range picked {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		script := filepath.Join(repoRoot, "compare", "scripts", "start-"+gw.Name+".sh")
+		fmt.Fprintf(b, " %s `%s`", gw.Name, cmdOut(repoRoot, script, "version"))
+	}
+	b.WriteString("\n\n")
+}
+
+func cpuModel() string {
+	raw, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		return runtime.GOARCH
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if k, v, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(k) == "model name" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return runtime.GOARCH
+}
+
+func osName() string {
+	raw, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return runtime.GOOS
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
+			return strings.Trim(v, `"`)
+		}
+	}
+	return runtime.GOOS
+}
+
+// cmdOut runs a short command and returns its trimmed stdout, or
+// "unknown" — provenance is best-effort and must not fail the render.
+func cmdOut(dir, name string, args ...string) string {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func die(format string, args ...any) {

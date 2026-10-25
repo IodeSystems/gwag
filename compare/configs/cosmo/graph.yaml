@@ -1,0 +1,14 @@
+# Compose input for `wgc router compose` (wgc 0.133.3). Offline: no
+# control plane. Regenerate execution-config.json with:
+#
+#   cd compare/configs/cosmo
+#   npx --yes wgc@0.133.3 router compose -i graph.yaml -o execution-config.json
+#
+# The subgraph isn't federation-enabled; Cosmo composes a single
+# plain subgraph fine. Router forwards to it at routing_url.
+version: 1
+subgraphs:
+  - name: hello
+    routing_url: http://localhost:50054/graphql
+    schema:
+      file: hello.graphqls

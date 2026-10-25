@@ -1,0 +1,10 @@
+# Grafbase Gateway config for the perf comparison.
+# Static graph (--schema federated-graph.graphql), no Grafbase cloud.
+# Single-subgraph mode: forwards queries to hello-graphql.
+
+[graph]
+path = "/graphql"
+introspection = false
+
+[telemetry]
+# No exporters configured: telemetry off.

@@ -1,0 +1,12 @@
+# Subgraph SDL for hello-graphql (examples/multi/cmd/hello-graphql),
+# matching its introspection output.
+
+type HelloPayload {
+  "Greeting line, e.g. \"Hello, alice!\"."
+  greeting: String!
+}
+
+type Query {
+  "Greet the named recipient."
+  hello("Recipient name; echoed back in the greeting." name: String!): HelloPayload!
+}

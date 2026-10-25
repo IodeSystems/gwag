@@ -1,0 +1,52 @@
+# Federated graph for the single-subgraph "federation" of hello-graphql.
+# Produced by `grafbase compose` (CLI 0.105.2) from the introspected
+# subgraph SDL (below); committed so runs don't need the CLI.
+#
+#   type Query { hello(name: String!): HelloPayload! }
+#   type HelloPayload { greeting: String! }
+#
+# Regenerate: put the SDL above in sub.graphql, then with a compose
+# config of
+#   [subgraphs.hello]
+#   url = "http://localhost:50054/graphql"
+#   schema_path = "sub.graphql"
+# run `grafbase compose -c compose.toml > federated-graph.graphql`.
+
+schema
+  @link(url: "https://specs.apollo.dev/link/v1.0")
+  @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION)
+  @link(url: "https://specs.apollo.dev/inaccessible/v0.2", for: SECURITY)
+{
+  query: Query
+}
+
+directive @join__unionMember(graph: join__Graph!, member: String!) on UNION
+
+directive @join__implements(graph: join__Graph!, interface: String!) on OBJECT | INTERFACE
+
+directive @join__graph(name: String!, url: String) on ENUM_VALUE
+
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, overrideLabel: String) on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+directive @join__type(graph: join__Graph, key: join__FieldSet, extension: Boolean = false, resolvable: Boolean = true, isInterfaceObject: Boolean = false) on SCALAR | OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT
+
+directive @join__owner(graph: join__Graph!) on OBJECT
+
+scalar join__FieldSet
+
+type HelloPayload
+  @join__type(graph: HELLO)
+{
+  greeting: String!
+}
+
+type Query
+{
+  hello(name: String!): HelloPayload! @join__field(graph: HELLO)
+}
+
+enum join__Graph
+{
+  HELLO @join__graph(name: "hello", url: "http://localhost:50054/graphql")
+}
+

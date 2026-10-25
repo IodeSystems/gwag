@@ -1,0 +1,14 @@
+{
+  "name": "gwag-perf-hive",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hive Gateway harness for the gwag perf comparison.",
+  "dependencies": {
+    "@graphql-hive/gateway": "2.15.3",
+    "@graphql-mesh/compose-cli": "1.8.4",
+    "@graphql-mesh/transport-grpc": "0.7.2",
+    "@omnigraph/grpc": "0.3.2",
+    "@omnigraph/openapi": "0.112.7",
+    "graphql": "16.14.2"
+  }
+}

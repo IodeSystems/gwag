@@ -5,8 +5,10 @@
 # port competitors.yaml expects) and waits for /api/health.
 # `stop` kills the process.
 #
-# Reuses bench/.run/bin/gateway if present; builds it on demand
-# otherwise. PID is stashed at /tmp/perf-gwag.pid.
+# Rebuilds bench/.run/bin/gateway on every start (incremental, so
+# cheap) — a cached binary from an older checkout would otherwise be
+# measured under the current commit's name. PID is stashed at
+# /tmp/perf-gwag.pid.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -15,10 +17,8 @@ PID_FILE="/tmp/perf-gwag.pid"
 LOG_FILE="/tmp/perf-gwag.log"
 
 start() {
-  if [[ ! -x $BIN ]]; then
-    echo "==> building gateway"
-    (cd "$REPO" && go build -o "$BIN" ./examples/multi/cmd/gateway)
-  fi
+  echo "==> building gateway"
+  (cd "$REPO" && go build -o "$BIN" ./examples/multi/cmd/gateway)
   mkdir -p "$REPO/bench/.run/nats/perf-gwag"
   nohup "$BIN" \
     --node-name perf-gwag \
@@ -48,5 +48,6 @@ stop() {
 case "${1:-start}" in
   start) start ;;
   stop)  stop ;;
-  *) echo "usage: $0 {start|stop}"; exit 1 ;;
+  version) git -C "$REPO" describe --always --dirty --abbrev=12 ;;
+  *) echo "usage: $0 {start|stop|version}"; exit 1 ;;
 esac

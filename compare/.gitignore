@@ -3,3 +3,6 @@
 configs/mesh/node_modules/
 configs/mesh/package-lock.json
 configs/mesh/.mesh/
+configs/hive/node_modules/
+configs/hive/package-lock.json
+configs/hive/supergraph.graphql

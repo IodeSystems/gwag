@@ -20,10 +20,10 @@ PID_FILE="/tmp/perf-gat.pid"
 LOG_FILE="/tmp/perf-gat.log"
 
 start() {
-  if [[ ! -x $BIN ]]; then
-    echo "==> building gat-gateway"
-    (cd "$REPO" && go build -o "$BIN" ./compare/cmd/gat-gateway)
-  fi
+  # Always rebuild (incremental): a cached binary from an older
+  # checkout would be measured under the current commit's name.
+  echo "==> building gat-gateway"
+  (cd "$REPO" && go build -o "$BIN" ./compare/cmd/gat-gateway)
   # gat.ProtoFile resolves imports relative to cwd, so run from the
   # directory holding protos/ — same as the backends do.
   cd "$REPO/examples/multi"
@@ -64,5 +64,6 @@ stop() {
 case "${1:-start}" in
   start) start ;;
   stop)  stop ;;
-  *) echo "usage: $0 {start|stop}"; exit 1 ;;
+  version) git -C "$REPO" describe --always --dirty --abbrev=12 ;;
+  *) echo "usage: $0 {start|stop|version}"; exit 1 ;;
 esac

@@ -1,0 +1,30 @@
+# Cosmo Router config for the perf comparison.
+# Static execution config, no control plane (no GRAPH_API_TOKEN).
+# Production-like: no playground, no introspection, no dev mode,
+# telemetry exporters off.
+version: "1"
+
+listen_addr: "0.0.0.0:14200"
+graphql_path: "/graphql"
+dev_mode: false
+log_level: "warn"
+
+playground:
+  enabled: false
+introspection:
+  enabled: false
+
+execution_config:
+  file:
+    # Relative to the router's cwd; start-cosmo.sh cd's here first.
+    path: "execution-config.json"
+    watch: false
+
+telemetry:
+  tracing:
+    enabled: false
+  metrics:
+    otlp:
+      enabled: false
+    prometheus:
+      enabled: false

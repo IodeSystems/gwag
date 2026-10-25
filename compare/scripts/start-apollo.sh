@@ -13,12 +13,14 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APOLLO_DIR="$REPO/compare/configs/apollo"
 APOLLO_BIN="$REPO/compare/.run/bin/router"
-APOLLO_VERSION="1.55.0"
+APOLLO_VERSION="2.19.0"
 PID_FILE="/tmp/perf-apollo.pid"
 LOG_FILE="/tmp/perf-apollo.log"
 
 ensure_binary() {
-  if [[ -x $APOLLO_BIN ]]; then return; fi
+  # Re-download when the cached binary is a different version, so a
+  # pin bump takes effect without a manual `rm`.
+  if [[ -x $APOLLO_BIN && "$("$APOLLO_BIN" --version 2>/dev/null)" == "$APOLLO_VERSION" ]]; then return; fi
   mkdir -p "$(dirname "$APOLLO_BIN")"
   echo "==> downloading apollo-router v$APOLLO_VERSION"
   local arch
@@ -37,7 +39,8 @@ ensure_binary() {
 
 start() {
   ensure_binary
-  nohup "$APOLLO_BIN" \
+  # Anonymous usage reporting off: no outbound calls during a sweep.
+  APOLLO_TELEMETRY_DISABLED=true nohup "$APOLLO_BIN" \
     --config "$APOLLO_DIR/router.yaml" \
     --supergraph "$APOLLO_DIR/supergraph.graphql" \
     > "$LOG_FILE" 2>&1 &
@@ -57,5 +60,6 @@ stop() {
 case "${1:-start}" in
   start) start ;;
   stop)  stop ;;
-  *) echo "usage: $0 {start|stop}"; exit 1 ;;
+  version) echo "$APOLLO_VERSION" ;;
+  *) echo "usage: $0 {start|stop|version}"; exit 1 ;;
 esac

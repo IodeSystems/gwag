@@ -31,19 +31,19 @@ scenarios:
     # graphql-mesh + Apollo Router don't natively wire a proto upstream
     # the way gwag does. They appear in this scenario only when the
     # gateway's config explicitly bridges proto → graphql.
-    supported_by: [gwag, gat]
+    supported_by: [gwag, gat, hive]
 
   - name: openapi
     query: 'mutation { hello_openapi { Hello(body: { name: "world" }) { greeting } } }'
     # graphql-mesh supports OpenAPI sources natively. Apollo Router
     # doesn't; needs a connector or sidecar.
-    supported_by: [gwag, gat, mesh]
+    supported_by: [gwag, gat, mesh, hive]
 
   - name: graphql
     query: '{ hello_graphql { hello(name: "world") { greeting } } }'
     # GraphQL-in / GraphQL-out is the universal scenario every peer
     # supports. The most apples-to-apples row.
-    supported_by: [gwag, mesh, apollo]
+    supported_by: [gwag, mesh, hive, apollo, cosmo, grafbase]
   # gat has no GraphQL-upstream ingest (AddGraphQL is a full-gwag
   # feature), so it sits this scenario out rather than faking it.
 
@@ -67,8 +67,23 @@ gateways:
     # never binds and gwag silently answers in its place.
     target_template: "http://localhost:18085/api/graphql"
 
+  - name: hive
+    description: "Hive Gateway (Node; Mesh v1 compose-cli supergraph, one worker per core; multi-format ingest peer)"
+    target_template: "http://localhost:14000/graphql"
+    # mesh.config.ts encapsulates each source under its name, so root
+    # fields match gwag's namespaces. OpenAPI input arg is `input` (the
+    # openapi handler's mapping); the gRPC handler names the method
+    # field after the full service path.
+    query_overrides:
+      openapi: 'mutation { hello_openapi { Hello(input: { name: "world" }) { greeting } } }'
+      proto: '{ hello_proto { hello_v1_HelloService_Hello(input: {name: "world"}) { greeting } } }'
+
+  # Legacy: graphql-mesh v0 serving its own stitched schema. Mesh v1
+  # hands serving to Hive Gateway (above). Kept as a reference row so a
+  # Hive regression can be told apart from a harness problem; shares
+  # :14000 with hive (runs are serial).
   - name: mesh
-    description: "graphql-mesh (Node, npm-distributed; multi-format ingest peer)"
+    description: "graphql-mesh v0 (legacy; Node, npm-distributed; multi-format ingest peer)"
     target_template: "http://localhost:14000/graphql"
     # Mesh's stitched schema doesn't prefix per-source by default —
     # both sources land at the schema root. The gwag canonical
@@ -88,7 +103,17 @@ gateways:
     query_overrides:
       graphql: '{ hello(name: "world") { greeting } }'
 
-  - name: wundergraph
-    description: "WunderGraph (Go API + Node config; deferred — codegen-heavy)"
-    target_template: "http://localhost:9991/operations/Hello"
-    enabled: false
+  - name: cosmo
+    description: "WunderGraph Cosmo Router (Go, GraphQL-federation specialist; static execution config, single-subgraph mode here)"
+    target_template: "http://localhost:14200/graphql"
+    # No control plane: the router reads configs/cosmo/execution-config.json
+    # (composed offline with wgc). No prefixing, like apollo.
+    query_overrides:
+      graphql: '{ hello(name: "world") { greeting } }'
+
+  - name: grafbase
+    description: "Grafbase Gateway (Rust, GraphQL-federation specialist; static schema, single-subgraph mode here)"
+    target_template: "http://localhost:14300/graphql"
+    # Self-hosted, no Grafbase cloud. No prefixing, like apollo.
+    query_overrides:
+      graphql: '{ hello(name: "world") { greeting } }'

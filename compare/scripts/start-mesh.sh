@@ -48,5 +48,6 @@ stop() {
 case "${1:-start}" in
   start) start ;;
   stop)  stop ;;
-  *) echo "usage: $0 {start|stop}"; exit 1 ;;
+  version) node -p "require('$MESH_DIR/package.json').dependencies['@graphql-mesh/cli']" ;;
+  *) echo "usage: $0 {start|stop|version}"; exit 1 ;;
 esac
