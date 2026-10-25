@@ -1,7 +1,7 @@
 connectrpc.com/connect v1.21.1 h1:h2kacdlzXpZU2OQFSv98xkjYXNUSr/ptxmGVbS/+CRM=
 connectrpc.com/connect v1.21.1/go.mod h1:fhMcVJ5w6r/yTYhnkEbW6+sIF7OZ5Ay7KYgmfebh2ek=
-github.com/IodeSystems/graphql-go/v2 v2.0.1 h1:o4mOnWgtHnJbf1hCvSG8X7LYRIKS2B3zt5Iwg89CZSs=
-github.com/IodeSystems/graphql-go/v2 v2.0.1/go.mod h1:vrEXrgzKilq1O94caK33IaNVF/oOiAxDSf9LuORW7+k=
+github.com/IodeSystems/graphql-go/v2 v2.1.0 h1:0um7REaAQsyHDgeVwaA+5srs/JRq1KKwIavbStM9u2I=
+github.com/IodeSystems/graphql-go/v2 v2.1.0/go.mod h1:vrEXrgzKilq1O94caK33IaNVF/oOiAxDSf9LuORW7+k=
 github.com/antithesishq/antithesis-sdk-go v0.8.0 h1:bVV5ZAuwaREn4klRSJusYaA+A7NXq8Qi9C/knCaQ2N4=
 github.com/antithesishq/antithesis-sdk-go v0.8.0/go.mod h1:FQyySiasQQM8735Ddel3MRojmy4dA1IqCeyJ5jmPMbI=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
