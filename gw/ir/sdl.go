@@ -150,6 +150,17 @@ func PrintSchemaSDL(s *graphql.Schema, ann ...*AnnotationIndex) string {
 		b.WriteString("}\n")
 	}
 
+	// Directives the schema declares beyond the specified ones
+	// (RuntimeOptions.Directives): clients validate documents that use
+	// them against this SDL.
+	if decls := customDirectiveDeclarations(s); len(decls) > 0 {
+		separate()
+		for _, d := range decls {
+			b.WriteString(d)
+			b.WriteString("\n")
+		}
+	}
+
 	// Synthesized directive declarations the annotated fields/types
 	// below reference, so the emitted SDL stays self-validating.
 	if decls := idx.declarations(); len(decls) > 0 {
@@ -452,4 +463,39 @@ func quoteString(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// customDirectiveDeclarations prints the schema's non-specified
+// directives as SDL declarations, sorted by name.
+func customDirectiveDeclarations(s *graphql.Schema) []string {
+	specified := map[string]bool{}
+	for _, d := range graphql.SpecifiedDirectives {
+		specified[d.Name] = true
+	}
+	var out []string
+	for _, d := range s.Directives() {
+		if specified[d.Name] {
+			continue
+		}
+		var sb strings.Builder
+		sb.WriteString("directive @")
+		sb.WriteString(d.Name)
+		if len(d.Args) > 0 {
+			sb.WriteString("(")
+			for i, a := range d.Args {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(a.Name())
+				sb.WriteString(": ")
+				sb.WriteString(a.Type.String())
+			}
+			sb.WriteString(")")
+		}
+		sb.WriteString(" on ")
+		sb.WriteString(strings.Join(d.Locations, " | "))
+		out = append(out, sb.String())
+	}
+	sort.Strings(out)
+	return out
 }

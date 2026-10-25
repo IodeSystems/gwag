@@ -10,6 +10,13 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- **gat batched requests with `@export`.** A POST body that is an array
+  of operations runs them in order; `@export(as: "x")` on a field passes
+  its values (deduplicated; a list under a list) to the operations after
+  it as `$x`. The answer to "fetch these, then the things they reference"
+  in one round trip, without links or nested resolvers.
+- **`ir.RuntimeOptions.Directives`** declares extra directives on the
+  rendered schema; `ir.PrintSchemaSDL` prints them.
 - **gat request attributes.** `gat.Attrs` is a bag scoped to the
   inbound request (GraphQL HTTP request, gRPC call, graphql-ws
   connection) that every fused operation shares;

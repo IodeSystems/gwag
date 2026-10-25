@@ -34,6 +34,11 @@ type RuntimeOptions struct {
 	// (see IRTypeBuilderOptions.NonNullRepeatedRequired). Pair with a
 	// dispatch that coerces nil slices to `[]`.
 	NonNullRequiredLists bool
+
+	// Directives are declared on the schema alongside the specified
+	// ones (@include, @skip, @deprecated), so documents using them
+	// validate. The executor ignores them; the embedder acts on them.
+	Directives []*graphql.Directive
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
@@ -62,6 +67,9 @@ func RenderGraphQLRuntime(svcs []*Service, registry *DispatchRegistry, opts Runt
 	}
 	if len(subs) > 0 {
 		cfg.Subscription = graphql.NewObject(graphql.ObjectConfig{Name: "Subscription", Fields: subs})
+	}
+	if len(opts.Directives) > 0 {
+		cfg.Directives = append(append([]*graphql.Directive{}, graphql.SpecifiedDirectives...), opts.Directives...)
 	}
 	schema, err := graphql.NewSchema(cfg)
 	if err != nil {

@@ -271,6 +271,52 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
   operation over REST. A declared `Content-Length` is checked for
   free; only chunked bodies pay for a limiting reader.
 
+## Dependent operations (instead of links)
+
+A fused query runs independent operations together. When the second
+call needs the first one's results — the orders, then the customers
+they name — send a **batch** and pass the values along with
+**`@export`**:
+
+```json
+[
+  {"query": "{ Shop { listOrders(limit: 50) { id total customerId @export(as: \"ids\") } } }"},
+  {"query": "query ($ids: [String!]) { Shop { getCustomersById(ids: $ids) { id name } } }"}
+]
+```
+
+The response is an array with one result per operation. That is
+`orders.map(o => o.customerId)` written in GraphQL: one round trip, one
+call to each operation, no N+1.
+
+- Operations run in order. `@export(as: "x")` on a field hands the
+  values it resolved to every operation after it as `$x`; variables the
+  client set itself win.
+- Values are deduplicated, so 50 orders naming 3 customers send 3 ids.
+  A field under a list (or exported twice) exports a list; a single
+  field exports a scalar.
+- Each entry is an ordinary operation: same huma middlewares, same
+  context, same handler as over REST and gRPC. The batch shares one
+  request scope, so `MaxOperations` (which also caps the batch length),
+  `Attrs`, cookies and the cache-header merge span all of it.
+- An entry refused before it runs (unknown document id, query text
+  under enforced trusted documents) gets an errors object in its slot;
+  the others still run. Batches are POST only.
+- The lookup operation is a normal one. Give it a bounded list
+  parameter — `` IDs []string `query:"ids" maxItems:"100"` `` — and REST
+  callers can use it as `GET /customers?ids=a&ids=b`.
+
+**Why gat has no links or nested resolvers.** Resolving a reference
+inside the server ("`order.customer` calls the customer loader")
+looks convenient and brings the problems this avoids: N+1 calls that
+need batching machinery, fan-out nobody bounded (a list of orders,
+each with its list of items, each with…), a second auth path for the
+hidden calls, and fields that exist only over GraphQL. With a batch the
+client states the dependency, each step is an operation you already
+test, and the size of every step is the size of a parameter you
+declared. OpenAPI response `links` on a huma operation stay
+documentation; gat logs a note pointing here when it sees one.
+
 ## Response headers of fused operations
 
 Over REST each operation answers alone with its own headers. A GraphQL

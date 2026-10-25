@@ -138,6 +138,21 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 		}
 	}
 
+	// OpenAPI response links are fine as documentation, but gat does not
+	// resolve them into nested fields — on purpose. Point whoever
+	// declared one at the pattern gat supports instead.
+	for _, c := range g.captured {
+		for code, resp := range c.op.Responses {
+			if resp != nil && len(resp.Links) > 0 {
+				log.Printf("gat: note: %s declares OpenAPI response links (%s); gat does not resolve links "+
+					"into nested fields. To fetch dependent data in one request, batch the operations "+
+					"and pass values along with @export — see \"Dependent operations\" in docs/gat.md.",
+					c.op.OperationID, code)
+				break
+			}
+		}
+	}
+
 	if len(g.captured) > 0 || len(g.subs) > 0 {
 		if err := g.ingestHuma(api); err != nil {
 			return err
