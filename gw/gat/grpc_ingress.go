@@ -218,9 +218,11 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		if cap.check != nil {
 			args = messageToArgs(req.Msg)
 		}
+		var inbound *http.Request
 		if cap.needsRequest {
-			ctx = withInboundRequest(ctx, connectInboundRequest(req))
+			inbound = connectInboundRequest(req)
 		}
+		ctx, _ = newScope(ctx, inbound, false)
 		out, err := cap.invoke(ctx, in, args)
 		if err != nil {
 			return nil, handlerErrorToConnect(err)

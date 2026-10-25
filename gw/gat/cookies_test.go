@@ -52,7 +52,8 @@ func TestCookieSink_RoundTrip(t *testing.T) {
 		SetCookie http.Cookie `header:"Set-Cookie"`
 		Body      struct{ Code string }
 	}
-	ctx, sink := withCookieSink(context.Background())
+	ctx, scope := newScope(context.Background(), nil, true)
+	sink := scope.cookies
 	if cookieSinkFrom(ctx) != sink {
 		t.Fatal("sink not retrievable from ctx")
 	}
@@ -76,7 +77,8 @@ func TestCookieSink_EmptyCookieSkipped(t *testing.T) {
 	type out struct {
 		SetCookie http.Cookie `header:"Set-Cookie"`
 	}
-	_, sink := withCookieSink(context.Background())
+	_, scope := newScope(context.Background(), nil, true)
+	sink := scope.cookies
 	sink.addFromOutput(&out{})
 	rec := httptest.NewRecorder()
 	sink.emit(rec)

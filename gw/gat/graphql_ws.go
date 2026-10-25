@@ -79,8 +79,9 @@ func (g *Gateway) serveGraphQLWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	// The upgrade request is what huma middlewares see for every
-	// subscription on this connection.
-	ctx = withInboundRequest(ctx, r)
+	// subscription on this connection, and one attribute bag spans
+	// them: same connection, same client.
+	ctx, _ = newScope(ctx, r, false)
 
 	// websocket.Conn isn't safe for concurrent writes.
 	var writeMu sync.Mutex

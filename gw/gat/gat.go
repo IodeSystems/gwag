@@ -286,7 +286,7 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 
-		ctx, cookies := withCookieSink(withInboundRequest(r.Context(), r))
+		ctx, scope := newScope(r.Context(), r, true)
 		pr := g.planCache.Get(g.schema, query, operationName)
 
 		// Emit any Set-Cookie a handler produced (login/logout) before the
@@ -374,7 +374,7 @@ func (g *Gateway) Handler() http.Handler {
 		// Execution is done, so the sink now holds whatever the resolvers
 		// produced. Emit before WriteHeader — after it the header map is
 		// already on the wire.
-		cookies.emit(w)
+		scope.cookies.emit(w)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)

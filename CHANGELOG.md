@@ -9,6 +9,14 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **gat request attributes.** `gat.Attrs` is a bag scoped to the
+  inbound request (GraphQL HTTP request, gRPC call, graphql-ws
+  connection) that every fused operation shares;
+  `gat.LockIfAbsentAndFill` computes a value once while concurrent
+  callers wait, so a session lookup runs once per request, not once per
+  operation. `gat.AttrsMiddleware` scopes REST requests.
+
 ## v2.3.1 — 2026-10-22
 
 ### Security

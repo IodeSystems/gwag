@@ -213,7 +213,7 @@ func connectStream(s *streamOp, md protoreflect.MethodDescriptor) func(context.C
 		if err != nil {
 			return err
 		}
-		ctx = withInboundRequest(ctx, connectInboundRequest(req))
+		ctx, _ = newScope(ctx, connectInboundRequest(req), false)
 		var args map[string]any
 		if s.check != nil {
 			args = messageToArgs(req.Msg)

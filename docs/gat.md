@@ -176,6 +176,49 @@ With one event type the field and the stream message are that type.
 `gat.Subscribe` (channel source, GraphQL + gRPC only, not on REST) is
 deprecated in favour of `RegisterSSE`.
 
+## Request attributes (share a session across fused operations)
+
+One GraphQL request can fuse several operations, and huma middleware
+runs once per operation. A middleware that looks the session up would
+look it up once per operation. `gat.Attrs` is a bag scoped to the
+inbound request that every operation of it shares:
+
+```go
+api.UseMiddleware(func(hctx huma.Context, next func(huma.Context)) {
+	ctx := hctx.Context()
+	user, err := gat.LockIfAbsentAndFill(ctx, sessionKey{}, func() (*User, error) {
+		return sessions.Lookup(ctx, hctx.Header("Cookie")) // once per request
+	})
+	if err != nil {
+		_ = huma.WriteErr(api, hctx, http.StatusUnauthorized, "login required")
+		return
+	}
+	n, _ := gat.LockIfAbsentAndFill(ctx, opCountKey{}, func() (*atomic.Int64, error) {
+		return new(atomic.Int64), nil
+	})
+	if n.Add(1) > 20 { // operations in this request
+		_ = huma.WriteErr(api, hctx, http.StatusTooManyRequests, "too many operations")
+		return
+	}
+	next(huma.WithValue(hctx, principalKey{}, user))
+})
+```
+
+- `LockIfAbsentAndFill`: the first caller locks the key and runs
+  `fill`; callers arriving meanwhile wait for its result. The result,
+  error included, is kept for the rest of the request. `fill` must not
+  ask for its own key.
+- `AttrsFrom(ctx)` returns the bag: `Get`, `PutIfAbsent`.
+- Scope: one bag per GraphQL HTTP request, per gRPC call, and per
+  graphql-transport-ws connection (every subscription on it). Not per
+  keep-alive HTTP connection: a proxy carries many clients' requests
+  over one.
+- REST requests reach huma without passing through gat. Wrap the mux
+  with `gat.AttrsMiddleware` to give them a bag too; gat reuses an
+  enclosing bag, so the GraphQL handler then shares it.
+- No bag in the context (a call gat did not scope): nothing is shared
+  and `fill` runs every time.
+
 ## Incremental adoption
 
 `gat.Register` is opt-in per operation. Plain `huma.Register`

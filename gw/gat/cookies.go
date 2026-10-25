@@ -11,8 +11,8 @@ import (
 // GraphQL transport has no per-operation response-header channel: a single
 // HTTP response can carry many resolved fields, so a handler's huma output
 // headers (e.g. a `Set-Cookie` for login/logout) are normally dropped on the
-// GraphQL surface. cookieSink bridges that gap — the GraphQL HTTP handler
-// installs one per request, the in-proc dispatcher feeds each handler output's
+// GraphQL surface. cookieSink bridges that gap — the GraphQL HTTP handler's
+// request scope carries one, the in-proc dispatcher feeds each handler output's
 // Set-Cookie value into it, and the handler emits them onto the real response
 // before the body is written. Resolvers can run concurrently, so it's guarded.
 type cookieSink struct {
@@ -20,17 +20,13 @@ type cookieSink struct {
 	cookies []*http.Cookie
 }
 
-type cookieSinkKey struct{}
-
-// withCookieSink returns a context carrying a fresh sink and the sink itself.
-func withCookieSink(ctx context.Context) (context.Context, *cookieSink) {
-	s := &cookieSink{}
-	return context.WithValue(ctx, cookieSinkKey{}, s), s
-}
-
+// cookieSinkFrom returns the request's sink, or nil on transports that
+// don't emit cookies.
 func cookieSinkFrom(ctx context.Context) *cookieSink {
-	s, _ := ctx.Value(cookieSinkKey{}).(*cookieSink)
-	return s
+	if s := scopeFrom(ctx); s != nil {
+		return s.cookies
+	}
+	return nil
 }
 
 // addFromOutput scans a huma output struct for fields tagged

@@ -16,20 +16,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// inboundRequestKey carries the transport request (GraphQL HTTP request,
-// or a synthetic one for gRPC ingress) to the middleware runner. It is
-// private and separate from WithHTTPRequest on purpose: that key also
-// turns on Authorization forwarding to OpenAPI upstreams, which the
-// middleware runner must not switch on as a side effect.
-type inboundRequestKey struct{}
-
-func withInboundRequest(ctx context.Context, r *http.Request) context.Context {
-	return context.WithValue(ctx, inboundRequestKey{}, r)
-}
-
+// inboundRequestFrom returns the transport request (GraphQL HTTP
+// request, or a synthetic one for gRPC ingress) the request scope
+// carries for the middleware runner; see requestScope.inbound.
 func inboundRequestFrom(ctx context.Context) *http.Request {
-	if r, ok := ctx.Value(inboundRequestKey{}).(*http.Request); ok {
-		return r
+	if s := scopeFrom(ctx); s != nil && s.inbound != nil {
+		return s.inbound
 	}
 	return HTTPRequestFromContext(ctx)
 }
