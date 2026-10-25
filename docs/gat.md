@@ -246,7 +246,9 @@ g.ParallelQueries(8) // before RegisterHuma
 ## Request limits (public APIs)
 
 ```go
-g.MaxOperations(64)       // the default: operations per request, aliases included
+g.MaxOperations(64)        // the default: operations per request, aliases included
+g.MaxDepth(8)              // field nesting, namespace included
+g.DisableIntrospection()   // production: no __schema, no /schema/*
 g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
 ```
 
@@ -255,6 +257,15 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
   (an atomic add in the request scope), so aliases and fragments count
   and nothing is re-parsed. Default 64; `MaxOperations(0)` turns it
   off.
+- `MaxDepth(n)`: queries nesting fields deeper than `n` are refused
+  (every field level counts, the namespace included). A validation
+  rule: checked once per distinct query, the verdict cached with the
+  plan.
+- `DisableIntrospection()`: refuses `__schema` / `__type` (not
+  `__typename`) and stops serving `{prefix}/schema/*`. Generate client
+  code at build time against a gateway with it on.
+- Mutations over GET get 405 before anything runs (GraphQL over HTTP
+  forbids them; they would be a CSRF hole for cookie sessions).
 - `MaxRequestBytes(n)`: a larger GraphQL body gets 413 before it is
   decoded. On by default at 1 MiB, the limit huma applies to the same
   operation over REST. A declared `Content-Length` is checked for

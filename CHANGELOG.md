@@ -32,6 +32,9 @@ changes on MINOR, drops on MAJOR.
   merge into the GraphQL response: identical values pass through,
   otherwise the most restrictive combination; ETags combine into one
   weak ETag. GET with a matching `If-None-Match` gets 304.
+- **gat `MaxDepth` and `DisableIntrospection`.** Validation rules run by
+  the plan cache, so each distinct query is checked once.
+  `DisableIntrospection` also stops serving `{prefix}/schema/*`.
 - **gat `HookDispatch`.** A per-operation hook that receives the
   request context and returns the one the handler sees, plus a done
   callback with the error — for trace spans. No tracing dependency.
@@ -40,8 +43,8 @@ changes on MINOR, drops on MAJOR.
 - **gat refuses mutations over GET.** `GET {prefix}/graphql?query=mutation…`
   ran the mutation, so any page could trigger one with a visitor's
   cookies (a link or an `<img src>`; `SameSite=Lax` still sends cookies
-  on top-level GETs). Mutation fields now fail with a 405 field error
-  on GET without running; GraphQL over HTTP forbids them there.
+  on top-level GETs). A GET whose operation is a mutation now gets 405
+  before anything runs; GraphQL over HTTP forbids them there.
 
 ### Fixed
 - **gat GET requests read `variables` and `extensions`.** They were
@@ -61,6 +64,7 @@ changes on MINOR, drops on MAJOR.
 - **gat refuses GraphQL bodies over 1 MiB with 413** (`MaxRequestBytes`
   default), matching huma's REST limit for the same operation. Set
   `MaxRequestBytes(0)` for no limit.
+- **graphql-go fork v2.1.0**: `PlanCacheOptions.Rules`, `Plan.IsMutation`.
 
 ## v2.3.1 — 2026-10-22
 

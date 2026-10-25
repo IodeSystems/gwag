@@ -105,6 +105,12 @@ type Gateway struct {
 	maxOps   int
 	maxBody  int64
 
+	// maxDepth (MaxDepth) and noIntrospection (DisableIntrospection)
+	// become plan-cache validation rules: checked once per distinct
+	// query.
+	maxDepth        int
+	noIntrospection bool
+
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
 	// cross-node fanout layer — nil until EnablePeerMesh is called.
@@ -305,6 +311,7 @@ func (g *Gateway) build() error {
 	// Defaults mirror gw/'s: gat has no knobs to expose them through.
 	g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
 		MaxEntries: planCacheEntries,
+		Rules:      g.validationRules(),
 	})
 	g.built = true
 	return nil
@@ -418,6 +425,15 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		default:
 			pr = g.planCache.Get(g.schema, query, operationName)
+		}
+
+		// GraphQL over HTTP forbids mutations on GET. Running one would
+		// let any page trigger it with the visitor's cookies (a link or an
+		// <img src>; SameSite=Lax still sends cookies on top-level GETs).
+		if r.Method == http.MethodGet && pr.Plan != nil && pr.Plan.IsMutation() {
+			w.Header().Set("Allow", http.MethodPost)
+			writeError(w, "mutations are not allowed over GET; use POST", http.StatusMethodNotAllowed)
+			return
 		}
 
 		ctx, scope := newScope(r.Context(), r, true)

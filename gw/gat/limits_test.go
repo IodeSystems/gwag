@@ -3,7 +3,6 @@ package gat_test
 import (
 	"context"
 	"fmt"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -120,24 +119,19 @@ func TestMutationOverGETIsRefused(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	var resp map[string]any
-	_ = json.Unmarshal(mustGET(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`mutation { Demo { setA(id: "1") { id } } }`)), &resp)
+	status, resp := getJSON(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`mutation { Demo { setA(id: "1") { id } } }`))
 	if n := ran.Load(); n != 0 {
 		t.Fatalf("mutation ran %d times over GET", n)
 	}
-	errs, _ := resp["errors"].([]any)
-	if len(errs) == 0 {
-		t.Fatalf("GET mutation returned no error: %v", resp)
-	}
-	if st := digPath(errs[0], "extensions", "status"); st != float64(http.StatusMethodNotAllowed) {
-		t.Errorf("extensions.status = %v, want 405", st)
+	if status != http.StatusMethodNotAllowed {
+		t.Errorf("GET mutation: status %d, want 405: %v", status, resp)
 	}
 
 	if r := mustGraphQL(t, srv.URL+"/api/graphql", `mutation { Demo { setA(id: "1") { id } } }`); r["errors"] != nil || ran.Load() != 1 {
 		t.Errorf("POST mutation: ran=%d resp=%v", ran.Load(), r)
 	}
-	_ = json.Unmarshal(mustGET(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`query { Demo { getA(id: "1") { id } } }`)), &resp)
-	if digPath(resp, "data", "Demo", "getA", "id") != "1" {
+	status, resp = getJSON(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`query { Demo { getA(id: "1") { id } } }`))
+	if status != http.StatusOK || digPath(resp, "data", "Demo", "getA", "id") != "1" {
 		t.Errorf("GET query broke: %v", resp)
 	}
 }
@@ -157,4 +151,62 @@ func TestMaxOperations_DefaultIs64(t *testing.T) {
 	if errs, _ := resp["errors"].([]any); len(errs) != 1 {
 		t.Errorf("%d errors, want 1", len(errs))
 	}
+}
+
+func TestMaxDepth(t *testing.T) {
+	srv, calls := newLimitsGat(t, func(g *gat.Gateway) { g.MaxDepth(2) })
+	gql := srv.URL + "/api/graphql"
+	refused := func(name, q string) {
+		t.Helper()
+		resp := mustGraphQL(t, gql, q)
+		errs, _ := resp["errors"].([]any)
+		if resp["data"] != nil || len(errs) == 0 {
+			t.Errorf("%s: want refused, got %v", name, resp)
+			return
+		}
+		if msg, _ := errs[0].(map[string]any)["message"].(string); !strings.Contains(msg, "exceeds the limit of 2") {
+			t.Errorf("%s: message %q", name, msg)
+		}
+	}
+	refused("direct", `query { Demo { opA(id: "1") { id } } }`)
+	refused("fragment", `query { Demo { ...F } } fragment F on DemoQueryNamespace { opA(id: "1") { ... on Demo_Project { id } } }`)
+	if n := calls.Load(); n != 0 {
+		t.Errorf("handler ran %d times for refused queries", n)
+	}
+	if resp := mustGraphQL(t, gql, `query { Demo { __typename } }`); resp["errors"] != nil {
+		t.Errorf("depth 2 refused: %v", resp)
+	}
+	// A fragment cycle must not hang the depth walk (the spec's
+	// NoFragmentCycles rule reports it).
+	resp := mustGraphQL(t, gql, `query { Demo { ...A } } fragment A on DemoQueryNamespace { ...B } fragment B on DemoQueryNamespace { ...A }`)
+	if resp["errors"] == nil {
+		t.Errorf("fragment cycle accepted: %v", resp)
+	}
+}
+
+func TestDisableIntrospection(t *testing.T) {
+	srv, _ := newLimitsGat(t, func(g *gat.Gateway) { g.DisableIntrospection() })
+	gql := srv.URL + "/api/graphql"
+	for _, q := range []string{`{ __schema { queryType { name } } }`, `{ __type(name: "Query") { name } }`} {
+		resp := mustGraphQL(t, gql, q)
+		if resp["data"] != nil || resp["errors"] == nil {
+			t.Errorf("%s: want refused, got %v", q, resp)
+		}
+	}
+	if resp := mustGraphQL(t, gql, `query { Demo { __typename opA(id: "1") { id } } }`); resp["errors"] != nil {
+		t.Errorf("__typename refused: %v", resp)
+	}
+	if status, _ := getStatus(t, srv.URL+"/api/schema/graphql"); status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
+		t.Errorf("/schema/graphql still served: %d", status)
+	}
+}
+
+func getStatus(t *testing.T, url string) (int, error) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }

@@ -148,7 +148,9 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 		return err
 	}
 
-	mountSchemaEndpoints(api, g, prefix)
+	if !g.noIntrospection {
+		mountSchemaEndpoints(api, g, prefix)
+	}
 	mountGraphQLEndpoint(api, g, prefix)
 	mountSubscribe(api, g, prefix)
 	if g.mesh != nil {
