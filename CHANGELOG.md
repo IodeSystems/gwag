@@ -10,6 +10,10 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- **gat `@export` within one document.** A field reading a variable that
+  another field of the same query exports runs after it: gat splits the
+  document into stages at plan time and merges their data into one
+  response in query field order. One request, one result type.
 - **gat batched requests with `@export`.** A POST body that is an array
   of operations runs them in order; `@export(as: "x")` on a field passes
   its values (deduplicated; a list under a list) to the operations after

@@ -273,33 +273,51 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
 
 ## Dependent operations (instead of links)
 
-A fused query runs independent operations together. When the second
-call needs the first one's results — the orders, then the customers
-they name — send a **batch** and pass the values along with
-**`@export`**:
+A fused query runs independent operations together. When one call
+needs another's results — the orders, then the customers they name —
+mark the field with **`@export`** and read the variable in the same
+document:
 
-```json
-[
-  {"query": "{ Shop { listOrders(limit: 50) { id total customerId @export(as: \"ids\") } } }"},
-  {"query": "query ($ids: [String!]) { Shop { getCustomersById(ids: $ids) { id name } } }"}
-]
+```graphql
+query ($ids: [String!]) {
+  Shop {
+    listOrders(limit: 50) { id total customerId @export(as: "ids") }
+    getCustomersById(ids: $ids) { id name }
+  }
+}
 ```
 
-The response is an array with one result per operation. That is
-`orders.map(o => o.customerId)` written in GraphQL: one round trip, one
-call to each operation, no N+1.
+One request, one ordinary GraphQL response, one generated type for
+codegen. That is `orders.map(o => o.customerId)` written in GraphQL; no
+N+1: `getCustomersById` runs once with every id.
 
-- Operations run in order. `@export(as: "x")` on a field hands the
-  values it resolved to every operation after it as `$x`; variables the
-  client set itself win.
+How it runs: gat sees that `getCustomersById` reads `$ids`, which
+`listOrders` exports, and splits the document into stages at plan time
+(cached per document). Each stage is an ordinary document run by the
+ordinary executor; its exports fill the next stage's variables, and the
+stages' data merges into one response in the query's field order.
+
+- Branches and chains: independent fields share a stage (parallel
+  under `ParallelQueries`); a field reading two exports waits for both;
+  `A → B → C` is three stages. A cycle is refused (`EXPORT_DEPENDENCY`).
+- `$ids` is declared in the operation (optional) so the document
+  validates anywhere; a value the client sends wins over the export.
+- An export feeds operations, not a field inside another operation's
+  result. Results come back side by side, not nested: the client joins
+  `customerId` to `id`. Nesting needs the server to know the join —
+  links, below.
+- The same works as a **batch**: a POST body that is an array of
+  documents runs them in order, each one's exports feeding the next,
+  and answers with an array of results.
 - Values are deduplicated, so 50 orders naming 3 customers send 3 ids.
   A field under a list (or exported twice) exports a list; a single
   field exports a scalar.
-- Each entry is an ordinary operation: same huma middlewares, same
-  context, same handler as over REST and gRPC. The batch shares one
-  request scope, so `MaxOperations` (which also caps the batch length),
-  `Attrs`, cookies and the cache-header merge span all of it.
-- An entry refused before it runs (unknown document id, query text
+- Every step is an ordinary operation: same huma middlewares, same
+  context, same handler as over REST and gRPC. The document (or batch)
+  shares one request scope, so `MaxOperations` (which also caps a
+  batch's length), `Attrs`, cookies and the cache-header merge span all
+  of it.
+- A batch entry refused before it runs (unknown document id, query text
   under enforced trusted documents) gets an errors object in its slot;
   the others still run. Batches are POST only.
 - The lookup operation is a normal one. Give it a bounded list
@@ -311,8 +329,8 @@ inside the server ("`order.customer` calls the customer loader")
 looks convenient and brings the problems this avoids: N+1 calls that
 need batching machinery, fan-out nobody bounded (a list of orders,
 each with its list of items, each with…), a second auth path for the
-hidden calls, and fields that exist only over GraphQL. With a batch the
-client states the dependency, each step is an operation you already
+hidden calls, and fields that exist only over GraphQL. With `@export`
+the client states the dependency, each step is an operation you already
 test, and the size of every step is the size of a parameter you
 declared. OpenAPI response `links` on a huma operation stay
 documentation; gat logs a note pointing here when it sees one.

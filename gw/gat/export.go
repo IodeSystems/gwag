@@ -53,8 +53,9 @@ type exportPath struct {
 // does not re-parse its documents. Bounded: past the cap new documents
 // are parsed but not kept.
 type exportCache struct {
-	mu    sync.RWMutex
-	paths map[exportKey][]exportPath
+	mu     sync.RWMutex
+	paths  map[exportKey][]exportPath
+	stages map[exportKey]*stagedDoc // nil value: needs no staging
 }
 
 type exportKey struct{ query, operationName string }
@@ -84,6 +85,32 @@ func (c *exportCache) exportsFor(query, operationName string) []exportPath {
 	}
 	c.mu.Unlock()
 	return paths
+}
+
+// stagesFor returns the document's dependency stages (staging.go), nil
+// when it needs none — without parsing unless the text contains
+// "@export".
+func (c *exportCache) stagesFor(schema *graphql.Schema, query, operationName string) *stagedDoc {
+	if !strings.Contains(query, "@export") {
+		return nil
+	}
+	key := exportKey{query, operationName}
+	c.mu.RLock()
+	st, ok := c.stages[key]
+	c.mu.RUnlock()
+	if ok {
+		return st
+	}
+	st = planStages(schema, query, operationName)
+	c.mu.Lock()
+	if c.stages == nil {
+		c.stages = make(map[exportKey]*stagedDoc)
+	}
+	if len(c.stages) < exportCacheEntries {
+		c.stages[key] = st
+	}
+	c.mu.Unlock()
+	return st
 }
 
 // parseExports finds the @export fields of the selected operation. A

@@ -436,7 +436,7 @@ func (g *Gateway) Handler() http.Handler {
 		//
 		// Nothing here streams — ExecutePlanAppend assembles the bytes in
 		// memory — so deferring the header costs nothing.
-		res := g.execute(ctx, p, req.OperationName, req.Variables)
+		res := g.run(ctx, p, req.OperationName, req.Variables)
 
 		// Execution is done, so the sink now holds whatever the resolvers
 		// produced. Emit before WriteHeader — after it the header map is
@@ -554,6 +554,45 @@ func (r execResult) recycle() {
 	}
 }
 
+// run executes a planned request: in one pass, or — when fields of the
+// document feed each other through @export — stage by stage
+// (staging.go), merged into one response.
+func (g *Gateway) run(ctx context.Context, p plannedRequest, operationName string, variables map[string]any) execResult {
+	if p.pr.Plan == nil || len(p.pr.Errors) > 0 {
+		return g.execute(ctx, p, operationName, variables)
+	}
+	st := g.exports.stagesFor(g.schema, p.query, operationName)
+	if st == nil {
+		return g.execute(ctx, p, operationName, variables)
+	}
+	if st.err != nil {
+		return execResult{payload: appendCodedError(nil, st.err.Error(), "EXPORT_DEPENDENCY")}
+	}
+	exported := map[string]any{}
+	payloads := make([][]byte, 0, len(st.stages))
+	for _, stage := range st.stages {
+		vars := variables
+		if len(exported) > 0 {
+			// Exports fill the variables the client left unset.
+			vars = make(map[string]any, len(variables)+len(exported))
+			for k, v := range exported {
+				vars[k] = v
+			}
+			for k, v := range variables {
+				vars[k] = v
+			}
+		}
+		sp := plannedRequest{query: stage.query, pr: g.planCache.Get(g.schema, stage.query, operationName)}
+		res := g.execute(ctx, sp, operationName, vars)
+		payloads = append(payloads, append([]byte(nil), res.payload...))
+		if len(stage.exports) > 0 {
+			collectExports(stage.exports, res.payload, exported)
+		}
+		res.recycle()
+	}
+	return execResult{payload: mergeStageResults(payloads, st.order)}
+}
+
 // execute runs a planned request and returns its response JSON.
 func (g *Gateway) execute(ctx context.Context, p plannedRequest, operationName string, variables map[string]any) (res execResult) {
 	pr := p.pr
@@ -654,7 +693,7 @@ func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, batch []gql
 			}
 			vars = merged
 		}
-		res := g.execute(ctx, p, req.OperationName, vars)
+		res := g.run(ctx, p, req.OperationName, vars)
 		out = append(out, res.payload...)
 		if paths := g.exports.exportsFor(p.query, req.OperationName); paths != nil {
 			collectExports(paths, res.payload, exported)
