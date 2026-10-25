@@ -246,14 +246,15 @@ g.ParallelQueries(8) // before RegisterHuma
 ## Request limits (public APIs)
 
 ```go
-g.MaxOperations(32)       // operations per GraphQL request, aliases included
+g.MaxOperations(64)       // the default: operations per request, aliases included
 g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
 ```
 
 - `MaxOperations(n)`: operations past `n` in one request are not
   dispatched; each fails with a 400 field error. Counted at dispatch
   (an atomic add in the request scope), so aliases and fragments count
-  and nothing is re-parsed. Off by default.
+  and nothing is re-parsed. Default 64; `MaxOperations(0)` turns it
+  off.
 - `MaxRequestBytes(n)`: a larger GraphQL body gets 413 before it is
   decoded. On by default at 1 MiB, the limit huma applies to the same
   operation over REST. A declared `Content-Length` is checked for

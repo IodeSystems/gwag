@@ -2,6 +2,7 @@ package gat_test
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -138,5 +139,22 @@ func TestMutationOverGETIsRefused(t *testing.T) {
 	_ = json.Unmarshal(mustGET(t, srv.URL+"/api/graphql?query="+url.QueryEscape(`query { Demo { getA(id: "1") { id } } }`)), &resp)
 	if digPath(resp, "data", "Demo", "getA", "id") != "1" {
 		t.Errorf("GET query broke: %v", resp)
+	}
+}
+
+func TestMaxOperations_DefaultIs64(t *testing.T) {
+	srv, calls := newLimitsGat(t, func(*gat.Gateway) {})
+	var q strings.Builder
+	q.WriteString("query { Demo {")
+	for i := range 65 {
+		fmt.Fprintf(&q, ` a%d: opA(id: "%d") { id }`, i, i)
+	}
+	q.WriteString(" } }")
+	resp := mustGraphQL(t, srv.URL+"/api/graphql", q.String())
+	if n := calls.Load(); n != 64 {
+		t.Errorf("handler ran %d times, want 64", n)
+	}
+	if errs, _ := resp["errors"].([]any); len(errs) != 1 {
+		t.Errorf("%d errors, want 1", len(errs))
 	}
 }

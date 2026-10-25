@@ -13,7 +13,8 @@ are explicitly carved out from the promise.
 |---|---|---|
 | Imported names in `github.com/iodesystems/gwag/v2/gw` (default reflection path) | Stable. No renames / removals; new options are additive. | `// Stability: stable` in godoc |
 | Imported names in `github.com/iodesystems/gwag/v2/gw/ir` | Stable IR contract. Struct fields may be added; existing field semantics fixed. | `// Stability: stable` in godoc |
-| Imported names in `github.com/iodesystems/gwag/v2/gw/gat` | **Experimental.** Tier-2 work (proto ingest, `gwag serve`) may still reshape it. | `// Stability: experimental` in godoc |
+| `gw/gat` core: `Gateway`, `New`, `ServiceRegistration`, `Handler`, `Register`, `RegisterHuma`, `RegisterSSE`, `RegisterGRPC`, `HandleMux`; routes `{prefix}/graphql`, `{prefix}/schema/{graphql,proto,openapi}`, the gRPC procedure paths | Stable. | `// Stability: stable` in godoc |
+| Other imported names in `github.com/iodesystems/gwag/v2/gw/gat` | **Experimental.** Tier-2 work (proto ingest, `gwag serve`) may still reshape it. | `// Stability: experimental` in godoc |
 | Control-plane proto wire (`controlplane.v1`) | Stable. Field numbers locked; new fields ride on unused tags. | `gw/proto/controlplane/v1/` |
 | Admin huma surface (`/admin/*`) | Stable URLs + handlers, additive response fields | `gw/admin_huma.go` |
 | MCP tool names and prompt shapes | Experimental. Reflection-driven; subject to schema-naming-policy churn | `gw/mcp_tools.go` |
@@ -151,11 +152,12 @@ instead.
 
 ## What's experimental
 
-**`gw/gat`** — the embedded GraphQL translator. The current API
-captures the huma + GraphQL + connect-go-gRPC paired pattern, plus
-the `gwag serve` / `RegisterHTTP` / proto-ingest paths. Treat gat
-as the unstable testbed for "what if gwag were embedded?" — the
-shape may shift on a minor.
+**`gw/gat` outside its core** — the embedded GraphQL translator. The
+paired huma pattern (`New`, `Register`, `RegisterHuma`, `RegisterSSE`,
+`RegisterGRPC`, `Handler`) and its routes are stable. Everything else
+in the package — the request limits and attributes, trusted
+documents, dispatch hooks, `RegisterHTTP`, proto ingest, pubsub — is
+experimental and may shift on a minor.
 
 **Experimental escape-hatches inside `gw` / `gw/ir`.** A handful of
 recently-added symbols live in the otherwise-stable packages but carry

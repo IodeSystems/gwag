@@ -33,7 +33,8 @@ func (g *Gateway) ParallelQueries(n int) *Gateway {
 }
 
 // MaxOperations caps how many operations one GraphQL request may run,
-// aliases and fragments included (n <= 0: no cap). Operations past the
+// aliases and fragments included (default 64; n <= 0: no cap).
+// Operations past the
 // cap are not dispatched; each fails with a 400 field error, so a
 // request aliasing one operation a thousand times runs n of them, not
 // a thousand. The count is taken at dispatch — an atomic add in the

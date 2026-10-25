@@ -51,6 +51,13 @@ changes on MINOR, drops on MAJOR.
   wraps the handler invocation both surfaces share.
 
 ### Changed
+- **gat core API is stable**: `Gateway`, `New`, `ServiceRegistration`,
+  `Handler`, `Register`, `RegisterHuma`, `RegisterSSE`, `RegisterGRPC`,
+  `HandleMux`, and the `/graphql`, `/schema/*` and gRPC routes. The
+  rest of `gw/gat` stays experimental (`docs/stability.md`).
+- **gat runs at most 64 operations per GraphQL request** by default
+  (`MaxOperations`); excess aliases fail with 400 instead of
+  dispatching. `MaxOperations(0)` removes the cap.
 - **gat refuses GraphQL bodies over 1 MiB with 413** (`MaxRequestBytes`
   default), matching huma's REST limit for the same operation. Set
   `MaxRequestBytes(0)` for no limit.

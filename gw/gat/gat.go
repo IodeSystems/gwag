@@ -39,7 +39,7 @@ import (
 //     as dispatchers, builds the schema, and mounts the GraphQL +
 //     schema-view endpoints onto the adopter's huma router.
 //
-// Stability: experimental
+// Stability: stable
 type Gateway struct {
 	schema      *graphql.Schema
 	annotations *ir.AnnotationIndex
@@ -118,7 +118,7 @@ type Gateway struct {
 
 // ServiceRegistration pairs an IR service with its dispatch config.
 //
-// Stability: experimental
+// Stability: stable
 type ServiceRegistration struct {
 	Service     *ir.Service
 	BaseURL     string                        // upstream HTTP base URL for OpenAPI dispatch
@@ -147,13 +147,14 @@ type ServiceRegistration struct {
 //	})
 //	http.Handle("/graphql", gw.Handler())
 //
-// Stability: experimental
+// Stability: stable
 func New(regs ...ServiceRegistration) (*Gateway, error) {
 	g := &Gateway{
 		registry:       ir.NewDispatchRegistry(),
 		pubsub:         newPubSub(),
 		emptyNilSlices: true,
 		maxBody:        defaultMaxRequestBytes,
+		maxOps:         defaultMaxOperations,
 	}
 	if len(regs) == 0 {
 		// Empty gateway — adopter will populate via gat.Register and
@@ -314,7 +315,7 @@ func (g *Gateway) build() error {
 // subscriptions registered with Subscribe (a WebSocket upgrade on the
 // same path, graphql-transport-ws subprotocol).
 //
-// Stability: experimental
+// Stability: stable
 func (g *Gateway) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
@@ -607,6 +608,11 @@ func (g *Gateway) publish(channel string, payload []byte) {
 		g.mesh.fanout(channel, payload)
 	}
 }
+
+// defaultMaxOperations bounds the operations one GraphQL request may
+// run: enough for any page a client fuses, low enough that a body of
+// a thousand aliases cannot turn into a thousand handler calls.
+const defaultMaxOperations = 64
 
 // defaultMaxRequestBytes matches huma's default request body limit
 // (huma.Config MaxBodyBytes), so an operation accepts the same body

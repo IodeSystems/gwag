@@ -43,7 +43,7 @@ import (
 //
 // Must be called before RegisterHuma.
 //
-// Stability: experimental
+// Stability: stable
 func RegisterSSE[I any](api huma.API, g *Gateway, op huma.Operation, eventTypeMap map[string]any, f func(ctx context.Context, input *I, send sse.Sender)) {
 	sse.Register(api, op, eventTypeMap, f)
 	if g.built {
