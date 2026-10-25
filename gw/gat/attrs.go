@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 )
 
 // requestScope is gat's per-inbound-request state: the transport
@@ -25,6 +26,9 @@ type requestScope struct {
 	cookies *cookieSink // &sink on transports that emit cookies, else nil
 	own     Attrs
 	sink    cookieSink
+	// inflight counts operations of this request running on their own
+	// goroutine (ParallelQueries).
+	inflight atomic.Int32
 }
 
 type scopeKey struct{}

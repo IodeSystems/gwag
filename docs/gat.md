@@ -219,6 +219,30 @@ api.UseMiddleware(func(hctx huma.Context, next func(huma.Context)) {
 - No bag in the context (a call gat did not scope): nothing is shared
   and `fill` runs every time.
 
+## Parallel queries
+
+Fused query operations run one after another by default: two 100ms
+operations take 200ms. `ParallelQueries(n)` runs up to `n` of them at
+once per request, so the request takes as long as the slowest one:
+
+```go
+g, _ := gat.New()
+g.ParallelQueries(8) // before RegisterHuma
+```
+
+- Queries only. Mutations stay serial, as the GraphQL spec requires.
+  gRPC and REST calls carry one operation and are unaffected.
+- Past `n`, operations run inline on the request goroutine, so at most
+  `n` goroutines plus the request goroutine work at once.
+- A panic in a handler becomes that field's error; siblings keep their
+  data.
+- Handlers, huma middlewares and the `ObserveDispatch` observer run
+  concurrently. Per-request state they shared without a lock must move
+  to `Attrs` (above): `LockIfAbsentAndFill` makes one sibling resolve
+  the session while the rest wait.
+- Cost when on: 3 allocations (~120 B) per query operation, including
+  requests that fuse nothing (`BenchmarkParallelQueries_OneOp`).
+
 ## Incremental adoption
 
 `gat.Register` is opt-in per operation. Plain `huma.Register`

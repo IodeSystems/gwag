@@ -16,6 +16,9 @@ changes on MINOR, drops on MAJOR.
   `gat.LockIfAbsentAndFill` computes a value once while concurrent
   callers wait, so a session lookup runs once per request, not once per
   operation. `gat.AttrsMiddleware` scopes REST requests.
+- **gat parallel queries.** `ParallelQueries(n)` runs up to `n` query
+  operations of one GraphQL request concurrently; mutations stay
+  serial. Off by default.
 
 ## v2.3.1 — 2026-10-22
 

@@ -89,6 +89,10 @@ type Gateway struct {
 	// operation dispatch for per-operation metrics. nil = no observation.
 	observe DispatchObserver
 
+	// parallel caps how many query operations of one GraphQL request run
+	// concurrently (ParallelQueries). 0 = serial, the default.
+	parallel int
+
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
 	// cross-node fanout layer — nil until EnablePeerMesh is called.
@@ -217,6 +221,7 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 // are added between rounds (RegisterHuma does this when paired
 // captured ops are present).
 func (g *Gateway) build() error {
+	g.wrapParallel()
 	longScalar, jsonScalar := ir.StandardScalarsWith(g.longAsNumber)
 	annotations := ir.NewAnnotationIndex()
 	schema, err := ir.RenderGraphQLRuntime(g.services, g.registry, ir.RuntimeOptions{
