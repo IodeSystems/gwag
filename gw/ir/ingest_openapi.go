@@ -546,7 +546,10 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 			OpenAPILocation: p.In,
 		}
 		if p.Schema != nil && p.Schema.Value != nil {
-			arg.Type = openapiPropToField(svc, opHint+pascalIdent(p.Name), p.Name, p.Schema, p.Required).Type
+			// Keep the list-ness: an array query param (?ids=a&ids=b) is
+			// a list argument, not a string.
+			f := openapiPropToField(svc, opHint+pascalIdent(p.Name), p.Name, p.Schema, p.Required)
+			arg.Type, arg.Repeated, arg.ItemRequired = f.Type, f.Repeated, f.ItemRequired
 		} else {
 			arg.Type = TypeRef{Builtin: ScalarString}
 		}
@@ -575,9 +578,13 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 		}
 	}
 
-	// Response: prefer 200, then 201, then default. One TypeRef.
+	// Response: prefer 200, then 201, then default. An array body is a
+	// list output.
 	if op.Responses != nil {
-		out.Output = openapiResponseTypeRef(svc, opHint, op.Responses)
+		if f := openapiResponseField(svc, opHint, op.Responses); f != nil {
+			out.Output = &f.Type
+			out.OutputRepeated, out.OutputItemRequired = f.Repeated, f.ItemRequired
+		}
 	}
 	return out
 }
@@ -631,20 +638,18 @@ func ingestOpenAPIFormDataBody(svc *Service, out *Operation, opHint string, s *o
 	_ = body
 }
 
-func openapiResponseTypeRef(svc *Service, opHint string, r *openapi3.Responses) *TypeRef {
+func openapiResponseField(svc *Service, opHint string, r *openapi3.Responses) *Field {
 	for _, code := range []string{"200", "201"} {
 		resp := r.Status(parseStatusCode(code))
 		if resp != nil && resp.Value != nil {
 			if mt, ok := resp.Value.Content["application/json"]; ok && mt.Schema != nil {
-				ref := openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false).Type
-				return &ref
+				return openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false)
 			}
 		}
 	}
 	if def := r.Default(); def != nil && def.Value != nil {
 		if mt, ok := def.Value.Content["application/json"]; ok && mt.Schema != nil {
-			ref := openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false).Type
-			return &ref
+			return openapiPropToField(svc, opHint+"Response", "response", mt.Schema, false)
 		}
 	}
 	return nil

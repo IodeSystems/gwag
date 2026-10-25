@@ -98,7 +98,16 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 		case "path":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p.Name+"}", url.PathEscape(strVal))
 		case "query":
-			queryArgs.Add(p.Name, strVal)
+			// A list argument is an array param: repeat the key per
+			// element (form, explode — OpenAPI's default for query
+			// arrays), not one "[a b]" string.
+			if list, ok := v.([]any); ok {
+				for _, e := range list {
+					queryArgs.Add(p.Name, fmt.Sprintf("%v", e))
+				}
+			} else {
+				queryArgs.Add(p.Name, strVal)
+			}
 		}
 	}
 

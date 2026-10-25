@@ -216,7 +216,7 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		if err != nil {
 			return nil, handlerErrorToConnect(err)
 		}
-		body := extractBody(out)
+		body := wrapResponseValue(extractBody(out))
 
 		if outPlan != nil {
 			// Hand over the value, not a message: the codec encodes it.
@@ -230,6 +230,26 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		}
 		return connect.NewResponse(newBuiltResult(md.Output(), respMsg)), nil
 	}
+}
+
+// wrapResponseValue puts a list or scalar body under "value". A proto
+// method returns a message, so an operation answering with a list or a
+// scalar gets a synthesized `{ value }` response message
+// (ir.synthResponseMessage). A struct or map body is that message
+// already and passes through.
+func wrapResponseValue(body any) any {
+	v := reflect.ValueOf(body)
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return body
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Invalid, reflect.Struct, reflect.Map:
+		return body
+	}
+	return map[string]any{"value": body}
 }
 
 // newConnectBinder returns the request binder for one method: proto

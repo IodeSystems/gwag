@@ -51,6 +51,12 @@ changes on MINOR, drops on MAJOR.
   before anything runs; GraphQL over HTTP forbids them there.
 
 ### Fixed
+- **OpenAPI array query parameters and array responses keep their list
+  type.** Ingest dropped it: `?ids=a&ids=b` became a `String` argument
+  and a JSON-array response a single object (fields read as null), in
+  gat and gwag, over GraphQL and gRPC. Outbound OpenAPI calls now send a
+  list argument as repeated keys instead of `ids=[a b]`, and gat's gRPC
+  ingress answers list operations under the response message's `value`.
 - **gat GET requests read `variables` and `extensions`.** They were
   ignored, so a GET query with variables failed.
 - **gat `ObserveDispatch` now fires for gRPC calls.** gRPC ingress
@@ -58,6 +64,9 @@ changes on MINOR, drops on MAJOR.
   wraps the handler invocation both surfaces share.
 
 ### Changed
+- **GraphQL and proto types change for OpenAPI array parameters and
+  array responses** (the fix above): `ids: String` → `ids: [String!]`,
+  `listThings: Thing` → `listThings: [Thing!]`. Regenerate clients.
 - **gat core API is stable**: `Gateway`, `New`, `ServiceRegistration`,
   `Handler`, `Register`, `RegisterHuma`, `RegisterSSE`, `RegisterGRPC`,
   `HandleMux`, and the `/graphql`, `/schema/*` and gRPC routes. The
