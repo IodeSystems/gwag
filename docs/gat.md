@@ -243,6 +243,22 @@ g.ParallelQueries(8) // before RegisterHuma
 - Cost when on: 3 allocations (~120 B) per query operation, including
   requests that fuse nothing (`BenchmarkParallelQueries_OneOp`).
 
+## Request limits (public APIs)
+
+```go
+g.MaxOperations(32)       // operations per GraphQL request, aliases included
+g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
+```
+
+- `MaxOperations(n)`: operations past `n` in one request are not
+  dispatched; each fails with a 400 field error. Counted at dispatch
+  (an atomic add in the request scope), so aliases and fragments count
+  and nothing is re-parsed. Off by default.
+- `MaxRequestBytes(n)`: a larger GraphQL body gets 413 before it is
+  decoded. On by default at 1 MiB, the limit huma applies to the same
+  operation over REST. A declared `Content-Length` is checked for
+  free; only chunked bodies pay for a limiting reader.
+
 ## Incremental adoption
 
 `gat.Register` is opt-in per operation. Plain `huma.Register`

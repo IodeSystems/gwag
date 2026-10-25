@@ -19,6 +19,14 @@ changes on MINOR, drops on MAJOR.
 - **gat parallel queries.** `ParallelQueries(n)` runs up to `n` query
   operations of one GraphQL request concurrently; mutations stay
   serial. Off by default.
+- **gat request limits.** `MaxOperations(n)` caps operations per GraphQL
+  request (aliases included; excess ones fail with 400, not dispatched).
+  `MaxRequestBytes(n)` caps the GraphQL body.
+
+### Changed
+- **gat refuses GraphQL bodies over 1 MiB with 413** (`MaxRequestBytes`
+  default), matching huma's REST limit for the same operation. Set
+  `MaxRequestBytes(0)` for no limit.
 
 ## v2.3.1 — 2026-10-22
 

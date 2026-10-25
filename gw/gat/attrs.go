@@ -27,8 +27,10 @@ type requestScope struct {
 	own     Attrs
 	sink    cookieSink
 	// inflight counts operations of this request running on their own
-	// goroutine (ParallelQueries).
+	// goroutine (ParallelQueries); ops counts operations dispatched
+	// (MaxOperations).
 	inflight atomic.Int32
+	ops      atomic.Int32
 }
 
 type scopeKey struct{}

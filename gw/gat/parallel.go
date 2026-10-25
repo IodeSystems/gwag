@@ -3,6 +3,7 @@ package gat
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
@@ -31,41 +32,94 @@ func (g *Gateway) ParallelQueries(n int) *Gateway {
 	return g
 }
 
-// wrapParallel swaps every query operation's dispatcher for a
-// parallelDispatcher. Run by build(), which may run more than once, so
-// already-wrapped dispatchers are left alone.
-func (g *Gateway) wrapParallel() {
-	if g.parallel <= 0 {
+// MaxOperations caps how many operations one GraphQL request may run,
+// aliases and fragments included (n <= 0: no cap). Operations past the
+// cap are not dispatched; each fails with a 400 field error, so a
+// request aliasing one operation a thousand times runs n of them, not
+// a thousand. The count is taken at dispatch — an atomic add in the
+// request scope, no parse.
+//
+// Call before the schema builds. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) MaxOperations(n int) *Gateway {
+	g.maxOps = n
+	return g
+}
+
+// wrapLimits puts a limitDispatcher in front of every operation's
+// dispatcher when ParallelQueries or MaxOperations is set. Run by
+// build(), which may run more than once, so already-wrapped
+// dispatchers are left alone.
+func (g *Gateway) wrapLimits() {
+	if g.parallel <= 0 && g.maxOps <= 0 {
 		return
 	}
 	for _, svc := range g.services {
 		for _, op := range svc.FlatOperations() {
-			if op.Kind != ir.OpQuery {
+			if op.Kind == ir.OpSubscription {
 				continue
 			}
 			d := g.registry.Get(op.SchemaID)
 			if d == nil {
 				continue
 			}
-			if _, done := d.(*parallelDispatcher); done {
+			if _, done := d.(*limitDispatcher); done {
 				continue
 			}
-			g.registry.Set(op.SchemaID, &parallelDispatcher{inner: d, limit: int32(g.parallel)})
+			ld := &limitDispatcher{inner: d, maxOps: int32(max(g.maxOps, 0))}
+			if op.Kind == ir.OpQuery {
+				ld.parallel = int32(max(g.parallel, 0))
+			}
+			g.registry.Set(op.SchemaID, ld)
 		}
 	}
 }
 
-// parallelDispatcher runs its inner dispatcher on a goroutine and
-// returns a thunk — func() (interface{}, error) — in place of the
-// result. The executor's two-phase walker calls every resolver of a
-// selection set before awaiting any thunk, so sibling operations
-// overlap. Only the GraphQL resolver calls Dispatch on gat's registry,
-// and it hands the result straight to the executor, which is what
-// makes returning a thunk sound.
-type parallelDispatcher struct {
-	inner ir.Dispatcher
-	limit int32
+// limitDispatcher applies the per-request limits in one hop: the
+// operation cap, then (queries only) parallel dispatch. Only the
+// GraphQL resolver calls Dispatch on gat's registry, and it hands the
+// result straight to the executor — which is what makes returning a
+// thunk sound.
+type limitDispatcher struct {
+	inner    ir.Dispatcher
+	maxOps   int32 // 0 = no cap
+	parallel int32 // 0 = serial
 }
+
+func (d *limitDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	s := scopeFrom(ctx)
+	if s == nil {
+		return d.inner.Dispatch(ctx, args)
+	}
+	if d.maxOps > 0 {
+		if n := s.ops.Add(1); n > d.maxOps {
+			return nil, withStatusExtensions(&opLimitError{max: d.maxOps})
+		}
+	}
+	if d.parallel == 0 {
+		return d.inner.Dispatch(ctx, args)
+	}
+	if s.inflight.Add(1) > d.parallel {
+		s.inflight.Add(-1)
+		return d.inner.Dispatch(ctx, args)
+	}
+	// The executor's two-phase walker calls every resolver of a
+	// selection set before awaiting any thunk — func() (interface{},
+	// error) — so sibling operations overlap.
+	r := &parallelResult{}
+	r.wg.Add(1)
+	go r.run(ctx, d.inner, args, s)
+	return r.await, nil
+}
+
+type opLimitError struct{ max int32 }
+
+func (e *opLimitError) Error() string {
+	return fmt.Sprintf("gat: request exceeds %d operations", e.max)
+}
+
+func (e *opLimitError) GetStatus() int { return http.StatusBadRequest }
 
 // parallelResult is the one allocation a parallel dispatch adds: the
 // goroutine writes it, the thunk reads it after wg.Wait.
@@ -73,21 +127,6 @@ type parallelResult struct {
 	wg  sync.WaitGroup
 	val any
 	err error
-}
-
-func (d *parallelDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
-	s := scopeFrom(ctx)
-	if s == nil {
-		return d.inner.Dispatch(ctx, args)
-	}
-	if s.inflight.Add(1) > d.limit {
-		s.inflight.Add(-1)
-		return d.inner.Dispatch(ctx, args)
-	}
-	r := &parallelResult{}
-	r.wg.Add(1)
-	go r.run(ctx, d.inner, args, s)
-	return r.await, nil
 }
 
 func (r *parallelResult) run(ctx context.Context, inner ir.Dispatcher, args map[string]any, s *requestScope) {

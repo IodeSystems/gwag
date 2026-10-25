@@ -8,6 +8,7 @@ package gat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -90,8 +91,12 @@ type Gateway struct {
 	observe DispatchObserver
 
 	// parallel caps how many query operations of one GraphQL request run
-	// concurrently (ParallelQueries). 0 = serial, the default.
+	// concurrently (ParallelQueries). 0 = serial, the default. maxOps caps
+	// operations per request (MaxOperations); 0 = no cap. maxBody caps
+	// the GraphQL request body (MaxRequestBytes).
 	parallel int
+	maxOps   int
+	maxBody  int64
 
 	// pubsub is gat's in-process publish/subscribe primitive, always
 	// available via PubSub(). mesh is the optional best-effort
@@ -141,6 +146,7 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 		registry:       ir.NewDispatchRegistry(),
 		pubsub:         newPubSub(),
 		emptyNilSlices: true,
+		maxBody:        defaultMaxRequestBytes,
 	}
 	if len(regs) == 0 {
 		// Empty gateway — adopter will populate via gat.Register and
@@ -180,6 +186,16 @@ func (g *Gateway) EmptyNilSlices(b bool) *Gateway {
 // server-side timing hook around each resolver→handler call — so consumers can emit per-operation
 // metrics (rate/errors/latency) the way an AOP pointcut did. Keep it cheap; it runs on the hot path.
 type DispatchObserver func(operationID string, dur time.Duration, err error)
+
+// MaxRequestBytes caps the GraphQL request body (default 1 MiB, huma's
+// REST default; n <= 0: no cap). A larger body is refused with 413
+// before it is decoded. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) MaxRequestBytes(n int64) *Gateway {
+	g.maxBody = n
+	return g
+}
 
 // ObserveDispatch sets the per-operation dispatch observer (see DispatchObserver). Call before the
 // schema builds (the dispatchers capture it at build time). Returns g for chaining; a no-op once
@@ -221,7 +237,7 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 // are added between rounds (RegisterHuma does this when paired
 // captured ops are present).
 func (g *Gateway) build() error {
-	g.wrapParallel()
+	g.wrapLimits()
 	longScalar, jsonScalar := ir.StandardScalarsWith(g.longAsNumber)
 	annotations := ir.NewAnnotationIndex()
 	schema, err := ir.RenderGraphQLRuntime(g.services, g.registry, ir.RuntimeOptions{
@@ -269,12 +285,29 @@ func (g *Gateway) Handler() http.Handler {
 		)
 
 		if r.Method == http.MethodPost {
+			body := r.Body
+			if g.maxBody > 0 {
+				// A declared length is checked up front for free; only a
+				// chunked body pays for the limiting reader.
+				if r.ContentLength > g.maxBody {
+					writeError(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+				if r.ContentLength < 0 {
+					body = http.MaxBytesReader(w, r.Body, g.maxBody)
+				}
+			}
 			var req struct {
 				Query         string         `json:"query"`
 				Variables     map[string]any `json:"variables"`
 				OperationName string         `json:"operationName"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := json.NewDecoder(body).Decode(&req); err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					writeError(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				writeError(w, "invalid JSON", http.StatusBadRequest)
 				return
 			}
@@ -470,6 +503,11 @@ func (g *Gateway) publish(channel string, payload []byte) {
 		g.mesh.fanout(channel, payload)
 	}
 }
+
+// defaultMaxRequestBytes matches huma's default request body limit
+// (huma.Config MaxBodyBytes), so an operation accepts the same body
+// size over GraphQL as over REST.
+const defaultMaxRequestBytes = 1 << 20
 
 // planCacheEntries bounds the parsed-query cache. gat fronts one
 // binary's own operations, so the realistic working set is the query

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -32,6 +33,14 @@ func adapterRequest(ctx huma.Context) *http.Request {
 	}
 	if r.URL == nil {
 		r.URL = &url.URL{Path: ctx.URL().Path}
+	}
+	// NewRequest can't see the length through the NopCloser; without it
+	// every body would read as chunked (-1) to MaxRequestBytes.
+	r.ContentLength = -1
+	if cl := ctx.Header("Content-Length"); cl != "" {
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
+			r.ContentLength = n
+		}
 	}
 	return r
 }
