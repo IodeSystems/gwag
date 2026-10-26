@@ -9,6 +9,8 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.4.0 — 2026-10-26
+
 ### Added
 - **gat `@export` within one document.** A field reading a variable that
   another field of the same query exports runs after it: gat splits the
@@ -89,6 +91,10 @@ changes on MINOR, drops on MAJOR.
   default), matching huma's REST limit for the same operation. Set
   `MaxRequestBytes(0)` for no limit.
 - **graphql-go fork v2.1.0**: `PlanCacheOptions.Rules`, `Plan.IsMutation`.
+- **gat allocates less per request.** Mounted endpoints use the
+  adapter's own request on humago/humachi/humamux/humaflow, and binary
+  proto requests decode straight into the input struct (gatbench:
+  GraphQL Get 88 → 74 allocs/op, Connect proto Get 69 → 59).
 
 ## v2.3.1 — 2026-10-22
 
