@@ -22,6 +22,9 @@ type dispatchAccumulatorKey struct{}
 type dispatchAccumulator struct {
 	Sum   atomic.Int64
 	Count atomic.Int64
+	// start is when the request began, for an ingress that reads it
+	// back from the context (the GraphQL handler's done hook).
+	start time.Time
 }
 
 // withDispatchAccumulator installs a fresh accumulator on ctx and

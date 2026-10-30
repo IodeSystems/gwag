@@ -29,6 +29,9 @@ func (g *Gateway) assembleLocked() error {
 	}
 	g.schema.Store(schema)
 	g.schemaAnnotations.Store(annotations)
+	if err := g.gql.SetSchema(schema, annotations, nil); err != nil {
+		return err
+	}
 	if !g.cfg.disableGraphiQL {
 		g.graphiqlHandler.Store(newGraphiqlServer(schema))
 	}

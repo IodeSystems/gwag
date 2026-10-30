@@ -172,7 +172,7 @@ anything. Two limits are on by default:
 
 | Option | Default | What it refuses |
 |---|---|---|
-| `WithMaxOperations(n)` | 64 | A document selecting more than `n` operations, aliases and fragment spreads included. |
+| `WithMaxOperations(n)` | 64 | A document selecting more than `n` operations, aliases and fragment spreads included; a batch (JSON array body) of more than `n` documents. |
 | `WithMaxRequestBytes(n)` | 1 MiB | A non-multipart body over `n` bytes (413). Upload bodies follow `WithUploadLimit`. |
 | `WithMaxDepth(n)` | off | Fields nested deeper than `n`, the namespace field included. |
 | `WithoutIntrospection()` | off | `__schema` / `__type`. The schema export handlers keep serving; mount them where only your tooling reaches them. |
@@ -180,6 +180,10 @@ anything. Two limits are on by default:
 Pass `0` to turn a default off. The operation, depth and introspection
 checks are validation rules in the plan cache: each runs once per
 distinct query, and a cache hit pays nothing.
+
+A body that is not valid JSON, carries no query, or has `variables`
+that are not an object (or a string holding one) is refused with 400
+before any of this runs.
 
 ### Trusted documents
 

@@ -7,8 +7,6 @@ package gateway
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,12 +19,12 @@ import (
 	"time"
 
 	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/iodesystems/gwag/v2/gw/gat"
 	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
@@ -172,6 +170,12 @@ type Gateway struct {
 	// vendored graphiqlServer in gw/graphiql.go.
 	graphiqlHandler atomic.Pointer[graphiqlServer]
 
+	// gql serves Handler: gat's GraphQL request path with gwag's
+	// hooks (graphql_handler.go). assembleLocked hands it each schema.
+	gql *gat.Gateway
+	// graphqlDone is graphqlRequestDone as a func value, made once.
+	graphqlDone func(context.Context)
+
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
 	lifeCancel context.CancelFunc
@@ -282,7 +286,7 @@ type config struct {
 	maxDepth        int
 	noIntrospection bool
 	maxRequestBytes int64
-	trusted         *gqlguard.TrustedDocs
+	trusted         *trustedDocsConfig
 
 	// disableGraphiQL skips construction of the cached GraphiQL UI
 	// handler and routes browser requests through the JSON path.
@@ -1025,7 +1029,14 @@ const DefaultMaxRequestBytes = 1 << 20
 //
 // Stability: experimental
 func WithTrustedDocuments(docs map[string]string, enforce bool) Option {
-	return func(cfg *config) { cfg.trusted = gqlguard.NewTrustedDocs(docs, enforce) }
+	return func(cfg *config) { cfg.trusted = &trustedDocsConfig{docs: docs, enforce: enforce} }
+}
+
+// trustedDocsConfig is WithTrustedDocuments' arguments, handed to the
+// GraphQL handler's gat.TrustedDocuments.
+type trustedDocsConfig struct {
+	docs    map[string]string
+	enforce bool
 }
 
 // ParseTrustedDocuments reads a persisted-documents manifest: a JSON
@@ -1296,6 +1307,7 @@ func New(opts ...Option) *Gateway {
 			pm.registry.MustRegister(newPlanCacheCollector(g.planCache, pm.prefix))
 		}
 	}
+	g.gql = g.newGraphQLIngress()
 	// Auto-install gwag.ps.v1.PubSub when a cluster is bound — the
 	// pub/sub primitive needs NATS to do anything useful. Standalone
 	// gateways skip the install (schema doesn't surface ps.pub/ps.sub),
@@ -1965,256 +1977,7 @@ func (g *Gateway) Handler() http.Handler {
 	}
 	g.mu.Unlock()
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isWebSocketUpgrade(r) {
-			release, reason, ok := g.wsLimit.acquire(r)
-			if !ok {
-				g.cfg.metrics.RecordWSRejected(reason)
-				http.Error(w, "ws limit exceeded: "+reason, http.StatusTooManyRequests)
-				return
-			}
-			defer release()
-			// WebSocket subscriptions live as long as the client stays
-			// connected; request_*_seconds is a per-request histogram,
-			// not a per-stream-lifetime one. Skip recording.
-			g.serveWebSocket(w, r)
-			return
-		}
-		schema := g.schema.Load()
-		ctx := g.tracer.extractHTTP(r.Context(), r.Header)
-		ctx, span := g.tracer.startIngressSpan(ctx, "gateway.graphql",
-			ingressAttr("graphql"),
-			httpMethodAttr(r.Method),
-			httpTargetAttr(r.URL.Path),
-		)
-		defer span.End()
-		ctx = withTracer(ctx, g.tracer)
-		ctx, accum := withDispatchAccumulator(ctx)
-		ctx = withInjectCache(ctx)
-		ctx = withHTTPRequest(ctx, r)
-		start := time.Now()
-		// Browser UI render — rare, never on the hot path. The cached
-		// graphql-go/handler is built once per assembleLocked so this
-		// branch costs no per-request alloc. WithoutGraphiQL() drops
-		// the cache and falls through to the JSON path.
-		if gh := g.graphiqlHandler.Load(); gh != nil && isGraphiQLRequest(r) {
-			gh.ServeHTTP(w, r.WithContext(ctx))
-		} else {
-			g.serveGraphQLJSON(ctx, schema, w, r)
-		}
-		total := time.Since(start)
-		dispatchSum := time.Duration(accum.Sum.Load())
-		g.cfg.metrics.RecordRequest("graphql", total, total-dispatchSum)
-		g.logRequestLine("graphql", r.URL.Path, total, dispatchSum, int(accum.Count.Load()))
-	})
-}
-
-// isGraphiQLRequest mirrors graphql-go/handler's GraphiQL trigger:
-// non-raw browser requests asking for text/html and not application/json.
-// We detect this up front so the JSON hot path doesn't need to thread
-// through handler.Handler.
-func isGraphiQLRequest(r *http.Request) bool {
-	if _, raw := r.URL.Query()["raw"]; raw {
-		return false
-	}
-	accept := r.Header.Get("Accept")
-	if strings.Contains(accept, "application/json") {
-		return false
-	}
-	return strings.Contains(accept, "text/html")
-}
-
-// serveGraphQLJSON is the GraphQL execute + JSON response path with
-// the parsed+validated AST cache inserted between request parsing and
-// graphql.Execute. Equivalent in behavior to graphql-go/handler.New
-// with Pretty: true on a hit; on a miss we go through parser.Parse +
-// graphql.ValidateDocument once and store the result.
-func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, w http.ResponseWriter, r *http.Request) {
-	// Cap inline multipart bodies at WithUploadLimit so a misbehaving
-	// client can't push an unbounded body through the parser. The cap
-	// is enforced via MaxBytesReader (the reader returns an error once
-	// the limit is exceeded; the multipart machinery surfaces that
-	// error to the GraphQL ingress, which renders the JSON error
-	// envelope downstream). MaxBytesReader writes a 413 to w on
-	// overshoot, which the existing parseErr handling then overrides
-	// with our richer envelope — that's fine since headers haven't
-	// been flushed yet.
-	if r.Body != nil && r.Method == http.MethodPost {
-		multipart := strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/")
-		switch max := g.cfg.maxRequestBytes; {
-		case multipart:
-			if g.cfg.uploadLimit > 0 {
-				r.Body = http.MaxBytesReader(w, r.Body, g.cfg.uploadLimit)
-			}
-		case max <= 0:
-		case r.ContentLength > max:
-			// A declared length is checked up front for free; only a
-			// chunked body pays for the limiting reader.
-			writeCodedError(w, "request body too large", "BAD_REQUEST", http.StatusRequestEntityTooLarge)
-			return
-		case r.ContentLength < 0:
-			r.Body = http.MaxBytesReader(w, r.Body, max)
-		}
-	}
-	opts, parseErr := parseGraphqlRequest(r)
-	if tooLarge := (*http.MaxBytesError)(nil); parseErr != nil && errors.As(parseErr, &tooLarge) && !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
-		writeCodedError(w, "request body too large", "BAD_REQUEST", http.StatusRequestEntityTooLarge)
-		return
-	}
-	if parseErr != nil {
-		// Today this fires only on a malformed multipart/form-data
-		// body — the JSON / form parsers still degrade silently to an
-		// empty options struct, matching the upstream handler. Surface
-		// the multipart parse failure as a GraphQL errors envelope so
-		// uploaders get a recognisable message instead of "no query".
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(&graphql.Result{
-			Errors: []gqlerrors.FormattedError{gqlerrors.NewFormattedError(parseErr.Error())},
-		})
-		return
-	}
-
-	var pr graphql.PlanResult
-	if t := g.cfg.trusted; t != nil || opts.DocumentID != "" || opts.Extensions != nil {
-		var (
-			msg, code string
-			status    int
-		)
-		opts.Query, pr, status, msg, code = g.planTrusted(schema, opts)
-		if status != 0 {
-			writeCodedError(w, msg, code, status)
-			return
-		}
-	} else {
-		pr = g.planCache.Get(schema, opts.Query, opts.OperationName)
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	// GraphQL over HTTP forbids mutations on GET. Running one would let
-	// any page fire it with a visitor's cookies — forwarded upstream by
-	// ForwardHeaders — through a link or an <img src>.
-	if r.Method == http.MethodGet && pr.Plan != nil && pr.Plan.IsMutation() {
-		w.Header().Set("Allow", http.MethodPost)
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(&graphql.Result{
-			Errors: []gqlerrors.FormattedError{gqlerrors.NewFormattedError("mutations are not allowed over GET; use POST")},
-		})
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-
-	switch {
-	case len(pr.Errors) > 0:
-		// Pre-execution errors (parse / validate). Rare path; small
-		// payload; the encoder is fine here.
-		_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: pr.Errors})
-	case pr.Plan != nil:
-		args := opts.Variables
-		if len(pr.SynthArgs) > 0 {
-			merged := make(map[string]interface{}, len(args)+len(pr.SynthArgs))
-			for k, v := range args {
-				merged[k] = v
-			}
-			for k, v := range pr.SynthArgs {
-				merged[k] = v
-			}
-			args = merged
-		}
-		// Append-mode hot path: walk the cached plan, emit JSON
-		// straight into a pooled buffer, write bytes to the wire.
-		// Skips the `map[string]any` result tree + scalar boxing +
-		// final json.Encode at the egress — the fork's ExecutePlan
-		// vs ExecutePlanAppend benchmarks show ~42% alloc reduction
-		// on this codepath.
-		buf := graphqlBufPool.Get().(*[]byte)
-		body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
-			Schema:        *schema,
-			OperationName: opts.OperationName,
-			Args:          args,
-			Context:       ctx,
-		}, (*buf)[:0])
-		if len(errs) > 0 {
-			// Spec-level errors (variable coercion, etc.) occurred
-			// before data assembly. ExecutePlanAppend's doc says the
-			// caller decides whether to surface them separately or
-			// fold them into a fresh response — we emit a clean
-			// errors envelope so the partial bytes (if any) don't
-			// confuse downstream clients.
-			_ = json.NewEncoder(w).Encode(&graphql.Result{Errors: errs})
-		} else {
-			_, _ = w.Write(body)
-		}
-		// Pool the (possibly grown) backing array unless it ballooned
-		// — a one-off MB response shouldn't pin a fat alloc forever.
-		if cap(body) <= graphqlBufPoolMax {
-			*buf = body[:0]
-			graphqlBufPool.Put(buf)
-		}
-	default:
-		// Plan == nil with no errors shouldn't happen, but stay
-		// safe by deferring to graphql.Do (parse + validate +
-		// plan + execute).
-		_ = json.NewEncoder(w).Encode(graphql.Do(graphql.Params{
-			Schema:         *schema,
-			RequestString:  opts.Query,
-			RootObject:     nil,
-			VariableValues: opts.Variables,
-			OperationName:  opts.OperationName,
-			Context:        ctx,
-		}))
-	}
-}
-
-// planTrusted resolves a request that may name a persisted document
-// (WithTrustedDocuments) and plans it. A non-zero status is a refusal
-// to write instead of executing. It returns the document text the
-// plan came from.
-func (g *Gateway) planTrusted(schema *graphql.Schema, opts *graphqlRequestOptions) (query string, pr graphql.PlanResult, status int, msg, code string) {
-	t := g.cfg.trusted
-	id := gqlguard.PersistedID(opts.DocumentID, opts.Extensions)
-	switch {
-	case id != "" && t == nil:
-		return "", pr, http.StatusBadRequest, "persisted documents are not enabled", "PERSISTED_QUERY_NOT_SUPPORTED"
-	case id != "":
-		key, doc, ok := t.Lookup(id)
-		switch {
-		case ok:
-			return doc, t.Plan(g.planCache, schema, key, doc, opts.OperationName), 0, "", ""
-		case opts.Query != "" && !t.Enforce:
-			// APQ sends the hash with the query on retry; without
-			// enforcement the query alone is enough.
-		default:
-			return "", pr, http.StatusOK, "PersistedQueryNotFound", "PERSISTED_QUERY_NOT_FOUND"
-		}
-	case t != nil && t.Enforce && opts.Query != "":
-		return "", pr, http.StatusBadRequest, "only trusted documents are accepted", "TRUSTED_DOCUMENT_REQUIRED"
-	}
-	return opts.Query, g.planCache.Get(schema, opts.Query, opts.OperationName), 0, "", ""
-}
-
-// writeCodedError writes a GraphQL errors envelope carrying
-// extensions.code, the shape clients key persisted-query handling on.
-func writeCodedError(w http.ResponseWriter, msg, code string, status int) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"errors": []map[string]any{{"message": msg, "extensions": map[string]any{"code": code}}},
-	})
-}
-
-// graphqlBufPool reuses []byte buffers across GraphQL responses to
-// keep allocs out of the hot path. New buffers start at 4 KB —
-// enough for most responses; ExecutePlanAppend grows the slice as
-// needed. graphqlBufPoolMax caps the size we'll hand back to the
-// pool so a one-off megabyte response doesn't pin a fat allocation.
-const graphqlBufPoolMax = 64 * 1024
-
-var graphqlBufPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, 0, 4096)
-		return &b
-	},
+	return g.gql.Handler()
 }
 
 // SchemaHandler returns an http.Handler that exports the GraphQL
