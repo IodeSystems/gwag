@@ -137,6 +137,7 @@ func (noopMetrics) RecordWSRejected(string)                                     
 // MetricsHandler.
 type prometheusMetrics struct {
 	registry      *prometheus.Registry
+	prefix        string
 	hist          *prometheus.HistogramVec
 	dwell         *prometheus.HistogramVec
 	backoff       *prometheus.CounterVec
@@ -157,76 +158,80 @@ type prometheusMetrics struct {
 	callerLimiter   *callerLimiter
 }
 
-func newPrometheusMetrics() *prometheusMetrics {
+func newPrometheusMetrics(p string) *prometheusMetrics {
+	if p == "" {
+		p = DefaultMetricPrefix
+	}
 	reg := prometheus.NewRegistry()
 	hist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "go_api_gateway_dispatch_duration_seconds",
+		Name:    p + "_dispatch_duration_seconds",
 		Help:    "Duration of dispatches (gRPC pools, OpenAPI sources, downstream-GraphQL sources) from the GraphQL surface to a backing replica. caller is extracted via WithCallerIDExtractor / WithCallerHeaders; defaults to \"unknown\". Cardinality is capped by WithCallerIDMetricsTopK — overflow folds into \"__other__\".",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"namespace", "version", "method", "code", "caller"})
 	dwell := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name: "go_api_gateway_pool_queue_dwell_seconds",
+		Name: p + "_pool_queue_dwell_seconds",
 		Help: "Time a dispatch waited for an in-flight slot in its pool.",
 		// Tighter low-end buckets — well-tuned pools rarely queue.
 		Buckets: []float64{0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 	}, []string{"namespace", "version", "method", "kind"})
 	backoff := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_pool_backoff_total",
+		Name: p + "_pool_backoff_total",
 		Help: "Count of dispatches rejected by pool backpressure (queue full or timeout).",
 	}, []string{"namespace", "version", "method", "kind", "reason"})
 	depth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "go_api_gateway_pool_queue_depth",
+		Name: p + "_pool_queue_depth",
 		Help: "Current count of dispatches waiting for an in-flight slot.",
 	}, []string{"namespace", "version", "kind"})
 	replicaDepth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "go_api_gateway_replica_queue_depth",
+		Name: p + "_replica_queue_depth",
 		Help: "Current count of dispatches waiting for a per-replica slot. Distinct from pool_queue_depth so MaxConcurrencyPerInstance saturation triages cleanly per replica address.",
 	}, []string{"namespace", "version", "kind", "replica"})
 	streams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "go_api_gateway_pool_streams_inflight",
+		Name: p + "_pool_streams_inflight",
 		Help: "Current count of active subscription streams in a pool.",
 	}, []string{"namespace", "version"})
 	streamsTotal := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "go_api_gateway_streams_inflight_total",
+		Name: p + "_streams_inflight_total",
 		Help: "Gateway-wide count of active subscription streams across all pools.",
 	})
 	signAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_sign_auth_total",
+		Name: p + "_sign_auth_total",
 		Help: "Outcomes of SignSubscriptionToken bearer checks (signer-secret + admin-token gate).",
 	}, []string{"code"})
 	adminAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_admin_auth_total",
+		Name: p + "_admin_auth_total",
 		Help: "Outcomes of AdminMiddleware auth checks (delegate + boot-token bearer).",
 	}, []string{"method", "outcome"})
 	gqlSubFanout := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_graphql_sub_fanout_total",
+		Name: p + "_graphql_sub_fanout_total",
 		Help: "Downstream-GraphQL subscription fanout open/close events. One open per upstream subscribe; one close when the last local consumer leaves.",
 	}, []string{"namespace", "event"})
 	gqlSubActive := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "go_api_gateway_graphql_sub_fanouts_active",
+		Name: p + "_graphql_sub_fanouts_active",
 		Help: "Current count of active downstream-GraphQL subscription fanouts (distinct upstream subscriptions) per source.",
 	}, []string{"namespace"})
 	reqDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "go_api_gateway_request_duration_seconds",
+		Name:    p + "_request_duration_seconds",
 		Help:    "Wall-clock duration of inbound requests, by ingress entry point (graphql, http, grpc).",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"ingress"})
 	reqSelf := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "go_api_gateway_request_self_seconds",
+		Name:    p + "_request_self_seconds",
 		Help:    "Per-request gateway self-time: wall-clock total minus the per-request dispatch accumulator. Pair with request_duration_seconds for the upstream slice.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"ingress"})
 	pubNoBinding := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "go_api_gateway_pub_no_binding_total",
+		Name: p + "_pub_no_binding_total",
 		Help: "Pubs to channels with no registered channel binding (empty payload_type).",
 	})
 	wsRejected := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "go_api_gateway_ws_rejected_total",
+		Name: p + "_ws_rejected_total",
 		Help: "graphql-transport-ws Upgrade requests rejected by WithWSLimit. reason=max_per_ip|rate_limit.",
 	}, []string{"reason"})
 	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected)
 	return &prometheusMetrics{
 		registry:     reg,
+		prefix:       p,
 		hist:         hist,
 		dwell:        dwell,
 		backoff:      backoff,

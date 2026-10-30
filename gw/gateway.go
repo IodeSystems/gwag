@@ -235,6 +235,7 @@ type config struct {
 	cluster        *Cluster
 	tls            *tls.Config
 	metrics        Metrics
+	metricPrefix   string
 	tracerProvider oteltrace.TracerProvider
 	backpressure   BackpressureOptions
 	subAuth      SubscriptionAuthOptions
@@ -644,6 +645,23 @@ func WithMetrics(m Metrics) Option {
 	return func(cfg *config) { cfg.metrics = m }
 }
 
+// DefaultMetricPrefix is the Prometheus metric name prefix used when
+// WithMetricPrefix is not set. v3 changes the default to "gwag".
+const DefaultMetricPrefix = "go_api_gateway"
+
+// WithMetricPrefix sets the name prefix of the default Prometheus
+// metrics, e.g. WithMetricPrefix("gwag") emits
+// gwag_dispatch_duration_seconds instead of
+// go_api_gateway_dispatch_duration_seconds. Only the prefix changes;
+// suffixes and labels stay the same. Exactly one set of series is
+// registered. Empty means DefaultMetricPrefix. No effect with
+// WithMetrics or WithoutMetrics.
+//
+// Stability: stable
+func WithMetricPrefix(prefix string) Option {
+	return func(cfg *config) { cfg.metricPrefix = prefix }
+}
+
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches
 // still run normally with no per-call instrumentation.
 //
@@ -1000,7 +1018,7 @@ func New(opts ...Option) *Gateway {
 		o(cfg)
 	}
 	if cfg.metrics == nil {
-		cfg.metrics = newPrometheusMetrics()
+		cfg.metrics = newPrometheusMetrics(cfg.metricPrefix)
 	}
 	if cfg.openAPIHTTP == nil {
 		// Default outbound HTTP client for OpenAPI / downstream-GraphQL
@@ -1098,7 +1116,7 @@ func New(opts ...Option) *Gateway {
 		// operator plugged in a custom Metrics impl — those callers
 		// own their own collectors.
 		if pm := unwrapPrometheusMetrics(cfg.metrics); pm != nil {
-			pm.registry.MustRegister(newPlanCacheCollector(g.planCache))
+			pm.registry.MustRegister(newPlanCacheCollector(g.planCache, pm.prefix))
 		}
 	}
 	// Auto-install gwag.ps.v1.PubSub when a cluster is bound — the

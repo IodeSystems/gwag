@@ -27,16 +27,16 @@ type planCacheCollector struct {
 	misses *prometheus.Desc
 }
 
-func newPlanCacheCollector(cache *graphql.PlanCache) *planCacheCollector {
+func newPlanCacheCollector(cache *graphql.PlanCache, p string) *planCacheCollector {
 	return &planCacheCollector{
 		cache: cache,
 		hits: prometheus.NewDesc(
-			"go_api_gateway_plan_cache_hits_total",
+			p+"_plan_cache_hits_total",
 			"Total parsed+validated+planned-query lookups that hit the plan cache (skipped parse + validate + plan).",
 			nil, nil,
 		),
 		misses: prometheus.NewDesc(
-			"go_api_gateway_plan_cache_misses_total",
+			p+"_plan_cache_misses_total",
 			"Total parsed+validated+planned-query lookups that missed the cache and paid parse + validate + plan.",
 			nil, nil,
 		),

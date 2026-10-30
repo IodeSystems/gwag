@@ -314,12 +314,12 @@ v1 surface is locked in. SemVer contract:
 [`docs/stability.md`](./docs/stability.md). Public-surface delta:
 [`CHANGELOG.md`](./CHANGELOG.md).
 
-Before the 1.0 tag:
+Pending rename of wire-level identifiers:
 
-- **Wire-level identifier rename.** Prometheus metrics still prefixed
-  `go_api_gateway_*`; proto packages still `gateway.*` (except
-  `gwag.ps.v1`). Renaming is a SemVer break post-1.0, so it happens
-  before the tag.
+- **Prometheus metrics.** Prefix is `go_api_gateway_*` by default;
+  `WithMetricPrefix("gwag")` opts in to `gwag_*` now (v2.5). v3 makes
+  `gwag_*` the default. Proto packages stay `gateway.*` (except
+  `gwag.ps.v1`); unchanged.
 
 After 1.0:
 

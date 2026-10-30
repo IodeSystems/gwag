@@ -82,6 +82,12 @@ mux.Handle("/schema", gw.SchemaHandler())
 mux.Handle("/metrics", gw.MetricsHandler())
 ```
 
+The `go_api_gateway_` prefix is the default. `gateway.WithMetricPrefix("gwag")`
+emits `gwag_*` names instead (same suffixes and labels, one set of series,
+no dual emission). v3 makes `gwag_*` the default; set the prefix now to
+migrate dashboards ahead of time, or `WithMetricPrefix("go_api_gateway")`
+to pin the old names across the v3 upgrade.
+
 Override or disable:
 
 ```go

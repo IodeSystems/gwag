@@ -9,6 +9,9 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **`WithMetricPrefix(prefix)`.** Opt in to `gwag_*` Prometheus metric names; default stays `go_api_gateway_*` until v3.
+
 ## v2.4.0 — 2026-10-26
 
 ### Added

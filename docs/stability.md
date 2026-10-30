@@ -132,7 +132,8 @@ file paths inside the FDS are derived from namespace/version and may
 be renormalised. Use the message FQN, not the file path, when
 diff-ing.
 
-**Metric label sets.** `go_api_gateway_*` Prometheus metrics carry
+**Metric label sets.** `go_api_gateway_*` Prometheus metrics (prefix
+selectable via `WithMetricPrefix`; default becomes `gwag_*` in v3) carry
 the labels documented in `docs/operations.md`. Adding a label is
 additive (existing Grafana queries still work). Renaming or removing
 a label is a 2.x change. New metrics (entirely new metric names) are
