@@ -253,3 +253,65 @@ func TestRequestBodyTooLargeCarriesCode(t *testing.T) {
 		t.Fatalf("413: %d %s", rr.Code, rr.Body)
 	}
 }
+
+// tickSchema has a subscription that sends one tick, then waits for
+// its context.
+func tickSchema(t testing.TB) *graphql.Schema {
+	t.Helper()
+	s, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{Name: "Query", Fields: graphql.Fields{
+			"v": &graphql.Field{Type: graphql.String},
+		}}),
+		Subscription: graphql.NewObject(graphql.ObjectConfig{Name: "Subscription", Fields: graphql.Fields{
+			"tick": &graphql.Field{
+				Type: graphql.String,
+				Subscribe: func(p graphql.ResolveParams) (any, error) {
+					ch := make(chan any, 1)
+					ch <- "tick"
+					go func() {
+						<-p.Context.Done()
+						close(ch)
+					}()
+					return ch, nil
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) { return p.Source, nil },
+			},
+		}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &s
+}
+
+func TestEchoComplete(t *testing.T) {
+	for _, echo := range []bool{false, true} {
+		g, err := gat.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.EchoComplete(echo)
+		if err := g.SetSchema(tickSchema(t), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewServer(g.Handler())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		conn := dialGraphQLWS(t, ctx, srv.URL, "")
+		wsSend(t, ctx, conn, subscribeMsg("1", `subscription { tick }`))
+		if m := wsRecv(t, ctx, conn); m.Type != "next" {
+			t.Fatalf("echo=%v: want next, got %+v", echo, m)
+		}
+		wsSend(t, ctx, conn, wsMsg{ID: "1", Type: "complete"})
+		if echo {
+			if m := wsRecv(t, ctx, conn); m.Type != "complete" || m.ID != "1" {
+				t.Fatalf("echo=true: want complete, got %+v", m)
+			}
+		}
+		wsSend(t, ctx, conn, wsMsg{Type: "ping"})
+		if m := wsRecv(t, ctx, conn); m.Type != "pong" {
+			t.Fatalf("echo=%v: want pong, got %+v", echo, m)
+		}
+		cancel()
+		srv.Close()
+	}
+}

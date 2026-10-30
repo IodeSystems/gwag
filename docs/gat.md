@@ -528,6 +528,7 @@ g.GraphiQL(page)                           // http.Handler for browser GETs
 g.ParseContentType("multipart/form-data", 32<<20, parseUpload)
 g.AcceptStringVariables(true)              // "variables": "{\"id\":1}"
 g.UsePlanCache(cache)                      // your *graphql.PlanCache and its rules
+g.EchoComplete(true)                       // answer a client's graphql-ws complete
 ```
 
 - `PreRequest` runs for every HTTP request (not WebSocket upgrades)
@@ -545,6 +546,8 @@ g.UsePlanCache(cache)                      // your *graphql.PlanCache and its ru
   answers 413. Every other body is read as JSON.
 - `UsePlanCache` replaces gat's plan cache, and with it the rules gat
   builds from `MaxOperations`, `MaxDepth` and `DisableIntrospection`.
+- `EchoComplete` sends `complete` back after a client completes a
+  subscription. Off by default; the protocol has the server stay silent.
 
 ## Front a remote gRPC service from a .proto
 

@@ -108,6 +108,17 @@ func (g *Gateway) AcceptStringVariables(b bool) *Gateway {
 	return g
 }
 
+// EchoComplete makes graphql-transport-ws answer a client's `complete`
+// with a `complete` of its own once the subscription has stopped
+// (default off: the protocol has the server send nothing). For hosts
+// whose clients expect the echo. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) EchoComplete(b bool) *Gateway {
+	g.echoComplete = b
+	return g
+}
+
 // UsePlanCache makes gat plan queries with c instead of a cache of its
 // own. c's rules then replace those gat builds from MaxOperations,
 // MaxDepth and DisableIntrospection. A nil c plans every query afresh

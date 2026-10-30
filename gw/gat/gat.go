@@ -143,6 +143,7 @@ type Gateway struct {
 	graphiql        http.Handler
 	parsers         map[string]contentParser
 	stringVariables bool
+	echoComplete    bool
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.

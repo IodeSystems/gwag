@@ -213,7 +213,9 @@ func (g *Gateway) runGraphQLSubscription(ctx context.Context, id string, p wsSub
 		}
 		_ = writeMsg(wsMessage{ID: id, Type: msgNext, Payload: b})
 	}
-	if ctx.Err() == nil {
+	// A subscription the client completed ends without a `complete`
+	// frame, as the protocol has it, unless EchoComplete is set.
+	if ctx.Err() == nil || g.echoComplete {
 		_ = writeMsg(wsMessage{ID: id, Type: msgComplete})
 	}
 }
