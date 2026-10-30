@@ -139,8 +139,10 @@ type Gateway struct {
 	streamGlobalQ   atomic.Int32 // waiting count
 
 	// draining flips to true on Drain(). Health returns 503; new
-	// WebSocket upgrades and new GraphQL queries reject; existing
-	// connections receive a `complete` and are then closed.
+	// WebSocket upgrades, gRPC ingress calls and REST ingress calls
+	// reject; existing WebSocket connections receive a `complete` and
+	// are then closed. HTTP GraphQL queries are not refused (see
+	// docs/operations.md).
 	draining atomic.Bool
 
 	// wsConns is the registry of live WebSocket subscription
