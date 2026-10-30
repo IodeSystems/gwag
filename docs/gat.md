@@ -519,9 +519,9 @@ handling around it (all experimental, all off by default, set before
 serving):
 
 ```go
-g.PreRequest(func(w http.ResponseWriter, r *http.Request) (context.Context, func(), bool) {
-    ctx, span := tracer.Start(r.Context(), "graphql")
-    return ctx, func() { span.End() }, true
+g.PreRequest(func(w http.ResponseWriter, r *http.Request) (context.Context, func(context.Context), bool) {
+    ctx, _ := tracer.Start(r.Context(), "graphql")
+    return ctx, endSpan, true // endSpan(ctx): trace.SpanFromContext(ctx).End()
 })
 g.WSUpgrade(gate)                          // same signature, for graphql-ws upgrades
 g.GraphiQL(page)                           // http.Handler for browser GETs
@@ -533,7 +533,8 @@ g.EchoComplete(true)                       // answer a client's graphql-ws compl
 
 - `PreRequest` runs for every HTTP request (not WebSocket upgrades)
   before the body is read. The context it returns is the one resolvers
-  see; `done` runs after the response is written; `ok=false` means the
+  see; `done(ctx)` runs with it after the response is written (so it
+  can be one func, not a closure per request); `ok=false` means the
   hook answered the request itself.
 - `WSUpgrade` runs before a graphql-ws upgrade is accepted. Its context
   is the connection's: cancel it and the connection closes. `done`

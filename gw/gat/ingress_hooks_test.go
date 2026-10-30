@@ -81,12 +81,16 @@ func serve(h http.Handler, method, target, contentType, body string, header ...s
 func TestPreRequest(t *testing.T) {
 	var done atomic.Int32
 	h := newHookGat(t, func(g *gat.Gateway) {
-		g.PreRequest(func(w http.ResponseWriter, r *http.Request) (context.Context, func(), bool) {
+		g.PreRequest(func(w http.ResponseWriter, r *http.Request) (context.Context, func(context.Context), bool) {
 			if r.Header.Get("X-Refuse") != "" {
 				http.Error(w, "refused", http.StatusTeapot)
 				return nil, nil, false
 			}
-			return context.WithValue(r.Context(), hookKey{}, "hooked"), func() { done.Add(1) }, true
+			return context.WithValue(r.Context(), hookKey{}, "hooked"), func(ctx context.Context) {
+				if ctx.Value(hookKey{}) == "hooked" {
+					done.Add(1)
+				}
+			}, true
 		})
 	})
 	rr := serve(h, http.MethodPost, "/graphql", "application/json", `{"query":"{ who }"}`)
@@ -204,14 +208,14 @@ func TestWSUpgradeHook(t *testing.T) {
 		cancels = make(chan context.CancelFunc, 1)
 	)
 	h := newHookGat(t, func(g *gat.Gateway) {
-		g.WSUpgrade(func(w http.ResponseWriter, r *http.Request) (context.Context, func(), bool) {
+		g.WSUpgrade(func(w http.ResponseWriter, r *http.Request) (context.Context, func(context.Context), bool) {
 			if refuse.Load() {
 				http.Error(w, "limit", http.StatusTooManyRequests)
 				return nil, nil, false
 			}
 			ctx, cancel := context.WithCancel(r.Context())
 			cancels <- cancel
-			return ctx, func() { ended <- struct{}{} }, true
+			return ctx, func(context.Context) { ended <- struct{}{} }, true
 		})
 	})
 	srv := httptest.NewServer(h)

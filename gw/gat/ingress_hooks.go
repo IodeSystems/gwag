@@ -1,12 +1,14 @@
 package gat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/IodeSystems/graphql-go/v2"
 )
@@ -31,11 +33,13 @@ type Request struct {
 
 // RequestHook runs before gat handles a request. It returns the
 // context gat handles the request with, and done, called (if non-nil)
-// once the response is written. ok=false refuses the request: the
-// hook has written the response itself and gat does nothing more.
+// with that context once the response is written: state the hook put
+// on the context is there, so done need not be a per-request closure.
+// ok=false refuses the request: the hook has written the response
+// itself and gat does nothing more.
 //
 // Stability: experimental
-type RequestHook func(w http.ResponseWriter, r *http.Request) (ctx context.Context, done func(), ok bool)
+type RequestHook func(w http.ResponseWriter, r *http.Request) (ctx context.Context, done func(context.Context), ok bool)
 
 // PreRequest sets a hook that runs for every GraphQL HTTP request
 // (query, mutation, batch, GraphiQL page) before its body is read.
@@ -204,13 +208,30 @@ type lenientRequest struct {
 
 var errVariables = errors.New("gat: variables must be an object")
 
+// decodeLenient reads the body into a pooled buffer and unmarshals it,
+// which allocates less than a json.Decoder per request.
 func decodeLenient(r io.Reader) (Request, error) {
+	buf := lenientBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= lenientBufPoolMax {
+			lenientBufPool.Put(buf)
+		}
+	}()
+	if _, err := buf.ReadFrom(r); err != nil {
+		return Request{}, err
+	}
 	var wire lenientRequest
-	if err := json.NewDecoder(r).Decode(&wire); err != nil {
+	// Unmarshal copies strings out, so the buffer can go back.
+	if err := json.Unmarshal(buf.Bytes(), &wire); err != nil {
 		return Request{}, err
 	}
 	return wire.request()
 }
+
+var lenientBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+const lenientBufPoolMax = 64 << 10
 
 // request returns the decoded Request; an error when variables are
 // neither an object nor a string holding one.
@@ -221,14 +242,25 @@ func (w *lenientRequest) request() (Request, error) {
 	case map[string]any:
 		req.Variables = v
 	case string:
-		if v == "" {
-			break
-		}
-		if err := json.Unmarshal([]byte(v), &req.Variables); err != nil {
+		vars, err := stringVariables(v)
+		if err != nil {
 			return req, errVariables
 		}
+		req.Variables = vars
 	default:
 		return req, errVariables
 	}
 	return req, nil
+}
+
+// stringVariables decodes variables sent as a JSON-encoded string. Its
+// own function so only the map, not the whole Request, goes to the
+// heap.
+func stringVariables(s string) (map[string]any, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var vars map[string]any
+	err := json.Unmarshal([]byte(s), &vars)
+	return vars, err
 }

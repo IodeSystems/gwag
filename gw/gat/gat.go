@@ -418,7 +418,7 @@ func (g *Gateway) Handler() http.Handler {
 					return
 				}
 				if done != nil {
-					defer done()
+					defer done(c)
 				}
 				ctx = c
 			}
@@ -431,7 +431,7 @@ func (g *Gateway) Handler() http.Handler {
 				return
 			}
 			if done != nil {
-				defer done()
+				defer done(ctx)
 			}
 			g.serveRequest(ctx, w, r, snap)
 			return
