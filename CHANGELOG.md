@@ -9,6 +9,19 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.6.0 — 2026-10-30
+
+gwag's GraphQL and gRPC ingress now run on gat's: one request path, so gwag gains batching, Connect and gRPC-Web.
+
+### Migration
+- **gwag GraphQL clients that send malformed requests** now get 400 instead of 200 with errors. This covers invalid JSON, an empty query, and `variables` that is not an object.
+- **gat `MaxOperations` refuses the whole request.** This applies to a document or to a batch counted as a whole. Before, the first n operations ran and the rest failed. Raise `MaxOperations` if a client sends more.
+- **Status codes are more specific.**
+  - gRPC clients of OpenAPI and GraphQL upstreams see AlreadyExists, Unavailable and similar codes where they saw InvalidArgument or Internal.
+  - REST clients see the upstream's own HTTP status where they saw 400 or 500.
+  - gat handlers that return a `*connect.Error` or a gRPC status keep that code where they got Internal.
+- **Pub/sub auth failures** carry `PERMISSION_DENIED` in `extensions.code` (none before).
+
 ### Added
 - **Batched GraphQL requests.** A POST body that is a JSON array runs each document in order and answers with an array of results; `WithMaxOperations(n)` also caps the batch: at most `n` documents, and at most `n` operations summed over them (over the cap, the whole batch is refused with 400 and nothing runs). (The GraphQL handler now runs on gat's request path.)
 - **gat ingress hooks** (experimental). `PreRequest`, `WSUpgrade`, `GraphiQL`, `ParseContentType`, `AcceptStringVariables`, `UsePlanCache`, `EchoComplete` let a host wrap gat's GraphQL handler; see docs/gat.md "Ingress hooks". New `gat.Request`, `gat.RequestHook`, `gat.RequestParser`.
