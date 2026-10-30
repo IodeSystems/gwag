@@ -264,10 +264,11 @@ func scalarToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 		return v.Int()
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		return v.Uint()
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		// Stringified to preserve precision (matches schema mapping above).
 		return strconv.FormatInt(v.Int(), 10)
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return strconv.FormatUint(v.Uint(), 10)
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		return v.Float()
 	case protoreflect.StringKind:

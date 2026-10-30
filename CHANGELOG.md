@@ -30,6 +30,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Fixed
 - **Cluster puts retried.** Deprecate and MCP-config writes retry a put lost to a replica change instead of failing the admin call; the deprecated bucket now follows the cluster replica count.
+- **uint64 proto fields.** A set `uint64` / `fixed64` field no longer panics on the map conversion path (gRPC ingress, subscriptions, pub/sub, runtime transforms); it renders as a decimal string.
 
 ## v2.4.0 — 2026-10-26
 
