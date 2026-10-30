@@ -324,7 +324,7 @@ func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	t.currentR.Store(int32(desired))
 }
 
-// setReplicas updates all three buckets. If one update fails we still
+// setReplicas updates every cluster bucket. If one update fails we still
 // try the others; caller decides whether to retry.
 func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -337,6 +337,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 		{peersBucketName, peerTTL},
 		{registryBucketName, registryTTL},
 		{stableBucketName, stableTTL},
+		{deprecatedBucketName, deprecatedTTL},
 		{mcpConfigBucketName, mcpConfigTTL},
 	} {
 		_, err := t.js.UpdateKeyValue(c, jetstream.KeyValueConfig{

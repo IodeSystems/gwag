@@ -94,8 +94,11 @@ func (cp *controlPlane) Deprecate(ctx context.Context, req *cpv1.DeprecateReques
 	if t != nil && t.deprecated != nil {
 		val := deprecatedKVValue{Reason: reason}
 		b, _ := json.Marshal(val)
-		kctx, cancel := kvCtx(ctx)
-		_, err := t.deprecated.Put(kctx, deprecatedKey(ns, ver), b)
+		// Two call timeouts: room for kvPutRetry to retry a put lost
+		// to a replica change. The same reason written twice is the
+		// same state.
+		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
+		err := kvPutRetry(kctx, t.deprecated, deprecatedKey(ns, ver), b)
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: persist deprecate to KV: %w", err)

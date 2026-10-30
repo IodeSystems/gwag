@@ -126,7 +126,13 @@ func (g *Gateway) setMCPConfig(ctx context.Context, cfg MCPConfig) error {
 		if err != nil {
 			return fmt.Errorf("mcp_config marshal: %w", err)
 		}
-		if _, err := t.mcpConfig.Put(ctx, mcpConfigKey, raw); err != nil {
+		// Two call timeouts: room for kvPutRetry to retry a put lost
+		// to a replica change. The whole config is written, so a
+		// repeated put is the same state.
+		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
+		err = kvPutRetry(kctx, t.mcpConfig, mcpConfigKey, raw)
+		cancel()
+		if err != nil {
 			return fmt.Errorf("mcp_config put: %w", err)
 		}
 		return nil
