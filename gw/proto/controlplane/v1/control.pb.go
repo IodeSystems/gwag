@@ -238,8 +238,14 @@ type ServiceBinding struct {
 	// replica (only the service-level cap applies). Frozen at first
 	// registration.
 	MaxConcurrencyPerInstance uint32 `protobuf:"varint,8,opt,name=max_concurrency_per_instance,json=maxConcurrencyPerInstance,proto3" json:"max_concurrency_per_instance,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Per-call timeout, in milliseconds, for unary dispatches to this
+	// binding's upstream. A call that runs past it fails with a
+	// timeout error. 0 → fall back to the gateway-wide default
+	// (WithUpstreamTimeout); a default of 0 means no timeout. Frozen
+	// at first registration.
+	TimeoutMs     uint32 `protobuf:"varint,9,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServiceBinding) Reset() {
@@ -324,6 +330,13 @@ func (x *ServiceBinding) GetMaxConcurrency() uint32 {
 func (x *ServiceBinding) GetMaxConcurrencyPerInstance() uint32 {
 	if x != nil {
 		return x.MaxConcurrencyPerInstance
+	}
+	return 0
+}
+
+func (x *ServiceBinding) GetTimeoutMs() uint32 {
+	if x != nil {
+		return x.TimeoutMs
 	}
 	return 0
 }
@@ -1621,7 +1634,7 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\vttl_seconds\x18\x03 \x01(\rR\n" +
 	"ttlSeconds\x12\x1f\n" +
 	"\vinstance_id\x18\x04 \x01(\tR\n" +
-	"instanceId\"\xc4\x03\n" +
+	"instanceId\"\xe3\x03\n" +
 	"\x0eServiceBinding\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12!\n" +
 	"\fproto_source\x18\x02 \x01(\fR\vprotoSource\x12^\n" +
@@ -1630,7 +1643,9 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\fopenapi_spec\x18\x05 \x01(\fR\vopenapiSpec\x12)\n" +
 	"\x10graphql_endpoint\x18\x06 \x01(\tR\x0fgraphqlEndpoint\x12'\n" +
 	"\x0fmax_concurrency\x18\a \x01(\rR\x0emaxConcurrency\x12?\n" +
-	"\x1cmax_concurrency_per_instance\x18\b \x01(\rR\x19maxConcurrencyPerInstance\x1a?\n" +
+	"\x1cmax_concurrency_per_instance\x18\b \x01(\rR\x19maxConcurrencyPerInstance\x12\x1d\n" +
+	"\n" +
+	"timeout_ms\x18\t \x01(\rR\ttimeoutMs\x1a?\n" +
 	"\x11ProtoImportsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\\\n" +
