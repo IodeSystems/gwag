@@ -162,15 +162,17 @@ func TestBatch_RefusedEntryDoesNotFailTheOthers(t *testing.T) {
 	}
 }
 
-func TestBatch_SharesTheOperationCap(t *testing.T) {
+func TestBatch_OperationCap(t *testing.T) {
 	srv, _ := newShopGat(t, func(g *gat.Gateway) { g.MaxOperations(2) })
 	out := postBatch(t, srv.URL+"/api/graphql", []map[string]any{
-		{"query": `{ Shop { listOrders { id } } }`},
 		{"query": `{ Shop { a: listOrders { id } b: listOrders { id } } }`},
+		{"query": `{ Shop { a: listOrders { id } b: listOrders { id } c: listOrders { id } } }`},
 	})
-	errs, _ := out[1]["errors"].([]any)
-	if len(errs) != 1 {
-		t.Errorf("third operation across the batch should hit the cap of 2: %v", out[1])
+	if out[0]["errors"] != nil {
+		t.Errorf("document at the cap of 2: %v", out[0])
+	}
+	if errs, _ := out[1]["errors"].([]any); len(errs) != 1 || out[1]["data"] != nil {
+		t.Errorf("document over the cap of 2 should be refused whole: %v", out[1])
 	}
 	b, _ := json.Marshal([]map[string]any{{"query": "{ __typename }"}, {"query": "{ __typename }"}, {"query": "{ __typename }"}})
 	resp, err := http.Post(srv.URL+"/api/graphql", "application/json", bytes.NewReader(b))

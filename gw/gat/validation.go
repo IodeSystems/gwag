@@ -39,6 +39,9 @@ func (g *Gateway) DisableIntrospection() *Gateway {
 // spec rules for this gateway's settings.
 func (g *Gateway) validationRules() []graphql.ValidationRuleFn {
 	var rules []graphql.ValidationRuleFn
+	if g.maxOps > 0 {
+		rules = append(rules, gqlguard.MaxOperationsRule(g.maxOps))
+	}
 	if g.maxDepth > 0 {
 		rules = append(rules, gqlguard.MaxDepthRule(g.maxDepth))
 	}

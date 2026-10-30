@@ -136,6 +136,13 @@ type Gateway struct {
 	pubsub  *pubSub
 	mesh    *peerMesh
 	subAuth []byte
+
+	// Ingress hooks (ingress_hooks.go); all nil / off by default.
+	preRequest      RequestHook
+	wsUpgrade       RequestHook
+	graphiql        http.Handler
+	parsers         map[string]contentParser
+	stringVariables bool
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.
@@ -368,10 +375,10 @@ func (g *Gateway) install(schema *graphql.Schema, annotations *ir.AnnotationInde
 // registration, like RegisterHuma. services feeds the proto and
 // OpenAPI schema views; annotations may be nil.
 //
-// The validation rules (MaxDepth, DisableIntrospection) are fixed by
-// the first schema, so set them before. A host schema that omits the
-// @export directive cannot run batched exports; ParallelQueries and
-// MaxOperations apply only to dispatchers gat wired itself.
+// The validation rules (MaxOperations, MaxDepth, DisableIntrospection)
+// are fixed by the first schema, so set them before. A host schema that
+// omits the @export directive cannot run batched exports;
+// ParallelQueries applies only to dispatchers gat wired itself.
 //
 // Stability: experimental
 func (g *Gateway) SetSchema(schema *graphql.Schema, annotations *ir.AnnotationIndex, services []*ir.Service) error {
@@ -403,38 +410,78 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && isWebSocketUpgrade(r) {
-			g.serveGraphQLWS(w, r)
-			return
-		}
-
-		var req gqlRequest
-		if r.Method == http.MethodPost {
-			body := r.Body
-			if g.maxBody > 0 {
-				// A declared length is checked up front for free; only a
-				// chunked body pays for the limiting reader.
-				if r.ContentLength > g.maxBody {
-					writeError(w, "request body too large", http.StatusRequestEntityTooLarge)
+			ctx := r.Context()
+			if g.wsUpgrade != nil {
+				c, done, ok := g.wsUpgrade(w, r)
+				if !ok {
 					return
 				}
-				if r.ContentLength < 0 {
-					body = http.MaxBytesReader(w, r.Body, g.maxBody)
+				if done != nil {
+					defer done()
 				}
+				ctx = c
+			}
+			g.serveGraphQLWS(ctx, w, r)
+			return
+		}
+		if g.preRequest != nil {
+			ctx, done, ok := g.preRequest(w, r)
+			if !ok {
+				return
+			}
+			if done != nil {
+				defer done()
+			}
+			g.serveRequest(ctx, w, r, snap)
+			return
+		}
+		g.serveRequest(r.Context(), w, r, snap)
+	})
+}
+
+// serveRequest serves one GraphQL HTTP request (not a WebSocket) with
+// ctx as its context.
+func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, snap *snapshot) {
+	if g.graphiql != nil && isGraphiQLRequest(r) {
+		g.graphiql.ServeHTTP(w, r.WithContext(ctx))
+		return
+	}
+
+	var req Request
+	if r.Method == http.MethodPost {
+		var (
+			p      contentParser
+			custom bool
+		)
+		if g.parsers != nil {
+			p, custom = g.parsers[mediaType(r.Header.Get("Content-Type"))]
+		}
+		if custom {
+			var ok bool
+			if req, ok = parseWith(w, r, p); !ok {
+				return
+			}
+		} else {
+			if !limitBody(w, r, g.maxBody) {
+				return
 			}
 			// Peek at the first byte to tell a batch (array) from a single
 			// request (object) and decode straight into the right type.
 			br := peekReaderPool.Get().(*bufio.Reader)
-			br.Reset(body)
+			br.Reset(r.Body)
 			isBatch := firstNonSpace(br) == '['
 			var (
-				batch []gqlRequest
+				batch []Request
 				err   error
 			)
-			if isBatch {
+			switch {
+			case isBatch:
 				// Its own function: &batch here would put the slice
 				// header on the heap for every request, batch or not.
-				batch, err = decodeBatch(br)
-			} else {
+				batch, err = decodeBatch(br, g.stringVariables)
+			case g.stringVariables:
+				req, err = decodeLenient(br)
+			default:
 				err = json.NewDecoder(br).Decode(&req)
 			}
 			br.Reset(nil)
@@ -442,96 +489,86 @@ func (g *Gateway) Handler() http.Handler {
 			if err != nil {
 				var tooLarge *http.MaxBytesError
 				if errors.As(err, &tooLarge) {
-					writeError(w, "request body too large", http.StatusRequestEntityTooLarge)
+					writeTooLarge(w)
 					return
 				}
 				writeError(w, "invalid JSON", http.StatusBadRequest)
 				return
 			}
 			if isBatch {
-				g.serveBatch(w, r, snap, batch)
-				return
-			}
-		} else {
-			params := r.URL.Query()
-			req.Query = params.Get("query")
-			req.OperationName = params.Get("operationName")
-			req.DocumentID = params.Get("documentId")
-			// GET carries variables and extensions as JSON in the query
-			// string (GraphQL over HTTP); persisted documents over GET —
-			// the CDN-cacheable form — depend on it.
-			var err error
-			if req.Variables, err = jsonParam(params, "variables"); err != nil {
-				writeError(w, "invalid variables JSON", http.StatusBadRequest)
-				return
-			}
-			if req.Extensions, err = jsonParam(params, "extensions"); err != nil {
-				writeError(w, "invalid extensions JSON", http.StatusBadRequest)
+				g.serveBatch(ctx, w, r, snap, batch)
 				return
 			}
 		}
-
-		p := g.planRequest(snap, &req)
-		if p.status != 0 {
-			writeCodedError(w, p.msg, p.code, p.status)
+	} else {
+		params := r.URL.Query()
+		req.Query = params.Get("query")
+		req.OperationName = params.Get("operationName")
+		req.DocumentID = params.Get("documentId")
+		// GET carries variables and extensions as JSON in the query
+		// string (GraphQL over HTTP); persisted documents over GET —
+		// the CDN-cacheable form — depend on it.
+		var err error
+		if req.Variables, err = jsonParam(params, "variables"); err != nil {
+			writeError(w, "invalid variables JSON", http.StatusBadRequest)
 			return
 		}
-
-		// GraphQL over HTTP forbids mutations on GET. Running one would
-		// let any page trigger it with the visitor's cookies (a link or an
-		// <img src>; SameSite=Lax still sends cookies on top-level GETs).
-		if r.Method == http.MethodGet && p.pr.Plan != nil && p.pr.Plan.IsMutation() {
-			w.Header().Set("Allow", http.MethodPost)
-			writeError(w, "mutations are not allowed over GET; use POST", http.StatusMethodNotAllowed)
+		if req.Extensions, err = jsonParam(params, "extensions"); err != nil {
+			writeError(w, "invalid extensions JSON", http.StatusBadRequest)
 			return
 		}
+	}
 
-		ctx, scope := newScope(r.Context(), r, true)
+	p := g.planRequest(snap, &req)
+	if p.status != 0 {
+		writeCodedError(w, p.msg, p.code, p.status)
+		return
+	}
 
-		// Status is 200 whatever the query did, matching gw/ and the
-		// GraphQL-over-HTTP spec: a query that resolved to errors is a
-		// successful transport exchange carrying an errors envelope, not a
-		// failed request. The 400s above are transport-level (the body
-		// wasn't JSON, or carried no query at all) and stay 400.
-		// Build the ENTIRE body before touching the response header. A
-		// handler's Set-Cookie only reaches the sink once its resolver has
-		// run (dispatch feeds the sink), so emitting before execution
-		// writes an EMPTY sink and the cookie is dropped — silently, since
-		// the op itself still succeeds. That is how login/logout stopped
-		// setting a session over GraphQL while the REST twin of the same
-		// handler kept working.
-		//
-		// Nothing here streams — ExecutePlanAppend assembles the bytes in
-		// memory — so deferring the header costs nothing.
-		res := g.run(ctx, snap, p, req.OperationName, req.Variables)
+	// GraphQL over HTTP forbids mutations on GET. Running one would
+	// let any page trigger it with the visitor's cookies (a link or an
+	// <img src>; SameSite=Lax still sends cookies on top-level GETs).
+	if r.Method == http.MethodGet && p.pr.Plan != nil && p.pr.Plan.IsMutation() {
+		w.Header().Set("Allow", http.MethodPost)
+		writeError(w, "mutations are not allowed over GET; use POST", http.StatusMethodNotAllowed)
+		return
+	}
 
-		// Execution is done, so the sink now holds whatever the resolvers
-		// produced. Emit before WriteHeader — after it the header map is
-		// already on the wire.
-		scope.cookies.emit(w)
-		etag := scope.cache.apply(w.Header(), p.query, req.Variables)
-		if r.Method == http.MethodGet && etagMatches(r.Header.Get("If-None-Match"), etag) {
-			// The client holds this response already. The work ran (the
-			// ETag comes from the operations), but the body stays home.
-			w.WriteHeader(http.StatusNotModified)
-			res.recycle()
-			return
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(res.payload)
+	ctx, scope := newScope(ctx, r, true)
+
+	// Status is 200 whatever the query did, matching gw/ and the
+	// GraphQL-over-HTTP spec: a query that resolved to errors is a
+	// successful transport exchange carrying an errors envelope, not a
+	// failed request. The 400s above are transport-level (the body
+	// wasn't JSON, or carried no query at all) and stay 400.
+	// Build the ENTIRE body before touching the response header. A
+	// handler's Set-Cookie only reaches the sink once its resolver has
+	// run (dispatch feeds the sink), so emitting before execution
+	// writes an EMPTY sink and the cookie is dropped — silently, since
+	// the op itself still succeeds. That is how login/logout stopped
+	// setting a session over GraphQL while the REST twin of the same
+	// handler kept working.
+	//
+	// Nothing here streams — ExecutePlanAppend assembles the bytes in
+	// memory — so deferring the header costs nothing.
+	res := g.run(ctx, snap, p, req.OperationName, req.Variables)
+
+	// Execution is done, so the sink now holds whatever the resolvers
+	// produced. Emit before WriteHeader — after it the header map is
+	// already on the wire.
+	scope.cookies.emit(w)
+	etag := scope.cache.apply(w.Header(), p.query, req.Variables)
+	if r.Method == http.MethodGet && etagMatches(r.Header.Get("If-None-Match"), etag) {
+		// The client holds this response already. The work ran (the
+		// ETag comes from the operations), but the body stays home.
+		w.WriteHeader(http.StatusNotModified)
 		res.recycle()
-	})
-}
-
-// gqlRequest is one GraphQL request: an operation as query text, or by
-// trusted document id.
-type gqlRequest struct {
-	Query         string         `json:"query"`
-	Variables     map[string]any `json:"variables"`
-	OperationName string         `json:"operationName"`
-	DocumentID    string         `json:"documentId"`
-	Extensions    map[string]any `json:"extensions"`
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(res.payload)
+	res.recycle()
 }
 
 // peekReaderPool holds the readers the handler peeks a POST body
@@ -539,8 +576,22 @@ type gqlRequest struct {
 // apart costs no allocation.
 var peekReaderPool = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 512) }}
 
-func decodeBatch(r io.Reader) ([]gqlRequest, error) {
-	var batch []gqlRequest
+func decodeBatch(r io.Reader, lenient bool) ([]Request, error) {
+	if lenient {
+		var wire []lenientRequest
+		if err := json.NewDecoder(r).Decode(&wire); err != nil {
+			return nil, err
+		}
+		batch := make([]Request, len(wire))
+		for i := range wire {
+			var err error
+			if batch[i], err = wire[i].request(); err != nil {
+				return nil, err
+			}
+		}
+		return batch, nil
+	}
+	var batch []Request
 	err := json.NewDecoder(r).Decode(&batch)
 	return batch, err
 }
@@ -574,7 +625,7 @@ type plannedRequest struct {
 
 // planRequest resolves a request's document (query text or trusted
 // document id) and plans it.
-func (g *Gateway) planRequest(snap *snapshot, req *gqlRequest) plannedRequest {
+func (g *Gateway) planRequest(snap *snapshot, req *Request) plannedRequest {
 	p := plannedRequest{query: req.Query}
 	id := gqlguard.PersistedID(req.DocumentID, req.Extensions)
 	switch {
@@ -724,7 +775,7 @@ func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationNam
 // before execution (unknown document id, query text under enforced
 // trusted documents) gets an errors object in its slot without failing
 // the others.
-func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, snap *snapshot, batch []gqlRequest) {
+func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, snap *snapshot, batch []Request) {
 	if len(batch) == 0 {
 		writeError(w, "empty batch", http.StatusBadRequest)
 		return
@@ -733,7 +784,7 @@ func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, snap *snaps
 		writeError(w, fmt.Sprintf("batch exceeds %d operations", g.maxOps), http.StatusBadRequest)
 		return
 	}
-	ctx, scope := newScope(r.Context(), r, true)
+	ctx, scope := newScope(ctx, r, true)
 	exported := map[string]any{}
 	docs := make([]string, 0, len(batch))
 	out := append(make([]byte, 0, 1024), '[')

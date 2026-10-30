@@ -3,7 +3,6 @@ package gat
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
@@ -32,13 +31,13 @@ func (g *Gateway) ParallelQueries(n int) *Gateway {
 	return g
 }
 
-// MaxOperations caps how many operations one GraphQL request may run,
-// aliases and fragments included (default 64; n <= 0: no cap).
-// Operations past the
-// cap are not dispatched; each fails with a 400 field error, so a
-// request aliasing one operation a thousand times runs n of them, not
-// a thousand. The count is taken at dispatch — an atomic add in the
-// request scope, no parse.
+// MaxOperations caps how many operations one GraphQL document may
+// select, aliases and fragment spreads included (default 64; n <= 0: no
+// cap). A document over the cap is refused whole before anything runs,
+// so a request aliasing one operation a thousand times runs none of
+// them. The check is a validation rule: it runs once per distinct
+// query and its verdict is cached with the plan. A batch may hold at
+// most n documents.
 //
 // Call before the schema builds. Returns g for chaining.
 //
@@ -48,17 +47,17 @@ func (g *Gateway) MaxOperations(n int) *Gateway {
 	return g
 }
 
-// wrapLimits puts a limitDispatcher in front of every operation's
-// dispatcher when ParallelQueries or MaxOperations is set. Run by
-// build(), which may run more than once, so already-wrapped
-// dispatchers are left alone.
+// wrapLimits puts a limitDispatcher in front of every query
+// operation's dispatcher when ParallelQueries is set. Run by build(),
+// which may run more than once, so already-wrapped dispatchers are
+// left alone.
 func (g *Gateway) wrapLimits() {
-	if g.parallel <= 0 && g.maxOps <= 0 {
+	if g.parallel <= 0 {
 		return
 	}
 	for _, svc := range g.services {
 		for _, op := range svc.FlatOperations() {
-			if op.Kind == ir.OpSubscription {
+			if op.Kind != ir.OpQuery {
 				continue
 			}
 			d := g.registry.Get(op.SchemaID)
@@ -68,37 +67,24 @@ func (g *Gateway) wrapLimits() {
 			if _, done := d.(*limitDispatcher); done {
 				continue
 			}
-			ld := &limitDispatcher{inner: d, maxOps: int32(max(g.maxOps, 0))}
-			if op.Kind == ir.OpQuery {
-				ld.parallel = int32(max(g.parallel, 0))
-			}
-			g.registry.Set(op.SchemaID, ld)
+			g.registry.Set(op.SchemaID, &limitDispatcher{inner: d, parallel: int32(g.parallel)})
 		}
 	}
 }
 
-// limitDispatcher applies the per-request limits in one hop: the
-// operation cap, then (queries only) parallel dispatch. Only the
+// limitDispatcher runs a query operation on its own goroutine while
+// the request has fewer than parallel in flight. Only the
 // GraphQL resolver calls Dispatch on gat's registry, and it hands the
 // result straight to the executor — which is what makes returning a
 // thunk sound.
 type limitDispatcher struct {
 	inner    ir.Dispatcher
-	maxOps   int32 // 0 = no cap
-	parallel int32 // 0 = serial
+	parallel int32
 }
 
 func (d *limitDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	s := scopeFrom(ctx)
 	if s == nil {
-		return d.inner.Dispatch(ctx, args)
-	}
-	if d.maxOps > 0 {
-		if n := s.ops.Add(1); n > d.maxOps {
-			return nil, withStatusExtensions(&opLimitError{max: d.maxOps})
-		}
-	}
-	if d.parallel == 0 {
 		return d.inner.Dispatch(ctx, args)
 	}
 	if s.inflight.Add(1) > d.parallel {
@@ -113,14 +99,6 @@ func (d *limitDispatcher) Dispatch(ctx context.Context, args map[string]any) (an
 	go r.run(ctx, d.inner, args, s)
 	return r.await, nil
 }
-
-type opLimitError struct{ max int32 }
-
-func (e *opLimitError) Error() string {
-	return fmt.Sprintf("gat: request exceeds %d operations", e.max)
-}
-
-func (e *opLimitError) GetStatus() int { return http.StatusBadRequest }
 
 // parallelResult is the one allocation a parallel dispatch adds: the
 // goroutine writes it, the thunk reads it after wg.Wait.

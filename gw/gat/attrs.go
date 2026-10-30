@@ -30,10 +30,8 @@ type requestScope struct {
 	// alongside the cookie sink).
 	cache cacheMerge
 	// inflight counts operations of this request running on their own
-	// goroutine (ParallelQueries); ops counts operations dispatched
-	// (MaxOperations).
+	// goroutine (ParallelQueries).
 	inflight atomic.Int32
-	ops      atomic.Int32
 }
 
 type scopeKey struct{}

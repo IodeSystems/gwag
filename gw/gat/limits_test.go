@@ -37,24 +37,26 @@ func newLimitsGat(t *testing.T, configure func(*gat.Gateway)) (*httptest.Server,
 	return srv, &calls
 }
 
-func TestMaxOperations_ExcessAliasesAreNotDispatched(t *testing.T) {
+func TestMaxOperations_RefusesTheWholeDocument(t *testing.T) {
 	for _, parallel := range []int{0, 4} {
 		srv, calls := newLimitsGat(t, func(g *gat.Gateway) { g.MaxOperations(3).ParallelQueries(parallel) })
 		resp := mustGraphQL(t, srv.URL+"/api/graphql",
 			`query { Demo { a: opA(id: "1") { id } b: opA(id: "2") { id } c: opA(id: "3") { id } d: opA(id: "4") { id } e: opA(id: "5") { id } } }`)
-		if n := calls.Load(); n != 3 {
-			t.Errorf("parallel=%d: handler ran %d times, want 3", parallel, n)
+		if n := calls.Load(); n != 0 {
+			t.Errorf("parallel=%d: handler ran %d times, want 0", parallel, n)
 		}
 		errs, _ := resp["errors"].([]any)
-		if len(errs) != 2 {
-			t.Fatalf("parallel=%d: %d errors, want 2: %v", parallel, len(errs), resp)
+		if len(errs) != 1 || resp["data"] != nil {
+			t.Fatalf("parallel=%d: want one error and no data: %v", parallel, resp)
 		}
 		first, _ := errs[0].(map[string]any)
-		if !strings.Contains(first["message"].(string), "exceeds 3 operations") {
+		if !strings.Contains(first["message"].(string), "selects 5 operations, over the limit of 3") {
 			t.Errorf("message = %v", first["message"])
 		}
-		if st := digPath(first, "extensions", "status"); st != float64(http.StatusBadRequest) {
-			t.Errorf("extensions.status = %v, want 400", st)
+		resp = mustGraphQL(t, srv.URL+"/api/graphql",
+			`query { Demo { a: opA(id: "1") { id } b: opA(id: "2") { id } c: opA(id: "3") { id } } }`)
+		if resp["errors"] != nil || calls.Load() != 3 {
+			t.Errorf("parallel=%d: at the cap: calls=%d resp=%v", parallel, calls.Load(), resp)
 		}
 	}
 }
@@ -145,8 +147,8 @@ func TestMaxOperations_DefaultIs64(t *testing.T) {
 	}
 	q.WriteString(" } }")
 	resp := mustGraphQL(t, srv.URL+"/api/graphql", q.String())
-	if n := calls.Load(); n != 64 {
-		t.Errorf("handler ran %d times, want 64", n)
+	if n := calls.Load(); n != 0 {
+		t.Errorf("handler ran %d times, want 0", n)
 	}
 	if errs, _ := resp["errors"].([]any); len(errs) != 1 {
 		t.Errorf("%d errors, want 1", len(errs))

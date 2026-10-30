@@ -62,8 +62,9 @@ func isWebSocketUpgrade(r *http.Request) bool {
 
 // serveGraphQLWS handles one graphql-transport-ws connection. Each
 // connection multiplexes any number of subscriptions, each with its
-// own context so complete / cancel is per id.
-func (g *Gateway) serveGraphQLWS(w http.ResponseWriter, r *http.Request) {
+// own context so complete / cancel is per id. parent is the connection's
+// parent context (r's, or the WSUpgrade hook's).
+func (g *Gateway) serveGraphQLWS(parent context.Context, w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{wsSubprotocol},
 	})
@@ -76,7 +77,7 @@ func (g *Gateway) serveGraphQLWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusInternalError, "internal")
 
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	// The upgrade request is what huma middlewares see for every
 	// subscription on this connection, and one attribute bag spans

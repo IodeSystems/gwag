@@ -291,11 +291,10 @@ g.DisableIntrospection()   // production: no __schema, no /schema/*
 g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
 ```
 
-- `MaxOperations(n)`: operations past `n` in one request are not
-  dispatched; each fails with a 400 field error. Counted at dispatch
-  (an atomic add in the request scope), so aliases and fragments count
-  and nothing is re-parsed. Default 64; `MaxOperations(0)` turns it
-  off.
+- `MaxOperations(n)`: a document selecting more than `n` operations
+  (aliases and fragment spreads count) is refused whole; nothing runs.
+  A validation rule, like `MaxDepth`. A batch may hold at most `n`
+  documents. Default 64; `MaxOperations(0)` turns it off.
 - `MaxDepth(n)`: queries nesting fields deeper than `n` are refused
   (every field level counts, the namespace included). A validation
   rule: checked once per distinct query, the verdict cached with the
@@ -353,9 +352,9 @@ stages' data merges into one response in the query's field order.
   field exports a scalar.
 - Every step is an ordinary operation: same huma middlewares, same
   context, same handler as over REST and gRPC. The document (or batch)
-  shares one request scope, so `MaxOperations` (which also caps a
-  batch's length), `Attrs`, cookies and the cache-header merge span all
-  of it.
+  shares one request scope, so `Attrs`, cookies and the cache-header
+  merge span all of it. `MaxOperations` applies to each document and
+  caps the batch's length.
 - A batch entry refused before it runs (unknown document id, query text
   under enforced trusted documents) gets an errors object in its slot;
   the others still run. Batches are POST only.
@@ -509,9 +508,43 @@ Endpoints: `POST /api/graphql`, `GET /api/schema/graphql` (SDL or
 `*graphql.Schema` the host built itself, and replaces it at run time:
 requests already running finish on the schema they started with, new
 ones get the replacement. Until the first schema, the GraphQL handler
-answers 503 `NOT_READY`. Set `MaxDepth` / `DisableIntrospection`
-before the first schema; `MaxOperations` and `ParallelQueries` apply
-only to dispatchers gat wired itself.
+answers 503 `NOT_READY`. Set `MaxOperations` / `MaxDepth` /
+`DisableIntrospection` before the first schema; `ParallelQueries`
+applies only to dispatchers gat wired itself.
+
+### Ingress hooks
+
+A host that serves gat's GraphQL handler as its own can put its request
+handling around it (all experimental, all off by default, set before
+serving):
+
+```go
+g.PreRequest(func(w http.ResponseWriter, r *http.Request) (context.Context, func(), bool) {
+    ctx, span := tracer.Start(r.Context(), "graphql")
+    return ctx, func() { span.End() }, true
+})
+g.WSUpgrade(gate)                          // same signature, for graphql-ws upgrades
+g.GraphiQL(page)                           // http.Handler for browser GETs
+g.ParseContentType("multipart/form-data", 32<<20, parseUpload)
+g.AcceptStringVariables(true)              // "variables": "{\"id\":1}"
+g.UsePlanCache(cache)                      // your *graphql.PlanCache and its rules
+```
+
+- `PreRequest` runs for every HTTP request (not WebSocket upgrades)
+  before the body is read. The context it returns is the one resolvers
+  see; `done` runs after the response is written; `ok=false` means the
+  hook answered the request itself.
+- `WSUpgrade` runs before a graphql-ws upgrade is accepted. Its context
+  is the connection's: cancel it and the connection closes. `done`
+  runs when the connection ends.
+- `GraphiQL` serves the handler when `Accept` names `text/html` and not
+  `application/json`, and the URL has no `raw` parameter.
+- `ParseContentType` reads POST bodies of one media type with your
+  `RequestParser` (returns a `gat.Request`), under its own byte cap. A
+  parser error answers 400 with its message; `*http.MaxBytesError`
+  answers 413. Every other body is read as JSON.
+- `UsePlanCache` replaces gat's plan cache, and with it the rules gat
+  builds from `MaxOperations`, `MaxDepth` and `DisableIntrospection`.
 
 ## Front a remote gRPC service from a .proto
 
