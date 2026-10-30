@@ -446,3 +446,35 @@ func TestErrorCode(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPStatus(t *testing.T) {
+	cases := map[connect.Code]int{
+		connect.CodeCanceled:           499,
+		connect.CodeUnknown:            500,
+		connect.CodeInvalidArgument:    400,
+		connect.CodeDeadlineExceeded:   504,
+		connect.CodeNotFound:           404,
+		connect.CodeAlreadyExists:      409,
+		connect.CodePermissionDenied:   403,
+		connect.CodeResourceExhausted:  429,
+		connect.CodeFailedPrecondition: 400,
+		connect.CodeAborted:            409,
+		connect.CodeOutOfRange:         400,
+		connect.CodeUnimplemented:      501,
+		connect.CodeInternal:           500,
+		connect.CodeUnavailable:        503,
+		connect.CodeDataLoss:           500,
+		connect.CodeUnauthenticated:    401,
+	}
+	for code, want := range cases {
+		if got := gat.HTTPStatus(code); got != want {
+			t.Errorf("HTTPStatus(%v) = %d, want %d", code, got, want)
+		}
+	}
+	// An upstream status that has its own code survives the round trip.
+	for _, st := range []int{400, 401, 403, 404, 409, 429, 501, 503} {
+		if got := gat.HTTPStatus(gat.ErrorCode(&statusErr{status: st})); got != st {
+			t.Errorf("round trip %d = %d", st, got)
+		}
+	}
+}

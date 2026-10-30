@@ -364,6 +364,41 @@ func ErrorCode(err error) connect.Code {
 	return connect.CodeInternal
 }
 
+// HTTPStatus is code as an HTTP status, by the Connect protocol's
+// table: Canceled 499, InvalidArgument, FailedPrecondition and
+// OutOfRange 400, Unauthenticated 401, PermissionDenied 403, NotFound
+// 404, AlreadyExists and Aborted 409, ResourceExhausted 429,
+// Unimplemented 501, Unavailable 503, DeadlineExceeded 504, the rest
+// 500. HTTPStatus(ErrorCode(err)) is the status a REST client gets
+// for err.
+//
+// Stability: experimental
+func HTTPStatus(code connect.Code) int {
+	switch code {
+	case connect.CodeCanceled:
+		return 499
+	case connect.CodeInvalidArgument, connect.CodeFailedPrecondition, connect.CodeOutOfRange:
+		return http.StatusBadRequest
+	case connect.CodeUnauthenticated:
+		return http.StatusUnauthorized
+	case connect.CodePermissionDenied:
+		return http.StatusForbidden
+	case connect.CodeNotFound:
+		return http.StatusNotFound
+	case connect.CodeAlreadyExists, connect.CodeAborted:
+		return http.StatusConflict
+	case connect.CodeResourceExhausted:
+		return http.StatusTooManyRequests
+	case connect.CodeUnimplemented:
+		return http.StatusNotImplemented
+	case connect.CodeUnavailable:
+		return http.StatusServiceUnavailable
+	case connect.CodeDeadlineExceeded:
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusInternalServerError
+}
+
 // connectError is err as the *connect.Error a Connect handler returns.
 func connectError(err error) *connect.Error {
 	var ce *connect.Error
