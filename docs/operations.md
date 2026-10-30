@@ -124,3 +124,31 @@ address — leave it unset or add the proxy to `TrustedIPs`.
 Peer IP comes from `r.RemoteAddr` (port stripped). The limiter does
 not honour `X-Forwarded-For` — spoofable headers are not a useful
 rate-limit key.
+
+## Request limits
+
+The GraphQL endpoint refuses oversized work before it dispatches
+anything. Two limits are on by default:
+
+| Option | Default | What it refuses |
+|---|---|---|
+| `WithMaxOperations(n)` | 64 | A document selecting more than `n` operations, aliases and fragment spreads included. |
+| `WithMaxRequestBytes(n)` | 1 MiB | A non-multipart body over `n` bytes (413). Upload bodies follow `WithUploadLimit`. |
+| `WithMaxDepth(n)` | off | Fields nested deeper than `n`, the namespace field included. |
+| `WithoutIntrospection()` | off | `__schema` / `__type`. The schema export handlers keep serving; mount them where only your tooling reaches them. |
+
+Pass `0` to turn a default off. The operation, depth and introspection
+checks are validation rules in the plan cache: each runs once per
+distinct query, and a cache hit pays nothing.
+
+### Trusted documents
+
+`WithTrustedDocuments(docs, enforce)` takes the manifest
+graphql-codegen's client preset writes with `persistedDocuments`
+(`ParseTrustedDocuments` reads it). Clients then send an id instead of
+the query: `{"documentId": "<id>"}`, Apollo APQ's
+`extensions.persistedQuery.sha256Hash`, or `GET ?documentId=<id>`. A
+known id skips parsing and validation. With `enforce` true, query text
+is refused (400 `TRUSTED_DOCUMENT_REQUIRED`), which closes a public
+endpoint to arbitrary queries. Unknown ids answer
+`PERSISTED_QUERY_NOT_FOUND`.

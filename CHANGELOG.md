@@ -11,6 +11,15 @@ changes on MINOR, drops on MAJOR.
 
 ### Added
 - **`WithMetricPrefix(prefix)`.** Opt in to `gwag_*` Prometheus metric names; default stays `go_api_gateway_*` until v3.
+- **Request limits.** `WithMaxOperations(n)`, `WithMaxRequestBytes(n)`, `WithMaxDepth(n)`, `WithoutIntrospection()` on the GraphQL endpoint; see docs/operations.md "Request limits". Shared with gat (`gw/internal/gqlguard`).
+- **Trusted documents.** `WithTrustedDocuments(docs, enforce)` and `ParseTrustedDocuments`: persisted-document ids, Apollo APQ and GET by id, as in gat.
+
+### Security
+- **Default request limits.** The GraphQL endpoint now refuses documents selecting more than 64 operations and bodies over 1 MiB (413). Raise or turn them off with `WithMaxOperations(0)` / `WithMaxRequestBytes(0)`.
+- **GraphiQL no longer runs linked queries.** A browser GET with `?query=` executed the query server-side, outside the plan cache, so it skipped the request limits and the no-mutations-over-GET rule: a link could fire a mutation with the visitor's cookies. The page now only prefills the query.
+
+### Fixed
+- **Cluster puts retried.** Deprecate and MCP-config writes retry a put lost to a replica change instead of failing the admin call; the deprecated bucket now follows the cluster replica count.
 
 ## v2.4.0 — 2026-10-26
 

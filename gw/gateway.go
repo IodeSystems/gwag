@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -260,6 +262,16 @@ type config struct {
 	docCacheMaxQuery  int
 	docCacheDisabled  bool
 	docCacheNormalize bool
+
+	// Request limits on the GraphQL endpoint. maxOperations and
+	// maxDepth run as plan-cache validation rules (0 = no limit);
+	// maxRequestBytes caps a non-multipart request body (0 = none).
+	// trusted is nil unless WithTrustedDocuments ran.
+	maxOperations   int
+	maxDepth        int
+	noIntrospection bool
+	maxRequestBytes int64
+	trusted         *gqlguard.TrustedDocs
 
 	// disableGraphiQL skips construction of the cached GraphiQL UI
 	// handler and routes browser requests through the JSON path.
@@ -892,6 +904,103 @@ func WithoutDocCache() Option {
 	return func(cfg *config) { cfg.docCacheDisabled = true }
 }
 
+// WithMaxOperations caps how many operations one GraphQL request may
+// select, aliases and fragment spreads included (default
+// DefaultMaxOperations; n <= 0: no cap). A request over the cap is
+// refused before anything is dispatched, so a document that aliases
+// one operation a thousand times costs one validation, not a thousand
+// upstream calls. The count is a validation rule: it runs once per
+// distinct query and is cached with the plan.
+//
+// Stability: stable
+func WithMaxOperations(n int) Option {
+	return func(cfg *config) { cfg.maxOperations = max(n, 0) }
+}
+
+// DefaultMaxOperations is the WithMaxOperations default.
+const DefaultMaxOperations = 64
+
+// WithMaxDepth refuses queries whose fields nest deeper than n (n <= 0:
+// no limit, the default). Every field level counts, the namespace
+// field included: `{ pets { getPet { owner { name } } } }` is 4 deep.
+// Checked once per distinct query, like WithMaxOperations.
+//
+// Stability: stable
+func WithMaxDepth(n int) Option {
+	return func(cfg *config) { cfg.maxDepth = n }
+}
+
+// WithoutIntrospection refuses queries selecting __schema or __type
+// (__typename stays allowed), so a public endpoint does not hand out
+// its schema. The schema export handlers (SchemaHandler and siblings)
+// keep serving: mount them where only your tooling reaches them.
+//
+// Stability: stable
+func WithoutIntrospection() Option {
+	return func(cfg *config) { cfg.noIntrospection = true }
+}
+
+// WithMaxRequestBytes caps the GraphQL request body (default
+// DefaultMaxRequestBytes; n <= 0: no cap). A larger body is refused
+// with 413 before it is parsed. Multipart upload bodies are governed
+// by WithUploadLimit instead.
+//
+// Stability: stable
+func WithMaxRequestBytes(n int64) Option {
+	return func(cfg *config) { cfg.maxRequestBytes = max(n, 0) }
+}
+
+// DefaultMaxRequestBytes is the WithMaxRequestBytes default, 1 MiB.
+const DefaultMaxRequestBytes = 1 << 20
+
+// WithTrustedDocuments registers the GraphQL documents this gateway's
+// clients were built with, keyed by document id — the manifest
+// graphql-codegen's client preset writes with `persistedDocuments`
+// (see ParseTrustedDocuments). A request then names a document
+// instead of sending it:
+//
+//	{"documentId": "<id>", "variables": {...}}
+//	{"extensions": {"persistedQuery": {"sha256Hash": "<id>"}}, ...}
+//	GET /graphql?documentId=<id>&variables=<json>
+//
+// A known id skips reading, parsing and validating query text. Ids
+// may carry an algorithm prefix ("sha256:<hash>") on either side.
+//
+// enforce=false accepts both ids and full queries. enforce=true
+// accepts ids only: query text is refused with 400, which closes the
+// endpoint to arbitrary queries. Unknown ids answer
+// PERSISTED_QUERY_NOT_FOUND either way.
+//
+// Stability: experimental
+func WithTrustedDocuments(docs map[string]string, enforce bool) Option {
+	return func(cfg *config) { cfg.trusted = gqlguard.NewTrustedDocs(docs, enforce) }
+}
+
+// ParseTrustedDocuments reads a persisted-documents manifest: a JSON
+// object of document id → document text, as graphql-codegen's client
+// preset writes it.
+//
+// Stability: experimental
+func ParseTrustedDocuments(data []byte) (map[string]string, error) {
+	return gqlguard.ParseManifest(data)
+}
+
+// validationRules are the extra plan-cache rules for the configured
+// request limits.
+func (cfg *config) validationRules() []graphql.ValidationRuleFn {
+	var rules []graphql.ValidationRuleFn
+	if cfg.maxOperations > 0 {
+		rules = append(rules, gqlguard.MaxOperationsRule(cfg.maxOperations))
+	}
+	if cfg.maxDepth > 0 {
+		rules = append(rules, gqlguard.MaxDepthRule(cfg.maxDepth))
+	}
+	if cfg.noIntrospection {
+		rules = append(rules, gqlguard.NoIntrospectionRule)
+	}
+	return rules
+}
+
 // WithDocNormalization turns on literal→variable normalization in
 // the plan cache. With it on, two queries that differ only in
 // literal field-argument values share one cached plan; the per-call
@@ -1012,7 +1121,9 @@ func WithGRPCConnPoolSize(n int) Option {
 // Stability: stable
 func New(opts ...Option) *Gateway {
 	cfg := &config{
-		backpressure: DefaultBackpressure,
+		backpressure:    DefaultBackpressure,
+		maxOperations:   DefaultMaxOperations,
+		maxRequestBytes: DefaultMaxRequestBytes,
 	}
 	for _, o := range opts {
 		o(cfg)
@@ -1105,11 +1216,23 @@ func New(opts ...Option) *Gateway {
 	if cfg.mcpSeedSet {
 		g.mcpConfig = &mcpConfigState{cfg: cloneMCPConfig(cfg.mcpSeed)}
 	}
+	rules := cfg.validationRules()
+	if cfg.docCacheDisabled && len(rules) > 0 {
+		// A nil cache plans with the spec rules only. With limits set,
+		// keep a cache whose byte cap sends every query past it: the
+		// bypass path still runs the rules, and nothing is kept.
+		g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
+			MaxEntries:    1,
+			MaxQueryBytes: 1,
+			Rules:         rules,
+		})
+	}
 	if !cfg.docCacheDisabled {
 		g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
 			MaxEntries:    cfg.docCacheSize,
 			MaxQueryBytes: cfg.docCacheMaxQuery,
 			Normalize:     cfg.docCacheNormalize,
+			Rules:         rules,
 		})
 		// Surface the cache's hit/miss counters as Prometheus
 		// counters at scrape time. Skipped silently when the
@@ -1834,13 +1957,28 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 	// overshoot, which the existing parseErr handling then overrides
 	// with our richer envelope — that's fine since headers haven't
 	// been flushed yet.
-	if g.cfg.uploadLimit > 0 && r.Body != nil {
-		ct := r.Header.Get("Content-Type")
-		if strings.HasPrefix(ct, "multipart/") {
-			r.Body = http.MaxBytesReader(w, r.Body, g.cfg.uploadLimit)
+	if r.Body != nil && r.Method == http.MethodPost {
+		multipart := strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/")
+		switch max := g.cfg.maxRequestBytes; {
+		case multipart:
+			if g.cfg.uploadLimit > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, g.cfg.uploadLimit)
+			}
+		case max <= 0:
+		case r.ContentLength > max:
+			// A declared length is checked up front for free; only a
+			// chunked body pays for the limiting reader.
+			writeCodedError(w, "request body too large", "BAD_REQUEST", http.StatusRequestEntityTooLarge)
+			return
+		case r.ContentLength < 0:
+			r.Body = http.MaxBytesReader(w, r.Body, max)
 		}
 	}
 	opts, parseErr := parseGraphqlRequest(r)
+	if tooLarge := (*http.MaxBytesError)(nil); parseErr != nil && errors.As(parseErr, &tooLarge) && !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		writeCodedError(w, "request body too large", "BAD_REQUEST", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if parseErr != nil {
 		// Today this fires only on a malformed multipart/form-data
 		// body — the JSON / form parsers still degrade silently to an
@@ -1855,7 +1993,20 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 		return
 	}
 
-	pr := g.planCache.Get(schema, opts.Query, opts.OperationName)
+	var pr graphql.PlanResult
+	if t := g.cfg.trusted; t != nil || opts.DocumentID != "" || opts.Extensions != nil {
+		var (
+			msg, code string
+			status    int
+		)
+		opts.Query, pr, status, msg, code = g.planTrusted(schema, opts)
+		if status != 0 {
+			writeCodedError(w, msg, code, status)
+			return
+		}
+	} else {
+		pr = g.planCache.Get(schema, opts.Query, opts.OperationName)
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// GraphQL over HTTP forbids mutations on GET. Running one would let
@@ -1931,6 +2082,43 @@ func (g *Gateway) serveGraphQLJSON(ctx context.Context, schema *graphql.Schema, 
 			Context:        ctx,
 		}))
 	}
+}
+
+// planTrusted resolves a request that may name a persisted document
+// (WithTrustedDocuments) and plans it. A non-zero status is a refusal
+// to write instead of executing. It returns the document text the
+// plan came from.
+func (g *Gateway) planTrusted(schema *graphql.Schema, opts *graphqlRequestOptions) (query string, pr graphql.PlanResult, status int, msg, code string) {
+	t := g.cfg.trusted
+	id := gqlguard.PersistedID(opts.DocumentID, opts.Extensions)
+	switch {
+	case id != "" && t == nil:
+		return "", pr, http.StatusBadRequest, "persisted documents are not enabled", "PERSISTED_QUERY_NOT_SUPPORTED"
+	case id != "":
+		key, doc, ok := t.Lookup(id)
+		switch {
+		case ok:
+			return doc, t.Plan(g.planCache, schema, key, doc, opts.OperationName), 0, "", ""
+		case opts.Query != "" && !t.Enforce:
+			// APQ sends the hash with the query on retry; without
+			// enforcement the query alone is enough.
+		default:
+			return "", pr, http.StatusOK, "PersistedQueryNotFound", "PERSISTED_QUERY_NOT_FOUND"
+		}
+	case t != nil && t.Enforce && opts.Query != "":
+		return "", pr, http.StatusBadRequest, "only trusted documents are accepted", "TRUSTED_DOCUMENT_REQUIRED"
+	}
+	return opts.Query, g.planCache.Get(schema, opts.Query, opts.OperationName), 0, "", ""
+}
+
+// writeCodedError writes a GraphQL errors envelope carrying
+// extensions.code, the shape clients key persisted-query handling on.
+func writeCodedError(w http.ResponseWriter, msg, code string, status int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"errors": []map[string]any{{"message": msg, "extensions": map[string]any{"code": code}}},
+	})
 }
 
 // graphqlBufPool reuses []byte buffers across GraphQL responses to

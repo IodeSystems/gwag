@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"io"
 	"mime"
@@ -53,30 +54,43 @@ type graphqlRequestOptions struct {
 	Query         string         `json:"query"`
 	Variables     map[string]any `json:"variables"`
 	OperationName string         `json:"operationName"`
+	// DocumentID and Extensions name a persisted document
+	// (WithTrustedDocuments); see gqlguard.PersistedID.
+	DocumentID string         `json:"documentId"`
+	Extensions map[string]any `json:"extensions"`
 }
 
 // graphqlRequestOptionsCompat is the workaround shape for clients
 // that send `variables` as a JSON-encoded string rather than a
 // nested object. handler@v0.2.4 carried the same shim.
 type graphqlRequestOptionsCompat struct {
-	Query         string `json:"query"`
-	Variables     string `json:"variables"`
-	OperationName string `json:"operationName"`
+	Query         string         `json:"query"`
+	Variables     string         `json:"variables"`
+	OperationName string         `json:"operationName"`
+	DocumentID    string         `json:"documentId"`
+	Extensions    map[string]any `json:"extensions"`
 }
 
 func graphqlOptionsFromForm(values url.Values) *graphqlRequestOptions {
 	query := values.Get("query")
-	if query == "" {
+	documentID := values.Get("documentId")
+	extensions := values.Get("extensions")
+	if query == "" && documentID == "" && extensions == "" {
 		return nil
 	}
 	variables := make(map[string]any, len(values))
 	variablesStr := values.Get("variables")
 	_ = json.Unmarshal([]byte(variablesStr), &variables)
-	return &graphqlRequestOptions{
+	opts := &graphqlRequestOptions{
 		Query:         query,
 		Variables:     variables,
 		OperationName: values.Get("operationName"),
+		DocumentID:    documentID,
 	}
+	if extensions != "" {
+		_ = json.Unmarshal([]byte(extensions), &opts.Extensions)
+	}
+	return opts
 }
 
 // parseGraphqlRequest parses an http.Request into GraphQL request
@@ -151,6 +165,10 @@ func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
 			}
 		}()
 		if _, err := io.Copy(buf, r.Body); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				return &opts, err
+			}
 			return &opts, nil
 		}
 		body := buf.Bytes()
@@ -159,6 +177,8 @@ func parseGraphqlRequest(r *http.Request) (*graphqlRequestOptions, error) {
 			var optsCompat graphqlRequestOptionsCompat
 			_ = json.Unmarshal(body, &optsCompat)
 			_ = json.Unmarshal([]byte(optsCompat.Variables), &opts.Variables)
+			opts.Query, opts.OperationName = optsCompat.Query, optsCompat.OperationName
+			opts.DocumentID, opts.Extensions = optsCompat.DocumentID, optsCompat.Extensions
 		}
 		return &opts, nil
 	}
@@ -176,10 +196,9 @@ func newGraphiqlServer(schema *graphql.Schema) *graphiqlServer {
 	return &graphiqlServer{schema: schema}
 }
 
-// ServeHTTP renders the GraphiQL page. When the request carries a
-// query (e.g. a shared "?query=…" link), the query is executed
-// server-side and its result embedded into the page; otherwise the
-// browser fetches against `/api/graphql` itself.
+// ServeHTTP renders the GraphiQL page. A query the request carries
+// (e.g. a shared "?query=…" link) is prefilled, not executed; the
+// browser runs it against the endpoint itself.
 func (s *graphiqlServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	opts, _ := parseGraphqlRequest(r)
 	params := graphql.Params{
@@ -217,19 +236,13 @@ func renderGraphiQL(w http.ResponseWriter, params graphql.Params) {
 	if varsString == "null" {
 		varsString = ""
 	}
-	var resString string
-	if params.RequestString != "" {
-		result, err := json.MarshalIndent(graphql.Do(params), "", "  ")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		resString = string(result)
-	}
+	// The page only prefills a shared "?query=" link; the browser runs
+	// it over POST. Running it here would skip the plan cache's limits
+	// and the no-mutations-over-GET rule: any link a visitor follows
+	// could fire a mutation with their cookies.
 	d := graphiqlPageData{
 		GraphiqlVersion: graphiqlVersion,
 		QueryString:     params.RequestString,
-		ResultString:    resString,
 		VariablesString: varsString,
 		OperationName:   params.OperationName,
 	}
