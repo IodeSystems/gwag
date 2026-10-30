@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // AddGraphQL ingests a remote GraphQL service into the local schema
@@ -100,6 +101,7 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		hash:             hash,
 		forwardHeaders:   sc.forwardHeaders,
 		metrics:          g.cfg.metrics,
+		policy:           g.upstreamPolicyFor(sc.timeout),
 	}
 	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
@@ -128,7 +130,10 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 // replicaID may be empty for boot-time / standalone control-plane
 // callers; cluster-driven callers pass the registry KV replica id so
 // reconciler.handleDelete can later remove the matching replica.
-func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []byte, hash [32]byte, owner, replicaID string) error {
+//
+// timeout is the binding's per-call upstream timeout (0 → gateway
+// default), captured on source creation only.
+func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []byte, hash [32]byte, owner, replicaID string, timeout time.Duration) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}
@@ -178,6 +183,7 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		rawIntrospection: append([]byte(nil), rawIntro...),
 		hash:             hash,
 		metrics:          g.cfg.metrics,
+		policy:           g.upstreamPolicyFor(timeout),
 	}
 	if mi := g.cfg.backpressure.MaxInflight; mi > 0 {
 		src.sem = make(chan struct{}, mi)
@@ -311,6 +317,10 @@ type graphQLSource struct {
 	// subBroker can surface per-namespace fanout open/close +
 	// active-count without reaching back through the Gateway.
 	metrics Metrics
+
+	// policy carries the per-call timeout and ejection settings for
+	// unary dispatch, resolved at source creation (see upstream.go).
+	policy upstreamPolicy
 }
 
 // getSubBroker returns the source's subscription multiplexer,
@@ -331,32 +341,89 @@ type graphQLReplica struct {
 	owner      string       // registration ID; "" for boot-time
 	httpClient *http.Client // nil → http.DefaultClient
 	inflight   atomic.Int32
+
+	// health is the ejection state (upstream.go).
+	health replicaHealth
 }
 
+func (r *graphQLReplica) healthState() *replicaHealth { return &r.health }
+func (r *graphQLReplica) inflightN() int32            { return r.inflight.Load() }
+
 // pickReplica returns the replica with the lowest in-flight count,
-// breaking ties via round-robin so serial low-traffic dispatch still
-// spreads across replicas. Returns nil when the source is empty
-// (transient state during drain).
+// skipping ejected replicas unless all are ejected, and breaking
+// ties via round-robin so serial low-traffic dispatch still spreads
+// across replicas. Returns nil when the source is empty (transient
+// state during drain).
 func (s *graphQLSource) pickReplica() *graphQLReplica {
+	return s.pickReplicaExcept(nil)
+}
+
+// pickReplicaExcept is pickReplica over the replicas not in tried;
+// nil when none are left.
+func (s *graphQLSource) pickReplicaExcept(tried []*graphQLReplica) *graphQLReplica {
 	rs := s.replicas.Load()
 	if rs == nil || len(*rs) == 0 {
 		return nil
 	}
-	minN := (*rs)[0].inflight.Load()
-	for _, r := range (*rs)[1:] {
-		if n := r.inflight.Load(); n < minN {
-			minN = n
-		}
+	if len(*rs) == 1 && len(tried) == 0 {
+		return (*rs)[0]
 	}
-	hint := s.pickHint.Add(1) - 1
-	n := uint64(len(*rs))
-	for i := uint64(0); i < n; i++ {
-		r := (*rs)[(hint+i)%n]
-		if r.inflight.Load() == minN {
-			return r
-		}
+	r, _ := pickHealthy(*rs, s.pickHint.Add(1)-1, tried)
+	return r
+}
+
+// roundTrip is the unary upstream call shared by every GraphQL
+// dispatcher: pick a replica, POST under the source's timeout,
+// record the outcome for ejection, and retry on another replica when
+// the request provably never got a connection (httpConnProbe).
+// GraphQL-level errors in a 200 response are not upstream failures.
+func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[string]any) (*graphQLResponse, error) {
+	r := s.pickReplica()
+	if r == nil {
+		return nil, Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", s.namespace))
 	}
-	return (*rs)[0]
+	policy := &s.policy
+	callCtx, cancel := withUpstreamTimeout(ctx, policy)
+	defer cancel()
+	var tried [maxUpstreamAttempts]*graphQLReplica
+	for attempt := 0; ; attempt++ {
+		tried[attempt] = r
+		attemptCtx := callCtx
+		var probe *httpConnProbe
+		if attempt+1 < maxUpstreamAttempts && s.replicaCount() > attempt+1 && httpClientTraceable(r.httpClient) {
+			probe, attemptCtx = acquireHTTPConnProbe(callCtx)
+		}
+		r.inflight.Add(1)
+		resp, err := dispatchGraphQL(attemptCtx, r.httpClient, r.endpoint, query, vars, s.forwardHeaders)
+		r.inflight.Add(-1)
+		if err == nil {
+			r.health.success()
+			if probe != nil {
+				releaseHTTPConnProbe(probe)
+			}
+			return resp, nil
+		}
+		timedOut := upstreamTimedOut(ctx, callCtx, policy)
+		if timedOut || (ctx.Err() == nil && httpCountsAsFailure(err)) {
+			r.health.failure(policy)
+		}
+		notSent := false
+		if probe != nil {
+			notSent = !probe.gotConn.Load() && httpTransportFailure(err)
+			releaseHTTPConnProbe(probe)
+		}
+		if timedOut {
+			return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s/%s: upstream timeout after %s", s.namespace, s.version, policy.timeout))
+		}
+		if !notSent || callCtx.Err() != nil {
+			return nil, err
+		}
+		next := s.pickReplicaExcept(tried[:attempt+1])
+		if next == nil {
+			return nil, err
+		}
+		r = next
+	}
 }
 
 // addReplica appends r. Returns the new replica count.
@@ -476,15 +543,15 @@ func dispatchGraphQL(
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()))
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, Reject(httpStatusToCode(resp.StatusCode),
+		return nil, rejectUpstream(httpStatusClass(resp.StatusCode), httpStatusToCode(resp.StatusCode),
 			fmt.Sprintf("graphql: %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
 	var out graphQLResponse

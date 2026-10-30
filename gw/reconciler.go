@@ -126,7 +126,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addOpenAPISourceLocked(ns, ver, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID, int(v.MaxConcurrency), int(v.MaxConcurrencyPerInstance))
+		err := g.addOpenAPISourceLocked(ns, ver, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID, int(v.MaxConcurrency), int(v.MaxConcurrencyPerInstance), msDuration(v.TimeoutMs))
 		g.mu.Unlock()
 		if err != nil {
 			g.cfg.cluster.Server.Warnf("reconciler: openapi %s/%s: %v", ns, ver, err)
@@ -138,7 +138,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		var hash [32]byte
 		copy(hash[:], v.Hash)
 		g.mu.Lock()
-		err := g.addGraphQLSourceLocked(ns, ver, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID)
+		err := g.addGraphQLSourceLocked(ns, ver, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID, msDuration(v.TimeoutMs))
 		g.mu.Unlock()
 		if err != nil {
 			g.cfg.cluster.Server.Warnf("reconciler: graphql %s/%s: %v", ns, ver, err)
@@ -182,6 +182,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		replicaID:                 replicaID,
 		maxConcurrency:            int(v.MaxConcurrency),
 		maxConcurrencyPerInstance: int(v.MaxConcurrencyPerInstance),
+		timeout:                   msDuration(v.TimeoutMs),
 	}); err != nil {
 		r.releaseConn(v.Addr)
 		g.cfg.cluster.Server.Warnf("reconciler: join pool %s/%s: %v", ns, ver, err)

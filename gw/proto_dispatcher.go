@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/IodeSystems/graphql-go/v2/language/ast"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
@@ -80,20 +82,8 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			addDispatchTime(ctx, elapsed)
 			return nil, err
 		}
-		// Per-instance cap: acquired AFTER pickReplica because the
-		// per-instance sem is keyed on a specific replica. Service-
-		// level backpressure already gated entry above (in
-		// backpressureMiddleware on the canonical-args path; in the
-		// gRPC ingress prologue otherwise).
-		releaseInstance, err := acquireReplicaSlot(ctx, r, p, method, metrics, bpOpts)
-		if err != nil {
-			elapsed := time.Since(start)
-			metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
-			addDispatchTime(ctx, elapsed)
-			return nil, err
-		}
-		defer releaseInstance()
 
+		callCtx := ctx
 		if len(headers) > 0 {
 			injected, err := applyHeaderInjectors(ctx, headers)
 			if err != nil {
@@ -107,25 +97,80 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 				for k, v := range injected {
 					kvs = append(kvs, k, v)
 				}
-				ctx = metadata.AppendToOutgoingContext(ctx, kvs...)
+				callCtx = metadata.AppendToOutgoingContext(callCtx, kvs...)
 			}
 			releaseInjectorMap(injected)
 		}
+		callCtx = bridgeTraceMetadata(callCtx)
+		callCtx = tr.injectGRPC(callCtx)
+		policy := &p.policy
+		callCtx, cancel := withUpstreamTimeout(callCtx, policy)
+		defer cancel()
 
-		r.inflight.Add(1)
-		defer r.inflight.Add(-1)
-		ctx = bridgeTraceMetadata(ctx)
-		ctx = tr.injectGRPC(ctx)
-		resp := acquireDynamicMessage(outputDesc)
-		err = r.conn.Invoke(ctx, method, req, resp)
+		// Attempt loop. A retry happens only when the failed attempt
+		// provably never got a transport stream (grpcPeerProbe), and
+		// only onto a replica not tried yet.
+		var tried [maxUpstreamAttempts]*replica
+		var err error
+		for attempt := 0; ; attempt++ {
+			tried[attempt] = r
+			// Per-instance cap: acquired AFTER the pick because the
+			// per-instance sem is keyed on a specific replica.
+			// Service-level backpressure already gated entry (in
+			// backpressureMiddleware on the canonical-args path; in
+			// the gRPC ingress prologue otherwise).
+			var releaseInstance func()
+			releaseInstance, err = acquireReplicaSlot(ctx, r, p, method, metrics, bpOpts)
+			if err != nil {
+				break
+			}
+			var probe *grpcPeerProbe
+			if r.probePeer && attempt+1 < maxUpstreamAttempts && p.replicaCount() > attempt+1 {
+				probe = acquireGRPCPeerProbe()
+			}
+			resp := acquireDynamicMessage(outputDesc)
+			r.inflight.Add(1)
+			if probe != nil {
+				err = r.conn.Invoke(callCtx, method, req, resp, probe.opts...)
+			} else {
+				err = r.conn.Invoke(callCtx, method, req, resp)
+			}
+			r.inflight.Add(-1)
+			releaseInstance()
+			if err == nil {
+				r.health.success()
+				elapsed := time.Since(start)
+				metrics.RecordDispatch(ctx, ns, ver, method, elapsed, nil)
+				addDispatchTime(ctx, elapsed)
+				return resp, nil
+			}
+			releaseDynamicMessage(outputDesc, resp)
+			timedOut := upstreamTimedOut(ctx, callCtx, policy)
+			if timedOut || grpcCountsAsFailure(err) {
+				r.health.failure(policy)
+			}
+			notSent := false
+			if probe != nil {
+				notSent = probe.grpcNotSent(err)
+				releaseGRPCPeerProbe(probe)
+			}
+			if timedOut {
+				err = status.Errorf(codes.DeadlineExceeded, "gateway: %s/%s %s: upstream timeout after %s", ns, ver, method, policy.timeout)
+				break
+			}
+			if !notSent || callCtx.Err() != nil {
+				break
+			}
+			next := p.pickReplicaExcept(tried[:attempt+1])
+			if next == nil {
+				break
+			}
+			r = next
+		}
 		elapsed := time.Since(start)
 		metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
 		addDispatchTime(ctx, elapsed)
-		if err != nil {
-			releaseDynamicMessage(outputDesc, resp)
-			return nil, err
-		}
-		return resp, nil
+		return nil, err
 	})
 }
 

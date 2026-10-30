@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/IodeSystems/graphql-go/v2"
@@ -133,6 +134,7 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		rawSpec:                   append([]byte(nil), specBytes...),
 		maxConcurrency:            sc.maxConcurrency,
 		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
+		policy:                    g.upstreamPolicyFor(sc.timeout),
 		uploadStore:               g.cfg.uploadStore,
 		uploadLimit:               g.cfg.uploadLimit,
 	}
@@ -207,6 +209,10 @@ type openAPISource struct {
 	maxConcurrency            int
 	maxConcurrencyPerInstance int
 
+	// policy carries the per-call timeout and ejection settings,
+	// resolved at source creation (see upstream.go).
+	policy upstreamPolicy
+
 	// rawSpec is kept for /schema/openapi re-emit and (cluster mode)
 	// for the reconciler to write back into KV when shape changes.
 	rawSpec []byte
@@ -253,35 +259,35 @@ type openAPIReplica struct {
 
 	// queueing tracks waiters on the per-replica sem.
 	queueing atomic.Int32
+
+	// health is the ejection state (upstream.go).
+	health replicaHealth
 }
 
+func (r *openAPIReplica) healthState() *replicaHealth { return &r.health }
+func (r *openAPIReplica) inflightN() int32            { return r.inflight.Load() }
+
 // pickReplica returns the replica with the lowest in-flight count,
-// breaking ties via round-robin so serial low-traffic dispatch still
-// spreads across replicas. Returns nil when the source is empty
-// (transient state during drain).
+// skipping ejected replicas unless all are ejected, and breaking
+// ties via round-robin so serial low-traffic dispatch still spreads
+// across replicas. Returns nil when the source is empty (transient
+// state during drain).
 func (s *openAPISource) pickReplica() *openAPIReplica {
+	return s.pickReplicaExcept(nil)
+}
+
+// pickReplicaExcept is pickReplica over the replicas not in tried;
+// nil when none are left.
+func (s *openAPISource) pickReplicaExcept(tried []*openAPIReplica) *openAPIReplica {
 	rs := s.replicas.Load()
 	if rs == nil || len(*rs) == 0 {
 		return nil
 	}
-	// Find the minimum in-flight value.
-	minN := (*rs)[0].inflight.Load()
-	for _, r := range (*rs)[1:] {
-		if n := r.inflight.Load(); n < minN {
-			minN = n
-		}
+	if len(*rs) == 1 && len(tried) == 0 {
+		return (*rs)[0]
 	}
-	// Among replicas tied at the minimum, round-robin via pickHint.
-	hint := s.pickHint.Add(1) - 1
-	n := uint64(len(*rs))
-	for i := uint64(0); i < n; i++ {
-		r := (*rs)[(hint+i)%n]
-		if r.inflight.Load() == minN {
-			return r
-		}
-	}
-	// Race: replica counters changed mid-walk. Fall back to first.
-	return (*rs)[0]
+	r, _ := pickHealthy(*rs, s.pickHint.Add(1)-1, tried)
+	return r
 }
 
 // addReplica appends r. Returns the new replica count.
@@ -379,8 +385,10 @@ func (s *openAPISource) replicaCount() int {
 // maxConcurrency / maxConcurrencyPerInstance carry the
 // ServiceBinding's per-binding caps (0 → gateway default for
 // service-level, unbounded per-instance). Frozen at first
-// registration (overwritten on unstable swap).
-func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string, maxConcurrency, maxConcurrencyPerInstance int) error {
+// registration (overwritten on unstable swap). timeout is the
+// binding's per-call upstream timeout (0 → gateway default), also
+// captured on source creation only.
+func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string, maxConcurrency, maxConcurrencyPerInstance int, timeout time.Duration) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
@@ -440,6 +448,7 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		rawSpec:                   append([]byte(nil), specBytes...),
 		maxConcurrency:            maxConcurrency,
 		maxConcurrencyPerInstance: maxConcurrencyPerInstance,
+		policy:                    g.upstreamPolicyFor(timeout),
 		uploadStore:               g.cfg.uploadStore,
 		uploadLimit:               g.cfg.uploadLimit,
 	}
@@ -642,9 +651,11 @@ func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
 	return long, jsonScalar
 }
 
-// dispatchOpenAPI substitutes path params, encodes query + body, sends
-// the HTTP request, and decodes the JSON response. httpClient nil
-// means http.DefaultClient.
+// dispatchOpenAPIRaw substitutes path params, encodes query + body,
+// sends the HTTP request, and returns the upstream response body as
+// raw JSON bytes. httpClient nil means http.DefaultClient. Empty body
+// returns (nil, nil). openAPIDispatcher.Dispatch decodes the bytes;
+// DispatchAppend splices them without the full-tree map allocation.
 //
 // When op.RequestBody declares multipart/form-data (or any arg in
 // gqlArgs is *Upload), the dispatcher builds a multipart/form-data
@@ -654,35 +665,6 @@ func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
 // (those carrying TusID but no inline File) at dispatch time; nil
 // store + a tus-staged *Upload is a clear "no store configured"
 // error from (*Upload).Open.
-func dispatchOpenAPI(
-	ctx context.Context,
-	method, baseURL, pathTemplate string,
-	op *openapi3.Operation,
-	gqlArgs map[string]any,
-	forwardHeaders []string,
-	headerInjectors []headerInjector,
-	httpClient *http.Client,
-	store UploadStore,
-) (any, error) {
-	respBytes, err := dispatchOpenAPIRaw(ctx, method, baseURL, pathTemplate, op, gqlArgs, forwardHeaders, headerInjectors, httpClient, store)
-	if err != nil {
-		return nil, err
-	}
-	if len(respBytes) == 0 {
-		return nil, nil
-	}
-	var out any
-	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", err.Error()))
-	}
-	return out, nil
-}
-
-// dispatchOpenAPIRaw mirrors dispatchOpenAPI but returns the upstream
-// response body as raw JSON bytes — used by
-// openAPIDispatcher.DispatchAppend so the byte-splice path skips the
-// full-tree map allocation. Empty body returns (nil, nil); the caller
-// emits "null".
 func dispatchOpenAPIRaw(
 	ctx context.Context,
 	method, baseURL, pathTemplate string,
@@ -780,15 +762,15 @@ func dispatchOpenAPIRaw(
 	// this dispatch are ours to close.
 	closeUploads(multipartCloseups)
 	if err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, Reject(httpStatusToCode(resp.StatusCode),
+		return nil, rejectUpstream(httpStatusClass(resp.StatusCode), httpStatusToCode(resp.StatusCode),
 			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
 	return respBytes, nil

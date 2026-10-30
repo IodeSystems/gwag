@@ -49,6 +49,10 @@ type registryValue struct {
 	// (service-level) or unbounded (per-instance).
 	MaxConcurrency            uint32 `json:"max_concurrency,omitempty"`
 	MaxConcurrencyPerInstance uint32 `json:"max_concurrency_per_instance,omitempty"`
+
+	// TimeoutMs is ServiceBinding.timeout_ms: per-call upstream
+	// timeout; 0 → each gateway's own WithUpstreamTimeout default.
+	TimeoutMs uint32 `json:"timeout_ms,omitempty"`
 }
 
 // IsOpenAPI reports whether this entry represents an OpenAPI source.

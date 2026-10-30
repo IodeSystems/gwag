@@ -13,6 +13,16 @@ changes on MINOR, drops on MAJOR.
 - **`WithMetricPrefix(prefix)`.** Opt in to `gwag_*` Prometheus metric names; default stays `go_api_gateway_*` until v3.
 - **Request limits.** `WithMaxOperations(n)`, `WithMaxRequestBytes(n)`, `WithMaxDepth(n)`, `WithoutIntrospection()` on the GraphQL endpoint; see docs/operations.md "Request limits". Shared with gat (`gw/internal/gqlguard`).
 - **Trusted documents.** `WithTrustedDocuments(docs, enforce)` and `ParseTrustedDocuments`: persisted-document ids, Apollo APQ and GET by id, as in gat.
+- **Upstream call timeouts.** `Timeout(d)` (per service),
+  `WithUpstreamTimeout(d)` (gateway default) and
+  `ServiceBinding.timeout_ms` (control plane) bound unary dispatch to
+  gRPC, OpenAPI and downstream-GraphQL upstreams. Off by default.
+- **Retry on a different replica** when a unary call provably never
+  reached an upstream (connect refused, no connection). Delivered
+  requests, 5xx and timeouts are never retried.
+- **Replica ejection.** `WithReplicaEjection(failures, cooldown)`: a
+  replica with 5 consecutive failures (default) gets no traffic for
+  10 s (default). Fails open when every replica is ejected.
 
 ### Security
 - **Default request limits.** The GraphQL endpoint now refuses documents selecting more than 64 operations and bodies over 1 MiB (413). Raise or turn them off with `WithMaxOperations(0)` / `WithMaxRequestBytes(0)`.

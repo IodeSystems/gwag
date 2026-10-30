@@ -55,6 +55,46 @@ fails with `Reject(ResourceExhausted, "could not acquire slot in N")`
 gateway-wide unary cap by design (it would couple unrelated requests);
 visibility comes from the per-pool metrics below.
 
+## Upstream timeouts, retries, ejection
+
+These apply to unary dispatch to gRPC pools, OpenAPI sources and
+downstream GraphQL sources. Subscriptions are not affected.
+
+**Timeout.** None by default. Set one per service with
+`gateway.Timeout(d)` (or `timeout_ms` on the control-plane
+`ServiceBinding`), or a default for every service with
+`gateway.WithUpstreamTimeout(d)`. The service value wins. A call that
+runs past it fails with `upstream timeout after <d>` as a normal
+field error. The timeout covers the upstream call only, not the wait
+for a backpressure slot (`MaxWaitTime` covers that).
+
+**Retry.** The gateway re-sends a call only when it can prove the
+request never reached an upstream, and only to a replica it has not
+tried yet (at most 3 attempts per call, inside the same timeout):
+
+- gRPC: the call failed `Unavailable` and grpc-go never opened a
+  transport stream for it (connect refused, no connection). A
+  server that returns `Unavailable` itself is not retried. Only for
+  connections the gateway dials (`To("host:port")`, control plane,
+  cluster); a caller-supplied `grpc.ClientConnInterface` is never
+  retried.
+- OpenAPI / GraphQL: the HTTP client failed before it got a
+  connection (`httptrace` `GotConn` never fired). Only for clients
+  that use `*http.Transport`; OpenAPI requests with uploads are never
+  retried.
+
+5xx responses, timeouts, and errors after a connection was made are
+never retried, whatever the HTTP method.
+
+**Ejection.** On by default. After 5 consecutive failures (connect
+errors, timeouts, HTTP 5xx, gRPC `Unavailable`) a replica gets no
+traffic for 10 s, then is tried again; a success resets the count,
+and a readmitted replica that fails again is ejected again at once.
+When every replica of a service is ejected the gateway still sends to
+one, so a single-replica service behaves the same with or without
+ejection. Tune with `gateway.WithReplicaEjection(failures, cooldown)`;
+`failures <= 0` turns it off.
+
 ## Metrics
 
 Every dispatch is timed by default. `gw.MetricsHandler()` exposes:

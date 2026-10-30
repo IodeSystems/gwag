@@ -68,6 +68,10 @@ type pool struct {
 	maxConcurrency            int
 	maxConcurrencyPerInstance int
 
+	// policy carries the per-call timeout and ejection settings,
+	// resolved at pool creation (see upstream.go).
+	policy upstreamPolicy
+
 	// replicas slice is replaced (not mutated in place) on add/remove
 	// so dispatch closures snapshotting it never see partial mutation.
 	// Reads via Load() in pickReplica.
@@ -111,25 +115,40 @@ type replica struct {
 	// queueing tracks waiters on the per-replica sem (instance-level
 	// queue depth, distinct from pool.queueing).
 	queueing atomic.Int32
+
+	// health is the ejection state (upstream.go).
+	health replicaHealth
+
+	// probePeer: conn is a grpc-go ClientConn (or the gateway's own
+	// pool of them), so a grpc.Peer call option reliably tells
+	// whether a failed call ever got a transport stream. False for
+	// caller-supplied ClientConnInterface values → never retried.
+	probePeer bool
 }
 
-// pickReplica returns the replica with the lowest in-flight count.
-// Returns nil if the pool has no replicas (transient state during
-// drain). Caller treats nil as a transient failure.
+func (r *replica) healthState() *replicaHealth { return &r.health }
+func (r *replica) inflightN() int32            { return r.inflight.Load() }
+
+// pickReplica returns the replica with the lowest in-flight count,
+// skipping ejected replicas unless all are ejected. Returns nil if
+// the pool has no replicas (transient state during drain). Caller
+// treats nil as a transient failure.
 func (p *pool) pickReplica() *replica {
+	return p.pickReplicaExcept(nil)
+}
+
+// pickReplicaExcept is pickReplica over the replicas not in tried;
+// nil when none are left.
+func (p *pool) pickReplicaExcept(tried []*replica) *replica {
 	rs := p.replicas.Load()
 	if rs == nil || len(*rs) == 0 {
 		return nil
 	}
-	best := (*rs)[0]
-	bestN := best.inflight.Load()
-	for _, r := range (*rs)[1:] {
-		n := r.inflight.Load()
-		if n < bestN {
-			best, bestN = r, n
-		}
+	if len(*rs) == 1 && len(tried) == 0 {
+		return (*rs)[0]
 	}
-	return best
+	r, _ := pickHealthy(*rs, 0, tried)
+	return r
 }
 
 // addReplica returns a new pool slice with `r` appended. The pool's

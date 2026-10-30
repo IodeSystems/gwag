@@ -14,7 +14,7 @@ import (
 
 // openAPIDispatcher implements ir.Dispatcher for one OpenAPI source
 // + one operation. Inner work mirrors the inline body in
-// gw/openapi.go (pre-cutover): pickReplica → dispatchOpenAPI →
+// gw/openapi.go (pre-cutover): pickReplica → dispatchOpenAPIRaw →
 // RecordDispatch. backpressureMiddleware wraps the outside.
 //
 // One per (source, operation) at schema build time. The captured
@@ -71,26 +71,13 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	)
 	defer span.End()
 	start := time.Now()
-	r := d.src.pickReplica()
-	if r == nil {
-		err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
-		elapsed := time.Since(start)
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
-		addDispatchTime(ctx, elapsed)
-		return nil, err
+	respBytes, err := d.roundTrip(ctx, args)
+	var resp any
+	if err == nil && len(respBytes) > 0 {
+		if uerr := json.Unmarshal(respBytes, &resp); uerr != nil {
+			err = Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", uerr.Error()))
+		}
 	}
-	releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, d.src, d.label, d.metrics, d.bp)
-	if err != nil {
-		elapsed := time.Since(start)
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
-		addDispatchTime(ctx, elapsed)
-		return nil, err
-	}
-	defer releaseInstance()
-
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	resp, err := dispatchOpenAPI(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, d.src.uploadStore)
 	elapsed := time.Since(start)
 	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
 	addDispatchTime(ctx, elapsed)
@@ -98,6 +85,68 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 		return nil, err
 	}
 	return resp, nil
+}
+
+// roundTrip is the upstream call shared by Dispatch and
+// DispatchAppend: pick a replica, take its per-instance slot, send
+// the request under the source's timeout, record the outcome for
+// ejection, and retry on another replica when the request provably
+// never got a connection (httpConnProbe). Requests with upload
+// bodies are never retried: their readers are consumed by the first
+// attempt.
+func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) ([]byte, error) {
+	src := d.src
+	r := src.pickReplica()
+	if r == nil {
+		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
+	}
+	policy := &src.policy
+	callCtx, cancel := withUpstreamTimeout(ctx, policy)
+	defer cancel()
+	var tried [maxUpstreamAttempts]*openAPIReplica
+	for attempt := 0; ; attempt++ {
+		tried[attempt] = r
+		releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, src, d.label, d.metrics, d.bp)
+		if err != nil {
+			return nil, err
+		}
+		attemptCtx := callCtx
+		var probe *httpConnProbe
+		if attempt+1 < maxUpstreamAttempts && src.replicaCount() > attempt+1 && httpClientTraceable(r.httpClient) {
+			probe, attemptCtx = acquireHTTPConnProbe(callCtx)
+		}
+		r.inflight.Add(1)
+		respBytes, err := dispatchOpenAPIRaw(attemptCtx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, src.uploadStore)
+		r.inflight.Add(-1)
+		releaseInstance()
+		if err == nil {
+			r.health.success()
+			if probe != nil {
+				releaseHTTPConnProbe(probe)
+			}
+			return respBytes, nil
+		}
+		timedOut := upstreamTimedOut(ctx, callCtx, policy)
+		if timedOut || (ctx.Err() == nil && httpCountsAsFailure(err)) {
+			r.health.failure(policy)
+		}
+		notSent := false
+		if probe != nil {
+			notSent = !probe.gotConn.Load() && httpTransportFailure(err)
+			releaseHTTPConnProbe(probe)
+		}
+		if timedOut {
+			return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s/%s %s: upstream timeout after %s", d.ns, d.ver, d.label, policy.timeout))
+		}
+		if !notSent || callCtx.Err() != nil || isMultipartOp(d.op) || hasUploadArg(args) {
+			return nil, err
+		}
+		next := src.pickReplicaExcept(tried[:attempt+1])
+		if next == nil {
+			return nil, err
+		}
+		r = next
+	}
 }
 
 // DispatchAppend is the byte-splice variant. dispatchOpenAPIRaw
@@ -126,26 +175,7 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	)
 	defer span.End()
 	start := time.Now()
-	r := d.src.pickReplica()
-	if r == nil {
-		err := Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
-		elapsed := time.Since(start)
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
-		addDispatchTime(ctx, elapsed)
-		return dst, err
-	}
-	releaseInstance, err := acquireOpenAPIReplicaSlot(ctx, r, d.src, d.label, d.metrics, d.bp)
-	if err != nil {
-		elapsed := time.Since(start)
-		d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
-		addDispatchTime(ctx, elapsed)
-		return dst, err
-	}
-	defer releaseInstance()
-
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	respBytes, err := dispatchOpenAPIRaw(ctx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, d.src.uploadStore)
+	respBytes, err := d.roundTrip(ctx, args)
 	elapsed := time.Since(start)
 	d.metrics.RecordDispatch(ctx, d.ns, d.ver, d.label, elapsed, err)
 	addDispatchTime(ctx, elapsed)

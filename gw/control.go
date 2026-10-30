@@ -171,6 +171,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		maxConcurrency            uint32
 		maxConcurrencyPerInstance uint32
 
+		// Per-call upstream timeout from ServiceBinding.timeout_ms;
+		// 0 → gateway default.
+		timeoutMs uint32
+
 		isOpenAPI bool
 		isGraphQL bool
 	}
@@ -235,6 +239,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				graphqlIntrospection:      rawIntro,
 				maxConcurrency:            b.GetMaxConcurrency(),
 				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
+				timeoutMs:                 b.GetTimeoutMs(),
 				isGraphQL:                 true,
 			})
 			continue
@@ -264,6 +269,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				openAPISpec:               b.GetOpenapiSpec(),
 				maxConcurrency:            b.GetMaxConcurrency(),
 				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
+				timeoutMs:                 b.GetTimeoutMs(),
 				isOpenAPI:                 true,
 			})
 			continue
@@ -316,6 +322,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			protoImports:              b.GetProtoImports(),
 			maxConcurrency:            b.GetMaxConcurrency(),
 			maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
+			timeoutMs:                 b.GetTimeoutMs(),
 		})
 	}
 
@@ -347,6 +354,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				OwnerNodeID:               ownerNode,
 				MaxConcurrency:            p.maxConcurrency,
 				MaxConcurrencyPerInstance: p.maxConcurrencyPerInstance,
+				TimeoutMs:                 p.timeoutMs,
 			}
 			switch {
 			case p.isGraphQL:
@@ -433,7 +441,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	for _, p := range prep {
 		if p.isGraphQL {
 			// Standalone path: replicaID unused (no KV-driven removal).
-			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.version, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, ""); err != nil {
+			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.version, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, "", msDuration(p.timeoutMs)); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -443,7 +451,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			// Standalone path: replicaID is unused (no KV-driven
 			// removal). Pass "" so addOpenAPISourceLocked treats this
 			// as a boot-time-style replica owned by the registration.
-			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, "", int(p.maxConcurrency), int(p.maxConcurrencyPerInstance)); err != nil {
+			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, "", int(p.maxConcurrency), int(p.maxConcurrencyPerInstance), msDuration(p.timeoutMs)); err != nil {
 				rollback()
 				return nil, err
 			}
@@ -459,6 +467,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			owner:                     id,
 			maxConcurrency:            int(p.maxConcurrency),
 			maxConcurrencyPerInstance: int(p.maxConcurrencyPerInstance),
+			timeout:                   msDuration(p.timeoutMs),
 		})
 		if err != nil {
 			rollback()

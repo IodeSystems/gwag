@@ -240,6 +240,15 @@ type config struct {
 	metricPrefix   string
 	tracerProvider oteltrace.TracerProvider
 	backpressure   BackpressureOptions
+
+	// upstreamTimeout is the default per-call timeout for unary
+	// upstream dispatch (WithUpstreamTimeout); 0 → none.
+	// ejectAfter / ejectFor drive replica ejection
+	// (WithReplicaEjection); ejectAfter 0 → off.
+	upstreamTimeout time.Duration
+	ejectAfter      int
+	ejectFor        time.Duration
+
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
@@ -646,6 +655,47 @@ func WithBackpressure(b BackpressureOptions) Option {
 // Stability: stable
 func WithoutBackpressure() Option {
 	return func(cfg *config) { cfg.backpressure = BackpressureOptions{} }
+}
+
+// WithUpstreamTimeout sets the default per-call timeout for unary
+// dispatches to upstreams (gRPC pools, OpenAPI sources, downstream
+// GraphQL sources). A service's own Timeout option or control-plane
+// timeout_ms beats it. 0 (the default) means no timeout: a call runs
+// until the caller's context ends.
+//
+// A call that runs past the timeout fails with a timeout error the
+// client sees as a normal field error, and counts as a failure for
+// replica ejection (WithReplicaEjection). Subscriptions are not
+// affected.
+//
+// Stability: stable
+func WithUpstreamTimeout(d time.Duration) Option {
+	return func(cfg *config) { cfg.upstreamTimeout = d }
+}
+
+// WithReplicaEjection tunes replica ejection for unary upstream
+// dispatch. After `failures` consecutive failed calls to one replica
+// (connect errors, timeouts, HTTP 5xx, gRPC Unavailable; any success
+// resets the count) the replica gets no traffic for `cooldown`, then
+// is tried again. A readmitted replica that fails again is ejected
+// again at once.
+//
+// Ejection never refuses a call: when every replica of a service is
+// ejected, dispatch still picks one. A single-replica service
+// therefore behaves the same with or without ejection.
+//
+// On by default with failures=5, cooldown=10s. failures ≤ 0 turns
+// ejection off.
+//
+// Stability: stable
+func WithReplicaEjection(failures int, cooldown time.Duration) Option {
+	return func(cfg *config) {
+		if failures < 0 {
+			failures = 0
+		}
+		cfg.ejectAfter = failures
+		cfg.ejectFor = cooldown
+	}
 }
 
 // WithMetrics swaps the default Prometheus-backed metrics sink for a
@@ -1124,6 +1174,8 @@ func New(opts ...Option) *Gateway {
 		backpressure:    DefaultBackpressure,
 		maxOperations:   DefaultMaxOperations,
 		maxRequestBytes: DefaultMaxRequestBytes,
+		ejectAfter:      defaultEjectAfter,
+		ejectFor:        defaultEjectFor,
 	}
 	for _, o := range opts {
 		o(cfg)
@@ -1323,6 +1375,10 @@ type serviceConfig struct {
 	// Negative is rejected at registration.
 	maxConcurrencyPerInstance int
 
+	// timeout is the per-call upstream timeout for this service.
+	// 0 → gateway default (WithUpstreamTimeout).
+	timeout time.Duration
+
 	// protoImports carries transitive .proto import bytes for
 	// AddProtoBytes (multi-file .protos). Keyed by import path; nil
 	// for single-file .protos.
@@ -1464,6 +1520,22 @@ func MaxConcurrency(n int) ServiceOption {
 // Stability: stable
 func MaxConcurrencyPerInstance(n int) ServiceOption {
 	return func(c *serviceConfig) { c.maxConcurrencyPerInstance = n }
+}
+
+// Timeout sets the per-call timeout for unary dispatches to this
+// service's upstream. Beats the gateway-wide WithUpstreamTimeout
+// default. 0 → use the gateway default. A call that runs past it
+// fails with a timeout error and counts as a failure for replica
+// ejection.
+//
+// Applies to AddProto / AddProtoBytes / AddOpenAPI /
+// AddOpenAPIBytes / AddGraphQL. No-op for AddMCP. Frozen at first
+// registration of the (namespace, version); later replicas joining
+// the same service use the first registration's value.
+//
+// Stability: stable
+func Timeout(d time.Duration) ServiceOption {
+	return func(c *serviceConfig) { c.timeout = d }
 }
 
 // OpenAPIClient overrides the *http.Client used for outbound
@@ -1614,6 +1686,7 @@ func (g *Gateway) addProtoFromDescriptor(fd protoreflect.FileDescriptor, sc *ser
 		owner:                     "",
 		maxConcurrency:            sc.maxConcurrency,
 		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
+		timeout:                   sc.timeout,
 	})
 }
 
@@ -1667,6 +1740,7 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 		owner:                     "", // boot-time, never evicted
 		maxConcurrency:            sc.maxConcurrency,
 		maxConcurrencyPerInstance: sc.maxConcurrencyPerInstance,
+		timeout:                   sc.timeout,
 	})
 }
 
@@ -1690,6 +1764,10 @@ type poolEntry struct {
 	// is rejected upstream.
 	maxConcurrency            int
 	maxConcurrencyPerInstance int
+
+	// timeout is the registration's per-call upstream timeout; 0 →
+	// gateway default. Captured on pool creation only.
+	timeout time.Duration
 }
 
 // joinPoolLocked finds or creates the pool for (namespace, version) and
@@ -1734,6 +1812,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		hash:                      e.hash,
 		maxConcurrency:            e.maxConcurrency,
 		maxConcurrencyPerInstance: e.maxConcurrencyPerInstance,
+		policy:                    g.upstreamPolicyFor(e.timeout),
 	}
 	// Service-level cap: registration override beats gateway default.
 	// 0 → fall back to default; default of 0 → unbounded.
@@ -1766,10 +1845,11 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 // unset → unbounded per replica).
 func (g *Gateway) newReplica(p *pool, e poolEntry) *replica {
 	r := &replica{
-		id:    e.replicaID,
-		addr:  e.addr,
-		owner: e.owner,
-		conn:  e.conn,
+		id:        e.replicaID,
+		addr:      e.addr,
+		owner:     e.owner,
+		conn:      e.conn,
+		probePeer: grpcConnReportsPeer(e.conn),
 	}
 	if p.maxConcurrencyPerInstance > 0 {
 		r.sem = make(chan struct{}, p.maxConcurrencyPerInstance)
@@ -2333,6 +2413,10 @@ type rejection struct {
 	// ingress error envelopes (writeIngressDispatchError). Zero means
 	// no header — only quota-exhaustion rejections set it today.
 	RetryAfter time.Duration
+	// upstream classifies an outbound HTTP dispatch failure for
+	// replica ejection (see upstream.go). Zero for every other
+	// rejection.
+	upstream upstreamClass
 }
 
 func (r *rejection) Error() string { return r.Msg }

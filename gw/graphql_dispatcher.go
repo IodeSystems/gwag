@@ -162,13 +162,7 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	}
 
 	src := d.mirror.src
-	r := src.pickReplica()
-	if r == nil {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
-	}
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, vars, src.forwardHeaders)
+	resp, err := src.roundTrip(ctx, printed, vars)
 	if err != nil {
 		return nil, record(err)
 	}
@@ -262,13 +256,7 @@ func (d *graphQLDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	}
 
 	src := d.mirror.src
-	r := src.pickReplica()
-	if r == nil {
-		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
-	}
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, vars, src.forwardHeaders)
+	resp, err := src.roundTrip(ctx, printed, vars)
 	if err != nil {
 		return dst, record(err)
 	}
@@ -405,13 +393,7 @@ func (d *graphqlGroupDispatcher) Dispatch(ctx context.Context, _ map[string]any)
 	}
 
 	src := d.mirror.src
-	r := src.pickReplica()
-	if r == nil {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
-	}
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	resp, err := src.roundTrip(ctx, printed, info.VariableValues)
 	if err != nil {
 		return nil, record(err)
 	}
@@ -502,13 +484,7 @@ func (d *graphqlGroupDispatcher) DispatchAppend(ctx context.Context, _ map[strin
 	}
 
 	src := d.mirror.src
-	r := src.pickReplica()
-	if r == nil {
-		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", d.ns)))
-	}
-	r.inflight.Add(1)
-	defer r.inflight.Add(-1)
-	resp, err := dispatchGraphQL(ctx, r.httpClient, r.endpoint, printed, info.VariableValues, src.forwardHeaders)
+	resp, err := src.roundTrip(ctx, printed, info.VariableValues)
 	if err != nil {
 		return dst, record(err)
 	}
