@@ -464,6 +464,16 @@ Endpoints: `POST /api/graphql`, `GET /api/schema/graphql` (SDL or
 `?format=json` introspection), `GET /api/schema/proto` (FDS),
 `GET /api/schema/openapi`. `gwag serve` uses exactly this path.
 
+### Serving a schema you assemble
+
+`g.SetSchema(schema, annotations, services)` (experimental) serves a
+`*graphql.Schema` the host built itself, and replaces it at run time:
+requests already running finish on the schema they started with, new
+ones get the replacement. Until the first schema, the GraphQL handler
+answers 503 `NOT_READY`. Set `MaxDepth` / `DisableIntrospection`
+before the first schema; `MaxOperations` and `ParallelQueries` apply
+only to dispatchers gat wired itself.
+
 ## Front a remote gRPC service from a .proto
 
 The huma-paired flow above hosts handlers in the same Go binary as

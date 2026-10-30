@@ -183,8 +183,10 @@ func (g *Gateway) serveGraphQLWS(w http.ResponseWriter, r *http.Request) {
 // subscription.
 func (g *Gateway) runGraphQLSubscription(ctx context.Context, id string, p wsSubscribePayload, writeMsg func(wsMessage) error, cleanup func()) {
 	defer cleanup()
+	// Loaded per subscription, not per connection: a long-lived
+	// connection's new subscriptions see a replaced schema.
 	results := graphql.Subscribe(graphql.Params{
-		Schema:         *g.schema,
+		Schema:         *g.snap.Load().schema,
 		RequestString:  p.Query,
 		VariableValues: p.Variables,
 		OperationName:  p.OperationName,

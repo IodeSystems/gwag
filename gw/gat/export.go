@@ -56,6 +56,7 @@ type exportCache struct {
 	mu     sync.RWMutex
 	paths  map[exportKey][]exportPath
 	stages map[exportKey]*stagedDoc // nil value: needs no staging
+	schema *graphql.Schema          // the schema stages was planned against
 }
 
 type exportKey struct{ query, operationName string }
@@ -97,14 +98,17 @@ func (c *exportCache) stagesFor(schema *graphql.Schema, query, operationName str
 	key := exportKey{query, operationName}
 	c.mu.RLock()
 	st, ok := c.stages[key]
+	same := c.schema == schema
 	c.mu.RUnlock()
-	if ok {
+	if ok && same {
 		return st
 	}
 	st = planStages(schema, query, operationName)
 	c.mu.Lock()
-	if c.stages == nil {
+	if c.stages == nil || c.schema != schema {
+		// Stages depend on the schema; a replaced one drops them.
 		c.stages = make(map[exportKey]*stagedDoc)
+		c.schema = schema
 	}
 	if len(c.stages) < exportCacheEntries {
 		c.stages[key] = st

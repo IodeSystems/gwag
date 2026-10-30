@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/IodeSystems/graphql-go/v2"
@@ -45,16 +46,21 @@ import (
 //
 // Stability: stable
 type Gateway struct {
-	schema      *graphql.Schema
-	annotations *ir.AnnotationIndex
-	registry    *ir.DispatchRegistry
-	services    []*ir.Service
+	// snap is the schema being served, swapped whole by build and
+	// SetSchema. nil until the first one: the handler answers 503.
+	snap atomic.Pointer[snapshot]
+
+	// registry and services are build's inputs; the served copies live
+	// in snap.
+	registry *ir.DispatchRegistry
+	services []*ir.Service
 
 	// planCache holds parsed + validated + planned query state so a
-	// repeated query skips straight to execution. Built by build();
-	// nil only on a gateway whose schema never assembled, which the
-	// handler treats as "not ready".
+	// repeated query skips straight to execution. Created with the
+	// first schema and kept across swaps: it is keyed on the schema, so
+	// a replaced schema's entries are never hit again and age out.
 	planCache *graphql.PlanCache
+	planOnce  sync.Once
 
 	// captured holds ops registered via gat.Register for paired huma
 	// dispatch. Empty when only the BYO-IR path is used.
@@ -311,16 +317,54 @@ func (g *Gateway) build() error {
 	if err != nil {
 		return fmt.Errorf("gat: build schema: %w", err)
 	}
-	g.schema = schema
-	g.annotations = annotations
-	// The cache is keyed on (schema, query, operationName), so it is
-	// safe to build once here — the schema is immutable after build.
-	// Defaults mirror gw/'s: gat has no knobs to expose them through.
-	g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
-		MaxEntries: planCacheEntries,
-		Rules:      g.validationRules(),
+	g.install(schema, annotations, g.services)
+	return nil
+}
+
+// snapshot is one served schema and what was built with it. The
+// handler loads it once per request, so a request runs against one
+// schema while SetSchema replaces it.
+type snapshot struct {
+	schema      *graphql.Schema
+	annotations *ir.AnnotationIndex
+	services    []*ir.Service
+	plans       *graphql.PlanCache
+}
+
+// install makes schema the served one.
+func (g *Gateway) install(schema *graphql.Schema, annotations *ir.AnnotationIndex, services []*ir.Service) {
+	g.planOnce.Do(func() {
+		// Defaults mirror gw/'s: gat has no knobs to expose them through.
+		g.planCache = graphql.NewPlanCache(graphql.PlanCacheOptions{
+			MaxEntries: planCacheEntries,
+			Rules:      g.validationRules(),
+		})
 	})
+	g.snap.Store(&snapshot{schema: schema, annotations: annotations, services: services, plans: g.planCache})
 	g.built = true
+}
+
+// SetSchema replaces the schema the gateway serves, for a host that
+// assembles its own (from ir.RenderGraphQLRuntime or otherwise) and
+// rebuilds it at run time. Requests already running finish on the
+// schema they started with; new ones get this one. It closes
+// registration, like RegisterHuma. services feeds the proto and
+// OpenAPI schema views; annotations may be nil.
+//
+// The validation rules (MaxDepth, DisableIntrospection) are fixed by
+// the first schema, so set them before. A host schema that omits the
+// @export directive cannot run batched exports; ParallelQueries and
+// MaxOperations apply only to dispatchers gat wired itself.
+//
+// Stability: experimental
+func (g *Gateway) SetSchema(schema *graphql.Schema, annotations *ir.AnnotationIndex, services []*ir.Service) error {
+	if schema == nil {
+		return errors.New("gat: SetSchema: nil schema")
+	}
+	if annotations == nil {
+		annotations = ir.NewAnnotationIndex()
+	}
+	g.install(schema, annotations, services)
 	return nil
 }
 
@@ -334,6 +378,11 @@ func (g *Gateway) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
 			http.Error(w, "upgrade not supported", http.StatusNotFound)
+			return
+		}
+		snap := g.snap.Load()
+		if snap == nil {
+			writeCodedError(w, "schema not assembled", "NOT_READY", http.StatusServiceUnavailable)
 			return
 		}
 		if r.Method == http.MethodGet && isWebSocketUpgrade(r) {
@@ -383,7 +432,7 @@ func (g *Gateway) Handler() http.Handler {
 				return
 			}
 			if isBatch {
-				g.serveBatch(w, r, batch)
+				g.serveBatch(w, r, snap, batch)
 				return
 			}
 		} else {
@@ -405,7 +454,7 @@ func (g *Gateway) Handler() http.Handler {
 			}
 		}
 
-		p := g.planRequest(&req)
+		p := g.planRequest(snap, &req)
 		if p.status != 0 {
 			writeCodedError(w, p.msg, p.code, p.status)
 			return
@@ -437,7 +486,7 @@ func (g *Gateway) Handler() http.Handler {
 		//
 		// Nothing here streams — ExecutePlanAppend assembles the bytes in
 		// memory — so deferring the header costs nothing.
-		res := g.run(ctx, p, req.OperationName, req.Variables)
+		res := g.run(ctx, snap, p, req.OperationName, req.Variables)
 
 		// Execution is done, so the sink now holds whatever the resolvers
 		// produced. Emit before WriteHeader — after it the header map is
@@ -508,7 +557,7 @@ type plannedRequest struct {
 
 // planRequest resolves a request's document (query text or trusted
 // document id) and plans it.
-func (g *Gateway) planRequest(req *gqlRequest) plannedRequest {
+func (g *Gateway) planRequest(snap *snapshot, req *gqlRequest) plannedRequest {
 	p := plannedRequest{query: req.Query}
 	id := gqlguard.PersistedID(req.DocumentID, req.Extensions)
 	switch {
@@ -519,11 +568,11 @@ func (g *Gateway) planRequest(req *gqlRequest) plannedRequest {
 		switch {
 		case ok:
 			p.query = doc
-			p.pr = g.trusted.Plan(g.planCache, g.schema, key, doc, req.OperationName)
+			p.pr = g.trusted.Plan(snap.plans, snap.schema, key, doc, req.OperationName)
 		case req.Query != "" && !g.trusted.Enforce:
 			// APQ sends the hash with the query on retry; without
 			// enforcement the query alone is enough.
-			p.pr = g.planCache.Get(g.schema, req.Query, req.OperationName)
+			p.pr = snap.plans.Get(snap.schema, req.Query, req.OperationName)
 		default:
 			p.status, p.msg, p.code = http.StatusOK, "PersistedQueryNotFound", "PERSISTED_QUERY_NOT_FOUND"
 		}
@@ -532,7 +581,7 @@ func (g *Gateway) planRequest(req *gqlRequest) plannedRequest {
 	case g.trusted != nil && g.trusted.Enforce:
 		p.status, p.msg, p.code = http.StatusBadRequest, "only trusted documents are accepted", "TRUSTED_DOCUMENT_REQUIRED"
 	default:
-		p.pr = g.planCache.Get(g.schema, req.Query, req.OperationName)
+		p.pr = snap.plans.Get(snap.schema, req.Query, req.OperationName)
 	}
 	return p
 }
@@ -558,13 +607,13 @@ func (r execResult) recycle() {
 // run executes a planned request: in one pass, or — when fields of the
 // document feed each other through @export — stage by stage
 // (staging.go), merged into one response.
-func (g *Gateway) run(ctx context.Context, p plannedRequest, operationName string, variables map[string]any) execResult {
+func (g *Gateway) run(ctx context.Context, snap *snapshot, p plannedRequest, operationName string, variables map[string]any) execResult {
 	if p.pr.Plan == nil || len(p.pr.Errors) > 0 {
-		return g.execute(ctx, p, operationName, variables)
+		return execute(ctx, snap, p, operationName, variables)
 	}
-	st := g.exports.stagesFor(g.schema, p.query, operationName)
+	st := g.exports.stagesFor(snap.schema, p.query, operationName)
 	if st == nil {
-		return g.execute(ctx, p, operationName, variables)
+		return execute(ctx, snap, p, operationName, variables)
 	}
 	if st.err != nil {
 		return execResult{payload: appendCodedError(nil, st.err.Error(), "EXPORT_DEPENDENCY")}
@@ -583,8 +632,8 @@ func (g *Gateway) run(ctx context.Context, p plannedRequest, operationName strin
 				vars[k] = v
 			}
 		}
-		sp := plannedRequest{query: stage.query, pr: g.planCache.Get(g.schema, stage.query, operationName)}
-		res := g.execute(ctx, sp, operationName, vars)
+		sp := plannedRequest{query: stage.query, pr: snap.plans.Get(snap.schema, stage.query, operationName)}
+		res := execute(ctx, snap, sp, operationName, vars)
 		payloads = append(payloads, append([]byte(nil), res.payload...))
 		if len(stage.exports) > 0 {
 			collectExports(stage.exports, res.payload, exported)
@@ -595,7 +644,7 @@ func (g *Gateway) run(ctx context.Context, p plannedRequest, operationName strin
 }
 
 // execute runs a planned request and returns its response JSON.
-func (g *Gateway) execute(ctx context.Context, p plannedRequest, operationName string, variables map[string]any) (res execResult) {
+func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationName string, variables map[string]any) (res execResult) {
 	pr := p.pr
 	switch {
 	case len(pr.Errors) > 0:
@@ -619,7 +668,7 @@ func (g *Gateway) execute(ctx context.Context, p plannedRequest, operationName s
 		// map[string]any result tree and the final Encode.
 		buf := graphqlBufPool.Get().(*[]byte)
 		body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
-			Schema:        *g.schema,
+			Schema:        *snap.schema,
 			OperationName: operationName,
 			Args:          args,
 			Context:       ctx,
@@ -641,7 +690,7 @@ func (g *Gateway) execute(ctx context.Context, p plannedRequest, operationName s
 		// the full parse-and-execute path rather than serving an
 		// empty body.
 		res.payload, _ = json.Marshal(graphql.Do(graphql.Params{
-			Schema:         *g.schema,
+			Schema:         *snap.schema,
 			RequestString:  p.query,
 			VariableValues: variables,
 			OperationName:  operationName,
@@ -658,7 +707,7 @@ func (g *Gateway) execute(ctx context.Context, p plannedRequest, operationName s
 // before execution (unknown document id, query text under enforced
 // trusted documents) gets an errors object in its slot without failing
 // the others.
-func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, batch []gqlRequest) {
+func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, snap *snapshot, batch []gqlRequest) {
 	if len(batch) == 0 {
 		writeError(w, "empty batch", http.StatusBadRequest)
 		return
@@ -676,7 +725,7 @@ func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, batch []gql
 			out = append(out, ',')
 		}
 		req := &batch[i]
-		p := g.planRequest(req)
+		p := g.planRequest(snap, req)
 		if p.status != 0 {
 			out = appendCodedError(out, p.msg, p.code)
 			continue
@@ -694,7 +743,7 @@ func (g *Gateway) serveBatch(w http.ResponseWriter, r *http.Request, batch []gql
 			}
 			vars = merged
 		}
-		res := g.run(ctx, p, req.OperationName, vars)
+		res := g.run(ctx, snap, p, req.OperationName, vars)
 		out = append(out, res.payload...)
 		if paths := g.exports.exportsFor(p.query, req.OperationName); paths != nil {
 			collectExports(paths, res.payload, exported)
@@ -718,24 +767,36 @@ func appendCodedError(dst []byte, msg, code string) []byte {
 	return append(dst, b...)
 }
 
-// Schema returns the assembled graphql.Schema for introspection.
+// Schema returns the assembled graphql.Schema for introspection; nil
+// before the first one.
 //
 // Stability: experimental
 func (g *Gateway) Schema() *graphql.Schema {
-	return g.schema
+	if snap := g.snap.Load(); snap != nil {
+		return snap.schema
+	}
+	return nil
 }
 
 // GraphQLSDL renders the gateway's schema as SDL WITH its annotation index (@derived,
 // @deprecated, etc.). Prefer this over ir.PrintSchemaSDL(g.Schema()), which omits the
 // annotations — the SDL/graphql HTTP view uses this same path.
 func (g *Gateway) GraphQLSDL() string {
-	return ir.PrintSchemaSDL(g.schema, g.annotations)
+	snap := g.snap.Load()
+	if snap == nil {
+		return ""
+	}
+	return ir.PrintSchemaSDL(snap.schema, snap.annotations)
 }
 
-// Services returns the registered IR services.
+// Services returns the IR services: the served ones once a schema is
+// assembled, the registered ones before.
 //
 // Stability: experimental
 func (g *Gateway) Services() []*ir.Service {
+	if snap := g.snap.Load(); snap != nil {
+		return snap.services
+	}
 	return g.services
 }
 

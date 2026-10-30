@@ -26,21 +26,22 @@ func schemaGraphQLHandler(g *Gateway) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if g.schema == nil {
+		snap := g.snap.Load()
+		if snap == nil {
 			http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
 			return
 		}
 		switch r.URL.Query().Get("format") {
 		case "json":
 			result := graphql.Do(graphql.Params{
-				Schema:        *g.schema,
+				Schema:        *snap.schema,
 				RequestString: ir.IntrospectionQuery,
 			})
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_ = ir.WriteJSON(w, result)
 		default:
 			w.Header().Set("Content-Type", "application/graphql; charset=utf-8")
-			_, _ = w.Write([]byte(ir.PrintSchemaSDL(g.schema, g.annotations)))
+			_, _ = w.Write([]byte(ir.PrintSchemaSDL(snap.schema, snap.annotations)))
 		}
 	})
 }
@@ -54,7 +55,7 @@ func schemaProtoHandler(g *Gateway) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		fds, err := ir.RenderProtoFiles(g.services)
+		fds, err := ir.RenderProtoFiles(g.Services())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -80,13 +81,14 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if len(g.services) == 0 {
+		services := g.Services()
+		if len(services) == 0 {
 			http.Error(w, "no services", http.StatusServiceUnavailable)
 			return
 		}
 		// Single-service case: emit the one spec directly.
-		if len(g.services) == 1 {
-			doc, err := ir.RenderOpenAPI(g.services[0])
+		if len(services) == 1 {
+			doc, err := ir.RenderOpenAPI(services[0])
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -97,7 +99,7 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 		}
 		// Multi-service: emit a map keyed by namespace.
 		bundle := map[string]any{}
-		for _, svc := range g.services {
+		for _, svc := range services {
 			doc, err := ir.RenderOpenAPI(svc)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -23,6 +23,7 @@ changes on MINOR, drops on MAJOR.
 - **Replica ejection.** `WithReplicaEjection(failures, cooldown)`: a
   replica with 5 consecutive failures (default) gets no traffic for
   10 s (default). Fails open when every replica is ejected.
+- **gat `SetSchema`** (experimental). Serve a host-assembled schema and replace it at run time; in-flight requests keep the schema they started with. A gat handler with no schema yet answers 503 `NOT_READY` (was 200 with a "Must provide schema" error).
 
 ### Security
 - **Default request limits.** The GraphQL endpoint now refuses documents selecting more than 64 operations and bodies over 1 MiB (413). Raise or turn them off with `WithMaxOperations(0)` / `WithMaxRequestBytes(0)`.
