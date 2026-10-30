@@ -212,6 +212,9 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 			default:
 				f.Type = TypeRef{Builtin: ScalarInt32}
 			}
+			if name := extString(s.Extensions, ScalarExtension); validScalarName(name) {
+				f.Type.ScalarName = name
+			}
 		case "number":
 			switch s.Format {
 			case "float":

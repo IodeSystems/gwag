@@ -261,6 +261,11 @@ func renderOpenAPIFieldSchema(f *Field) *openapi3.SchemaRef {
 }
 
 func renderOpenAPIRefForType(r TypeRef) *openapi3.SchemaRef {
+	if r.ScalarName != "" && r.IsBuiltin() {
+		ref := primitiveOpenAPI(r.Builtin)
+		ref.Value.Extensions = map[string]any{ScalarExtension: r.ScalarName}
+		return ref
+	}
 	if r.IsNamed() {
 		return &openapi3.SchemaRef{Ref: "#/components/schemas/" + r.Named}
 	}

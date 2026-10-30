@@ -39,6 +39,10 @@ type RuntimeOptions struct {
 	// ones (@include, @skip, @deprecated), so documents using them
 	// validate. The executor ignores them; the embedder acts on them.
 	Directives []*graphql.Directive
+
+	// intScalars is set per render so every service's builder shares
+	// the TypeRef.ScalarName scalars.
+	intScalars map[string]*graphql.Scalar
 }
 
 // RenderGraphQLRuntime walks `svcs` into a fully-wired graphql.Schema.
@@ -86,6 +90,7 @@ func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opt
 	if registry == nil {
 		return nil, nil, nil, fmt.Errorf("runtime: nil DispatchRegistry")
 	}
+	opts.intScalars = map[string]*graphql.Scalar{}
 
 	byNS := map[string][]*Service{}
 	for _, svc := range svcs {
@@ -677,6 +682,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			InputName:  func(s string) string { return exportedName(s) + "_Input" },
 			FieldName:  lowerCamel,
 		}, IRTypeBuilderOptions{
+			intScalars:              opts.intScalars,
 			UploadType:              opts.UploadType,
 			AnnotationSink:          opts.AnnotationSink,
 			NonNullRepeatedRequired: opts.NonNullRequiredLists,
@@ -701,6 +707,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+			intScalars:              opts.intScalars,
 			Int64Type:               opts.LongType,
 			UInt64Type:              opts.LongType,
 			MapType:                 opts.JSONType,
@@ -727,6 +734,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+			intScalars:              opts.intScalars,
 			MapType:                 opts.JSONType,
 			JSONType:                opts.JSONType,
 			UploadType:              opts.UploadType,
@@ -753,6 +761,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			FieldName:     identityName,
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
+			intScalars:              opts.intScalars,
 			MapType:                 opts.JSONType,
 			JSONType:                opts.JSONType,
 			UploadType:              opts.UploadType,

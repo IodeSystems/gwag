@@ -400,7 +400,24 @@ type TypeRef struct {
 	Builtin ScalarKind
 	Named   string
 	Map     *MapType
+
+	// ScalarName, on an integer Builtin, renders the value in GraphQL
+	// as its own scalar of that name instead of Int / Long: a JSON
+	// number, exact within ±(2^53-1), accepting a number or a decimal
+	// string as input. Formats without custom scalars (proto, OpenAPI)
+	// keep Builtin. Set from OpenAPI by the ScalarExtension extension.
+	//
+	// Stability: experimental
+	ScalarName string
 }
+
+// ScalarExtension is the OpenAPI schema extension that names a
+// GraphQL scalar for an integer schema: `type: integer, format:
+// int64, x-gwag-scalar: Cents` ingests as TypeRef{Builtin:
+// ScalarInt64, ScalarName: "Cents"}.
+//
+// Stability: experimental
+const ScalarExtension = "x-gwag-scalar"
 
 // MapType is proto's map<K,V> / OpenAPI's
 // `type:object, additionalProperties:V`. GraphQL has no native

@@ -2,7 +2,9 @@ package ir
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
+	"strings"
 
 	"github.com/IodeSystems/graphql-go/v2"
 	"github.com/IodeSystems/graphql-go/v2/language/ast"
@@ -12,6 +14,98 @@ import (
 // magnitude a JS number holds exactly. At or below it a Long round-trips losslessly
 // as a JSON number; above it only a decimal string preserves precision.
 const maxSafeInteger = int64(1)<<53 - 1
+
+// newIntNumberScalar is the scalar a TypeRef.ScalarName names: an
+// integer emitted as a JSON number, exact within ±maxSafeInteger. It
+// accepts a JSON number or a decimal string; a fraction, or a value
+// past the range, is refused rather than rounded. Output past the
+// range serializes to null (a field error on a non-null field).
+func newIntNumberScalar(name string) *graphql.Scalar {
+	parse := func(v any) any {
+		if n, ok := safeInt(v); ok {
+			return n
+		}
+		return nil
+	}
+	return graphql.NewScalar(graphql.ScalarConfig{
+		Name: name,
+		Description: "Integer sent as a JSON number, exact within ±(2^53-1). " +
+			"Accepts a JSON number or a decimal string as input.",
+		Serialize:  parse,
+		ParseValue: parse,
+		ParseLiteral: func(v ast.Value) any {
+			switch x := v.(type) {
+			case *ast.IntValue:
+				return parse(x.Value)
+			case *ast.StringValue:
+				return parse(x.Value)
+			}
+			return nil
+		},
+	})
+}
+
+// safeInt returns v as an int64 when it is an integer within
+// ±maxSafeInteger: a Go integer, an integral float64 (encoding/json's
+// number), a json.Number, or a decimal string.
+func safeInt(v any) (int64, bool) {
+	var n int64
+	switch x := v.(type) {
+	case int64:
+		n = x
+	case int:
+		n = int64(x)
+	case int32:
+		n = int64(x)
+	case uint32:
+		n = int64(x)
+	case uint64:
+		if x > uint64(maxSafeInteger) {
+			return 0, false
+		}
+		n = int64(x)
+	case float64:
+		if x != math.Trunc(x) || x > float64(maxSafeInteger) || x < -float64(maxSafeInteger) {
+			return 0, false
+		}
+		n = int64(x)
+	case json.Number:
+		return safeInt(string(x))
+	case string:
+		var err error
+		if n, err = strconv.ParseInt(x, 10, 64); err != nil {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	if n > maxSafeInteger || n < -maxSafeInteger {
+		return 0, false
+	}
+	return n, true
+}
+
+// validScalarName reports whether name can name a TypeRef.ScalarName
+// scalar: a GraphQL name that is not one of the built-in scalars or
+// reserved by introspection.
+func validScalarName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "__") {
+		return false
+	}
+	switch name {
+	case "Int", "Float", "String", "Boolean", "ID", "Long", "JSON":
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // longToInt64 coerces any JSON-decoded scalar form — number or decimal string — to an
 // int64. This is the lenient (Jackson-style) input rule: a Long field accepts either

@@ -219,6 +219,31 @@ api.UseMiddleware(func(hctx huma.Context, next func(huma.Context)) {
 - No bag in the context (a call gat did not scope): nothing is shared
   and `fill` runs every time.
 
+## Integer scalars (money in cents)
+
+A Go `int64` renders as `Long`, which is a string unless
+`LongAsNumber(true)`. For an integer type that should travel as a
+JSON number under its own name, such as money in cents, return
+`gat.IntegerScalar` from the type's `huma.SchemaProvider` method:
+
+```go
+type Cents int64
+
+func (Cents) Schema(huma.Registry) *huma.Schema {
+    return gat.IntegerScalar("Cents", "Money in integer cents.")
+}
+```
+
+| Surface | `Cents` is |
+|---|---|
+| GraphQL | `scalar Cents` (not namespace-prefixed). Output is a JSON number whatever `LongAsNumber` says. Input takes a number or a decimal string. Exact within ±(2^53-1): a fraction or a value past the range is refused, and output past it is a field error, never rounded. |
+| REST / OpenAPI | `type: integer, format: int64`, `minimum`/`maximum` ±(2^53-1), plus `x-gwag-scalar: Cents`. |
+| proto / Connect | `int64`. |
+
+Map it in graphql-codegen with `scalars: { Cents: 'number' }`. A BYO
+OpenAPI spec gets the same scalar by putting `x-gwag-scalar` on an
+integer schema.
+
 ## Parallel queries
 
 Fused query operations run one after another by default: two 100ms

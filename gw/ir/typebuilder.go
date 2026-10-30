@@ -126,6 +126,11 @@ type IRTypeBuilderOptions struct {
 	// contract safe and giving clients a cleaner "lists are never null" DX.
 	// Output-only; input list fields keep their schema nullability.
 	NonNullRepeatedRequired bool
+
+	// intScalars holds the TypeRef.ScalarName scalars. Shared by every
+	// builder of one schema render, so two services naming the same
+	// scalar get one type, not a duplicate.
+	intScalars map[string]*graphql.Scalar
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
@@ -160,6 +165,9 @@ func NewIRTypeBuilder(svc *Service, naming IRTypeNaming, opts IRTypeBuilderOptio
 		enums:   map[string]*graphql.Enum{},
 		unions:  map[string]*graphql.Union{},
 		scalars: map[string]*graphql.Scalar{},
+	}
+	if b.options.intScalars == nil {
+		b.options.intScalars = map[string]*graphql.Scalar{}
 	}
 	if b.naming.ObjectName == nil {
 		b.naming.ObjectName = identityName
@@ -299,6 +307,8 @@ func (b *IRTypeBuilder) outputBase(ref TypeRef) (graphql.Output, error) {
 			return b.jsonScalar(), nil
 		}
 		return b.outputForType(t)
+	case ref.ScalarName != "" && isIntegerScalar(ref.Builtin):
+		return b.intScalar(ref.ScalarName), nil
 	}
 	return b.scalar(ref.Builtin)
 }
@@ -313,6 +323,8 @@ func (b *IRTypeBuilder) inputBase(ref TypeRef) (graphql.Input, error) {
 			return b.jsonScalar(), nil
 		}
 		return b.inputForType(t)
+	case ref.ScalarName != "" && isIntegerScalar(ref.Builtin):
+		return b.intScalar(ref.ScalarName), nil
 	}
 	s, err := b.scalar(ref.Builtin)
 	if err != nil {
@@ -636,6 +648,26 @@ func (b *IRTypeBuilder) scalarFor(t *Type) *graphql.Scalar {
 	})
 	b.scalars[t.Name] = s
 	return s
+}
+
+// intScalar returns the scalar a TypeRef.ScalarName names. The name is
+// used as given, without the namespace prefix other types get, so a
+// client maps one scalar whichever service declares it.
+func (b *IRTypeBuilder) intScalar(name string) *graphql.Scalar {
+	if s, ok := b.options.intScalars[name]; ok {
+		return s
+	}
+	s := newIntNumberScalar(name)
+	b.options.intScalars[name] = s
+	return s
+}
+
+func isIntegerScalar(s ScalarKind) bool {
+	switch s {
+	case ScalarInt32, ScalarInt64, ScalarUInt32, ScalarUInt64:
+		return true
+	}
+	return false
 }
 
 func (b *IRTypeBuilder) scalar(s ScalarKind) (graphql.Output, error) {
