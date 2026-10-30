@@ -48,6 +48,15 @@ type RuntimeOptions struct {
 	// Stability: experimental
 	VersionedOnly bool
 
+	// WrapError, when non-nil, is applied to every non-nil error an
+	// operation's dispatcher returns to a resolver (Dispatch,
+	// DispatchAppend, and subscription setup). The host uses it to
+	// shape the GraphQL error's extensions. Nil leaves errors as the
+	// dispatcher returned them, at no cost.
+	//
+	// Stability: experimental
+	WrapError func(error) error
+
 	// intScalars is set per render so every service's builder shares
 	// the TypeRef.ScalarName scalars.
 	intScalars map[string]*graphql.Scalar
@@ -378,6 +387,7 @@ func emitGroupContainer(dst graphql.Fields, g *OperationGroup, tb *IRTypeBuilder
 				return ad.DispatchAppend(ctx, rp.Args, dst)
 			}
 		}
+		field.Resolve, field.ResolveAppend = wrapResolveErrors(tb.options.wrapError, field.Resolve, field.ResolveAppend)
 	case inGraphQLGroup:
 		// Sub-group inside an outer graphql group: dereference from
 		// the parent map by the response key (alias-or-name) so
@@ -521,6 +531,7 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 			return d.Dispatch(rp.Context, rp.Args)
 		}
 	}
+	dispatch, appendDispatch = wrapResolveErrors(tb.options.wrapError, dispatch, appendDispatch)
 	if op.Kind == OpSubscription {
 		return &graphql.Field{
 			Type:              out,
@@ -557,6 +568,36 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		Resolve:           dispatch,
 		ResolveAppend:     appendDispatch,
 	}, nil
+}
+
+// wrapResolveErrors applies wrap to the errors resolve and
+// resolveAppend return. A nil wrap returns both unchanged; a nil
+// resolveAppend stays nil so the field keeps the map path.
+func wrapResolveErrors(wrap func(error) error, resolve graphql.FieldResolveFn, resolveAppend graphql.FieldResolveAppendFn) (graphql.FieldResolveFn, graphql.FieldResolveAppendFn) {
+	if wrap == nil {
+		return resolve, resolveAppend
+	}
+	if resolve != nil {
+		next := resolve
+		resolve = func(rp graphql.ResolveParams) (any, error) {
+			v, err := next(rp)
+			if err != nil {
+				return v, wrap(err)
+			}
+			return v, nil
+		}
+	}
+	if resolveAppend != nil {
+		next := resolveAppend
+		resolveAppend = func(rp graphql.ResolveParams, dst []byte) ([]byte, error) {
+			out, err := next(rp, dst)
+			if err != nil {
+				return out, wrap(err)
+			}
+			return out, nil
+		}
+	}
+	return resolve, resolveAppend
 }
 
 // outputHasAbstractType walks a graphql.Output (unwrapping NonNull
@@ -683,6 +724,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 	case KindProto:
 		if opts.SharedProtoBuilder != nil {
 			opts.SharedProtoBuilder.options.AnnotationSink = opts.AnnotationSink
+			opts.SharedProtoBuilder.options.wrapError = opts.WrapError
 			return opts.SharedProtoBuilder, nil
 		}
 		return NewIRTypeBuilder(svc, IRTypeNaming{
@@ -693,6 +735,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			FieldName:  lowerCamel,
 		}, IRTypeBuilderOptions{
 			intScalars:              opts.intScalars,
+			wrapError:               opts.WrapError,
 			UploadType:              opts.UploadType,
 			AnnotationSink:          opts.AnnotationSink,
 			NonNullRepeatedRequired: opts.NonNullRequiredLists,
@@ -718,6 +761,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
 			intScalars:              opts.intScalars,
+			wrapError:               opts.WrapError,
 			Int64Type:               opts.LongType,
 			UInt64Type:              opts.LongType,
 			MapType:                 opts.JSONType,
@@ -745,6 +789,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
 			intScalars:              opts.intScalars,
+			wrapError:               opts.WrapError,
 			MapType:                 opts.JSONType,
 			JSONType:                opts.JSONType,
 			UploadType:              opts.UploadType,
@@ -772,6 +817,7 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
 			intScalars:              opts.intScalars,
+			wrapError:               opts.WrapError,
 			MapType:                 opts.JSONType,
 			JSONType:                opts.JSONType,
 			UploadType:              opts.UploadType,

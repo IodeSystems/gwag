@@ -131,6 +131,10 @@ type IRTypeBuilderOptions struct {
 	// builder of one schema render, so two services naming the same
 	// scalar get one type, not a duplicate.
 	intScalars map[string]*graphql.Scalar
+
+	// wrapError is RuntimeOptions.WrapError, carried to the resolvers
+	// the runtime renderer builds with this builder.
+	wrapError func(error) error
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}
