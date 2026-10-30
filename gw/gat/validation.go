@@ -1,13 +1,9 @@
 package gat
 
 import (
-	"fmt"
-
 	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
-	"github.com/IodeSystems/graphql-go/v2/language/kinds"
-	"github.com/IodeSystems/graphql-go/v2/language/visitor"
+
+	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 )
 
 // MaxDepth refuses queries whose fields nest deeper than n (n <= 0: no
@@ -44,76 +40,10 @@ func (g *Gateway) DisableIntrospection() *Gateway {
 func (g *Gateway) validationRules() []graphql.ValidationRuleFn {
 	var rules []graphql.ValidationRuleFn
 	if g.maxDepth > 0 {
-		rules = append(rules, maxDepthRule(g.maxDepth))
+		rules = append(rules, gqlguard.MaxDepthRule(g.maxDepth))
 	}
 	if g.noIntrospection {
-		rules = append(rules, noIntrospectionRule)
+		rules = append(rules, gqlguard.NoIntrospectionRule)
 	}
 	return rules
-}
-
-func maxDepthRule(limit int) graphql.ValidationRuleFn {
-	return func(ctx *graphql.ValidationContext) *graphql.ValidationRuleInstance {
-		return &graphql.ValidationRuleInstance{VisitorOpts: &visitor.VisitorOptions{
-			KindFuncMap: map[string]visitor.NamedVisitFuncs{
-				kinds.OperationDefinition: {Kind: func(p visitor.VisitFuncParams) (string, interface{}) {
-					if op, ok := p.Node.(*ast.OperationDefinition); ok {
-						if d := selectionDepth(ctx, op.SelectionSet, map[string]bool{}); d > limit {
-							ctx.ReportError(gqlerrors.NewError(
-								fmt.Sprintf("query depth %d exceeds the limit of %d", d, limit),
-								[]ast.Node{op}, "", nil, []int{}, nil))
-						}
-					}
-					return visitor.ActionSkip, nil
-				}},
-			},
-		}}
-	}
-}
-
-// selectionDepth is the deepest field nesting under set, following
-// fragment spreads. inPath holds the fragments on the current path so a
-// cycle (reported by the spec's NoFragmentCycles rule) cannot recurse
-// forever.
-func selectionDepth(ctx *graphql.ValidationContext, set *ast.SelectionSet, inPath map[string]bool) int {
-	if set == nil {
-		return 0
-	}
-	deepest := 0
-	for _, sel := range set.Selections {
-		var d int
-		switch s := sel.(type) {
-		case *ast.Field:
-			d = 1 + selectionDepth(ctx, s.SelectionSet, inPath)
-		case *ast.InlineFragment:
-			d = selectionDepth(ctx, s.SelectionSet, inPath)
-		case *ast.FragmentSpread:
-			name := s.Name.Value
-			frag := ctx.Fragment(name)
-			if frag == nil || inPath[name] {
-				continue
-			}
-			inPath[name] = true
-			d = selectionDepth(ctx, frag.SelectionSet, inPath)
-			delete(inPath, name)
-		}
-		deepest = max(deepest, d)
-	}
-	return deepest
-}
-
-func noIntrospectionRule(ctx *graphql.ValidationContext) *graphql.ValidationRuleInstance {
-	return &graphql.ValidationRuleInstance{VisitorOpts: &visitor.VisitorOptions{
-		KindFuncMap: map[string]visitor.NamedVisitFuncs{
-			kinds.Field: {Kind: func(p visitor.VisitFuncParams) (string, interface{}) {
-				if f, ok := p.Node.(*ast.Field); ok && f.Name != nil {
-					if name := f.Name.Value; name == "__schema" || name == "__type" {
-						ctx.ReportError(gqlerrors.NewError(
-							"introspection is disabled", []ast.Node{f}, "", nil, []int{}, nil))
-					}
-				}
-				return visitor.ActionNoChange, nil
-			}},
-		},
-	}}
 }

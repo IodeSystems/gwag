@@ -21,6 +21,7 @@ import (
 	"github.com/IodeSystems/graphql-go/v2"
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -95,7 +96,7 @@ type Gateway struct {
 	observe DispatchObserver
 	// trusted holds the persisted documents (TrustedDocuments); nil =
 	// queries only.
-	trusted *trustedDocs
+	trusted *gqlguard.TrustedDocs
 	// exports caches the @export paths of batched documents.
 	exports exportCache
 	// hook, when set (HookDispatch), runs around every in-process
@@ -509,17 +510,17 @@ type plannedRequest struct {
 // document id) and plans it.
 func (g *Gateway) planRequest(req *gqlRequest) plannedRequest {
 	p := plannedRequest{query: req.Query}
-	id := persistedID(req.DocumentID, req.Extensions)
+	id := gqlguard.PersistedID(req.DocumentID, req.Extensions)
 	switch {
 	case id != "" && g.trusted == nil:
 		p.status, p.msg, p.code = http.StatusBadRequest, "persisted documents are not enabled", "PERSISTED_QUERY_NOT_SUPPORTED"
 	case id != "":
-		key, doc, ok := g.trusted.lookup(id)
+		key, doc, ok := g.trusted.Lookup(id)
 		switch {
 		case ok:
 			p.query = doc
-			p.pr = g.trusted.plan(g, key, doc, req.OperationName)
-		case req.Query != "" && !g.trusted.enforce:
+			p.pr = g.trusted.Plan(g.planCache, g.schema, key, doc, req.OperationName)
+		case req.Query != "" && !g.trusted.Enforce:
 			// APQ sends the hash with the query on retry; without
 			// enforcement the query alone is enough.
 			p.pr = g.planCache.Get(g.schema, req.Query, req.OperationName)
@@ -528,7 +529,7 @@ func (g *Gateway) planRequest(req *gqlRequest) plannedRequest {
 		}
 	case req.Query == "":
 		p.status, p.msg, p.code = http.StatusBadRequest, "missing query", "BAD_REQUEST"
-	case g.trusted != nil && g.trusted.enforce:
+	case g.trusted != nil && g.trusted.Enforce:
 		p.status, p.msg, p.code = http.StatusBadRequest, "only trusted documents are accepted", "TRUSTED_DOCUMENT_REQUIRED"
 	default:
 		p.pr = g.planCache.Get(g.schema, req.Query, req.OperationName)
