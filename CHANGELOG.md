@@ -9,6 +9,13 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.5.0 — 2026-10-30
+
+### Migration
+- **gwag GraphQL endpoint limits.** A request selecting more than 64 operations is now refused, and a body over 1 MiB gets 413. If a client sends larger requests, set `WithMaxOperations(n)` / `WithMaxRequestBytes(n)`, or pass 0 to turn a limit off. gat had these defaults already.
+- **gat with no schema.** A gat handler whose schema is not assembled yet answers 503 `NOT_READY` instead of 200 with an error.
+- **Dependencies.** huma v2.40.0, grpc v1.85.0, mcp-go v1.4.0 and golang.org/x/net v0.62.0 are the new minimums.
+
 ### Added
 - **`WithMetricPrefix(prefix)`.** Opt in to `gwag_*` Prometheus metric names; default stays `go_api_gateway_*` until v3.
 - **Request limits.** `WithMaxOperations(n)`, `WithMaxRequestBytes(n)`, `WithMaxDepth(n)`, `WithoutIntrospection()` on the GraphQL endpoint; see docs/operations.md "Request limits". Shared with gat (`gw/internal/gqlguard`).
