@@ -157,6 +157,18 @@ ResourceExhausted, 502/503/504 Unavailable, other 5xx Internal (see
 that code's HTTP status (`gat.HTTPStatus`), so an upstream 409 is 409
 there too.
 
+## GraphQL error codes
+
+A `Reject` error carries its `Code` name in `extensions.code`
+(`{"code": "NOT_FOUND"}`); other dispatch errors carry no code.
+`gateway.WithConnectErrorCodes()` (experimental) switches to gat's
+shape on every dispatch error: `{"status": 404, "code": "not_found"}`,
+the lower-case gRPC code the gRPC and REST ingresses use for the same
+error, plus its HTTP status. An upstream 409 is then `already_exists`
+(it is `INVALID_ARGUMENT` by default). `retryAfterSeconds` is kept;
+errors with their own extensions (downstream GraphQL errors,
+`subscribeAuthCode`) are left alone. v3 makes this the default.
+
 ## WebSocket upgrade caps
 
 `gw.Handler()` accepts graphql-transport-ws upgrades for subscriptions.

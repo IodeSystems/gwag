@@ -98,6 +98,10 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 		stableSnap = g.stableSnapshotLocked()
 	}
 	annotations := ir.NewAnnotationIndex()
+	var wrapError func(error) error
+	if g.cfg.connectErrorCodes {
+		wrapError = connectErrorCodes
+	}
 	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, ir.RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
@@ -105,6 +109,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 		StableVN:           stableSnap,
 		UploadType:         UploadScalar(),
 		AnnotationSink:     annotations,
+		WrapError:          wrapError,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime render: %w", err)

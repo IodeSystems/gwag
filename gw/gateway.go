@@ -244,6 +244,9 @@ type config struct {
 	tracerProvider oteltrace.TracerProvider
 	backpressure   BackpressureOptions
 
+	// connectErrorCodes: WithConnectErrorCodes.
+	connectErrorCodes bool
+
 	// upstreamTimeout is the default per-call timeout for unary
 	// upstream dispatch (WithUpstreamTimeout); 0 → none.
 	// ejectAfter / ejectFor drive replica ejection
@@ -725,6 +728,20 @@ const DefaultMetricPrefix = "go_api_gateway"
 // Stability: stable
 func WithMetricPrefix(prefix string) Option {
 	return func(cfg *config) { cfg.metricPrefix = prefix }
+}
+
+// WithConnectErrorCodes gives GraphQL errors gat's extensions shape,
+// {"status": 404, "code": "not_found"}: the error's gRPC / Connect code
+// in lower case (gat.ErrorCode) and its HTTP status, instead of the
+// upper-case Code name ({"code": "NOT_FOUND"}). The code is the one the
+// gRPC and REST ingresses use for the same error, so an upstream 409
+// is "already_exists" rather than "INVALID_ARGUMENT". Errors that carry
+// their own extensions (other than Reject's) are left alone;
+// retryAfterSeconds is kept. v3 makes this the default.
+//
+// Stability: experimental
+func WithConnectErrorCodes() Option {
+	return func(cfg *config) { cfg.connectErrorCodes = true }
 }
 
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches

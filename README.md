@@ -320,6 +320,9 @@ Pending rename of wire-level identifiers:
   `WithMetricPrefix("gwag")` opts in to `gwag_*` now (v2.5). v3 makes
   `gwag_*` the default. Proto packages stay `gateway.*` (except
   `gwag.ps.v1`); unchanged.
+- **GraphQL error codes.** `extensions.code` is the upper-case `Code`
+  name (`NOT_FOUND`) by default; `WithConnectErrorCodes()` opts in to
+  gat's `{status, code: "not_found"}` now. v3 makes it the default.
 
 After 1.0:
 
