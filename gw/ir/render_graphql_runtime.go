@@ -40,6 +40,14 @@ type RuntimeOptions struct {
 	// validate. The executor ignores them; the embedder acts on them.
 	Directives []*graphql.Directive
 
+	// VersionedOnly drops the unversioned copy of the latest version:
+	// ops render only under `ns.<version>` (and `ns.stable`), and the
+	// latest version's subscriptions take the `ns_<version>_` prefix.
+	// Type names do not change.
+	//
+	// Stability: experimental
+	VersionedOnly bool
+
 	// intScalars is set per render so every service's builder shares
 	// the TypeRef.ScalarName scalars.
 	intScalars map[string]*graphql.Scalar
@@ -125,7 +133,7 @@ func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opt
 
 		stableSvc := pickStableSvc(services, opts.StableVN[ns])
 		for _, kind := range []OpKind{OpQuery, OpMutation} {
-			field, err := buildNamespaceFold(ns, services, latest, latestReason, builders, kind, registry, stableSvc)
+			field, err := buildNamespaceFold(ns, services, latest, latestReason, builders, kind, registry, stableSvc, opts.VersionedOnly)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("runtime: ns %s kind %v: %w", ns, kind, err)
 			}
@@ -148,7 +156,7 @@ func RenderGraphQLRuntimeFields(svcs []*Service, registry *DispatchRegistry, opt
 			}
 			depReason := CombineDepReason(svc.Deprecated, autoReason)
 			prefix := ns + "_"
-			if !isLatest {
+			if !isLatest || opts.VersionedOnly {
 				prefix = ns + "_" + svc.Version + "_"
 			}
 			if err := addSubscriptionFlat(subs, svc, builders[svc], prefix, depReason, registry); err != nil {
@@ -180,14 +188,16 @@ func CombineDepReason(manual, auto string) string {
 	return auto
 }
 
-func buildNamespaceFold(ns string, services []*Service, latest *Service, latestReason string, builders map[*Service]*IRTypeBuilder, kind OpKind, registry *DispatchRegistry, stableSvc *Service) (*graphql.Field, error) {
+func buildNamespaceFold(ns string, services []*Service, latest *Service, latestReason string, builders map[*Service]*IRTypeBuilder, kind OpKind, registry *DispatchRegistry, stableSvc *Service, versionedOnly bool) (*graphql.Field, error) {
 	nsPath := pascalCaseRuntime(ns)
 	kindSfx := kindSuffixForRuntime(kind)
 
 	nsFields := graphql.Fields{}
-	latestDep := CombineDepReason(latest.Deprecated, "")
-	if err := addServiceContent(nsFields, latest, builders[latest], kind, nsPath, latestDep, registry); err != nil {
-		return nil, fmt.Errorf("latest content: %w", err)
+	if !versionedOnly {
+		latestDep := CombineDepReason(latest.Deprecated, "")
+		if err := addServiceContent(nsFields, latest, builders[latest], kind, nsPath, latestDep, registry); err != nil {
+			return nil, fmt.Errorf("latest content: %w", err)
+		}
 	}
 
 	for _, svc := range services {

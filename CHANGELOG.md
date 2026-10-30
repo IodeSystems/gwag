@@ -24,6 +24,7 @@ changes on MINOR, drops on MAJOR.
   replica with 5 consecutive failures (default) gets no traffic for
   10 s (default). Fails open when every replica is ejected.
 - **Integer scalars** (experimental). `gat.IntegerScalar(name, desc)` for a Go type's `huma.SchemaProvider`, or `x-gwag-scalar: <Name>` on an OpenAPI integer schema, renders that field as its own GraphQL scalar: a JSON number exact within ±(2^53-1), input as number or decimal string. REST stays integer/int64, proto int64. New `ir.TypeRef.ScalarName`, `ir.ScalarExtension`.
+- **gat `VersionedOnly(true)`** (experimental). Render each GraphQL operation once, at `ns.v1.op`, without the unversioned `ns.op` copy. Default off. New `ir.RuntimeOptions.VersionedOnly`.
 - **gat `SetSchema`** (experimental). Serve a host-assembled schema and replace it at run time; in-flight requests keep the schema they started with. A gat handler with no schema yet answers 503 `NOT_READY` (was 200 with a "Must provide schema" error).
 
 ### Security

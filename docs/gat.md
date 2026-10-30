@@ -219,6 +219,20 @@ api.UseMiddleware(func(hctx huma.Context, next func(huma.Context)) {
 - No bag in the context (a call gat did not scope): nothing is shared
   and `fill` runs every time.
 
+## One copy per operation (`VersionedOnly`)
+
+By default every operation renders twice in GraphQL: at `ns.op` (the
+latest version) and at `ns.v1.op`. To keep only the versioned copy:
+
+```go
+g, _ := gat.New()
+g.VersionedOnly(true) // before RegisterHuma
+```
+
+Then `ns.op` is gone and `ns.v1.op` stays; subscriptions are named
+`ns_v1_op` instead of `ns_op`. Type names, REST and gRPC do not change.
+Experimental.
+
 ## Integer scalars (money in cents)
 
 A Go `int64` renders as `Long`, which is a string unless

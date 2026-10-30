@@ -91,6 +91,10 @@ type Gateway struct {
 	// behavior (nullable lists, nil → JSON null).
 	emptyNilSlices bool
 
+	// versionedOnly renders ops only under `ns.<version>`, without the
+	// unversioned copy of the latest version. Set via VersionedOnly().
+	versionedOnly bool
+
 	// allowEmbeddedParams downgrades the embedded-parameter check from a
 	// mount-time error to a log warning. Off by default: the condition
 	// silently drops request parameters, so failing loudly is the safer
@@ -194,6 +198,18 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 // Returns g for chaining; a no-op once built. Input is lenient (number or string) either way.
 func (g *Gateway) LongAsNumber(b bool) *Gateway {
 	g.longAsNumber = b
+	return g
+}
+
+// VersionedOnly drops the unversioned copy of each op (default off).
+// When on, an op renders once, at `ns.v1.op`, instead of at both
+// `ns.op` and `ns.v1.op`; subscriptions become `ns_v1_op`. Type names do
+// not change. Call before the schema builds. Returns g for chaining; a
+// no-op once built.
+//
+// Stability: experimental
+func (g *Gateway) VersionedOnly(b bool) *Gateway {
+	g.versionedOnly = b
 	return g
 }
 
@@ -313,6 +329,7 @@ func (g *Gateway) build() error {
 		AnnotationSink:       annotations,
 		NonNullRequiredLists: g.emptyNilSlices,
 		Directives:           []*graphql.Directive{exportDirective},
+		VersionedOnly:        g.versionedOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("gat: build schema: %w", err)
