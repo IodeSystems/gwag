@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type gqlErrorBody struct {
@@ -71,6 +72,56 @@ func TestConnectErrorCodes_UpstreamStatus(t *testing.T) {
 				if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 					t.Errorf("%s: extensions %v, want %v", q, got, tc.want)
 				}
+			}
+		})
+	}
+}
+
+// Pub/sub auth failures carry PERMISSION_DENIED (was no code), lower
+// case under WithConnectErrorCodes.
+func TestConnectErrorCodes_ChannelAuth(t *testing.T) {
+	cluster, err := StartCluster(ClusterOptions{
+		NodeName:      "errcodes-test",
+		ClientListen:  "127.0.0.1:0",
+		ClusterListen: "127.0.0.1:0",
+		DataDir:       t.TempDir(),
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cluster.Close)
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want map[string]any
+	}{
+		{"default", nil, map[string]any{"code": "PERMISSION_DENIED"}},
+		{"connect", []Option{WithConnectErrorCodes()}, map[string]any{"code": "permission_denied", "status": float64(403)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := New(append([]Option{
+				WithCluster(cluster),
+				WithoutMetrics(),
+				WithoutBackpressure(),
+				WithSubscriptionAuth(SubscriptionAuthOptions{Secret: []byte("channel-secret-32-bytes-of-padding!!")}),
+				WithChannelAuth("events.>", ChannelAuthHMAC),
+			}, tc.opts...)...)
+			defer gw.Close()
+			gw.mu.Lock()
+			if err := gw.assembleLocked(); err != nil {
+				gw.mu.Unlock()
+				t.Fatal(err)
+			}
+			gw.mu.Unlock()
+			body := postGraphQLQuery(t, gw.Handler(), `{ ps { pub(channel:"events.orders.1", payload:"x") { __typename } } }`)
+			e := body.Errors[0]
+			if !strings.Contains(e.Message, "ps: hmac required") {
+				t.Errorf("message %q", e.Message)
+			}
+			if fmt.Sprint(e.Extensions) != fmt.Sprint(tc.want) {
+				t.Errorf("extensions %v, want %v", e.Extensions, tc.want)
 			}
 		})
 	}

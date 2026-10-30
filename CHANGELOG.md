@@ -40,6 +40,7 @@ changes on MINOR, drops on MAJOR.
 - **gRPC ingress: more specific status codes.** An OpenAPI or downstream-GraphQL upstream's HTTP error status now picks the gRPC code (`gat.ErrorCode`): 409 AlreadyExists (was InvalidArgument), 412 FailedPrecondition, 413 ResourceExhausted, 501 Unimplemented, 502/503/504 Unavailable (were Internal). GraphQL `extensions.code` is unchanged.
 - **REST ingress: status follows the gRPC code.** `IngressHandler` answers a failed dispatch with `gat.HTTPStatus(gat.ErrorCode(err))`, so REST and gRPC clients see one classification. An upstream 409 is now 409 (was 400), 410 404, 412 400, 413 429, 501 501, 502/503 503, 504 503 (5xx were 500); a gRPC upstream's status picks the REST status (was 500 for all); a cancelled or timed-out call is 499 / 504 (was 500).
 - **gat gRPC error codes.** A handler error that is a `*connect.Error` or carries a gRPC status keeps its code (was Internal unless it had an HTTP status); `context.Canceled` / `DeadlineExceeded` answer Canceled / DeadlineExceeded (was Internal). Wrapped errors are unwrapped.
+- **Pub/sub auth failures carry a code.** A `ps.pub` / `ps.sub` refused by channel auth (HMAC or delegate) now fails with PermissionDenied: GraphQL `extensions.code` `PERMISSION_DENIED` (was none), gRPC PermissionDenied, REST 403. Messages are unchanged.
 - **gat 413 carries `extensions.code`** (`BAD_REQUEST`), as gwag's does.
 
 ### Security

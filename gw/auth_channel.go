@@ -161,9 +161,9 @@ func (g *Gateway) checkChannelAuth(ctx context.Context, channel string, wildcard
 	switch outcome, reason := g.consultPubSubDelegate(ctx, channel, hmacB64, ts, wildcard); outcome {
 	case channelDelegateReject:
 		if reason != "" {
-			return fmt.Errorf("ps: channel %q denied by delegate: %s", channel, reason)
+			return Reject(CodePermissionDenied, fmt.Sprintf("ps: channel %q denied by delegate: %s", channel, reason))
 		}
-		return fmt.Errorf("ps: channel %q denied by delegate", channel)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: channel %q denied by delegate", channel))
 	default:
 		// accept and fallthrough are both "HMAC-passed, proceed"; the
 		// HMAC check above is the always-works floor.
@@ -180,10 +180,10 @@ func (g *Gateway) checkChannelAuth(ctx context.Context, channel string, wildcard
 func (g *Gateway) verifyChannelHMAC(channel, hmacB64 string, ts int64) error {
 	secret, ok := g.cfg.subAuth.lookupSecret("")
 	if !ok {
-		return fmt.Errorf("ps: channel auth requires a configured HMAC secret (WithSubscriptionAuth)")
+		return Reject(CodePermissionDenied, "ps: channel auth requires a configured HMAC secret (WithSubscriptionAuth)")
 	}
 	if hmacB64 == "" {
-		return fmt.Errorf("ps: hmac required for channel %q", channel)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: hmac required for channel %q", channel))
 	}
 	skew := g.cfg.subAuth.SkewWindow
 	if skew == 0 {
@@ -191,18 +191,18 @@ func (g *Gateway) verifyChannelHMAC(channel, hmacB64 string, ts int64) error {
 	}
 	now := time.Now().Unix()
 	if ts < now-int64(skew.Seconds()) {
-		return fmt.Errorf("ps: hmac token too old (ts=%d, now=%d)", ts, now)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: hmac token too old (ts=%d, now=%d)", ts, now))
 	}
 	if ts > now+int64(skew.Seconds()) {
-		return fmt.Errorf("ps: hmac token too new (ts=%d, now=%d)", ts, now)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: hmac token too new (ts=%d, now=%d)", ts, now))
 	}
 	provided, err := base64.StdEncoding.DecodeString(hmacB64)
 	if err != nil {
-		return fmt.Errorf("ps: hmac malformed: %w", err)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: hmac malformed: %v", err))
 	}
 	expected := computeSubscribeHMAC(secret, "", channel, ts)
 	if !hmac.Equal(expected, provided) {
-		return fmt.Errorf("ps: hmac mismatch for channel %q", channel)
+		return Reject(CodePermissionDenied, fmt.Sprintf("ps: hmac mismatch for channel %q", channel))
 	}
 	return nil
 }

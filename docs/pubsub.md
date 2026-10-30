@@ -84,6 +84,10 @@ subscribe. Codes: `OK` accepts, `DENIED` rejects without falling
 through; `UNAVAILABLE` / `NOT_CONFIGURED` / `UNSPECIFIED` / transport
 error all fall through to HMAC-only (which already verified).
 
+A refused `pub` or `sub` (missing, stale or wrong HMAC, no secret
+configured, delegate `DENIED`) fails with `PERMISSION_DENIED`: GraphQL
+`extensions.code`, gRPC PermissionDenied, REST 403.
+
 ## Channel → payload-type registry
 
 Typemap from channel pattern to proto message type. Two registration
