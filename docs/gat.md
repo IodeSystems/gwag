@@ -553,6 +553,37 @@ g.EchoComplete(true)                       // answer a client's graphql-ws compl
 - `EchoComplete` sends `complete` back after a client completes a
   subscription. Off by default; the protocol has the server stay silent.
 
+### gRPC routes you supply
+
+A host can serve its own methods on gat's gRPC ingress, beside or
+instead of gat's operations (experimental):
+
+```go
+g.SetGRPCRoutes([]gat.GRPCRoute{{
+    Method:  md, // protoreflect.MethodDescriptor
+    Unary:   func(ctx context.Context, req *dynamicpb.Message) (proto.Message, error) { ... },
+    Release: putBack, // optional: gets the response once it is encoded
+    Data:    myInfo,  // handed to PreCall
+}})
+mux.Handle("/rpc/", http.StripPrefix("/rpc", g.GRPCHandler())) // Connect, gRPC-Web, gRPC (h2c/TLS)
+srv := grpc.NewServer(grpc.UnknownServiceHandler(g.GRPCStreamHandler()))
+```
+
+- A server-streaming method takes `Stream(ctx, req, send)` instead of
+  `Unary`. Client-streaming and bidi methods are refused.
+- `SetGRPCRoutes` replaces the whole table atomically: a call already
+  running finishes on its old route. Call it again whenever your set of
+  methods changes.
+- `g.PreCall(hook)` runs for every gRPC call, gat's own operations
+  included, after the request is read. The call's metadata is on the
+  context (`metadata.FromIncomingContext`) on every transport. An error
+  refuses the call; `done(ctx)` runs when the call ends, refused or not.
+- Errors map to codes with `gat.ErrorCode`, on both servers: a gRPC
+  status or `*connect.Error` keeps its code, an error with
+  `GetStatus() int` maps by HTTP status (404 NotFound, 409
+  AlreadyExists, 503 Unavailable, ...), context errors map to Canceled
+  and DeadlineExceeded, anything else is Internal.
+
 ## Front a remote gRPC service from a .proto
 
 The huma-paired flow above hosts handlers in the same Go binary as

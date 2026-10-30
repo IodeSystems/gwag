@@ -27,12 +27,14 @@ changes on MINOR, drops on MAJOR.
 - **gat `VersionedOnly(true)`** (experimental). Render each GraphQL operation once, at `ns.v1.op`, without the unversioned `ns.op` copy. Default off. New `ir.RuntimeOptions.VersionedOnly`.
 - **Batched GraphQL requests.** A POST body that is a JSON array runs each document in order and answers with an array of results; `WithMaxOperations(n)` also caps the batch: at most `n` documents, and at most `n` operations summed over them (over the cap, the whole batch is refused with 400 and nothing runs). (The GraphQL handler now runs on gat's request path.)
 - **gat ingress hooks** (experimental). `PreRequest`, `WSUpgrade`, `GraphiQL`, `ParseContentType`, `AcceptStringVariables`, `UsePlanCache`, `EchoComplete` let a host wrap gat's GraphQL handler; see docs/gat.md "Ingress hooks". New `gat.Request`, `gat.RequestHook`, `gat.RequestParser`.
+- **gat gRPC routes from the host** (experimental). `SetGRPCRoutes` serves host-supplied methods (`gat.GRPCRoute`) over Connect, gRPC and gRPC-Web (`GRPCHandler`) and on a grpc-go server (`GRPCStreamHandler`); the table swaps atomically. `PreCall` hooks every gRPC call; `gat.ErrorCode` is the one error-to-code mapping both use. See docs/gat.md "gRPC routes you supply".
 - **gat `SetSchema`** (experimental). Serve a host-assembled schema and replace it at run time; in-flight requests keep the schema they started with. A gat handler with no schema yet answers 503 `NOT_READY` (was 200 with a "Must provide schema" error).
 
 ### Changed
 - **GraphQL endpoint: 400 on bad input.** A body that is not valid JSON, an empty or missing query, or `variables` that are not an object (a JSON string holding one is still accepted; invalid `variables` on GET included) now answer 400 instead of 200 with a GraphQL error or silently dropped variables.
 - **GraphQL endpoint: other input changes.** A multipart body over `WithUploadLimit` answers 413 (was 400). On POST, `query` / `variables` in the URL no longer override the body. A WebSocket upgrade without the `graphql-transport-ws` subprotocol is accepted and closed with 1008 (was served as an HTTP request).
 - **gat `MaxOperations` refuses the whole document.** A document selecting more operations than the cap now fails validation and nothing runs (was: the first `n` ran and the rest got field errors). In a batch the cap counts the operations of all its documents together: a batch over it is refused whole with 400.
+- **gat gRPC error codes.** A handler error that is a `*connect.Error` or carries a gRPC status keeps its code (was Internal unless it had an HTTP status); `context.Canceled` / `DeadlineExceeded` answer Canceled / DeadlineExceeded (was Internal). Wrapped errors are unwrapped.
 - **gat 413 carries `extensions.code`** (`BAD_REQUEST`), as gwag's does.
 
 ### Security

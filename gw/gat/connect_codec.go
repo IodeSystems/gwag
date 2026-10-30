@@ -39,6 +39,12 @@ func (fastProtoCodec) Marshal(msg any) ([]byte, error) {
 			return out, err
 		}
 	}
+	if r, ok := msg.(*hostResult); ok && r.release != nil {
+		// A host route's response: encoded, it goes back to the host.
+		out, err := proto.MarshalOptions{AllowPartial: true}.Marshal(r.msg)
+		r.release(r.msg)
+		return out, err
+	}
 	pm, ok := msg.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("gat: %T does not implement proto.Message", msg)

@@ -147,6 +147,11 @@ type Gateway struct {
 	parsers         map[string]contentParser
 	stringVariables bool
 	echoComplete    bool
+
+	// gRPC ingress (grpc_routes.go): the PreCall hook, and the host
+	// routes SetGRPCRoutes swaps in.
+	preCall    CallHook
+	grpcRoutes atomic.Pointer[grpcRouteTable]
 }
 
 // ServiceRegistration pairs an IR service with its dispatch config.

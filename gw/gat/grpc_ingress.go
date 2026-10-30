@@ -82,7 +82,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 				if st, ok := streamsByName[name]; ok && md.IsStreamingServer() {
 					mux.Handle(prefix+procedure, connect.NewServerStreamHandler(
 						procedure,
-						connectStream(st, md),
+						connectStream(g, st, md, procedure),
 						connect.WithSchema(md),
 						connect.WithRequestInitializer(newRequestInitializer(wireDecoderFor(st.inputType, st.irOp, st.check, md))),
 						connect.WithCodec(fastProtoCodec{}),
@@ -95,7 +95,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 				}
 				handler := connect.NewUnaryHandler(
 					procedure,
-					connectUnary(cap, md),
+					connectUnary(g, cap, md, procedure),
 					connect.WithSchema(md),
 					connect.WithRequestInitializer(newRequestInitializer(wireDecoderFor(cap.inputType, cap.irOp, cap.check, md))),
 					connect.WithCodec(fastProtoCodec{}),
@@ -120,23 +120,11 @@ func wireDecoderFor(inputType reflect.Type, irOp *ir.Operation, check *inputChec
 }
 
 // handlerErrorToConnect maps a captured-handler error to a
-// connect.Error with a status-aware code.
-//
-// Huma's `huma.NewError(status, msg)` (and its 4xx helpers) returns a
-// value whose dynamic type implements `interface { GetStatus() int }`
-// — that's the StatusError shape. We duck-type rather than import the
-// huma package so gat stays loose-coupled to its OpenAPI ingest path;
-// any framework that exposes the same shape (e.g., a hand-rolled
-// error type) gets the same treatment for free.
-//
-// Unrecognised errors stay CodeInternal — same as before this helper
-// existed.
+// connect.Error, its code from ErrorCode. Huma's errors carry their
+// HTTP status (GetStatus), which picks the code; an error gat cannot
+// classify is Internal.
 func handlerErrorToConnect(err error) *connect.Error {
-	type statusError interface{ GetStatus() int }
-	if se, ok := err.(statusError); ok {
-		return connect.NewError(httpStatusToConnectCode(se.GetStatus()), err)
-	}
-	return connect.NewError(connect.CodeInternal, err)
+	return connectError(err)
 }
 
 // httpStatusToConnectCode maps an HTTP status code to the Connect code
@@ -183,8 +171,9 @@ func httpStatusToConnectCode(status int) connect.Code {
 
 // connectUnary builds the typed unary handler that bridges
 // dynamicpb messages to the captured huma handler.
-func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(context.Context, *connect.Request[wireRequest]) (*connect.Response[wireResult], error) {
+func connectUnary(g *Gateway, cap *capturedOp, md protoreflect.MethodDescriptor, procedure string) func(context.Context, *connect.Request[wireRequest]) (*connect.Response[wireResult], error) {
 	bind := newConnectBinder(cap.inputType, cap.irOp, md)
+	call := GRPCCall{Procedure: procedure}
 
 	// Plan the response against the operation's types. A nil plan is
 	// the normal outcome for anything the walker can't prove it
@@ -202,6 +191,16 @@ func connectUnary(cap *capturedOp, md protoreflect.MethodDescriptor) func(contex
 		in, err := bindRequest(req.Msg, bind)
 		if err != nil {
 			return nil, err
+		}
+		if g.preCall != nil {
+			var done func(context.Context)
+			ctx, done, err = g.preCall(withHeaderMetadata(ctx, req.Header()), call)
+			if done != nil {
+				defer done(ctx)
+			}
+			if err != nil {
+				return nil, connectError(err)
+			}
 		}
 		var args map[string]any
 		if cap.check != nil {
