@@ -1,7 +1,9 @@
 package gat_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +73,40 @@ func TestMaxOperations_CountsPerRequest(t *testing.T) {
 	}
 	if n := calls.Load(); n != 3 {
 		t.Errorf("calls = %d, want 3 (the cap is per request)", n)
+	}
+}
+
+func TestMaxOperations_CountsAcrossBatch(t *testing.T) {
+	srv, calls := newLimitsGat(t, func(g *gat.Gateway) { g.MaxOperations(3) })
+	two := `query { Demo { a: opA(id: "1") { id } b: opA(id: "2") { id } } }`
+	post := func(docs ...string) (int, string) {
+		var batch []map[string]any
+		for _, d := range docs {
+			batch = append(batch, map[string]any{"query": d})
+		}
+		b, _ := json.Marshal(batch)
+		resp, err := http.Post(srv.URL+"/api/graphql", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	// Each document is under the cap of 3; together they select 4.
+	status, body := post(two, two)
+	if status != http.StatusBadRequest || !strings.Contains(body, "batch selects 4 operations, over the limit of 3") {
+		t.Errorf("batch over the cap: status %d body %s", status, body)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("a refused batch ran %d operations, want 0", n)
+	}
+	// At the cap the batch runs.
+	if status, body := post(two, `query { Demo { opA(id: "3") { id } } }`); status != http.StatusOK || strings.Contains(body, "errors") {
+		t.Errorf("batch at the cap: status %d body %s", status, body)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("calls = %d, want 3", n)
 	}
 }
 

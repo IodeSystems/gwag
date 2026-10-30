@@ -294,7 +294,9 @@ g.MaxRequestBytes(1 << 20) // the default: huma's REST body limit
 - `MaxOperations(n)`: a document selecting more than `n` operations
   (aliases and fragment spreads count) is refused whole; nothing runs.
   A validation rule, like `MaxDepth`. A batch may hold at most `n`
-  documents. Default 64; `MaxOperations(0)` turns it off.
+  documents and `n` operations over all of them; a batch over the cap is
+  refused with 400 and nothing runs. Default 64; `MaxOperations(0)`
+  turns it off.
 - `MaxDepth(n)`: queries nesting fields deeper than `n` are refused
   (every field level counts, the namespace included). A validation
   rule: checked once per distinct query, the verdict cached with the
@@ -354,7 +356,8 @@ stages' data merges into one response in the query's field order.
   context, same handler as over REST and gRPC. The document (or batch)
   shares one request scope, so `Attrs`, cookies and the cache-header
   merge span all of it. `MaxOperations` applies to each document and
-  caps the batch's length.
+  to the batch as a whole: its length, and the operations of all its
+  documents summed.
 - A batch entry refused before it runs (unknown document id, query text
   under enforced trusted documents) gets an errors object in its slot;
   the others still run. Batches are POST only.

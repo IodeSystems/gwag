@@ -172,7 +172,7 @@ anything. Two limits are on by default:
 
 | Option | Default | What it refuses |
 |---|---|---|
-| `WithMaxOperations(n)` | 64 | A document selecting more than `n` operations, aliases and fragment spreads included; a batch (JSON array body) of more than `n` documents. |
+| `WithMaxOperations(n)` | 64 | A document selecting more than `n` operations, aliases and fragment spreads included; a batch (JSON array body) of more than `n` documents, or whose documents select more than `n` operations together (the whole batch is refused). |
 | `WithMaxRequestBytes(n)` | 1 MiB | A non-multipart body over `n` bytes (413). Upload bodies follow `WithUploadLimit`. |
 | `WithMaxDepth(n)` | off | Fields nested deeper than `n`, the namespace field included. |
 | `WithoutIntrospection()` | off | `__schema` / `__type`. The schema export handlers keep serving; mount them where only your tooling reaches them. |

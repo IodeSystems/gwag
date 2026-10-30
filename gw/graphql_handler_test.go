@@ -88,6 +88,27 @@ func TestGraphQLHandler_Batch(t *testing.T) {
 	}
 }
 
+// WithMaxOperations caps a batch's operations summed over its
+// documents: over the cap, the whole batch is refused and none runs.
+func TestGraphQLHandler_BatchOperationCap(t *testing.T) {
+	h, calls := limitsGateway(t, WithMaxOperations(3))
+	two := `{"query":"{ test { a: getThing(id:\"x\") { id } b: getThing(id:\"y\") { id } } }"}`
+	rr := serveGraphQL(h, http.MethodPost, "/graphql", "application/json", "["+two+","+two+"]")
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "over the limit of 3") {
+		t.Fatalf("batch of 4 operations: %d %s", rr.Code, rr.Body)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("refused batch dispatched %d calls", n)
+	}
+	rr = serveGraphQL(h, http.MethodPost, "/graphql", "application/json", "["+two+`,{"query":"{ __typename }"}]`)
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "errors") {
+		t.Fatalf("batch at the cap: %d %s", rr.Code, rr.Body)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("backend calls = %d, want 2", n)
+	}
+}
+
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

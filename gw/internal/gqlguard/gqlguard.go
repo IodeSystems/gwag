@@ -43,25 +43,58 @@ func MaxDepthRule(limit int) graphql.ValidationRuleFn {
 func MaxOperationsRule(limit int) graphql.ValidationRuleFn {
 	return func(ctx *graphql.ValidationContext) *graphql.ValidationRuleInstance {
 		return onOperation(func(op *ast.OperationDefinition) {
-			var root *graphql.Object
-			schema := ctx.Schema()
-			switch op.Operation {
-			case ast.OperationTypeMutation:
-				root = schema.MutationType()
-			case ast.OperationTypeSubscription:
-				root = schema.SubscriptionType()
-			default:
-				root = schema.QueryType()
-			}
+			root := rootType(ctx.Schema(), op)
 			if root == nil {
 				return
 			}
-			if n := countOperations(ctx, root, op.SelectionSet, map[string]bool{}); n > limit {
+			if n := countOperations(ctx.Fragment, root, op.SelectionSet, map[string]bool{}); n > limit {
 				ctx.ReportError(gqlerrors.NewError(
 					fmt.Sprintf("request selects %d operations, over the limit of %d", n, limit),
 					[]ast.Node{op}, "", nil, []int{}, nil))
 			}
 		})
+	}
+}
+
+// CountOperations counts the operations MaxOperationsRule counts, for
+// the operation of doc that operationName selects (the only one when
+// operationName is empty). 0 when there is no such operation. A host
+// sums it across the documents of a batch, so the cap holds for the
+// whole request.
+func CountOperations(schema *graphql.Schema, doc *ast.Document, operationName string) int {
+	var op *ast.OperationDefinition
+	frags := map[string]*ast.FragmentDefinition{}
+	for _, def := range doc.Definitions {
+		switch d := def.(type) {
+		case *ast.OperationDefinition:
+			if op == nil && (operationName == "" || d.Name != nil && d.Name.Value == operationName) {
+				op = d
+			}
+		case *ast.FragmentDefinition:
+			frags[d.Name.Value] = d
+		}
+	}
+	if op == nil {
+		return 0
+	}
+	root := rootType(schema, op)
+	if root == nil {
+		return 0
+	}
+	lookup := func(name string) *ast.FragmentDefinition { return frags[name] }
+	return countOperations(lookup, root, op.SelectionSet, map[string]bool{})
+}
+
+// rootType is the schema's root object for op's kind; nil when the
+// schema has none.
+func rootType(schema *graphql.Schema, op *ast.OperationDefinition) *graphql.Object {
+	switch op.Operation {
+	case ast.OperationTypeMutation:
+		return schema.MutationType()
+	case ast.OperationTypeSubscription:
+		return schema.SubscriptionType()
+	default:
+		return schema.QueryType()
 	}
 }
 
@@ -130,7 +163,7 @@ func selectionDepth(ctx *graphql.ValidationContext, set *ast.SelectionSet, inPat
 // countOperations counts the operation fields selected under parent
 // (a root type or a namespace container), descending only into
 // containers. Fragments count once per spread.
-func countOperations(ctx *graphql.ValidationContext, parent *graphql.Object, set *ast.SelectionSet, inPath map[string]bool) int {
+func countOperations(fragment func(string) *ast.FragmentDefinition, parent *graphql.Object, set *ast.SelectionSet, inPath map[string]bool) int {
 	if set == nil {
 		return 0
 	}
@@ -146,20 +179,20 @@ func countOperations(ctx *graphql.ValidationContext, parent *graphql.Object, set
 				continue // unknown field: the spec rules report it
 			}
 			if c := container(def.Type); c != nil {
-				n += countOperations(ctx, c, s.SelectionSet, inPath)
+				n += countOperations(fragment, c, s.SelectionSet, inPath)
 			} else {
 				n++
 			}
 		case *ast.InlineFragment:
-			n += countOperations(ctx, parent, s.SelectionSet, inPath)
+			n += countOperations(fragment, parent, s.SelectionSet, inPath)
 		case *ast.FragmentSpread:
 			name := s.Name.Value
-			frag := ctx.Fragment(name)
+			frag := fragment(name)
 			if frag == nil || inPath[name] {
 				continue
 			}
 			inPath[name] = true
-			n += countOperations(ctx, parent, frag.SelectionSet, inPath)
+			n += countOperations(fragment, parent, frag.SelectionSet, inPath)
 			delete(inPath, name)
 		}
 	}

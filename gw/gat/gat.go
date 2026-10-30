@@ -109,6 +109,9 @@ type Gateway struct {
 	trusted *gqlguard.TrustedDocs
 	// exports caches the @export paths of batched documents.
 	exports exportCache
+	// opCounts caches operation counts of batched documents, for the
+	// batch-wide MaxOperations check.
+	opCounts opCountCache
 	// hook, when set (HookDispatch), runs around every in-process
 	// operation call with its context. nil = off.
 	hook DispatchHook
@@ -785,6 +788,20 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 		writeError(w, fmt.Sprintf("batch exceeds %d operations", g.maxOps), http.StatusBadRequest)
 		return
 	}
+	// Plan every document before running any, so a batch over the
+	// operation cap is refused whole.
+	plans := make([]plannedRequest, len(batch))
+	total := 0
+	for i := range batch {
+		plans[i] = g.planRequest(snap, &batch[i])
+		if p := plans[i]; g.maxOps > 0 && len(batch) > 1 && p.status == 0 && p.pr.Plan != nil {
+			total += g.opCounts.count(snap.schema, p.query, batch[i].OperationName)
+		}
+	}
+	if g.maxOps > 0 && total > g.maxOps {
+		writeError(w, fmt.Sprintf("batch selects %d operations, over the limit of %d", total, g.maxOps), http.StatusBadRequest)
+		return
+	}
 	ctx, scope := newScope(ctx, r, true)
 	exported := map[string]any{}
 	docs := make([]string, 0, len(batch))
@@ -794,7 +811,7 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 			out = append(out, ',')
 		}
 		req := &batch[i]
-		p := g.planRequest(snap, req)
+		p := plans[i]
 		if p.status != 0 {
 			out = appendCodedError(out, p.msg, p.code)
 			continue

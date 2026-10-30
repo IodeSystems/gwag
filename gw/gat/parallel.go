@@ -37,7 +37,9 @@ func (g *Gateway) ParallelQueries(n int) *Gateway {
 // so a request aliasing one operation a thousand times runs none of
 // them. The check is a validation rule: it runs once per distinct
 // query and its verdict is cached with the plan. A batch may hold at
-// most n documents.
+// most n documents, and the operations of all its documents count
+// together: a batch over n is refused whole (400) and runs nothing.
+// The batch cap applies under UsePlanCache too.
 //
 // Call before the schema builds. Returns g for chaining.
 //
