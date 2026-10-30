@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	greeterv1 "github.com/iodesystems/gwag/v2/examples/multi/gen/greeter/v1"
 )
@@ -485,5 +487,63 @@ func TestHTTPIngress_OpenAPI_PathParamURLDecoded(t *testing.T) {
 	}
 	if rec.Path != "/things/hello world" {
 		t.Fatalf("backend path=%q want %q", rec.Path, "/things/hello world")
+	}
+}
+
+// An upstream HTTP error status reaches a REST client as the status of
+// its gRPC code (gat.HTTPStatus(gat.ErrorCode)), the same classification
+// the gRPC ingress uses. Changed: every upstream 4xx other than
+// 400/401/403/404/429 was 400 and every 5xx was 500.
+func TestHTTPIngress_UpstreamHTTPStatus(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var code int
+		_, _ = fmt.Sscanf(r.URL.Path, "/things/%d", &code)
+		w.WriteHeader(code)
+	}))
+	defer backend.Close()
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")))
+	defer gw.Close()
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(backend.URL), As("test")); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(gw.IngressHandler())
+	defer srv.Close()
+	for upstream, want := range map[int]int{
+		http.StatusBadRequest:          http.StatusBadRequest,
+		http.StatusNotFound:            http.StatusNotFound,
+		http.StatusConflict:            http.StatusConflict,
+		http.StatusGone:                http.StatusNotFound,
+		http.StatusTooManyRequests:     http.StatusTooManyRequests,
+		http.StatusInternalServerError: http.StatusInternalServerError,
+		http.StatusNotImplemented:      http.StatusNotImplemented,
+		http.StatusBadGateway:          http.StatusServiceUnavailable,
+		http.StatusServiceUnavailable:  http.StatusServiceUnavailable,
+	} {
+		resp, err := http.Get(fmt.Sprintf("%s/things/%d", srv.URL, upstream))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("upstream %d: status %d, want %d", upstream, resp.StatusCode, want)
+		}
+	}
+}
+
+// A gRPC upstream's status code picks the REST status. Changed: was
+// 500 for every gRPC status.
+func TestHTTPIngress_UpstreamGRPCStatus(t *testing.T) {
+	f := newHTTPIngressFixture(t)
+	f.greeter.helloFn = func(_ context.Context, _ *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+		return nil, status.Error(codes.NotFound, "no such greeting")
+	}
+	resp, err := http.Post(f.server.URL+"/greeter.v1.GreeterService/Hello", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s, want 404", resp.StatusCode, body)
 	}
 }

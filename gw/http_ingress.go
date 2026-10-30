@@ -16,6 +16,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/iodesystems/gwag/v2/gw/gat"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -801,11 +802,12 @@ func writeIngressError(w http.ResponseWriter, status int, msg string) {
 }
 
 // writeIngressDispatchError maps a Reject (or arbitrary error) onto an
-// HTTP status. Uses the gateway's Code enum the same way the OpenAPI
-// dispatcher's classification does — keeps ingress + egress error
-// codes symmetric. Surfaces RetryAfter as the standard HTTP header
-// when set on the rejection (today only WithQuota does so).
+// HTTP status through gat.ErrorCode and gat.HTTPStatus, the same
+// classification the gRPC ingress uses, so a client sees one code for
+// one failure on every transport. Surfaces RetryAfter as the standard
+// HTTP header when set on the rejection (today only WithQuota does so).
 func writeIngressDispatchError(w http.ResponseWriter, err error) {
+	status := gat.HTTPStatus(gat.ErrorCode(err))
 	var rej *rejection
 	if errors.As(err, &rej) {
 		if rej.RetryAfter > 0 {
@@ -815,15 +817,14 @@ func writeIngressDispatchError(w http.ResponseWriter, err error) {
 			}
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
 		}
-		writeIngressError(w, codeToHTTPStatus(rej.Code), rej.Msg)
+		writeIngressError(w, status, rej.Msg)
 		return
 	}
-	writeIngressError(w, http.StatusInternalServerError, err.Error())
+	writeIngressError(w, status, err.Error())
 }
 
 // codeToHTTPStatus is the inverse of httpStatusToCode in openapi.go —
-// classifies a gateway Code onto the most appropriate HTTP status for
-// ingress error envelopes.
+// classifies a gateway Code onto an HTTP status (rejection.GetStatus).
 func codeToHTTPStatus(c Code) int {
 	switch c {
 	case CodeUnauthenticated:

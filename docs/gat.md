@@ -582,7 +582,9 @@ srv := grpc.NewServer(grpc.UnknownServiceHandler(g.GRPCStreamHandler()))
   status or `*connect.Error` keeps its code, an error with
   `GetStatus() int` maps by HTTP status (404 NotFound, 409
   AlreadyExists, 503 Unavailable, ...), context errors map to Canceled
-  and DeadlineExceeded, anything else is Internal.
+  and DeadlineExceeded, anything else is Internal. `gat.HTTPStatus`
+  turns a code back into an HTTP status (Connect's table); gwag's REST
+  ingress answers with `HTTPStatus(ErrorCode(err))`.
 
 ## Front a remote gRPC service from a .proto
 

@@ -153,7 +153,9 @@ draining, per-pool backpressure on unary proto calls, the
 on gRPC and request headers on Connect and gRPC-Web. An upstream's HTTP
 error status picks the gRPC code: 404 NotFound, 409 AlreadyExists, 429
 ResourceExhausted, 502/503/504 Unavailable, other 5xx Internal (see
-`gat.ErrorCode`).
+`gat.ErrorCode`). The REST ingress (`gw.IngressHandler()`) answers with
+that code's HTTP status (`gat.HTTPStatus`), so an upstream 409 is 409
+there too.
 
 ## WebSocket upgrade caps
 
