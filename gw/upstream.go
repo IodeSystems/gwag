@@ -165,6 +165,26 @@ func upstreamTimedOut(parent, callCtx context.Context, p *upstreamPolicy) bool {
 	return p.timeout > 0 && parent.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded)
 }
 
+// grpcDeadlineSlack is how close to callCtx's deadline a gRPC
+// DeadlineExceeded must arrive to count as the policy timeout.
+const grpcDeadlineSlack = 20 * time.Millisecond
+
+// grpcUpstreamTimedOut is upstreamTimedOut for a gRPC call. grpc-go
+// sends the deadline upstream as grpc-timeout, so the upstream's
+// deadline can fire and reset the stream before callCtx's own timer
+// does: err is DeadlineExceeded while callCtx.Err() is still nil. A
+// DeadlineExceeded well before the deadline is the upstream's own.
+func grpcUpstreamTimedOut(parent, callCtx context.Context, p *upstreamPolicy, err error) bool {
+	if upstreamTimedOut(parent, callCtx, p) {
+		return true
+	}
+	if p.timeout <= 0 || parent.Err() != nil || status.Code(err) != codes.DeadlineExceeded {
+		return false
+	}
+	deadline, ok := callCtx.Deadline()
+	return ok && time.Until(deadline) <= grpcDeadlineSlack
+}
+
 // ---------------------------------------------------------------------
 // "Never reached the upstream" probes
 // ---------------------------------------------------------------------

@@ -27,6 +27,9 @@ changes on MINOR, drops on MAJOR.
 - **Pub/sub auth failures carry a code.** A `ps.pub` / `ps.sub` refused by channel auth (HMAC or delegate) now fails with PermissionDenied: GraphQL `extensions.code` `PERMISSION_DENIED` (was none), gRPC PermissionDenied, REST 403. Messages are unchanged.
 - **gat 413 carries `extensions.code`** (`BAD_REQUEST`), as gwag's does.
 
+### Fixed
+- **gRPC upstream timeouts recognised.** A gRPC upstream whose copy of the deadline reset the stream just before the gateway's own timer fired was reported as the upstream's DeadlineExceeded, not as the upstream timeout: no `upstream timeout after` message, and no count toward replica ejection.
+
 ## v2.5.0 — 2026-10-30
 
 ### Migration

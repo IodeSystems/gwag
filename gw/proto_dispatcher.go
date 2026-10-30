@@ -145,7 +145,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 				return resp, nil
 			}
 			releaseDynamicMessage(outputDesc, resp)
-			timedOut := upstreamTimedOut(ctx, callCtx, policy)
+			timedOut := grpcUpstreamTimedOut(ctx, callCtx, policy, err)
 			if timedOut || grpcCountsAsFailure(err) {
 				r.health.failure(policy)
 			}

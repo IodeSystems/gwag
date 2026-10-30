@@ -468,3 +468,32 @@ func TestPickHealthy_NoAllocs(t *testing.T) {
 		t.Fatalf("allocs=%v want 0", n)
 	}
 }
+
+// The upstream's copy of the deadline can reset the stream before
+// callCtx's timer fires; that is still the policy timeout.
+func TestGRPCUpstreamTimedOut(t *testing.T) {
+	p := &upstreamPolicy{timeout: 100 * time.Millisecond}
+	dl := status.Error(codes.DeadlineExceeded, "stream terminated by RST_STREAM")
+	near, cancelNear := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancelNear()
+	far, cancelFar := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFar()
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	for name, c := range map[string]struct {
+		parent, call context.Context
+		p            *upstreamPolicy
+		err          error
+		want         bool
+	}{
+		"near deadline":     {context.Background(), near, p, dl, true},
+		"upstream's own":    {context.Background(), far, p, dl, false},
+		"other code":        {context.Background(), near, p, status.Error(codes.Unavailable, "x"), false},
+		"caller gone":       {done, near, p, dl, false},
+		"no policy timeout": {context.Background(), near, &upstreamPolicy{}, dl, false},
+	} {
+		if got := grpcUpstreamTimedOut(c.parent, c.call, c.p, c.err); got != c.want {
+			t.Errorf("%s: got %v, want %v", name, got, c.want)
+		}
+	}
+}
