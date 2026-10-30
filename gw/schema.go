@@ -36,7 +36,9 @@ func (g *Gateway) assembleLocked() error {
 		g.graphiqlHandler.Store(newGraphiqlServer(schema))
 	}
 	g.rebuildIngressLocked()
-	g.rebuildGRPCIngressLocked()
+	if err := g.rebuildGRPCIngressLocked(); err != nil {
+		return err
+	}
 	g.rebuildChannelBindingIndexLocked()
 	// Re-check InjectPath landings against the rebuilt IR so any
 	// dormant→active or active→dormant transition surfaces exactly

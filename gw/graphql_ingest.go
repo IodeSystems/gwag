@@ -551,7 +551,7 @@ func dispatchGraphQL(
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, rejectUpstream(httpStatusClass(resp.StatusCode), httpStatusToCode(resp.StatusCode),
+		return nil, rejectUpstreamStatus(resp.StatusCode,
 			fmt.Sprintf("graphql: %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBytes))))
 	}
 	var out graphQLResponse

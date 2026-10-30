@@ -277,6 +277,12 @@ func rejectUpstream(class upstreamClass, code Code, msg string) error {
 	return &rejection{Code: code, Msg: msg, upstream: class}
 }
 
+// rejectUpstreamStatus rejects with an upstream's HTTP error status,
+// kept for the gRPC ingress's status → code mapping.
+func rejectUpstreamStatus(status int, msg string) error {
+	return &rejection{Code: httpStatusToCode(status), Msg: msg, upstream: httpStatusClass(status), status: status}
+}
+
 // httpStatusClass: 5xx counts toward ejection, 4xx does not.
 func httpStatusClass(status int) upstreamClass {
 	if status >= 500 {

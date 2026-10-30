@@ -88,8 +88,8 @@ still emits its own span under the request that initiated it.
 | `gateway.graphql` | GraphQL POST + GraphiQL — `gw.Handler()` |
 | `gateway.http` | HTTP/JSON proto-style + OpenAPI passthrough — `gw.IngressHandler()` |
 | `gateway.http.subscription` | SSE subscription over the HTTP ingress |
-| `gateway.grpc` | gRPC unary unknown-service handler — `gw.GRPCUnknownHandler()` |
-| `gateway.grpc.subscription` | gRPC server-streaming unknown-service handler |
+| `gateway.grpc` | gRPC unary call — `gw.GRPCUnknownHandler()`, or Connect / gRPC-Web via `gw.ConnectHandler()` (trace context from request headers) |
+| `gateway.grpc.subscription` | gRPC server-streaming call, on either handler |
 
 Attributes:
 

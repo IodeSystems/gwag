@@ -135,6 +135,26 @@ gw := gateway.New(gateway.WithoutMetrics())            // disable
 gw := gateway.New(gateway.WithMetrics(myCustomSink))   // plug in your own
 ```
 
+## gRPC, Connect and gRPC-Web
+
+`gw.GRPCUnknownHandler()` serves every registered service as gRPC on a
+grpc-go server. `gw.ConnectHandler()` (experimental) serves the same
+routes over Connect, gRPC-Web and gRPC on a plain `http.Handler`, at
+`/package.Service/Method`; browsers reach the gateway this way:
+
+```go
+mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
+```
+
+Both run on gat's gRPC ingress and behave the same: `Unavailable` while
+draining, per-pool backpressure on unary proto calls, the
+`gateway.grpc` span and request metrics. The subscription auth handles
+(`x-gateway-hmac`, `x-gateway-timestamp`, `x-gateway-kid`) are metadata
+on gRPC and request headers on Connect and gRPC-Web. An upstream's HTTP
+error status picks the gRPC code: 404 NotFound, 409 AlreadyExists, 429
+ResourceExhausted, 502/503/504 Unavailable, other 5xx Internal (see
+`gat.ErrorCode`).
+
 ## WebSocket upgrade caps
 
 `gw.Handler()` accepts graphql-transport-ws upgrades for subscriptions.

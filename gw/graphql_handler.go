@@ -18,10 +18,12 @@ import (
 // execute, graphql-transport-ws); gwag supplies the schema
 // (assembleLocked → SetSchema), its plan cache and limits, and the
 // hooks below for tracing, metrics, the request log, uploads, the
-// WebSocket limits and drain, and GraphiQL.
+// WebSocket limits and drain, and GraphiQL. The same gat gateway
+// serves the gRPC ingress (grpc_ingress.go).
 func (g *Gateway) newGraphQLIngress() *gat.Gateway {
 	cfg := g.cfg
 	g.graphqlDone = g.graphqlRequestDone
+	g.grpcDone = g.grpcUnaryDone
 	gg, _ := gat.New()
 	gg.UsePlanCache(g.planCache).
 		MaxRequestBytes(cfg.maxRequestBytes).
@@ -32,6 +34,8 @@ func (g *Gateway) newGraphQLIngress() *gat.Gateway {
 		// gwag has always answered a client's complete with one.
 		EchoComplete(true).
 		PreRequest(g.graphqlPreRequest).
+		// The gRPC ingress (grpc_ingress.go) runs on gat too.
+		PreCall(g.grpcPreCall).
 		WSUpgrade(g.graphqlWSUpgrade).
 		ParseContentType(contentTypeMultipartForm, cfg.uploadLimit, parseMultipartRequest).
 		ParseContentType(contentTypeGraphQL, cfg.maxRequestBytes, parseGraphQLBody).

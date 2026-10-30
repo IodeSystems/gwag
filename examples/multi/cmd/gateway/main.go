@@ -262,6 +262,9 @@ func main() {
 	// OpenAPI services at their declared path/method. Mounted under
 	// /api/ingress/ so it doesn't collide with the SPA catch-all on /.
 	mux.Handle("/api/ingress/", http.StripPrefix("/api/ingress", gw.IngressHandler()))
+	// The gRPC routes again, for Connect and gRPC-Web clients (browsers):
+	// base URL http://host:8080/api/connect.
+	mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
 	mux.Handle("/api/schema", gw.SchemaHandler()) // back-compat alias
 	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
 	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())

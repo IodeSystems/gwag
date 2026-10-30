@@ -23,8 +23,12 @@ type dispatchAccumulator struct {
 	Sum   atomic.Int64
 	Count atomic.Int64
 	// start is when the request began, for an ingress that reads it
-	// back from the context (the GraphQL handler's done hook).
+	// back from the context (the GraphQL and gRPC done hooks).
 	start time.Time
+	// method and release are the gRPC ingress's: the procedure for
+	// the request log, and the backpressure slot to give back.
+	method  string
+	release func()
 }
 
 // withDispatchAccumulator installs a fresh accumulator on ctx and

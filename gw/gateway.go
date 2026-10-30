@@ -122,13 +122,6 @@ type Gateway struct {
 	// handler doesn't take g.mu on the hot path.
 	ingressRoutes atomic.Pointer[ingressTable]
 
-	// grpcIngressRoutes is the gRPC analogue of ingressRoutes:
-	// "/<svcFullName>/<methodName>" → proto-native chained Handler
-	// (skipping canonical-args round trip). Consumed by
-	// GRPCUnknownHandler. Rebuilt + atomic-swapped on every
-	// assembleLocked.
-	grpcIngressRoutes atomic.Pointer[grpcIngressTable]
-
 	// streamGlobalSem caps simultaneous subscription streams across
 	// every pool — the gateway-wide MaxStreamsTotal ceiling. nil when
 	// disabled (0).
@@ -171,10 +164,14 @@ type Gateway struct {
 	graphiqlHandler atomic.Pointer[graphiqlServer]
 
 	// gql serves Handler: gat's GraphQL request path with gwag's
-	// hooks (graphql_handler.go). assembleLocked hands it each schema.
+	// hooks (graphql_handler.go). assembleLocked hands it each schema
+	// and the gRPC routes GRPCUnknownHandler and ConnectHandler serve
+	// (grpc_ingress.go).
 	gql *gat.Gateway
 	// graphqlDone is graphqlRequestDone as a func value, made once.
 	graphqlDone func(context.Context)
+	// grpcDone is grpcUnaryDone as a func value, made once.
+	grpcDone func(context.Context)
 
 	// life is cancelled by Close to stop background goroutines.
 	life       context.Context
@@ -2182,9 +2179,22 @@ type rejection struct {
 	// replica ejection (see upstream.go). Zero for every other
 	// rejection.
 	upstream upstreamClass
+	// status is the upstream's HTTP error status, when the rejection
+	// relays one; 0 otherwise.
+	status int
 }
 
 func (r *rejection) Error() string { return r.Msg }
+
+// GetStatus is the rejection as an HTTP status: the upstream's, when
+// it relays one, else its Code's. gat.ErrorCode reads it to pick the
+// gRPC code on the gRPC ingress.
+func (r *rejection) GetStatus() int {
+	if r.status != 0 {
+		return r.status
+	}
+	return codeToHTTPStatus(r.Code)
+}
 func (r *rejection) Extensions() map[string]any {
 	ext := map[string]any{"code": r.Code.String()}
 	if r.RetryAfter > 0 {
