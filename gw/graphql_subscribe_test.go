@@ -173,6 +173,43 @@ func (s *upstreamWSStats) waitFor(want int, timeout time.Duration) bool {
 	return false
 }
 
+// waitForFanoutTargets polls until the namespace's subscription
+// broker has a fanout with at least want attached consumers.
+func waitForFanoutTargets(g *Gateway, ns string, want int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if maxFanoutTargets(g, ns) >= want {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+func maxFanoutTargets(g *Gateway, ns string) int {
+	g.mu.Lock()
+	var src *graphQLSource
+	for k := range g.slots {
+		if k.namespace == ns {
+			src = g.graphQLSlot(k)
+		}
+	}
+	g.mu.Unlock()
+	if src == nil {
+		return 0
+	}
+	b := src.getSubBroker()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	most := 0
+	for _, f := range b.fanouts {
+		f.mu.Lock()
+		most = max(most, len(f.targets))
+		f.mu.Unlock()
+	}
+	return most
+}
+
 // TestGraphQLIngest_SubscriptionMultiplexer verifies the multiplexer
 // fans one upstream subscription out to N local subscribers. Two
 // concurrent local subs with the same operation MUST cause exactly
@@ -226,6 +263,12 @@ func TestGraphQLIngest_SubscriptionMultiplexer(t *testing.T) {
 	// the two local subscribers.
 	if !stats.waitFor(1, 5*time.Second) {
 		t.Fatal("upstream never received any subscribe")
+	}
+	// The upstream subscribe goes out before the first consumer
+	// attaches, and the second consumer joins later still. Push only
+	// once both are attached, or a frame can reach just one of them.
+	if !waitForFanoutTargets(gw, "pets", 2, 5*time.Second) {
+		t.Fatal("local consumers never both attached to the fanout")
 	}
 
 	// Push a frame from upstream; both local conns should receive it.
