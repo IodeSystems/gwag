@@ -810,6 +810,11 @@ func writeIngressDispatchError(w http.ResponseWriter, err error) {
 	status := gat.HTTPStatus(gat.ErrorCode(err))
 	var rej *rejection
 	if errors.As(err, &rej) {
+		// An upstream HTTP status relays as is: mapping it through a
+		// gRPC code loses detail (410 → 404, 502 → 503).
+		if rej.status != 0 {
+			status = rej.status
+		}
 		if rej.RetryAfter > 0 {
 			secs := int(rej.RetryAfter / time.Second)
 			if secs < 1 {

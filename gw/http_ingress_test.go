@@ -490,10 +490,9 @@ func TestHTTPIngress_OpenAPI_PathParamURLDecoded(t *testing.T) {
 	}
 }
 
-// An upstream HTTP error status reaches a REST client as the status of
-// its gRPC code (gat.HTTPStatus(gat.ErrorCode)), the same classification
-// the gRPC ingress uses. Changed: every upstream 4xx other than
-// 400/401/403/404/429 was 400 and every 5xx was 500.
+// An upstream HTTP error status reaches a REST client unchanged.
+// Changed: every upstream 4xx other than 400/401/403/404/429 was 400
+// and every 5xx was 500.
 func TestHTTPIngress_UpstreamHTTPStatus(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var code int
@@ -512,11 +511,13 @@ func TestHTTPIngress_UpstreamHTTPStatus(t *testing.T) {
 		http.StatusBadRequest:          http.StatusBadRequest,
 		http.StatusNotFound:            http.StatusNotFound,
 		http.StatusConflict:            http.StatusConflict,
-		http.StatusGone:                http.StatusNotFound,
+		http.StatusGone:                http.StatusGone,
+		http.StatusTeapot:              http.StatusTeapot,
 		http.StatusTooManyRequests:     http.StatusTooManyRequests,
 		http.StatusInternalServerError: http.StatusInternalServerError,
 		http.StatusNotImplemented:      http.StatusNotImplemented,
-		http.StatusBadGateway:          http.StatusServiceUnavailable,
+		http.StatusBadGateway:          http.StatusBadGateway,
+		http.StatusGatewayTimeout:      http.StatusGatewayTimeout,
 		http.StatusServiceUnavailable:  http.StatusServiceUnavailable,
 	} {
 		resp, err := http.Get(fmt.Sprintf("%s/things/%d", srv.URL, upstream))
