@@ -10,6 +10,31 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
+- **Batched GraphQL requests.** A POST body that is a JSON array runs each document in order and answers with an array of results; `WithMaxOperations(n)` also caps the batch: at most `n` documents, and at most `n` operations summed over them (over the cap, the whole batch is refused with 400 and nothing runs). (The GraphQL handler now runs on gat's request path.)
+- **gat ingress hooks** (experimental). `PreRequest`, `WSUpgrade`, `GraphiQL`, `ParseContentType`, `AcceptStringVariables`, `UsePlanCache`, `EchoComplete` let a host wrap gat's GraphQL handler; see docs/gat.md "Ingress hooks". New `gat.Request`, `gat.RequestHook`, `gat.RequestParser`.
+- **Connect and gRPC-Web ingress.** `ConnectHandler()` (experimental) serves the routes `GRPCUnknownHandler` serves over Connect, gRPC-Web and gRPC on an `http.Handler`. Both now run on gat's gRPC ingress; see docs/operations.md "gRPC, Connect and gRPC-Web".
+- **gat gRPC routes from the host** (experimental). `SetGRPCRoutes` serves host-supplied methods (`gat.GRPCRoute`) over Connect, gRPC and gRPC-Web (`GRPCHandler`) and on a grpc-go server (`GRPCStreamHandler`); the table swaps atomically. `PreCall` hooks every gRPC call; `gat.ErrorCode` is the one error-to-code mapping both use. See docs/gat.md "gRPC routes you supply".
+- **`WithConnectErrorCodes()`** (experimental). GraphQL dispatch errors carry gat's extensions shape, `{status, code: "not_found"}` (lower-case gRPC code, as the gRPC and REST ingresses classify the error), instead of `{code: "NOT_FOUND"}`. Default stays upper case until v3. New `ir.RuntimeOptions.WrapError`.
+- **`gat.HTTPStatus(code)`** (experimental). A gRPC / Connect code as an HTTP status, by the Connect protocol's table.
+
+### Changed
+- **GraphQL endpoint: 400 on bad input.** A body that is not valid JSON, an empty or missing query, or `variables` that are not an object (a JSON string holding one is still accepted; invalid `variables` on GET included) now answer 400 instead of 200 with a GraphQL error or silently dropped variables.
+- **GraphQL endpoint: other input changes.** A multipart body over `WithUploadLimit` answers 413 (was 400). On POST, `query` / `variables` in the URL no longer override the body. A WebSocket upgrade without the `graphql-transport-ws` subprotocol is accepted and closed with 1008 (was served as an HTTP request).
+- **gat `MaxOperations` refuses the whole document.** A document selecting more operations than the cap now fails validation and nothing runs (was: the first `n` ran and the rest got field errors). In a batch the cap counts the operations of all its documents together: a batch over it is refused whole with 400.
+- **gRPC ingress: more specific status codes.** An OpenAPI or downstream-GraphQL upstream's HTTP error status now picks the gRPC code (`gat.ErrorCode`): 409 AlreadyExists (was InvalidArgument), 412 FailedPrecondition, 413 ResourceExhausted, 501 Unimplemented, 502/503/504 Unavailable (were Internal). GraphQL `extensions.code` is unchanged.
+- **REST ingress: upstream statuses relayed.** `IngressHandler` answers a failed dispatch with the upstream's own HTTP status (was: 4xx other than 400/401/403/404/429 became 400, every 5xx became 500). An error with no HTTP status uses `gat.HTTPStatus(gat.ErrorCode(err))`: a gRPC upstream's status picks the REST status (was 500 for all); a cancelled or timed-out call is 499 / 504 (was 500).
+- **gat gRPC error codes.** A handler error that is a `*connect.Error` or carries a gRPC status keeps its code (was Internal unless it had an HTTP status); `context.Canceled` / `DeadlineExceeded` answer Canceled / DeadlineExceeded (was Internal). Wrapped errors are unwrapped.
+- **Pub/sub auth failures carry a code.** A `ps.pub` / `ps.sub` refused by channel auth (HMAC or delegate) now fails with PermissionDenied: GraphQL `extensions.code` `PERMISSION_DENIED` (was none), gRPC PermissionDenied, REST 403. Messages are unchanged.
+- **gat 413 carries `extensions.code`** (`BAD_REQUEST`), as gwag's does.
+
+## v2.5.0 — 2026-10-30
+
+### Migration
+- **gwag GraphQL endpoint limits.** A request selecting more than 64 operations is now refused, and a body over 1 MiB gets 413. If a client sends larger requests, set `WithMaxOperations(n)` / `WithMaxRequestBytes(n)`, or pass 0 to turn a limit off. gat had these defaults already.
+- **gat with no schema.** A gat handler whose schema is not assembled yet answers 503 `NOT_READY` instead of 200 with an error.
+- **Dependencies.** huma v2.40.0, grpc v1.85.0, mcp-go v1.4.0 and golang.org/x/net v0.62.0 are the new minimums.
+
+### Added
 - **`WithMetricPrefix(prefix)`.** Opt in to `gwag_*` Prometheus metric names; default stays `go_api_gateway_*` until v3.
 - **Request limits.** `WithMaxOperations(n)`, `WithMaxRequestBytes(n)`, `WithMaxDepth(n)`, `WithoutIntrospection()` on the GraphQL endpoint; see docs/operations.md "Request limits". Shared with gat (`gw/internal/gqlguard`).
 - **Trusted documents.** `WithTrustedDocuments(docs, enforce)` and `ParseTrustedDocuments`: persisted-document ids, Apollo APQ and GET by id, as in gat.
@@ -25,23 +50,7 @@ changes on MINOR, drops on MAJOR.
   10 s (default). Fails open when every replica is ejected.
 - **Integer scalars** (experimental). `gat.IntegerScalar(name, desc)` for a Go type's `huma.SchemaProvider`, or `x-gwag-scalar: <Name>` on an OpenAPI integer schema, renders that field as its own GraphQL scalar: a JSON number exact within ±(2^53-1), input as number or decimal string. REST stays integer/int64, proto int64. New `ir.TypeRef.ScalarName`, `ir.ScalarExtension`.
 - **gat `VersionedOnly(true)`** (experimental). Render each GraphQL operation once, at `ns.v1.op`, without the unversioned `ns.op` copy. Default off. New `ir.RuntimeOptions.VersionedOnly`.
-- **Batched GraphQL requests.** A POST body that is a JSON array runs each document in order and answers with an array of results; `WithMaxOperations(n)` also caps the batch: at most `n` documents, and at most `n` operations summed over them (over the cap, the whole batch is refused with 400 and nothing runs). (The GraphQL handler now runs on gat's request path.)
-- **gat ingress hooks** (experimental). `PreRequest`, `WSUpgrade`, `GraphiQL`, `ParseContentType`, `AcceptStringVariables`, `UsePlanCache`, `EchoComplete` let a host wrap gat's GraphQL handler; see docs/gat.md "Ingress hooks". New `gat.Request`, `gat.RequestHook`, `gat.RequestParser`.
-- **Connect and gRPC-Web ingress.** `ConnectHandler()` (experimental) serves the routes `GRPCUnknownHandler` serves over Connect, gRPC-Web and gRPC on an `http.Handler`. Both now run on gat's gRPC ingress; see docs/operations.md "gRPC, Connect and gRPC-Web".
-- **gat gRPC routes from the host** (experimental). `SetGRPCRoutes` serves host-supplied methods (`gat.GRPCRoute`) over Connect, gRPC and gRPC-Web (`GRPCHandler`) and on a grpc-go server (`GRPCStreamHandler`); the table swaps atomically. `PreCall` hooks every gRPC call; `gat.ErrorCode` is the one error-to-code mapping both use. See docs/gat.md "gRPC routes you supply".
-- **`WithConnectErrorCodes()`** (experimental). GraphQL dispatch errors carry gat's extensions shape, `{status, code: "not_found"}` (lower-case gRPC code, as the gRPC and REST ingresses classify the error), instead of `{code: "NOT_FOUND"}`. Default stays upper case until v3. New `ir.RuntimeOptions.WrapError`.
-- **`gat.HTTPStatus(code)`** (experimental). A gRPC / Connect code as an HTTP status, by the Connect protocol's table.
 - **gat `SetSchema`** (experimental). Serve a host-assembled schema and replace it at run time; in-flight requests keep the schema they started with. A gat handler with no schema yet answers 503 `NOT_READY` (was 200 with a "Must provide schema" error).
-
-### Changed
-- **GraphQL endpoint: 400 on bad input.** A body that is not valid JSON, an empty or missing query, or `variables` that are not an object (a JSON string holding one is still accepted; invalid `variables` on GET included) now answer 400 instead of 200 with a GraphQL error or silently dropped variables.
-- **GraphQL endpoint: other input changes.** A multipart body over `WithUploadLimit` answers 413 (was 400). On POST, `query` / `variables` in the URL no longer override the body. A WebSocket upgrade without the `graphql-transport-ws` subprotocol is accepted and closed with 1008 (was served as an HTTP request).
-- **gat `MaxOperations` refuses the whole document.** A document selecting more operations than the cap now fails validation and nothing runs (was: the first `n` ran and the rest got field errors). In a batch the cap counts the operations of all its documents together: a batch over it is refused whole with 400.
-- **gRPC ingress: more specific status codes.** An OpenAPI or downstream-GraphQL upstream's HTTP error status now picks the gRPC code (`gat.ErrorCode`): 409 AlreadyExists (was InvalidArgument), 412 FailedPrecondition, 413 ResourceExhausted, 501 Unimplemented, 502/503/504 Unavailable (were Internal). GraphQL `extensions.code` is unchanged.
-- **REST ingress: upstream statuses relayed.** `IngressHandler` answers a failed dispatch with the upstream's own HTTP status (was: 4xx other than 400/401/403/404/429 became 400, every 5xx became 500). An error with no HTTP status uses `gat.HTTPStatus(gat.ErrorCode(err))`: a gRPC upstream's status picks the REST status (was 500 for all); a cancelled or timed-out call is 499 / 504 (was 500).
-- **gat gRPC error codes.** A handler error that is a `*connect.Error` or carries a gRPC status keeps its code (was Internal unless it had an HTTP status); `context.Canceled` / `DeadlineExceeded` answer Canceled / DeadlineExceeded (was Internal). Wrapped errors are unwrapped.
-- **Pub/sub auth failures carry a code.** A `ps.pub` / `ps.sub` refused by channel auth (HMAC or delegate) now fails with PermissionDenied: GraphQL `extensions.code` `PERMISSION_DENIED` (was none), gRPC PermissionDenied, REST 403. Messages are unchanged.
-- **gat 413 carries `extensions.code`** (`BAD_REQUEST`), as gwag's does.
 
 ### Security
 - **Default request limits.** The GraphQL endpoint now refuses documents selecting more than 64 operations and bodies over 1 MiB (413). Raise or turn them off with `WithMaxOperations(0)` / `WithMaxRequestBytes(0)`.
