@@ -13,6 +13,9 @@ changes on MINOR, drops on MAJOR.
 - **OpenAPI 3.1 export** (experimental). `WithOpenAPI31()` (gwag), `OpenAPI31(true)` (gat) or `?openapi=3.1` on the OpenAPI schema route writes `"openapi": "3.1.0"` with JSON Schema 2020-12 forms: `nullable` becomes a `"null"` type entry, boolean exclusive bounds become numbers, a schema `example` becomes `examples`. Default stays 3.0.0 until v3. New `ir.RenderOpenAPIWith`, `ir.RenderOpenAPIOptions`, `ir.ParseOpenAPIVersion`. See docs/gat.md "OpenAPI 3.1".
 - **OpenAPI 3.2 `query` and `additionalOperations`.** A QUERY operation becomes a GraphQL Query field with a `body` arg; a custom method becomes a Mutation. gwag, gat and REST ingress send the declared method and body upstream. HEAD / OPTIONS / TRACE / CONNECT operations are still skipped, now with a warning at registration (new `ir.UnsupportedOpenAPIOperations`). Cross-kind OpenAPI 3.0 export puts these methods under the `x-additional-operations` Path Item extension.
 
+### Fixed
+- `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.
+
 ## v2.6.0 — 2026-10-30
 
 gwag's GraphQL and gRPC ingress now run on gat's: one request path, so gwag gains batching, Connect and gRPC-Web.
