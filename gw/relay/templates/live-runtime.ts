@@ -4,9 +4,14 @@
 // The runtime owns the cap lifecycle (connect, reconnect, renew, revalidate); the
 // app owns *how to get a cap* — you pass a minter `() => Promise<SubResponse>`,
 // the runtime calls it whenever it needs a fresh one. (Same shape as Ably's
-// authCallback / Pusher's authorizer.) Framework-agnostic core (subscribeRaw) +
-// an optional React hook (useSub).
-import { useEffect, useRef } from 'react'
+// authCallback / Pusher's authorizer.) Framework-agnostic core (subscribeRaw,
+// subscribeLive) + optional React hooks (useSub, useLiveSocket).
+//
+// The runtime heartbeats the socket: a proxy idle timeout does not close it, and
+// a dead or half-open one is noticed and replaced. Screens read the result with
+// useLiveSocket; a screen refetches when `reconnects` grows, because pushes sent
+// while the socket was down are lost.
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 // SubResponse is the signed capability a mint endpoint returns. TEvent is a
 // phantom carrier (erased at runtime) so callers type the handler with no cast.
@@ -28,6 +33,55 @@ export function setRelayPath(path: string): void {
   relayPath = path
 }
 
+// Heartbeat: every pingEveryMs the client sends a ping. Any inbound frame counts
+// as an answer (a relay without the ping op answers err "unknown op"). A ping
+// unanswered for deadAfterMs means the socket is dead: the runtime drops it and
+// reconnects at once, where a browser can wait a minute for a close handshake
+// that never comes. Keep pingEveryMs under the shortest proxy idle timeout.
+let pingEveryMs = 20_000
+let deadAfterMs = 15_000
+export function setHeartbeat(pingEvery: number, deadAfter: number): void {
+  pingEveryMs = pingEvery
+  deadAfterMs = deadAfter
+}
+
+// 'idle' = no subscriptions, no socket; 'connecting' = opening the first socket;
+// 'live' = open and answering; 'reconnecting' = was live, now down and retrying.
+export type LiveState = 'idle' | 'connecting' | 'live' | 'reconnecting'
+export type LiveSnapshot = {
+  state: LiveState
+  // ms epoch of the last frame received: the last moment the data was known
+  // current. null before the first frame.
+  lastSeen: number | null
+  // Socket opens after the first one.
+  reconnects: number
+}
+
+let snapshot: LiveSnapshot = { state: 'idle', lastSeen: null, reconnects: 0 }
+const liveListeners = new Set<() => void>()
+
+function updateLive(next: Partial<LiveSnapshot>): void {
+  snapshot = { ...snapshot, ...next }
+  for (const l of liveListeners) l()
+}
+
+export function liveSnapshot(): LiveSnapshot {
+  return snapshot
+}
+
+// subscribeLive calls l on every state change. Returns an unsubscribe fn.
+export function subscribeLive(l: () => void): () => void {
+  liveListeners.add(l)
+  return () => {
+    liveListeners.delete(l)
+  }
+}
+
+// useLiveSocket is the socket's state for a component.
+export function useLiveSocket(): LiveSnapshot {
+  return useSyncExternalStore(subscribeLive, liveSnapshot, liveSnapshot)
+}
+
 type OutFrame = { op: string; id: string; payload?: unknown; err?: string }
 
 // MuxSocket owns the single shared connection and per-sub minters. On (re)connect
@@ -37,9 +91,17 @@ class MuxSocket {
   private ws: WebSocket | null = null
   private mints = new Map<string, Minter<unknown>>()
   private handlers = new Map<string, (e: unknown) => void>()
+  // A sub's id on the wire is `<channel>#<n>`, not its local id: frames carry the
+  // id, and a relay with compression shares one compressed frame among sockets
+  // only when the id matches. Local ids depend on a page's history; these do not.
+  private wireIds = new Map<string, string>() // local id → wire id
+  private routes = new Map<string, string>() // wire id → local id
   private seq = 0
   private attempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeat: ReturnType<typeof setInterval> | null = null
+  private awaiting: number | null = null // when the oldest unanswered ping was sent
+  private everOpened = false
 
   private url(): string {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -50,28 +112,86 @@ class MuxSocket {
     if (this.ws) return
     const ws = new WebSocket(this.url())
     this.ws = ws
+    updateLive({ state: this.everOpened ? 'reconnecting' : 'connecting' })
     ws.onopen = () => {
       this.attempt = 0
+      this.awaiting = null
+      this.heartbeat = setInterval(() => this.beat(ws), pingEveryMs)
+      updateLive({
+        state: 'live',
+        lastSeen: Date.now(),
+        reconnects: snapshot.reconnects + (this.everOpened ? 1 : 0),
+      })
+      this.everOpened = true
       for (const id of this.mints.keys()) void this.activate(id) // re-mint + re-sub all
     }
     ws.onmessage = (ev) => {
+      this.awaiting = null
+      updateLive({ lastSeen: Date.now() })
       let f: OutFrame
       try {
         f = JSON.parse(ev.data as string) as OutFrame
       } catch {
         return
       }
+      const id = this.routes.get(f.id)
+      if (id === undefined) return // pong, err, or a sub already gone
       if (f.op === 'data') {
-        const h = this.handlers.get(f.id)
+        const h = this.handlers.get(id)
         if (h) h(f.payload)
       } else if (f.op === 'revalidate') {
-        void this.activate(f.id) // relay asked for a fresh cap on this sub
+        void this.activate(id) // relay asked for a fresh cap on this sub
       }
     }
-    ws.onclose = () => {
-      if (this.ws === ws) this.ws = null
-      if (this.mints.size > 0) this.scheduleReconnect()
+    ws.onclose = () => this.down(ws)
+  }
+
+  // down handles the loss of ws, reported by the browser or by beat. A socket
+  // already replaced or closed on purpose is ignored.
+  private down(ws: WebSocket): void {
+    if (this.ws !== ws) return
+    this.ws = null
+    this.stopHeartbeat()
+    updateLive({ state: this.everOpened ? 'reconnecting' : 'connecting' })
+    this.scheduleReconnect()
+  }
+
+  private beat(ws: WebSocket): void {
+    if (ws !== this.ws || ws.readyState !== WebSocket.OPEN) return
+    if (this.awaiting !== null && Date.now() - this.awaiting > deadAfterMs) {
+      ws.onopen = ws.onmessage = ws.onclose = null
+      try {
+        ws.close(4000, 'heartbeat timeout')
+      } catch {
+        // already closing
+      }
+      this.down(ws)
+      return
     }
+    this.send({ op: 'ping', id: 'hb' })
+    if (this.awaiting === null) this.awaiting = Date.now()
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat)
+    this.heartbeat = null
+  }
+
+  // wireId returns id's wire id on channel, taking the lowest free index.
+  private wireId(id: string, channel: string): string {
+    const prefix = `${channel}#`
+    const current = this.wireIds.get(id)
+    if (current !== undefined) {
+      if (current.startsWith(prefix)) return current
+      this.send({ op: 'unsub', id: current }) // the minter moved to another channel
+      this.routes.delete(current)
+    }
+    let n = 0
+    while (this.routes.has(prefix + n)) n++
+    const wire = prefix + n
+    this.wireIds.set(id, wire)
+    this.routes.set(wire, id)
+    return wire
   }
 
   private scheduleReconnect(): void {
@@ -94,7 +214,7 @@ class MuxSocket {
       return // denied / mint unavailable — drop silently; the app's poll fallback covers it
     }
     if (!this.mints.has(id)) return // unsubscribed while minting
-    this.send({ op: 'sub', id, token: cap.token })
+    this.send({ op: 'sub', id: this.wireId(id, cap.channel), token: cap.token })
   }
 
   private send(frame: object): void {
@@ -111,14 +231,23 @@ class MuxSocket {
     return () => {
       this.mints.delete(id)
       this.handlers.delete(id)
-      this.send({ op: 'unsub', id })
+      const wire = this.wireIds.get(id)
+      if (wire !== undefined) {
+        this.send({ op: 'unsub', id: wire })
+        this.wireIds.delete(id)
+        this.routes.delete(wire)
+      }
       if (this.mints.size === 0) {
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer)
           this.reconnectTimer = null
         }
-        if (this.ws) this.ws.close()
+        this.stopHeartbeat()
+        const ws = this.ws
         this.ws = null
+        if (ws) ws.close()
+        this.everOpened = false
+        updateLive({ state: 'idle' })
       }
     }
   }

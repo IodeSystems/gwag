@@ -12,6 +12,8 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - **`relay.WithCompression()`** negotiates permessage-deflate (no context takeover) on the multiplex relay's sockets. Off by default. A data frame is compressed once per event and sub id and shared among sockets, so a fan-out does not compress per socket.
 - **Relay `ping` op.** A client frame `{"op":"ping","id":…}` gets `{"op":"pong","id":…}`, so a browser (which cannot send WebSocket ping control frames) can keep a socket alive through a proxy idle timeout and detect a dead one. Before this, the relay answered `ping` with `{"op":"err","err":"unknown op"}`.
+- **Relay generated runtime: heartbeat and live state.** The runtime pings every 20 s, replaces a socket that stops answering, and exports `useLiveSocket`, `subscribeLive`, `liveSnapshot` and `setHeartbeat`. React 18 or later is required for `useLiveSocket`.
+- Relay generated runtime: wire sub ids are `<channel>#<n>`, so sockets on a channel can share compressed frames. No relay change is needed; a mismatch of runtime and relay versions works.
 
 ## v2.7.0 — 2026-10-31
 
