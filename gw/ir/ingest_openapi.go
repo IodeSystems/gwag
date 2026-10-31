@@ -708,6 +708,18 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 			out.OutputRepeated, out.OutputItemRequired = f.Repeated, f.ItemRequired
 		}
 	}
+
+	// Streamed success response (OpenAPI 3.2 itemSchema on a
+	// sequential media type) → subscription; Output is one event.
+	// OpenAPIStreamOf already returns nil when a unary JSON response
+	// exists, so an op offering both stays unary.
+	if st := OpenAPIStreamOf(op); st != nil {
+		f := openapiPropToField(svc, opHint+"Event", "event", st.Item, true)
+		out.Kind = OpSubscription
+		out.Output = &f.Type
+		out.OutputRepeated, out.OutputItemRequired = f.Repeated, f.ItemRequired
+		out.OutputRequired = !f.Nullable
+	}
 	return out
 }
 
