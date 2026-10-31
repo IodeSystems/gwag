@@ -10,7 +10,7 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
-- **`relay.WithCompression()`** negotiates permessage-deflate (no context takeover) on the multiplex relay's sockets. Off by default. No fixed per-connection memory; about 1.2 MB transient per frame being compressed, so one event fanned to N sockets can hold up to N pooled writers at once.
+- **`relay.WithCompression()`** negotiates permessage-deflate (no context takeover) on the multiplex relay's sockets. Off by default. A data frame is compressed once per event and sub id and shared among sockets, so a fan-out does not compress per socket.
 - **Relay `ping` op.** A client frame `{"op":"ping","id":…}` gets `{"op":"pong","id":…}`, so a browser (which cannot send WebSocket ping control frames) can keep a socket alive through a proxy idle timeout and detect a dead one. Before this, the relay answered `ping` with `{"op":"err","err":"unknown op"}`.
 
 ## v2.7.0 — 2026-10-31

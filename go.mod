@@ -8,6 +8,7 @@ require (
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/getkin/kin-openapi v0.152.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/jhump/protoreflect v1.19.0
 	github.com/mark3labs/mcp-go v1.5.0
 	github.com/nats-io/nats-server/v2 v2.15.2

@@ -41,6 +41,8 @@ github.com/google/jsonschema-go v0.4.3 h1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+
 github.com/google/jsonschema-go v0.4.3/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
+github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/jhump/protoreflect v1.19.0 h1:YhKbE78JrjfngcCZfZTIV7rQQGndyqll6fXfaqiOEg4=
 github.com/jhump/protoreflect v1.19.0/go.mod h1:I2yar2oJEMf0k4EMryPzfV0tvGwN/SejJziYBOpETQo=
 github.com/jhump/protoreflect/v2 v2.0.0 h1:dBg0utH2witLqXfczkVVrHFrFQc8SN1rvaKkOR5ALDg=

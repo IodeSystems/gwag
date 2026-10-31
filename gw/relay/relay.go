@@ -7,9 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
+	"github.com/gorilla/websocket"
 )
+
+// readLimit caps one client frame: control frames only, so a cap token is the
+// largest thing in one.
+const readLimit = 32 << 10
 
 // inFrame is a client→relay control frame.
 type inFrame struct {
@@ -24,6 +27,10 @@ type outFrame struct {
 	ID      string          `json:"id"`                // echoes the client sub id
 	Payload json.RawMessage `json:"payload,omitempty"` // op "data": the raw bus payload
 	Err     string          `json:"err,omitempty"`     // op "err"
+
+	// prepared is the wire form of this frame shared with other sockets
+	// (WithCompression); the fields above are unused when it is set.
+	prepared *websocket.PreparedMessage
 }
 
 // Relay multiplexes many cap-gated channel subscriptions over one WebSocket.
@@ -37,6 +44,7 @@ type Relay struct {
 	writeTO  time.Duration
 	coalesce bool
 	compress bool
+	frames   *frameCache // WithCompression only
 }
 
 // Option configures a Relay.
@@ -59,13 +67,12 @@ func WithQueue(n int) Option {
 func WithWriteTimeout(d time.Duration) Option { return func(r *Relay) { r.writeTO = d } }
 
 // WithCompression negotiates permessage-deflate with clients that offer it
-// (browsers do), in no-context-takeover mode: frames over 512 bytes are
-// compressed, each with a pooled flate writer, so there is no fixed
-// per-connection cost. The cost is transient instead — about 1.2 MB per frame
-// being compressed at that moment, so a fan-out of one event to N sockets can
-// hold up to N writers at once — plus CPU per frame per socket. Context
-// takeover (a fixed ~1.2 MB writer per connection) is deliberately not offered.
-// Off by default.
+// (browsers do), in no-context-takeover mode: frames of compressThreshold bytes
+// or more are compressed, so there is no fixed per-connection cost. A data frame
+// is compressed once per event per distinct subscription id on its channel and
+// the result written to every socket that holds that id, so one event to N
+// viewers costs one compression when they subscribed in the same order (the
+// generated runtime numbers subs per page). Off by default.
 func WithCompression() Option { return func(r *Relay) { r.compress = true } }
 
 // WithoutCoalescing disables the default per-channel subscription coalescing, so
@@ -85,6 +92,9 @@ func New(secret []byte, src Source, opts ...Option) *Relay {
 		src = Coalesce(src)
 	}
 	r.src = src
+	if r.compress {
+		r.frames = newFrameCache()
+	}
 	return r
 }
 
@@ -95,26 +105,32 @@ func New(secret []byte, src Source, opts ...Option) *Relay {
 // wrap with the caller's origin policy when serving cross-origin.
 func (r *Relay) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		opts := &websocket.AcceptOptions{OriginPatterns: []string{"*"}}
-		if r.compress {
-			opts.CompressionMode = websocket.CompressionNoContextTakeover
+		up := websocket.Upgrader{
+			CheckOrigin:       func(*http.Request) bool { return true },
+			EnableCompression: r.compress,
 		}
-		c, err := websocket.Accept(w, req, opts)
+		c, err := up.Upgrade(w, req, nil)
 		if err != nil {
-			return // Accept already wrote the failure
+			return // Upgrade already wrote the failure
 		}
-		defer func() { _ = c.CloseNow() }()
+		defer func() { _ = c.Close() }()
 		r.serve(req.Context(), c)
 	})
 }
 
 // serve runs one connection: a single writer goroutine drains the outbound
 // buffer, while this goroutine reads control frames and (un)subscribes the
-// Source. nhooyr permits one concurrent reader + one concurrent writer, which is
+// Source. gorilla permits one concurrent reader + one concurrent writer, which is
 // exactly this split.
 func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	c.SetReadLimit(readLimit)
+	// Reads take no context: closing the conn is what ends a blocked read.
+	go func() {
+		<-ctx.Done()
+		_ = c.Close()
+	}()
 
 	out := make(chan outFrame, r.queue)
 
@@ -145,10 +161,7 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 			case <-ctx.Done():
 				return
 			case f := <-out:
-				wctx, wcancel := context.WithTimeout(ctx, r.writeTO)
-				err := wsjson.Write(wctx, c, f)
-				wcancel()
-				if err != nil {
+				if err := r.write(c, f); err != nil {
 					cancel() // client gone / write stalled — tear down
 					return
 				}
@@ -158,7 +171,7 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 
 	for {
 		var in inFrame
-		if err := wsjson.Read(ctx, c, &in); err != nil {
+		if err := c.ReadJSON(&in); err != nil {
 			return // client closed or sent a non-JSON frame
 		}
 		switch in.Op {
@@ -182,6 +195,23 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 	}
 }
 
+// write sends one frame under the write timeout.
+func (r *Relay) write(c *websocket.Conn, f outFrame) error {
+	if err := c.SetWriteDeadline(time.Now().Add(r.writeTO)); err != nil {
+		return err
+	}
+	if f.prepared != nil {
+		c.EnableWriteCompression(true)
+		return c.WritePreparedMessage(f.prepared)
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	c.EnableWriteCompression(len(b) >= compressThreshold)
+	return c.WriteMessage(websocket.TextMessage, b)
+}
+
 func (r *Relay) handleSub(in inFrame, mu *sync.Mutex, subs map[string]func(), send func(outFrame)) {
 	if in.ID == "" {
 		send(outFrame{Op: "err", Err: "missing id"})
@@ -193,10 +223,15 @@ func (r *Relay) handleSub(in inFrame, mu *sync.Mutex, subs map[string]func(), se
 		return
 	}
 	id := in.ID
-	cancel, err := r.src.Subscribe(cp.Channel, func(payload []byte) {
-		send(outFrame{Op: "data", ID: id, Payload: json.RawMessage(payload)})
+	channel := cp.Channel
+	r.frames.acquire(channel)
+	cancel, err := r.src.Subscribe(channel, func(payload []byte) {
+		f := outFrame{Op: "data", ID: id, Payload: json.RawMessage(payload)}
+		f.prepared = r.frames.frame(channel, f)
+		send(f)
 	})
 	if err != nil {
+		r.frames.release(channel)
 		send(outFrame{Op: "err", ID: id, Err: "subscribe failed"})
 		return
 	}
@@ -204,7 +239,10 @@ func (r *Relay) handleSub(in inFrame, mu *sync.Mutex, subs map[string]func(), se
 	if old := subs[id]; old != nil {
 		old() // a re-sub on the same id replaces the prior subscription
 	}
-	subs[id] = cancel
+	subs[id] = func() {
+		cancel()
+		r.frames.release(channel)
+	}
 	mu.Unlock()
 	send(outFrame{Op: "ack", ID: id})
 }
