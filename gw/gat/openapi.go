@@ -46,6 +46,8 @@ type openAPIDispatcher struct {
 	method    string
 	pathTmpl  string
 	operation *openapi3.Operation
+	gateway   *Gateway
+	validator *ir.OpenAPIValidator
 }
 
 func newOpenAPIDispatcher(baseURL string, svc *ir.Service, op *ir.Operation) *openAPIDispatcher {
@@ -115,6 +117,9 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any, accept string) (*http.Request, string, error) {
 	if d.operation == nil || d.pathTmpl == "" {
 		return nil, "", fmt.Errorf("gat: openapi dispatcher not configured")
+	}
+	if err := d.validator.Validate(args, d.gateway.validation); err != nil {
+		return nil, "", fmt.Errorf("gat: %w", err)
 	}
 
 	resolvedPath := d.pathTmpl

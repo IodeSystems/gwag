@@ -257,6 +257,9 @@ type config struct {
 	// openAPIVersion: WithOpenAPIVersion ("", "3.0" or "3.1").
 	openAPIVersion string
 
+	// validation: WithValidation ("", "strict", "warn" or "off").
+	validation string
+
 	// upstreamTimeout is the default per-call timeout for unary
 	// upstream dispatch (WithUpstreamTimeout); 0 → none.
 	// ejectAfter / ejectFor drive replica ejection
@@ -770,6 +773,21 @@ func WithOpenAPIVersion(v string) Option {
 		panic(fmt.Sprintf("gateway: WithOpenAPIVersion(%q): want 3.0 or 3.1", v))
 	}
 	return func(cfg *config) { cfg.openAPIVersion = v }
+}
+
+// WithValidation sets how the gateway treats an OpenAPI arg declared
+// base64 (`format: byte`, `contentEncoding: base64`) that does not
+// decode: "strict" (the default, also "") rejects the call before
+// dispatch, "warn" logs the field and forwards it, "off" does not
+// check. Proto `bytes` args are always rejected: they cannot be
+// encoded. Any other v panics.
+//
+// Stability: experimental
+func WithValidation(v string) Option {
+	if err := ir.CheckValidation(v); err != nil {
+		panic("gateway: WithValidation: " + err.Error())
+	}
+	return func(cfg *config) { cfg.validation = v }
 }
 
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches

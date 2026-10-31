@@ -85,7 +85,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 					continue
 				}
 			}
-			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp)
+			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp, g.cfg.validation)
 			core.svc = svc
 			core.irOp = op
 			core.typePrefix = typePrefix

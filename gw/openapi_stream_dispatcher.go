@@ -42,9 +42,11 @@ type openAPIStreamDispatcher struct {
 	headerInjectors []headerInjector
 	metrics         Metrics
 	ns, ver, label  string
+	validator       *ir.OpenAPIValidator
 }
 
 func newOpenAPIStreamDispatcher(g *Gateway, src *openAPISource, op *openapi3.Operation, stream *ir.OpenAPIStream, method, pathTemplate string, headers []headerInjector, metrics Metrics) *openAPIStreamDispatcher {
+	label := method + " " + pathTemplate
 	return &openAPIStreamDispatcher{
 		g:               g,
 		src:             src,
@@ -56,7 +58,8 @@ func newOpenAPIStreamDispatcher(g *Gateway, src *openAPISource, op *openapi3.Ope
 		metrics:         metrics,
 		ns:              src.namespace,
 		ver:             src.version,
-		label:           method + " " + pathTemplate,
+		label:           label,
+		validator:       ir.NewOpenAPIValidator(op, src.namespace+"/"+src.version+" "+label),
 	}
 }
 
@@ -120,6 +123,9 @@ func (d *openAPIStreamDispatcher) Dispatch(ctx context.Context, args map[string]
 }
 
 func (d *openAPIStreamDispatcher) open(ctx context.Context, args map[string]any) (chan any, error) {
+	if err := d.validator.Validate(args, d.g.cfg.validation); err != nil {
+		return nil, Reject(CodeInvalidArgument, "openapi: "+err.Error())
+	}
 	release, err := d.acquireStreamSlots()
 	if err != nil {
 		return nil, err

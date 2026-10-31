@@ -217,7 +217,7 @@ func (o Options) toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoref
 	case protoreflect.BytesKind:
 		switch x := v.(type) {
 		case string:
-			b, err := decodeBase64(x)
+			b, err := ir.DecodeBase64(x)
 			if err != nil {
 				return protoreflect.Value{}, fmt.Errorf("bytes: %w", err)
 			}
@@ -277,19 +277,6 @@ func toInt64(v any) (int64, error) {
 	default:
 		return 0, fmt.Errorf("expected number, got %T", v)
 	}
-}
-
-// decodeBase64 reads a bytes value the way protojson does: standard
-// or URL-safe alphabet, with or without padding.
-func decodeBase64(s string) ([]byte, error) {
-	enc := base64.StdEncoding
-	if strings.ContainsAny(s, "-_") {
-		enc = base64.URLEncoding
-	}
-	if len(s)%4 != 0 {
-		enc = enc.WithPadding(base64.NoPadding)
-	}
-	return enc.DecodeString(s)
 }
 
 // toUint64 is toInt64 for unsigned fields: a string takes the full

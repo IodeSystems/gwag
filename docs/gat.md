@@ -765,6 +765,28 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
+### Validation (`Validation`)
+
+An OpenAPI arg declared base64 (`format: byte`, `contentEncoding:
+base64`), in a parameter or anywhere in a JSON body, is checked before
+dispatch. Standard or URL-safe alphabet, padded or not.
+
+```go
+g.Validation("warn") // "strict" (default), "warn" or "off"
+```
+
+- `strict`: the call fails. gwag answers REST with 400.
+- `warn`: the field path is logged, up to 16 lines per operation, and
+  the call goes through.
+- `off`: no check.
+
+In gwag the option is `WithValidation("warn")`. Errors and logs carry
+the field path, not the value. Not checked: multipart bodies (a
+`format: byte` property there is a file), and a `oneOf` / `anyOf` with
+several branches, where the value may belong to another branch.
+Responses are not checked. Proto `bytes` args always fail on bad
+base64, in every mode: they cannot be encoded. Experimental.
+
 ### OpenAPI version (`OpenAPIVersion`)
 
 By default `/api/schema/openapi` writes a synthesized spec (proto or

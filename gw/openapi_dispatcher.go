@@ -33,6 +33,8 @@ type openAPIDispatcher struct {
 	ns              string
 	ver             string
 	label           string // "<METHOD> <pathTemplate>" — proto-side metric parity
+	validator       *ir.OpenAPIValidator
+	validation      string
 
 	// Set by registerOpenAPIDispatchersLocked after construction; used
 	// only by the AppendDispatcher path to enable type-aware projection
@@ -44,7 +46,8 @@ type openAPIDispatcher struct {
 	typePrefix string
 }
 
-func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []headerInjector, metrics Metrics, bp BackpressureOptions) *openAPIDispatcher {
+func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []headerInjector, metrics Metrics, bp BackpressureOptions, validation string) *openAPIDispatcher {
+	label := method + " " + pathTemplate
 	return &openAPIDispatcher{
 		src:             src,
 		op:              op,
@@ -56,7 +59,9 @@ func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pa
 		bp:              bp,
 		ns:              src.namespace,
 		ver:             src.version,
-		label:           method + " " + pathTemplate,
+		label:           label,
+		validator:       ir.NewOpenAPIValidator(op, src.namespace+"/"+src.version+" "+label),
+		validation:      validation,
 	}
 }
 
@@ -95,6 +100,9 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 // bodies are never retried: their readers are consumed by the first
 // attempt.
 func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) ([]byte, error) {
+	if err := d.validator.Validate(args, d.validation); err != nil {
+		return nil, Reject(CodeInvalidArgument, "openapi: "+err.Error())
+	}
 	src := d.src
 	r := src.pickReplica()
 	if r == nil {

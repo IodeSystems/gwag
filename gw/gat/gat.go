@@ -100,6 +100,8 @@ type Gateway struct {
 	// openAPIVersion is the OpenAPI schema route's default version
 	// (OpenAPIVersion): "", "3.0" or "3.1".
 	openAPIVersion string
+	// validation (Validation): "", "strict", "warn" or "off".
+	validation string
 
 	// allowEmbeddedParams downgrades the embedded-parameter check from a
 	// mount-time error to a log warning. Off by default: the condition
@@ -254,6 +256,22 @@ func (g *Gateway) OpenAPIVersion(v string) *Gateway {
 	return g
 }
 
+// Validation sets how gat treats an OpenAPI arg declared base64
+// (`format: byte`, `contentEncoding: base64`) that does not decode:
+// "strict" (the default, also "") fails the call before dispatch,
+// "warn" logs the field and forwards it, "off" does not check.
+// Proto `bytes` args always fail: they cannot be encoded. Any other v
+// panics. Call before serving. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) Validation(v string) *Gateway {
+	if err := ir.CheckValidation(v); err != nil {
+		panic("gat: Validation: " + err.Error())
+	}
+	g.validation = v
+	return g
+}
+
 // EmptyNilSlices toggles the empty-list contract (default on). When on, required
 // output list fields render non-null (`[T!]!`) and the dispatch coerces nil Go
 // slices to `[]`, so clients never receive a null list. Off restores the legacy
@@ -355,6 +373,8 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 			}
 			if reg.BaseURL != "" && svc.OriginKind == ir.KindOpenAPI {
 				d := newOpenAPIDispatcher(reg.BaseURL, svc, op)
+				d.gateway = g
+				d.validator = ir.NewOpenAPIValidator(d.operation, svc.Namespace+"/"+svc.Version+" "+d.method+" "+d.pathTmpl)
 				if st := ir.OpenAPIStreamOf(d.operation); op.Kind == ir.OpSubscription && st != nil {
 					g.registry.Set(op.SchemaID, &openAPIStreamDispatcher{openAPIDispatcher: d, stream: st})
 					continue

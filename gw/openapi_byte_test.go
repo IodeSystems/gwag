@@ -100,3 +100,67 @@ func TestOpenAPI_FormatByte(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPI_Validation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opts     []Option
+		rejected bool
+	}{
+		{"default", nil, true},
+		{"strict", []Option{WithValidation("strict")}, true},
+		{"warn", []Option{WithValidation("warn")}, false},
+		{"off", []Option{WithValidation("off")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":"aGk="}`))
+			}))
+			t.Cleanup(backend.Close)
+			gw := New(append([]Option{WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test-token"))}, tc.opts...)...)
+			t.Cleanup(gw.Close)
+			if err := gw.AddOpenAPIBytes([]byte(openAPIByteSpec), To(backend.URL), As("test")); err != nil {
+				t.Fatalf("AddOpenAPIBytes: %v", err)
+			}
+
+			graphqlBody, _ := json.Marshal(map[string]any{
+				"query": `mutation { test { putBlob(tag: "dGFn", body: {data: "not base64!"}) { data } } }`,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(string(graphqlBody)))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			gw.Handler().ServeHTTP(rr, req)
+			if got := strings.Contains(rr.Body.String(), "invalid base64 in body.data"); got != tc.rejected {
+				t.Errorf("graphql: rejected=%v: %s", got, rr.Body.String())
+			}
+
+			req = httptest.NewRequest(http.MethodPost, "/blobs?tag=not%20base64!", strings.NewReader(`{"data":"aGk="}`))
+			req.Header.Set("Content-Type", "application/json")
+			rr = httptest.NewRecorder()
+			gw.IngressHandler().ServeHTTP(rr, req)
+			if got := rr.Code == http.StatusBadRequest; got != tc.rejected {
+				t.Errorf("rest: status=%d body=%s", rr.Code, rr.Body.String())
+			}
+
+			want := int32(2)
+			if tc.rejected {
+				want = 0
+			}
+			if got := calls.Load(); got != want {
+				t.Errorf("backend calls = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestWithValidation_PanicsOnUnknownMode(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("no panic")
+		}
+	}()
+	WithValidation("lenient")
+}
