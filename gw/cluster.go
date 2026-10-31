@@ -45,7 +45,7 @@ type Cluster struct {
 // Stability: stable
 type ClusterOptions struct {
 	NodeName      string
-	ClientListen  string // e.g. ":14222"; default ":14222"
+	ClientListen  string // e.g. ":14222"; default ":14222"; port 0 picks a free port
 	ClusterListen string // e.g. ":14248"; default ":14248"
 	Peers         []string
 	DataDir       string // JetStream storage; required for persistence
@@ -119,6 +119,10 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 	host, port, err := splitHostPort(opts.ClientListen)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: ClientListen: %w", err)
+	}
+	if port == 0 {
+		// natsd reads Port 0 as its default 4222, not "any free port".
+		port = natsd.RANDOM_PORT
 	}
 
 	srvOpts := &natsd.Options{
