@@ -129,3 +129,47 @@ func mustGetBody(t *testing.T, url string) []byte {
 	}
 	return b
 }
+
+func TestSchemaOpenAPI_Version(t *testing.T) {
+	target := startGreeterUpstream(t)
+	regs, err := gat.ProtoSource("greeter.proto", []byte(greeterProtoSrc), nil, target)
+	if err != nil {
+		t.Fatalf("ProtoSource: %v", err)
+	}
+	g, err := gat.New(regs...)
+	if err != nil {
+		t.Fatalf("gat.New: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := gat.RegisterHTTP(mux, g, "/api"); err != nil {
+		t.Fatalf("RegisterHTTP: %v", err)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		on31  bool
+		query string
+		want  string
+	}{
+		{false, "", `"openapi":"3.0.0"`},
+		{false, "?openapi=3.1", `"openapi":"3.1.0"`},
+		{true, "", `"openapi":"3.1.0"`},
+		{true, "?openapi=3.0", `"openapi":"3.0.0"`},
+	} {
+		g.OpenAPI31(tc.on31)
+		body := mustGetBody(t, srv.URL+"/api/schema/openapi"+tc.query)
+		if !strings.Contains(string(body), tc.want) {
+			t.Errorf("OpenAPI31(%v) %q: want %s, got %s", tc.on31, tc.query, tc.want, body[:min(200, len(body))])
+		}
+	}
+
+	resp, err := http.Get(srv.URL + "/api/schema/openapi?openapi=2.0")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("openapi=2.0: status %d, want 400", resp.StatusCode)
+	}
+}

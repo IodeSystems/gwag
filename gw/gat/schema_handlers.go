@@ -74,11 +74,17 @@ func schemaProtoHandler(g *Gateway) http.Handler {
 // schemaOpenAPIHandler re-emits the OpenAPI projection of every IR
 // service. When the source was OpenAPI (e.g. huma's spec) the round
 // trip is near-identity; when the source was proto/GraphQL the
-// projection produces a synthesized spec.
+// projection produces a synthesized spec. `?openapi=3.0|3.1` picks the
+// OpenAPI version; the default is 3.0 unless OpenAPI31 is set.
 func schemaOpenAPIHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		opts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.openAPI31)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		services := g.Services()
@@ -88,7 +94,7 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 		}
 		// Single-service case: emit the one spec directly.
 		if len(services) == 1 {
-			doc, err := ir.RenderOpenAPI(services[0])
+			doc, err := ir.RenderOpenAPIWith(services[0], opts)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -100,7 +106,7 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 		// Multi-service: emit a map keyed by namespace.
 		bundle := map[string]any{}
 		for _, svc := range services {
-			doc, err := ir.RenderOpenAPI(svc)
+			doc, err := ir.RenderOpenAPIWith(svc, opts)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

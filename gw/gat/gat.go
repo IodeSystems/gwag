@@ -95,6 +95,9 @@ type Gateway struct {
 	// unversioned copy of the latest version. Set via VersionedOnly().
 	versionedOnly bool
 
+	// openAPI31 makes the OpenAPI schema route emit 3.1 (OpenAPI31).
+	openAPI31 bool
+
 	// allowEmbeddedParams downgrades the embedded-parameter check from a
 	// mount-time error to a log warning. Off by default: the condition
 	// silently drops request parameters, so failing loudly is the safer
@@ -226,6 +229,19 @@ func (g *Gateway) LongAsNumber(b bool) *Gateway {
 // Stability: experimental
 func (g *Gateway) VersionedOnly(b bool) *Gateway {
 	g.versionedOnly = b
+	return g
+}
+
+// OpenAPI31 makes {prefix}/schema/openapi emit OpenAPI 3.1.0 instead
+// of 3.0.0 (default off): nullable schemas become type lists with
+// "null", exclusive bounds become numbers, a schema example becomes
+// examples. A request can pick either with `?openapi=3.0` or
+// `?openapi=3.1`. v3 makes 3.1 the default. Call before serving.
+// Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) OpenAPI31(b bool) *Gateway {
+	g.openAPI31 = b
 	return g
 }
 

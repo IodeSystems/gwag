@@ -660,6 +660,35 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
+### OpenAPI 3.1 (`OpenAPI31`)
+
+`/api/schema/openapi` writes a synthesized spec (proto or GraphQL
+source) as `"openapi": "3.0.0"`. An OpenAPI source (huma's spec, an
+ingested upstream) is written as its source declared it. To get 3.1.0
+for every service:
+
+```go
+g.OpenAPI31(true)
+```
+
+or per request, `GET /api/schema/openapi?openapi=3.1` (`?openapi=3.0`
+asks for the default output when the option is on). In 3.1 output,
+schemas use the JSON Schema 2020-12 forms:
+
+| 3.0                                     | 3.1                                       |
+| --------------------------------------- | ----------------------------------------- |
+| `type: string, nullable: true`          | `type: [string, "null"]`                  |
+| `allOf: [$ref], nullable: true`         | `oneOf: [$ref, {type: "null"}]`           |
+| `minimum: 0, exclusiveMinimum: true`    | `exclusiveMinimum: 0`                     |
+| `example: x`                            | `examples: [x]`                           |
+
+A nullable `enum` also gets `null` in its values. `?openapi=3.0` does
+not convert a 3.1 source down to 3.0. In gwag the same switch is
+`WithOpenAPI31()` and the same query parameter on
+`SchemaOpenAPIHandler`. From Go, `ir.RenderOpenAPIWith(svc,
+ir.RenderOpenAPIOptions{OpenAPI31: true})`. Experimental; v3 makes
+3.1 the default.
+
 ## Trap: parameters on an unexported field
 
 **huma skips unexported fields when it discovers request parameters.**
