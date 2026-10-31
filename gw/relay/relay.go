@@ -13,14 +13,14 @@ import (
 
 // inFrame is a client→relay control frame.
 type inFrame struct {
-	Op    string `json:"op"`    // "sub" | "unsub"
+	Op    string `json:"op"`    // "sub" | "unsub" | "ping"
 	ID    string `json:"id"`    // client-chosen subscription id (multiplex key)
 	Token string `json:"token"` // signed Cap (op "sub" only)
 }
 
 // outFrame is a relay→client frame.
 type outFrame struct {
-	Op      string          `json:"op"`                // "data" | "ack" | "err"
+	Op      string          `json:"op"`                // "data" | "ack" | "err" | "pong"
 	ID      string          `json:"id"`                // echoes the client sub id
 	Payload json.RawMessage `json:"payload,omitempty"` // op "data": the raw bus payload
 	Err     string          `json:"err,omitempty"`     // op "err"
@@ -36,6 +36,7 @@ type Relay struct {
 	queue    int
 	writeTO  time.Duration
 	coalesce bool
+	compress bool
 }
 
 // Option configures a Relay.
@@ -56,6 +57,16 @@ func WithQueue(n int) Option {
 
 // WithWriteTimeout caps how long a single frame write may take before teardown.
 func WithWriteTimeout(d time.Duration) Option { return func(r *Relay) { r.writeTO = d } }
+
+// WithCompression negotiates permessage-deflate with clients that offer it
+// (browsers do), in no-context-takeover mode: frames over 512 bytes are
+// compressed, each with a pooled flate writer, so there is no fixed
+// per-connection cost. The cost is transient instead — about 1.2 MB per frame
+// being compressed at that moment, so a fan-out of one event to N sockets can
+// hold up to N writers at once — plus CPU per frame per socket. Context
+// takeover (a fixed ~1.2 MB writer per connection) is deliberately not offered.
+// Off by default.
+func WithCompression() Option { return func(r *Relay) { r.compress = true } }
 
 // WithoutCoalescing disables the default per-channel subscription coalescing, so
 // each client subscription opens its own upstream subscription. Rarely wanted —
@@ -84,7 +95,11 @@ func New(secret []byte, src Source, opts ...Option) *Relay {
 // wrap with the caller's origin policy when serving cross-origin.
 func (r *Relay) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		c, err := websocket.Accept(w, req, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		opts := &websocket.AcceptOptions{OriginPatterns: []string{"*"}}
+		if r.compress {
+			opts.CompressionMode = websocket.CompressionNoContextTakeover
+		}
+		c, err := websocket.Accept(w, req, opts)
 		if err != nil {
 			return // Accept already wrote the failure
 		}
@@ -149,6 +164,11 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 		switch in.Op {
 		case "sub":
 			r.handleSub(in, &mu, subs, send)
+		case "ping":
+			// Application-level heartbeat: a client that must keep an idle socket alive
+			// through a proxy idle timeout, and notice a dead one, sends ping and expects
+			// pong. (Browsers cannot send WebSocket ping control frames.)
+			send(outFrame{Op: "pong", ID: in.ID})
 		case "unsub":
 			mu.Lock()
 			if cf := subs[in.ID]; cf != nil {

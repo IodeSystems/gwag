@@ -213,3 +213,54 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatalf("condition not met within timeout")
 }
+
+func TestRelay_PingPong(t *testing.T) {
+	c, done := dialRelay(t, []byte("k"), newFakeSource())
+	defer done()
+	writeFrame(t, c, inFrame{Op: "ping", ID: "hb"})
+	if f := readFrame(t, c); f.Op != "pong" || f.ID != "hb" {
+		t.Fatalf("want pong/hb, got %+v", f)
+	}
+}
+
+// TestRelay_Compression: WithCompression negotiates permessage-deflate when the client
+// offers it, and frames still arrive intact; without the option nothing is negotiated.
+func TestRelay_Compression(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want bool
+	}{
+		{"default off", nil, false},
+		{"WithCompression", []Option{WithCompression()}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret := []byte("k")
+			src := newFakeSource()
+			srv := httptest.NewServer(New(secret, src, tc.opts...).Handler())
+			defer srv.Close()
+			url := "ws" + strings.TrimPrefix(srv.URL, "http")
+			c, resp, err := websocket.Dial(context.Background(), url,
+				&websocket.DialOptions{CompressionMode: websocket.CompressionNoContextTakeover})
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer func() { _ = c.CloseNow() }()
+			got := strings.Contains(resp.Header.Get("Sec-WebSocket-Extensions"), "permessage-deflate")
+			if got != tc.want {
+				t.Fatalf("permessage-deflate negotiated = %v, want %v (%q)", got, tc.want, resp.Header.Get("Sec-WebSocket-Extensions"))
+			}
+			tok, _ := Sign(secret, Cap{Channel: "ch"})
+			writeFrame(t, c, inFrame{Op: "sub", ID: "1", Token: tok})
+			if ack := readFrame(t, c); ack.Op != "ack" {
+				t.Fatalf("want ack, got %+v", ack)
+			}
+			waitFor(t, func() bool { return src.count("ch") == 1 })
+			big := `{"rows":"` + strings.Repeat("abcdefgh", 1000) + `"}` // over the 512 B threshold
+			src.publish("ch", []byte(big))
+			if f := readFrame(t, c); f.Op != "data" || string(f.Payload) != big {
+				t.Fatalf("payload mangled: op=%s len=%d", f.Op, len(f.Payload))
+			}
+		})
+	}
+}
