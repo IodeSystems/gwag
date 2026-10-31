@@ -97,8 +97,9 @@ type Gateway struct {
 	// unversioned copy of the latest version. Set via VersionedOnly().
 	versionedOnly bool
 
-	// openAPI31 makes the OpenAPI schema route emit 3.1 (OpenAPI31).
-	openAPI31 bool
+	// openAPIVersion is the OpenAPI schema route's default version
+	// (OpenAPIVersion): "", "3.0" or "3.1".
+	openAPIVersion string
 
 	// allowEmbeddedParams downgrades the embedded-parameter check from a
 	// mount-time error to a log warning. Off by default: the condition
@@ -234,16 +235,22 @@ func (g *Gateway) VersionedOnly(b bool) *Gateway {
 	return g
 }
 
-// OpenAPI31 makes {prefix}/schema/openapi emit OpenAPI 3.1.0 instead
-// of 3.0.0 (default off): nullable schemas become type lists with
-// "null", exclusive bounds become numbers, a schema example becomes
-// examples. A request can pick either with `?openapi=3.0` or
-// `?openapi=3.1`. v3 makes 3.1 the default. Call before serving.
-// Returns g for chaining.
+// OpenAPIVersion sets the OpenAPI version {prefix}/schema/openapi
+// writes every spec in: "3.0", "3.1", or "" (the default) for each
+// spec as its source declared it. huma writes 3.1.0, so a huma
+// service is 3.1.0 by default and a proto or GraphQL one 3.0.0. "3.0"
+// converts 3.1 and 3.2 sources down, keeping what 3.0 cannot express
+// in x- extensions; "3.1" converts 3.0 sources up and 3.2 sources
+// down. A request picks a version with `?openapi=3.0` or
+// `?openapi=3.1`. Any other v panics. v3 makes "3.1" the default.
+// Call before serving. Returns g for chaining.
 //
 // Stability: experimental
-func (g *Gateway) OpenAPI31(b bool) *Gateway {
-	g.openAPI31 = b
+func (g *Gateway) OpenAPIVersion(v string) *Gateway {
+	if _, err := ir.ParseOpenAPIVersion(v, ""); err != nil {
+		panic(fmt.Sprintf("gat: OpenAPIVersion(%q): want 3.0 or 3.1", v))
+	}
+	g.openAPIVersion = v
 	return g
 }
 

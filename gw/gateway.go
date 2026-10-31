@@ -254,8 +254,8 @@ type config struct {
 	// connectErrorCodes: WithConnectErrorCodes.
 	connectErrorCodes bool
 
-	// openAPI31: WithOpenAPI31.
-	openAPI31 bool
+	// openAPIVersion: WithOpenAPIVersion ("", "3.0" or "3.1").
+	openAPIVersion string
 
 	// upstreamTimeout is the default per-call timeout for unary
 	// upstream dispatch (WithUpstreamTimeout); 0 → none.
@@ -754,16 +754,22 @@ func WithConnectErrorCodes() Option {
 	return func(cfg *config) { cfg.connectErrorCodes = true }
 }
 
-// WithOpenAPI31 makes SchemaOpenAPIHandler emit OpenAPI 3.1.0 instead
-// of 3.0.0: nullable schemas become type lists with "null", exclusive
-// bounds become numbers, a schema example becomes examples. A request
-// can pick either with `?openapi=3.0` or `?openapi=3.1`. Only the
-// exported spec changes; REST ingress routing does not. v3 makes this
-// the default.
+// WithOpenAPIVersion sets the OpenAPI version SchemaOpenAPIHandler
+// writes every spec in: "3.0", "3.1", or "" (the default). With "",
+// a synthesized spec (proto or GraphQL source) is 3.0.0 and an OpenAPI
+// source is written as it declared itself (huma writes 3.1.0). "3.0" converts 3.1 and
+// 3.2 sources down, keeping what 3.0 cannot express in x- extensions;
+// "3.1" converts 3.0 sources up and 3.2 sources down. A request picks
+// a version with `?openapi=3.0` or `?openapi=3.1`. Only the exported
+// spec changes; REST ingress routing does not. Any other v panics.
+// v3 makes "3.1" the default.
 //
 // Stability: experimental
-func WithOpenAPI31() Option {
-	return func(cfg *config) { cfg.openAPI31 = true }
+func WithOpenAPIVersion(v string) Option {
+	if _, err := ir.ParseOpenAPIVersion(v, ""); err != nil {
+		panic(fmt.Sprintf("gateway: WithOpenAPIVersion(%q): want 3.0 or 3.1", v))
+	}
+	return func(cfg *config) { cfg.openAPIVersion = v }
 }
 
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches

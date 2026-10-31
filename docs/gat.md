@@ -765,20 +765,107 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
-### OpenAPI 3.1 (`OpenAPI31`)
+### OpenAPI version (`OpenAPIVersion`)
 
-`/api/schema/openapi` writes a synthesized spec (proto or GraphQL
-source) as `"openapi": "3.0.0"`. An OpenAPI source (huma's spec, an
-ingested upstream) is written as its source declared it. To get 3.1.0
-for every service:
+By default `/api/schema/openapi` writes a synthesized spec (proto or
+GraphQL source) as `"openapi": "3.0.0"`, and an OpenAPI source (huma's
+spec, an ingested upstream) as its source declared it. huma writes
+3.1.0. To get one version for every service:
 
 ```go
-g.OpenAPI31(true)
+g.OpenAPIVersion("3.0") // or "3.1"; "" is the default
 ```
 
-or per request, `GET /api/schema/openapi?openapi=3.1` (`?openapi=3.0`
-asks for the default output when the option is on). In 3.1 output,
-schemas use the JSON Schema 2020-12 forms:
+or per request, `GET /api/schema/openapi?openapi=3.0` (or `3.1`). A
+full version such as `3.0.3` also works; anything else, `3.2`
+included, is a 400. In gwag the option is `WithOpenAPIVersion("3.0")`
+with the same query parameter on `SchemaOpenAPIHandler`. From Go,
+`ir.RenderOpenAPIWith(svc, ir.RenderOpenAPIOptions{Version: "3.0"})`.
+Experimental; v3 makes 3.1 the default.
+
+`3.0` is for client generators that do not read 3.1
+(openapi-generator's 3.1 support is beta, swagger-codegen and NSwag
+read 3.0 only). A 3.1 or 3.2 source is converted to
+`"openapi": "3.0.3"`; a 3.0 source and a synthesized spec are
+unchanged. `3.1` converts a 3.0 source up and a 3.2 source down to
+`"openapi": "3.1.0"`.
+
+The conversion keeps what the target version cannot express in `x-`
+extensions instead of dropping it. Tools of that version ignore
+those, so for them the cases marked "no" below are lossy: a validator
+generated from the 3.0 spec accepts values the source rejects, or a
+generator does not see an operation. The extensions:
+
+- `x-gwag-oas31`: 3.1 members 3.0 has no field for, verbatim, on the
+  object that had them. `?openapi=3.1` puts them back.
+- `x-gwag-oas32`: the same for members 3.2 added.
+- `x-webhooks`: the document's `webhooks` (ReDoc reads it).
+- `x-additional-operations`: a Path Item's QUERY and custom-method
+  operations, keyed by method. Synthesized specs already use it.
+- `x-item-schema`: a Media Type's `itemSchema`, verbatim.
+
+gwag and gat ingest `x-additional-operations` and `x-item-schema`, so
+a converted spec registers with the same QUERY, custom-method and
+streamed operations as its source.
+
+Schemas, 3.1 → 3.0:
+
+| 3.1                                        | 3.0                                                | Lossless |
+| ------------------------------------------ | -------------------------------------------------- | -------- |
+| `type: [T, "null"]`                        | `type: T, nullable: true`                          | yes |
+| `type: "null"`                             | `nullable: true, enum: [null]`                     | yes |
+| `type: [A, B]` (+ `"null"`)                | `anyOf: [{type: A}, {type: B}]` (+ `nullable`)     | yes |
+| `oneOf` / `anyOf` with a `{type: "null"}` branch | branch dropped, `nullable: true`; one branch left → `allOf: [branch]` | yes |
+| `$ref` with sibling keywords               | `allOf: [{$ref}]`, siblings beside it              | yes |
+| `const: v`                                 | `enum: [v]`                                        | yes |
+| `exclusiveMinimum: x`                      | `minimum: x, exclusiveMinimum: true`               | yes |
+| `exclusiveMinimum` and `minimum`           | the stricter; a dropped exclusive bound goes to `x-gwag-oas31` | yes |
+| `examples: [x]`                            | `example: x`                                       | yes |
+| `examples: [x, y, ...]`                    | `example: x`; the list in `x-gwag-oas31`           | no  |
+| `true` / `false` schema                    | `{}` / `{not: {}}`                                 | yes |
+| `$defs`                                    | `components.schemas` (the def's name, `Parent_Def` on a clash); `$ref`s rewritten | yes |
+| `contentEncoding: base64`                  | `format: byte`; keyword in `x-gwag-oas31`          | yes |
+| `contentMediaType` not text, JSON or XML   | `format: binary`; keyword in `x-gwag-oas31`        | yes |
+| other `contentEncoding` / `contentMediaType`, `contentSchema` | `x-gwag-oas31`                  | no  |
+| `prefixItems` (and `items` beside it)      | `items: {}`; both in `x-gwag-oas31`                | no  |
+| `if` / `then` / `else`, `dependentSchemas`, `dependentRequired`, `patternProperties`, `propertyNames`, `contains`, `minContains`, `maxContains`, `unevaluatedItems`, `unevaluatedProperties` | `x-gwag-oas31` | no |
+| `$id`, `$anchor`, `$dynamicRef`, `$dynamicAnchor`, `$schema`, `$vocabulary`, `$comment`, unknown keywords | `x-gwag-oas31` | no |
+| `const` beside `enum`                      | `x-gwag-oas31`                                     | no  |
+
+The document, 3.1 → 3.0:
+
+| 3.1                                        | 3.0                                                | Lossless |
+| ------------------------------------------ | -------------------------------------------------- | -------- |
+| `webhooks`                                 | `x-webhooks`                                       | no  |
+| `jsonSchemaDialect`, the default one       | dropped                                            | yes |
+| `jsonSchemaDialect`, another               | `x-gwag-oas31`                                     | no  |
+| `info.summary`, `license.identifier`       | `x-gwag-oas31`                                     | no  |
+| `summary` / `description` beside a non-schema `$ref` | `x-gwag-oas31`                           | no  |
+| Path Item `$ref` to `components.pathItems` | inlined; `components.pathItems` in `x-gwag-oas31`  | yes |
+| `mutualTLS` security scheme                | `x-gwag-oas31` of `components`; requirements that use it are dropped from `security` (original list in `x-gwag-oas31`); a list left empty is removed, so an operation falls back to the document's `security` | no |
+| no `paths`                                 | `paths: {}`                                        | yes |
+| operation without `responses`              | `responses: {default: {description: ""}}`          | yes |
+
+3.2 → 3.1 and 3.0 (schemas keep their 3.1 form for a 3.1 target):
+
+| 3.2                                        | 3.1 / 3.0                                          | Lossless |
+| ------------------------------------------ | -------------------------------------------------- | -------- |
+| Path Item `query`, `additionalOperations`  | `x-additional-operations`                          | no  |
+| Media Type `itemSchema`                    | `x-item-schema`; `schema` stays when present       | no  |
+| `in: querystring` parameter                | `x-gwag-oas32` of the operation or Path Item (or of `components`) | no |
+| Media Type `$ref` to `components.mediaTypes` | inlined; `components.mediaTypes` in `x-gwag-oas32` | yes |
+| Example `dataValue`                        | `value` when there is none; `dataValue`, `serializedValue` in `x-gwag-oas32` | yes |
+| Response without `description`             | `description: ""`                                  | yes |
+| `$self`, Server `name`, Tag `summary` / `parent` / `kind`, Response `summary`, Discriminator `defaultMapping`, XML `nodeType`, Security Scheme `deprecated` / `oauth2MetadataUrl`, `deviceAuthorization` flow, Media Type `itemEncoding` / `prefixEncoding`, Encoding `encoding` / `prefixEncoding` / `itemEncoding` | `x-gwag-oas32` | no |
+
+What gwag reads from a converted spec differs from the source in two
+places. `format: byte` / `binary` ingest as the `Upload` scalar where
+`contentEncoding` / `contentMediaType` ingested as `String`, and a
+hoisted `$defs` entry becomes a type of its own. A `querystring`
+parameter is not read back.
+
+In 3.1 output (`?openapi=3.1` of a 3.0 spec), schemas use the JSON
+Schema 2020-12 forms:
 
 | 3.0                                     | 3.1                                       |
 | --------------------------------------- | ----------------------------------------- |
@@ -787,12 +874,7 @@ schemas use the JSON Schema 2020-12 forms:
 | `minimum: 0, exclusiveMinimum: true`    | `exclusiveMinimum: 0`                     |
 | `example: x`                            | `examples: [x]`                           |
 
-A nullable `enum` also gets `null` in its values. `?openapi=3.0` does
-not convert a 3.1 source down to 3.0. In gwag the same switch is
-`WithOpenAPI31()` and the same query parameter on
-`SchemaOpenAPIHandler`. From Go, `ir.RenderOpenAPIWith(svc,
-ir.RenderOpenAPIOptions{OpenAPI31: true})`. Experimental; v3 makes
-3.1 the default.
+A nullable `enum` also gets `null` in its values.
 
 ## Trap: parameters on an unexported field
 

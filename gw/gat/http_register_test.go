@@ -148,19 +148,20 @@ func TestSchemaOpenAPI_Version(t *testing.T) {
 	defer srv.Close()
 
 	for _, tc := range []struct {
-		on31  bool
-		query string
-		want  string
+		version string
+		query   string
+		want    string
 	}{
-		{false, "", `"openapi":"3.0.0"`},
-		{false, "?openapi=3.1", `"openapi":"3.1.0"`},
-		{true, "", `"openapi":"3.1.0"`},
-		{true, "?openapi=3.0", `"openapi":"3.0.0"`},
+		{"", "", `"openapi":"3.0.0"`},
+		{"", "?openapi=3.1", `"openapi":"3.1.0"`},
+		{"3.1", "", `"openapi":"3.1.0"`},
+		{"3.1", "?openapi=3.0", `"openapi":"3.0.0"`},
+		{"3.0", "", `"openapi":"3.0.0"`},
 	} {
-		g.OpenAPI31(tc.on31)
+		g.OpenAPIVersion(tc.version)
 		body := mustGetBody(t, srv.URL+"/api/schema/openapi"+tc.query)
 		if !strings.Contains(string(body), tc.want) {
-			t.Errorf("OpenAPI31(%v) %q: want %s, got %s", tc.on31, tc.query, tc.want, body[:min(200, len(body))])
+			t.Errorf("OpenAPIVersion(%q) %q: want %s, got %s", tc.version, tc.query, tc.want, body[:min(200, len(body))])
 		}
 	}
 

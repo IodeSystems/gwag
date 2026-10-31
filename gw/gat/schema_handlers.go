@@ -74,15 +74,16 @@ func schemaProtoHandler(g *Gateway) http.Handler {
 // schemaOpenAPIHandler re-emits the OpenAPI projection of every IR
 // service. When the source was OpenAPI (e.g. huma's spec) the round
 // trip is near-identity; when the source was proto/GraphQL the
-// projection produces a synthesized spec. `?openapi=3.0|3.1` picks the
-// OpenAPI version; the default is 3.0 unless OpenAPI31 is set.
+// projection produces a synthesized spec. `?openapi=3.0|3.1` writes
+// every spec in that version, converting where needed; the default is
+// OpenAPIVersion, else each spec as declared.
 func schemaOpenAPIHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		opts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), map[bool]string{true: "3.1"}[g.openAPI31])
+		opts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.openAPIVersion)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

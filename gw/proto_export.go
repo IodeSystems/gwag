@@ -264,8 +264,9 @@ func transformFileDescriptor(
 //   - service=ns[:ver][,...]  — comma-separated namespaces, each
 //     optionally pinned to a version. Empty
 //     selector → all.
-//   - openapi=3.0|3.1 — OpenAPI version of each spec. Empty → 3.1
-//     under WithOpenAPI31, else 3.0.
+//   - openapi=3.0|3.1 — OpenAPI version of every spec, converting
+//     sources of another version. Empty → WithOpenAPIVersion, else
+//     each spec as its source declared it (synthesized specs: 3.0.0).
 //
 // Response: application/json, an object
 // `{"<ns>": {"<vN>": <spec>, ...}, ...}`. Single-version namespaces
@@ -283,7 +284,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), openAPIDefault(g.cfg.openAPI31))
+		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.cfg.openAPIVersion)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -347,11 +348,4 @@ func stripHiddenFields(
 	for _, nested := range m.NestedType {
 		stripHiddenFields(nested, hides)
 	}
-}
-
-func openAPIDefault(on31 bool) string {
-	if on31 {
-		return "3.1"
-	}
-	return ""
 }
