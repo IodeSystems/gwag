@@ -53,8 +53,12 @@ func newOpenAPIDispatcher(baseURL string, svc *ir.Service, op *ir.Operation) *op
 		method    string
 		operation *openapi3.Operation
 	)
-	if svc.Origin != nil {
-		doc := svc.Origin.(*openapi3.T)
+	// IngestOpenAPI stamps the source operation, method and path on
+	// the IR op. Use them when present: this also covers ops without
+	// an operationId and OpenAPI 3.2 QUERY / additionalOperations.
+	if o, ok := op.Origin.(*openapi3.Operation); ok && o != nil && op.HTTPMethod != "" && op.HTTPPath != "" {
+		pathTmpl, method, operation = op.HTTPPath, op.HTTPMethod, o
+	} else if doc, ok := svc.Origin.(*openapi3.T); ok && doc != nil && doc.Paths != nil {
 		for p, pi := range doc.Paths.Map() {
 			for m, opVal := range pi.Operations() {
 				if opVal.OperationID == op.Name {

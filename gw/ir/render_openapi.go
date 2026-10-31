@@ -128,6 +128,19 @@ func RenderOpenAPI(svc *Service) (*openapi3.T, error) {
 			item.Patch = oop
 		case "DELETE":
 			item.Delete = oop
+		default:
+			// QUERY and custom methods (OpenAPI 3.2) have no field in
+			// a 3.0 Path Item. Keep them under an x- extension, which
+			// 3.0 readers ignore, instead of dropping them.
+			if item.Extensions == nil {
+				item.Extensions = map[string]any{}
+			}
+			extra, _ := item.Extensions[xAdditionalOperations].(map[string]*openapi3.Operation)
+			if extra == nil {
+				extra = map[string]*openapi3.Operation{}
+				item.Extensions[xAdditionalOperations] = extra
+			}
+			extra[method] = oop
 		}
 	}
 	return doc, nil

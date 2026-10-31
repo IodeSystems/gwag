@@ -16,8 +16,10 @@ import (
 // gateway's openAPISource key).
 //
 // Operations land in declaration order per path (sorted) and per
-// HTTP method (GET→POST→PUT→PATCH→DELETE) so the output is
-// reproducible across runs.
+// HTTP method (GET→POST→PUT→PATCH→DELETE→QUERY, then OpenAPI 3.2
+// additionalOperations sorted by method) so the output is
+// reproducible across runs. HEAD / OPTIONS / TRACE / CONNECT are not
+// ingested; UnsupportedOpenAPIOperations lists them.
 //
 // Components.Schemas → Service.Types. Each schema becomes a Type
 // (Object/Enum); $ref'd schemas resolve to TypeRef.Named pointing
@@ -492,6 +494,7 @@ func ingestOpenAPIPath(svc *Service, path string, item *openapi3.PathItem) {
 		{"PUT", item.Put},
 		{"PATCH", item.Patch},
 		{"DELETE", item.Delete},
+		{openapi3.MethodQuery, item.Query},
 	}
 	for _, v := range verbs {
 		if v.op == nil {
@@ -499,6 +502,72 @@ func ingestOpenAPIPath(svc *Service, path string, item *openapi3.PathItem) {
 		}
 		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, v.method, path, v.op))
 	}
+	// OpenAPI 3.2 additionalOperations: custom HTTP methods, sorted for
+	// stable output.
+	for _, method := range additionalOpenAPIMethods(item) {
+		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, method, path, item.AdditionalOperations[method]))
+	}
+}
+
+// xAdditionalOperations is the Path Item extension RenderOpenAPI uses
+// to carry QUERY and custom-method operations in a 3.0 document,
+// which has no field for them. Keyed by HTTP method.
+const xAdditionalOperations = "x-additional-operations"
+
+// additionalOpenAPIMethods returns item's additionalOperations keys,
+// sorted. A key that collides with a fixed Path Item field is left
+// out (Validate rejects those, but ir callers may skip Validate),
+// matching kin-openapi's PathItem.Operations().
+func additionalOpenAPIMethods(item *openapi3.PathItem) []string {
+	if len(item.AdditionalOperations) == 0 {
+		return nil
+	}
+	fixed := map[string]bool{}
+	for _, m := range openapi3.PathItemMethods() {
+		fixed[m] = true
+	}
+	out := make([]string, 0, len(item.AdditionalOperations))
+	for m, op := range item.AdditionalOperations {
+		if op == nil || fixed[m] {
+			continue
+		}
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// UnsupportedOpenAPIOperations lists the operations in doc that
+// IngestOpenAPI does not turn into IR operations, one "METHOD /path"
+// entry each, sorted. Today that is HEAD, OPTIONS, TRACE and
+// CONNECT: they have no response body or are transport-level, so
+// there is no GraphQL field to give them. Callers log these at
+// registration so a dropped operation is visible.
+func UnsupportedOpenAPIOperations(doc *openapi3.T) []string {
+	if doc == nil || doc.Paths == nil {
+		return nil
+	}
+	var out []string
+	for path, item := range doc.Paths.Map() {
+		if item == nil {
+			continue
+		}
+		for _, v := range []struct {
+			method string
+			op     *openapi3.Operation
+		}{
+			{"HEAD", item.Head},
+			{"OPTIONS", item.Options},
+			{"TRACE", item.Trace},
+			{"CONNECT", item.Connect},
+		} {
+			if v.op != nil {
+				out = append(out, v.method+" "+path)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) *Operation {
@@ -516,8 +585,12 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 	if out.Name == "" {
 		out.Name = method + path
 	}
+	// QUERY (OpenAPI 3.2) is safe and idempotent like GET but carries
+	// a request body, so it is a Query field with a "body" arg. Custom
+	// additionalOperations methods declare no semantics; treat them as
+	// Mutations, the safe assumption for an unknown verb.
 	switch strings.ToUpper(method) {
-	case "GET", "HEAD":
+	case "GET", "HEAD", openapi3.MethodQuery:
 		out.Kind = OpQuery
 	default:
 		out.Kind = OpMutation

@@ -241,7 +241,10 @@ func (g *Gateway) addOpenAPIDocRoutes(t *ingressTable, doc *openapi3.T, key pool
 				continue
 			}
 			route := &ingressRoute{
-				method:     strings.ToUpper(mop.method),
+				// As declared: fixed methods are upper case, and
+				// custom (additionalOperations) methods are
+				// case-sensitive tokens.
+				method:     mop.method,
 				path:       path,
 				schemaID:   sid,
 				dispatcher: d,
@@ -268,21 +271,17 @@ type openAPIMethodOp struct {
 }
 
 func openAPIOpsForPath(item *openapi3.PathItem) []openAPIMethodOp {
-	out := make([]openAPIMethodOp, 0, 5)
-	if item.Get != nil {
-		out = append(out, openAPIMethodOp{"GET", item.Get})
-	}
-	if item.Post != nil {
-		out = append(out, openAPIMethodOp{"POST", item.Post})
-	}
-	if item.Put != nil {
-		out = append(out, openAPIMethodOp{"PUT", item.Put})
-	}
-	if item.Patch != nil {
-		out = append(out, openAPIMethodOp{"PATCH", item.Patch})
-	}
-	if item.Delete != nil {
-		out = append(out, openAPIMethodOp{"DELETE", item.Delete})
+	// Operations() covers the fixed fields plus OpenAPI 3.2 QUERY and
+	// additionalOperations. The methods IngestOpenAPI skips are
+	// skipped here too.
+	ops := item.Operations()
+	out := make([]openAPIMethodOp, 0, len(ops))
+	for method, op := range ops {
+		switch method {
+		case http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodConnect:
+			continue
+		}
+		out = append(out, openAPIMethodOp{method, op})
 	}
 	return out
 }

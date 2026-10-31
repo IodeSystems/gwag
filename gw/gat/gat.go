@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/IodeSystems/graphql-go/v2"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 	"github.com/iodesystems/gwag/v2/gw/ir"
@@ -333,6 +335,11 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 			svc.Version = "v1"
 		}
 		g.services = append(g.services, svc)
+		if doc, ok := svc.Origin.(*openapi3.T); ok {
+			for _, op := range ir.UnsupportedOpenAPIOperations(doc) {
+				log.Printf("gat: warning: %s/%s: OpenAPI operation %s is not supported; skipped", svc.Namespace, svc.Version, op)
+			}
+		}
 
 		for _, op := range svc.FlatOperations() {
 			if d, ok := reg.Dispatchers[op.SchemaID]; ok {

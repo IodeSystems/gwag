@@ -79,6 +79,7 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if err := doc.Validate(loader.Context); err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI(%s): validate: %w", label, err)
 	}
+	warnUnsupportedOpenAPIOps(g, label, doc)
 	ns := sc.namespace
 	if ns == "" {
 		if doc.Info != nil && doc.Info.Title != "" {
@@ -388,6 +389,21 @@ func (s *openAPISource) replicaCount() int {
 // registration (overwritten on unstable swap). timeout is the
 // binding's per-call upstream timeout (0 → gateway default), also
 // captured on source creation only.
+// warnUnsupportedOpenAPIOps logs every operation in doc that
+// IngestOpenAPI does not surface (HEAD / OPTIONS / TRACE / CONNECT).
+// Same sink as warnUnsupportedStreaming: the embedded NATS logger if
+// cluster is configured, fmt.Println otherwise.
+func warnUnsupportedOpenAPIOps(g *Gateway, label string, doc *openapi3.T) {
+	for _, op := range ir.UnsupportedOpenAPIOperations(doc) {
+		msg := fmt.Sprintf("gateway: filtering unsupported OpenAPI operation %s: %s", label, op)
+		if g.cfg.cluster != nil {
+			g.cfg.cluster.Server.Warnf("%s", msg)
+		} else {
+			fmt.Println(msg)
+		}
+	}
+}
+
 func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []byte, hash [32]byte, owner, replicaID string, maxConcurrency, maxConcurrencyPerInstance int, timeout time.Duration) error {
 	if err := validateNS(ns); err != nil {
 		return fmt.Errorf("openapi: %w", err)
@@ -439,6 +455,7 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		delete(g.slots, key)
 		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
+	warnUnsupportedOpenAPIOps(g, ns+"/"+ver, doc)
 	src := &openAPISource{
 		namespace:                 ns,
 		version:                   ver,
