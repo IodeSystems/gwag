@@ -37,7 +37,9 @@ class FakeSocket {
 globalThis.WebSocket = FakeSocket
 globalThis.window = { location: { protocol: 'http:', host: 'test' } }
 
-const { subscribeRaw, liveSnapshot, subscribeLive, setHeartbeat } = await import('./live-runtime.ts')
+const { subscribeRaw, liveSnapshot, subscribeLive, setHeartbeat, setMintRetry } = await import(
+  './live-runtime.ts',
+)
 
 const latest = () => FakeSocket.all.at(-1)
 const mint = (channel) => async () => ({ token: 'tok-' + channel, channel, exp: '' })
@@ -115,4 +117,75 @@ test('heartbeat pings, and replaces a socket that stops answering', async () => 
   off()
   stop()
   setHeartbeat(20_000, 15_000)
+})
+
+test('a failed mint retries with backoff until it works', async () => {
+  setMintRetry(4, 16)
+  let calls = 0
+  const states = []
+  const flaky = async () => {
+    if (++calls <= 3) throw new Error('denied')
+    return { token: 't', channel: 'e', exp: '' }
+  }
+  const stop = subscribeRaw(flaky, () => {}, (s) => states.push(s))
+  const ws = latest()
+  ws.open()
+  await until(() => subs(ws).length === 1)
+  assert.equal(calls, 4)
+  assert.deepEqual(states[0], { status: 'failed', error: 'denied' })
+  assert.equal(states.length, 1, 'same failure repeats no state change')
+  ws.deliver({ op: 'ack', id: subs(ws)[0].id })
+  assert.deepEqual(states.at(-1), { status: 'subscribed', error: null })
+  stop()
+})
+
+test('a relay err marks the sub failed and backs off on a resolved mint', async () => {
+  setMintRetry(20, 40)
+  let calls = 0
+  const states = []
+  const counting = async () => {
+    calls++
+    return { token: 'bad', channel: 'f', exp: '' }
+  }
+  const stop = subscribeRaw(counting, () => {}, (s) => states.push(s))
+  const ws = latest()
+  ws.open()
+  await until(() => subs(ws).length === 1)
+  const id = subs(ws)[0].id
+  ws.deliver({ op: 'err', id, err: 'relay: expired token' })
+  assert.deepEqual(states.at(-1), { status: 'failed', error: 'relay: expired token' })
+  assert.equal(calls, 1, 're-mint must wait for the backoff')
+  await until(() => subs(ws).length === 2)
+  ws.deliver({ op: 'ack', id })
+  assert.equal(states.at(-1).status, 'subscribed')
+
+  // No timer outlives the sub.
+  ws.deliver({ op: 'err', id, err: 'again' })
+  const before = calls
+  stop()
+  await sleep(60)
+  assert.equal(calls, before)
+})
+
+test('a lost socket returns subs to pending and cancels the retry', async () => {
+  setMintRetry(5, 5)
+  const states = []
+  const stop = subscribeRaw(mint('g'), () => {}, (s) => states.push(s.status))
+  const first = latest()
+  first.open()
+  await until(() => subs(first).length === 1)
+  first.deliver({ op: 'ack', id: subs(first)[0].id })
+  first.deliver({ op: 'err', id: subs(first)[0].id, err: 'x' })
+  first.dropped()
+  assert.deepEqual(states, ['subscribed', 'failed', 'pending'])
+  await until(() => latest() !== first)
+  const second = latest()
+  await sleep(20)
+  assert.equal(subs(first).length, 1, 'retry fired on a dead socket')
+  second.open()
+  await until(() => subs(second).length === 1)
+  second.deliver({ op: 'ack', id: subs(second)[0].id })
+  assert.equal(states.at(-1), 'subscribed')
+  stop()
+  setMintRetry(2_000, 60_000)
 })

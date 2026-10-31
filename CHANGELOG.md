@@ -11,6 +11,10 @@ changes on MINOR, drops on MAJOR.
 
 ### Added
 - **`Relay.Shutdown(ctx)`** sends close 1001 ("server restarting") to every socket, closes them, and answers new ones with 503, so a deploy is not a 1006 for every client. `http.Server.Shutdown` does not touch hijacked connections: call it from `srv.RegisterOnShutdown`.
+- **Relay generated runtime: per-sub status.** `useSub` returns `{status, error}`, and `subscribeRaw` takes an `onState` callback: `pending`, `subscribed` (the relay acked), or `failed` (the mint threw or the relay refused the cap). `setMintRetry` tunes the retry.
+
+### Fixed
+- Relay generated runtime: a failed mint dropped the sub until the next reconnect, and a relay `err` frame was ignored. Both now retry with jittered backoff, 2 s to 60 s, while the sub is mounted and the socket is open.
 
 ## v2.8.0 — 2026-10-31
 

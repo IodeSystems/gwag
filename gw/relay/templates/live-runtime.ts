@@ -11,7 +11,7 @@
 // a dead or half-open one is noticed and replaced. Screens read the result with
 // useLiveSocket; a screen refetches when `reconnects` grows, because pushes sent
 // while the socket was down are lost.
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 // SubResponse is the signed capability a mint endpoint returns. TEvent is a
 // phantom carrier (erased at runtime) so callers type the handler with no cast.
@@ -82,6 +82,25 @@ export function useLiveSocket(): LiveSnapshot {
   return useSyncExternalStore(subscribeLive, liveSnapshot, liveSnapshot)
 }
 
+// SubState is one subscription's standing. 'pending' = no answer from the relay on
+// this socket yet; 'subscribed' = the relay acked it; 'failed' = the mint threw or
+// the relay refused the cap, with error saying why. A failed sub is retried while
+// it is mounted and the socket is open. A socket going down is the live state's
+// news (see LiveState), so subs go back to 'pending' until the next ack.
+export type SubStatus = 'pending' | 'subscribed' | 'failed'
+export type SubState = { status: SubStatus; error: string | null }
+
+const PENDING: SubState = { status: 'pending', error: null }
+
+// A failed sub re-mints after firstRetryMs, doubling to maxRetryMs, with jitter.
+// An ack resets it.
+let firstRetryMs = 2_000
+let maxRetryMs = 60_000
+export function setMintRetry(first: number, max: number): void {
+  firstRetryMs = first
+  maxRetryMs = max
+}
+
 type OutFrame = { op: string; id: string; payload?: unknown; err?: string }
 
 // MuxSocket owns the single shared connection and per-sub minters. On (re)connect
@@ -91,6 +110,10 @@ class MuxSocket {
   private ws: WebSocket | null = null
   private mints = new Map<string, Minter<unknown>>()
   private handlers = new Map<string, (e: unknown) => void>()
+  private states = new Map<string, SubState>()
+  private stateHandlers = new Map<string, (s: SubState) => void>()
+  private retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private retries = new Map<string, number>() // failures since the last ack
   // A sub's id on the wire is `<channel>#<n>`, not its local id: frames carry the
   // id, and a relay with compression shares one compressed frame among sockets
   // only when the id matches. Local ids depend on a page's history; these do not.
@@ -139,6 +162,12 @@ class MuxSocket {
       if (f.op === 'data') {
         const h = this.handlers.get(id)
         if (h) h(f.payload)
+      } else if (f.op === 'ack') {
+        this.retries.delete(id)
+        this.clearRetry(id)
+        this.setState(id, { status: 'subscribed', error: null })
+      } else if (f.op === 'err') {
+        this.failed(id, f.err ?? 'relay refused the subscription')
       } else if (f.op === 'revalidate') {
         void this.activate(id) // relay asked for a fresh cap on this sub
       }
@@ -153,7 +182,44 @@ class MuxSocket {
     this.ws = null
     this.stopHeartbeat()
     updateLive({ state: this.everOpened ? 'reconnecting' : 'connecting' })
+    for (const id of this.mints.keys()) {
+      this.clearRetry(id) // onopen re-activates every sub
+      this.setState(id, PENDING)
+    }
     this.scheduleReconnect()
+  }
+
+  private setState(id: string, next: SubState): void {
+    const cur = this.states.get(id)
+    if (cur && cur.status === next.status && cur.error === next.error) return
+    this.states.set(id, next)
+    this.stateHandlers.get(id)?.(next)
+  }
+
+  private clearRetry(id: string): void {
+    const t = this.retryTimers.get(id)
+    if (t !== undefined) clearTimeout(t)
+    this.retryTimers.delete(id)
+  }
+
+  // failed records a mint or cap failure and schedules the retry. The count resets
+  // on ack, not on a resolved mint: a mint that succeeds with a cap the relay
+  // refuses must back off too.
+  private failed(id: string, error: string): void {
+    if (!this.mints.has(id)) return
+    this.setState(id, { status: 'failed', error })
+    this.clearRetry(id)
+    const n = this.retries.get(id) ?? 0
+    this.retries.set(id, n + 1)
+    const base = Math.min(maxRetryMs, firstRetryMs * Math.pow(2, n))
+    const delay = base / 2 + Math.random() * (base / 2) // jitter [base/2, base]
+    this.retryTimers.set(
+      id,
+      setTimeout(() => {
+        this.retryTimers.delete(id)
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) void this.activate(id)
+      }, delay),
+    )
   }
 
   private beat(ws: WebSocket): void {
@@ -210,8 +276,9 @@ class MuxSocket {
     let cap: SubResponse<unknown>
     try {
       cap = await mint() // re-runs the app's authorizer (canSee); throws if denied
-    } catch {
-      return // denied / mint unavailable — drop silently; the app's poll fallback covers it
+    } catch (e) {
+      this.failed(id, e instanceof Error ? e.message : String(e)) // denied / mint unavailable
+      return
     }
     if (!this.mints.has(id)) return // unsubscribed while minting
     this.send({ op: 'sub', id: this.wireId(id, cap.channel), token: cap.token })
@@ -222,15 +289,21 @@ class MuxSocket {
     // not open → onopen re-activates every sub; a stray unsub for a closed socket is moot
   }
 
-  sub<T>(mint: Minter<T>, handler: (e: T) => void): () => void {
+  sub<T>(mint: Minter<T>, handler: (e: T) => void, onState?: (s: SubState) => void): () => void {
     const id = String(++this.seq)
     this.mints.set(id, mint as Minter<unknown>)
     this.handlers.set(id, handler as (e: unknown) => void)
+    this.states.set(id, PENDING)
+    if (onState) this.stateHandlers.set(id, onState)
     if (this.ws && this.ws.readyState === WebSocket.OPEN) void this.activate(id)
     else this.connect()
     return () => {
       this.mints.delete(id)
       this.handlers.delete(id)
+      this.states.delete(id)
+      this.stateHandlers.delete(id)
+      this.retries.delete(id)
+      this.clearRetry(id)
       const wire = this.wireIds.get(id)
       if (wire !== undefined) {
         this.send({ op: 'unsub', id: wire })
@@ -256,32 +329,39 @@ class MuxSocket {
 const mux = new MuxSocket()
 
 // subscribeRaw is the framework-agnostic entry: subscribe via mint's channel,
-// routing each event to handler (typed TEvent). Returns an unsubscribe fn.
+// routing each event to handler (typed TEvent). onState, when given, hears every
+// status change after the initial 'pending'. Returns an unsubscribe fn.
 export function subscribeRaw<TEvent>(
   mint: Minter<TEvent>,
   handler: (e: TEvent) => void,
+  onState?: (s: SubState) => void,
 ): () => void {
-  return mux.sub(mint, handler)
+  return mux.sub(mint, handler, onState)
 }
 
 // useSub subscribes for the component's lifetime. Pass a minter (a thunk that
 // mints a fresh cap — the runtime calls it on connect/reconnect/renew/revalidate)
 // and a deps array (re-subscribe when these change, like useEffect). TEvent is
-// inferred from the minter's return type.
+// inferred from the minter's return type. Returns the sub's state: a resolved mint
+// is not a live sub, so show "Live" on 'subscribed' only.
 export function useSub<TEvent>(
   mint: Minter<TEvent>,
   handler: (e: TEvent) => void,
   deps: unknown[],
-): void {
+): SubState {
+  const [state, setState] = useState<SubState>(PENDING)
   const handlerRef = useRef(handler)
   handlerRef.current = handler
   const mintRef = useRef(mint)
   mintRef.current = mint
   useEffect(() => {
+    setState(PENDING)
     return subscribeRaw(
       () => mintRef.current(),
       (e) => handlerRef.current(e),
+      setState,
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
+  return state
 }

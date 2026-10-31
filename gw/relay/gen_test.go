@@ -97,7 +97,7 @@ func TestLiveRuntime(t *testing.T) {
 	for name, body := range map[string]string{
 		filepath.Join(dir, "live-runtime.test.mjs"): string(test),
 		filepath.Join(react, "package.json"):        `{"name":"react","type":"module","main":"index.js"}`,
-		filepath.Join(react, "index.js"):            `export const useEffect = () => {}, useRef = () => ({}), useSyncExternalStore = () => {}`,
+		filepath.Join(react, "index.js"):            `export const useEffect = () => {}, useRef = () => ({}), useState = () => [], useSyncExternalStore = () => {}`,
 	} {
 		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
