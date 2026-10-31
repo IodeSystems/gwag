@@ -109,7 +109,14 @@ func appendProtoSelection(dst []byte, msg protoreflect.Message, selSet *ast.Sele
 			dst = appendJSONString(dst, respKey)
 			dst = append(dst, ':')
 			if !msg.Has(fd) {
-				dst = appendProtoDefault(dst, fd)
+				// A field with presence (message, proto2 scalar, proto3
+				// `optional`, oneof member) is null when unset, as
+				// protojson emits it and as the map path omits it.
+				if fd.HasPresence() {
+					dst = append(dst, "null"...)
+				} else {
+					dst = appendProtoDefault(dst, fd)
+				}
 				continue
 			}
 			dst = appendProtoFieldValue(dst, fd, msg.Get(fd), n.SelectionSet)

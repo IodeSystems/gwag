@@ -112,9 +112,13 @@ func ingestProtoMethod(md protoreflect.MethodDescriptor, fileProto *descriptorpb
 	infields := in.Fields()
 	for i := 0; i < infields.Len(); i++ {
 		f := infields.Get(i)
+		// Same shape as the field on the message: a repeated field is
+		// a list arg, a map field the JSON scalar.
+		pf := ingestProtoField(f)
 		op.Args = append(op.Args, &Arg{
 			Name:        string(f.Name()),
-			Type:        fieldTypeRef(f),
+			Type:        pf.Type,
+			Repeated:    pf.Repeated,
 			Required:    !f.HasOptionalKeyword() && f.Cardinality() == protoreflect.Required,
 			Description: stringFromComments(f),
 		})

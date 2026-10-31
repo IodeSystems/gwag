@@ -31,6 +31,8 @@ changes on MINOR, drops on MAJOR.
 - **Channel patterns with a `>` that is not the last token** (e.g. in `WithChannelAuth` / `WithChannelBinding`) now match nothing, as in NATS and gat. gwag used to treat such a `>` as "match the rest". `New` now panics on such a `WithChannelAuth` pattern (or one with an empty token): the rule would match nothing, and its channels would fall back to the default HMAC tier, which can be weaker than the tier the rule declared.
 
 ### Fixed
+- **Repeated and map fields of a proto request message** rendered as a scalar GraphQL arg (`xs: Int`), so a list could not be sent. They are now `[T]` args, and map fields take the JSON scalar.
+- **Unset proto fields with presence** (proto2 `optional`, proto3 `optional`, oneof members) read as zero values on gwag's default GraphQL path, and a proto2 enum without a 0 value read as `0`. They now read `null`, as on the map path and in protojson.
 - **Proto `map<K,V>` fields** in gRPC args and responses (gwag and gat) panicked in the codec. They now convert as a JSON object: string keys, values in proto3 JSON form (enum names, base64 bytes, 64-bit integers as strings).
 - **`uint64` / `fixed64` args** above 2^63-1 were refused, and negative values wrapped. They now parse over the full unsigned range, and a negative value is an error. `uint32` args refuse negative values too.
 - `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.
