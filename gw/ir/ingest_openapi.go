@@ -556,19 +556,20 @@ func ingestOpenAPIPath(svc *Service, path string, item *openapi3.PathItem) {
 	}
 	// The same, spelled as the x-additional-operations extension (a
 	// 3.0 document).
-	ext := extAdditionalOperations(svc, item)
+	doc, _ := svc.Origin.(*openapi3.T)
+	ext := ExtAdditionalOperations(doc, item)
 	for _, method := range sortedOpMethods(ext) {
 		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, method, path, ext[method]))
 	}
 }
 
-// extAdditionalOperations decodes item's x-additional-operations
+// ExtAdditionalOperations decodes item's x-additional-operations
 // extension, where a 3.0 document keeps QUERY and custom-method
 // operations (RenderOpenAPI and the 3.0 down-conversion write it).
 // $refs into the document's components are resolved, as the loader
 // does for native fields. A method the Path Item has natively, or one
 // a 3.0 Path Item has a field for, is left out.
-func extAdditionalOperations(svc *Service, item *openapi3.PathItem) map[string]*openapi3.Operation {
+func ExtAdditionalOperations(doc *openapi3.T, item *openapi3.PathItem) map[string]*openapi3.Operation {
 	v, ok := item.Extensions[xAdditionalOperations]
 	if !ok {
 		return nil
@@ -581,7 +582,6 @@ func extAdditionalOperations(svc *Service, item *openapi3.PathItem) map[string]*
 	if err := json.Unmarshal(raw, &ops); err != nil {
 		return nil
 	}
-	doc, _ := svc.Origin.(*openapi3.T)
 	for m, op := range ops {
 		switch {
 		case op == nil, item.GetOperation(m) != nil, item.AdditionalOperations[m] != nil:

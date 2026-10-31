@@ -178,3 +178,43 @@ func TestOpenAPI32E2E_HTTPIngress(t *testing.T) {
 		f.assertBackend(t, tc.method, tc.path, tc.key, tc.val)
 	}
 }
+
+// A 3.2 spec converted to 3.0 keeps QUERY and custom methods in
+// x-additional-operations; ingress routes them as it routes the 3.2
+// fields.
+func TestOpenAPI32_IngressRoutesConvertedSpec(t *testing.T) {
+	src := newOpenAPI32Fixture(t)
+	spec := specOf(t, getSchemaOpenAPI(t, src.gw, "?openapi=3.0").Body.Bytes())
+
+	var lastReq atomic.Pointer[capturedRequest]
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		lastReq.Store(&capturedRequest{Method: r.Method, Path: r.URL.Path, Headers: r.Header.Clone(), Body: body})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"abc","name":"thing"}`))
+	}))
+	t.Cleanup(backend.Close)
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test-token")))
+	t.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes(spec, To(backend.URL), As("test")); err != nil {
+		t.Fatalf("AddOpenAPIBytes: %v", err)
+	}
+	h := gw.IngressHandler()
+	for _, tc := range []struct{ method, path, wantPath, body string }{
+		{"QUERY", "/things/search", "/things/search", `{"name":"n"}`},
+		{"PURGE", "/things/abc", "/things/abc", `{"reason":"r"}`},
+	} {
+		lastReq.Store(nil)
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s %s: status=%d body=%s", tc.method, tc.path, rr.Code, rr.Body.String())
+			continue
+		}
+		if rec := lastReq.Load(); rec == nil || rec.Method != tc.method || rec.Path != tc.wantPath || string(rec.Body) != tc.body {
+			t.Errorf("%s %s: backend got %+v", tc.method, tc.path, rec)
+		}
+	}
+}

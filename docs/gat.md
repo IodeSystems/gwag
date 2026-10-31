@@ -806,7 +806,7 @@ generator does not see an operation. The extensions:
 
 gwag and gat ingest `x-additional-operations` and `x-item-schema`, so
 a converted spec registers with the same QUERY, custom-method and
-streamed operations as its source.
+streamed operations as its source. gwag's REST ingress routes them too.
 
 Schemas, 3.1 → 3.0:
 

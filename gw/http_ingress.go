@@ -230,7 +230,7 @@ func (g *Gateway) addOpenAPIDocRoutes(t *ingressTable, doc *openapi3.T, key pool
 		if item == nil {
 			continue
 		}
-		for _, mop := range openAPIOpsForPath(item) {
+		for _, mop := range openAPIOpsForPath(doc, item) {
 			// SchemaID is keyed on the same name IngestOpenAPI
 			// uses: OperationID when set, otherwise "<METHOD><path>".
 			// RenderOpenAPI sets OperationID=op.Name (post-flatten),
@@ -276,10 +276,11 @@ type openAPIMethodOp struct {
 	op     *openapi3.Operation
 }
 
-func openAPIOpsForPath(item *openapi3.PathItem) []openAPIMethodOp {
+func openAPIOpsForPath(doc *openapi3.T, item *openapi3.PathItem) []openAPIMethodOp {
 	// Operations() covers the fixed fields plus OpenAPI 3.2 QUERY and
-	// additionalOperations. The methods IngestOpenAPI skips are
-	// skipped here too.
+	// additionalOperations; a 3.0 document spells those two as the
+	// x-additional-operations extension. The methods IngestOpenAPI
+	// skips are skipped here too.
 	ops := item.Operations()
 	out := make([]openAPIMethodOp, 0, len(ops))
 	for method, op := range ops {
@@ -287,6 +288,9 @@ func openAPIOpsForPath(item *openapi3.PathItem) []openAPIMethodOp {
 		case http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodConnect:
 			continue
 		}
+		out = append(out, openAPIMethodOp{method, op})
+	}
+	for method, op := range ir.ExtAdditionalOperations(doc, item) {
 		out = append(out, openAPIMethodOp{method, op})
 	}
 	return out
