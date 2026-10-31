@@ -859,10 +859,11 @@ The document, 3.1 → 3.0:
 | `$self`, Server `name`, Tag `summary` / `parent` / `kind`, Response `summary`, Discriminator `defaultMapping`, XML `nodeType`, Security Scheme `deprecated` / `oauth2MetadataUrl`, `deviceAuthorization` flow, Media Type `itemEncoding` / `prefixEncoding`, Encoding `encoding` / `prefixEncoding` / `itemEncoding` | `x-gwag-oas32` | no |
 
 What gwag reads from a converted spec differs from the source in two
-places. `format: byte` / `binary` ingest as the `Upload` scalar where
-`contentEncoding` / `contentMediaType` ingested as `String`, and a
-hoisted `$defs` entry becomes a type of its own. A `querystring`
-parameter is not read back.
+places. `format: binary` ingests as the `Upload` scalar where
+`contentMediaType` ingested as `String`, and a hoisted `$defs` entry
+becomes a type of its own. A `querystring` parameter is not read back.
+`format: byte` and `contentEncoding: base64` both ingest as a base64
+`String`, except that `format: byte` in `multipart/form-data` is a file.
 
 In 3.1 output (`?openapi=3.1` of a 3.0 spec), schemas use the JSON
 Schema 2020-12 forms:

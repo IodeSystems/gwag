@@ -206,13 +206,15 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 		switch pt {
 		case "string":
 			switch {
-			case s.Format == "binary" || s.Format == "byte":
+			case s.Format == "binary":
 				// OpenAPI's spec-blessed file-upload encoding: in a
 				// multipart/form-data schema, type:string + format:binary
-				// is "this property is a file". format:byte (base64 in
-				// JSON contexts) is treated identically — both map to the
-				// Upload scalar; the dispatcher chooses the wire encoding.
+				// is "this property is a file".
 				f.Type = TypeRef{Builtin: ScalarUpload}
+			case s.Format == "byte" || s.ContentEncoding == "base64":
+				// Base64 text, as proto bytes are. A multipart property
+				// is the exception: see ingestOpenAPIFormDataBody.
+				f.Type = TypeRef{Builtin: ScalarBytes}
 			case len(s.Enum) > 0:
 				f.Type = TypeRef{Named: synthesizeInlineEnum(svc, pathHint, s)}
 			default:
@@ -949,7 +951,7 @@ func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) 
 // ingestOpenAPIFormDataBody flattens a multipart/form-data request
 // body schema into top-level Args on `out`. Each property becomes one
 // Arg with OpenAPILocation="formdata"; properties typed
-// string/format:binary land as TypeRef{Builtin: ScalarUpload}, others
+// string/format:binary or :byte land as TypeRef{Builtin: ScalarUpload}, others
 // follow the regular openapiPropToField mapping. Array-of-binary
 // properties land as repeated ScalarUpload (`[Upload!]!` once required
 // + ItemRequired are honored downstream).
@@ -978,6 +980,9 @@ func ingestOpenAPIFormDataBody(svc *Service, out *Operation, opHint string, s *o
 	for _, k := range keys {
 		propRef := s.Properties[k]
 		field := openapiPropToField(svc, opHint+"FormData"+pascalIdent(k), k, propRef, required[k])
+		if field.Type.Builtin == ScalarBytes && openapiByteProp(propRef) {
+			field.Type = TypeRef{Builtin: ScalarUpload}
+		}
 		out.Args = append(out.Args, &Arg{
 			Name:            k,
 			Type:            field.Type,
@@ -993,6 +998,16 @@ func ingestOpenAPIFormDataBody(svc *Service, out *Operation, opHint string, s *o
 	// required[] set above. Keep the closure tight to avoid leaking
 	// shadowed metadata.
 	_ = body
+}
+
+// openapiByteProp reports whether a form-data property is format:byte
+// or an array of it: a file part, like format:binary.
+func openapiByteProp(ref *openapi3.SchemaRef) bool {
+	s := ref.Value
+	if s != nil && s.Type != nil && s.Type.Includes("array") && s.Items != nil {
+		s = s.Items.Value
+	}
+	return s != nil && s.Format == "byte"
 }
 
 func openapiResponseField(svc *Service, opHint string, r *openapi3.Responses) *Field {

@@ -351,16 +351,14 @@ func TestDowncast31To30_IR(t *testing.T) {
 	out, svc := downcast(t, openapi31Rich, "3.0")
 	down := IngestOpenAPI(loadSpec(t, mustJSON(t, out)))
 	checkIRDiff(t, irDiff(svc, down), []string{
-		// (12 is ScalarUpload, 1 ScalarString.) contentEncoding base64 /
-		// contentMediaType image/png ingest as
-		// String; their 3.0 forms, format byte / binary, as Upload.
-		"+ field Item.blob:12:rep=false:req=false:null=false:item=false",
+		// (12 is ScalarUpload, 1 ScalarString.) contentMediaType
+		// image/png ingests as String; its 3.0 form, format binary, as
+		// Upload.
 		"+ field Item.image:12:rep=false:req=false:null=false:item=false",
 		// A $defs entry is not a component, so the 3.1 IR has a Named
 		// Local with no Type behind it. Hoisted, it is one.
 		"+ field Local.x:1:rep=false:req=false:null=false:item=false",
 		"+ type Local 0 enum[]",
-		"- field Item.blob:1:rep=false:req=false:null=false:item=false",
 		"- field Item.image:1:rep=false:req=false:null=false:item=false",
 	})
 	for _, op := range []string{"getItem", "createItem", "clearItems", "listOps"} {

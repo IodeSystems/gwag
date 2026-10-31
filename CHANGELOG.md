@@ -10,6 +10,7 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Migration
+- **OpenAPI `format: byte` outside `multipart/form-data` is now a GraphQL `String`**, not `Upload`, and `contentEncoding: base64` ingests the same way. Clients pass base64 text; the gateway forwards it as given. It used to reach the upstream as a multipart body or query value holding a Go struct. `format: byte` in `multipart/form-data` is still `Upload`.
 - **Proto `bytes` fields are base64 both ways** (proto3 JSON). GraphQL args used to take the raw string, and output was base64 on gwag's default path but the raw string on gat and gwag's map path. Clients that send raw text to a `bytes` arg must base64-encode it; gat clients reading `bytes` output must decode it. Input accepts standard or URL-safe base64, padded or not. Upload-marked `bytes` fields are unchanged.
 - **Standalone gwag gateways have pub/sub.** `ps/v1` appears in the schema, admin service lists and MCP tools without `WithCluster`. Tests that count services or slots see one more.
 - **`WithChannelAuth` patterns** with a `>` before the last token, or an empty token, make `New` panic. Write `a.>` (rest of the channel) or `a.*.b` (one token).
