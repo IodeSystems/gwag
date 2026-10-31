@@ -5,7 +5,8 @@
 //
 // GraphQL-canonical means: lowerCamel keys, args decoded the way
 // graphql-go hands them to a resolver (map[string]any, []any,
-// primitives), 64-bit integers as decimal strings, enums as int32
+// primitives), 64-bit integers as decimal strings, bytes as base64
+// (standard, padded; input also takes URL-safe or unpadded), enums as int32
 // numbers (the Value graphql-go enum configs are built with).
 //
 // Map fields (proto `map<K,V>`) are a JSON object both ways (the IR
@@ -216,7 +217,11 @@ func (o Options) toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoref
 	case protoreflect.BytesKind:
 		switch x := v.(type) {
 		case string:
-			return protoreflect.ValueOfBytes([]byte(x)), nil
+			b, err := decodeBase64(x)
+			if err != nil {
+				return protoreflect.Value{}, fmt.Errorf("bytes: %w", err)
+			}
+			return protoreflect.ValueOfBytes(b), nil
 		case []byte:
 			if o.BytesFromSlice {
 				return protoreflect.ValueOfBytes(x), nil
@@ -272,6 +277,19 @@ func toInt64(v any) (int64, error) {
 	default:
 		return 0, fmt.Errorf("expected number, got %T", v)
 	}
+}
+
+// decodeBase64 reads a bytes value the way protojson does: standard
+// or URL-safe alphabet, with or without padding.
+func decodeBase64(s string) ([]byte, error) {
+	enc := base64.StdEncoding
+	if strings.ContainsAny(s, "-_") {
+		enc = base64.URLEncoding
+	}
+	if len(s)%4 != 0 {
+		enc = enc.WithPadding(base64.NoPadding)
+	}
+	return enc.DecodeString(s)
 }
 
 // toUint64 is toInt64 for unsigned fields: a string takes the full
@@ -402,7 +420,9 @@ func scalarToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 	case protoreflect.StringKind:
 		return v.String()
 	case protoreflect.BytesKind:
-		return string(v.Bytes())
+		// Standard base64 with padding (proto3 JSON), as the append
+		// path writes it.
+		return base64.StdEncoding.EncodeToString(v.Bytes())
 	case protoreflect.EnumKind:
 		// Proto enums register with graphql-go as `Value: int32(number)`.
 		// graphql-go's enum Serialize matches the resolver value against
@@ -432,8 +452,7 @@ func mapToAny(fd protoreflect.FieldDescriptor, mp protoreflect.Map) map[string]a
 }
 
 // jsonValueToAny renders one value inside a JSON scalar, where no
-// GraphQL type serialises it: enums as their names, bytes as base64,
-// nested messages with every set field. Matches the append path's
+// GraphQL type serialises it: enums as their names, nested messages with every set field. Matches the append path's
 // output for the same value.
 func jsonValueToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 	switch fd.Kind() {
@@ -442,8 +461,6 @@ func jsonValueToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 			return string(ev.Name())
 		}
 		return int32(v.Enum())
-	case protoreflect.BytesKind:
-		return base64.StdEncoding.EncodeToString(v.Bytes())
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		if f := v.Float(); math.IsNaN(f) || math.IsInf(f, 0) {
 			return nil

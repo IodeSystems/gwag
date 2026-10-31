@@ -11,6 +11,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Migration
 - **The exported OpenAPI spec is 3.1.0.** A client that generates code from gwag's or gat's OpenAPI schema route gets 3.1 forms (see Added). If its generator reads 3.0 only, use `WithOpenAPI30()` (gwag), `OpenAPI31(false)` (gat), or request `?openapi=3.0`.
+- **Proto `bytes` fields are base64 both ways** (proto3 JSON). GraphQL args used to take the raw string, and output was base64 on gwag's default path but the raw string on gat and gwag's map path. Clients that send raw text to a `bytes` arg must base64-encode it; gat clients reading `bytes` output must decode it. Input accepts standard or URL-safe base64, padded or not. Upload-marked `bytes` fields are unchanged.
 - **Standalone gwag gateways have pub/sub.** `ps/v1` appears in the schema, admin service lists and MCP tools without `WithCluster`. Tests that count services or slots see one more.
 - **`WithChannelAuth` patterns** with a `>` before the last token, or an empty token, make `New` panic. Write `a.>` (rest of the channel) or `a.*.b` (one token).
 

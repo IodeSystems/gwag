@@ -33,7 +33,7 @@ func TestProtoMapFields(t *testing.T) {
 	maxU := strconv.FormatUint(math.MaxUint64, 10)
 	args := map[string]any{
 		"counts": map[string]any{"a": "9007199254740993", "b": 2},
-		"inners": map[string]any{"7": map[string]any{"blob": "hi", "color": "COLOR_RED"}},
+		"inners": map[string]any{"7": map[string]any{"blob": "aGk=", "color": "COLOR_RED"}},
 		"flags":  map[string]any{"true": "COLOR_RED"},
 		"big":    maxU,
 		"fixed":  "18446744073709551614",

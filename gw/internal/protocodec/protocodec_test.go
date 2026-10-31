@@ -97,7 +97,7 @@ func TestBytesFromSlice(t *testing.T) {
 	}
 	for _, o := range []Options{{}, gwagOpts} {
 		msg := dynamicpb.NewMessage(md)
-		if err := o.ArgsToMessage(map[string]any{"blob": "s"}, msg); err != nil {
+		if err := o.ArgsToMessage(map[string]any{"blob": "cw=="}, msg); err != nil {
 			t.Fatalf("string into bytes: %v", err)
 		}
 	}
@@ -133,7 +133,7 @@ func TestRoundTrip(t *testing.T) {
 		"userId":  "9007199254740993",
 		"color":   "COLOR_RED",
 		"tags":    []any{"a", "b"},
-		"inner":   map[string]any{"blob": "x"},
+		"inner":   map[string]any{"blob": "eA=="},
 		"count":   "9223372036854775807",
 		"ratio":   0.5,
 		"unknown": 1,
@@ -149,11 +149,11 @@ func TestRoundTrip(t *testing.T) {
 			"color":  int32(1),
 			"count":  "9223372036854775807",
 			"ratio":  float64(0.5),
-			"inner":  map[string]any{"blob": "x"},
+			"inner":  map[string]any{"blob": "eA=="},
 		}
 		for k, w := range want {
 			if k == "inner" {
-				if got := out[k].(map[string]any)["blob"]; got != "x" {
+				if got := out[k].(map[string]any)["blob"]; got != "eA==" {
 					t.Fatalf("%s: inner.blob = %#v", name, got)
 				}
 				continue
@@ -203,5 +203,27 @@ func TestLowerCamel(t *testing.T) {
 		if got := LowerCamel(in); got != want {
 			t.Errorf("LowerCamel(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Bytes are base64 both ways (proto3 JSON); input also takes the
+// URL-safe alphabet and unpadded forms.
+func TestBytesBase64(t *testing.T) {
+	md := testMessage(t)
+	blob := md.Fields().ByName("blob")
+	for _, in := range []string{"+/8=", "-_8=", "-_8", "+/8"} {
+		msg := dynamicpb.NewMessage(md)
+		if err := (Options{}).ArgsToMessage(map[string]any{"blob": in}, msg); err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := msg.Get(blob).Bytes(); string(got) != "\xfb\xff" {
+			t.Errorf("%q decoded to %x", in, got)
+		}
+		if got := MessageToMap(msg)["blob"]; got != "+/8=" {
+			t.Errorf("%q: output %v", in, got)
+		}
+	}
+	if err := (Options{}).ArgsToMessage(map[string]any{"blob": "not base64!"}, dynamicpb.NewMessage(md)); err == nil {
+		t.Error("invalid base64 accepted")
 	}
 }
