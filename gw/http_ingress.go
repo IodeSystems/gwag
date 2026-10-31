@@ -60,6 +60,11 @@ type ingressRoute struct {
 	hasBody         bool
 	multipartBody   bool
 	formdataArgs    map[string]bool // arg name → true for OpenAPILocation="formdata" Upload-typed slots
+
+	// stream is set for an OpenAPI op whose success response is a
+	// stream (OpenAPI 3.2 itemSchema). Its dispatcher returns a chan
+	// any; the handler relays the items in stream.MediaType's framing.
+	stream *ir.OpenAPIStream
 }
 
 type routeSeg struct {
@@ -252,6 +257,7 @@ func (g *Gateway) addOpenAPIDocRoutes(t *ingressTable, doc *openapi3.T, key pool
 			}
 			route.segs = parseRouteTemplate(path)
 			route.queryParamNames, route.hasBody, route.multipartBody, route.formdataArgs = openAPIArgPlan(mop.op)
+			route.stream = ir.OpenAPIStreamOf(mop.op)
 			if hasParamSeg(route.segs) {
 				t.templated[route.method] = append(t.templated[route.method], route)
 			} else {
@@ -428,7 +434,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ns, ver, op := route.schemaID.Parts()
-	if route.shape == ingressShapeSubscription {
+	if route.shape == ingressShapeSubscription || route.stream != nil {
 		// SSE subscription lifetime is open-ended; request_*_seconds is
 		// not meaningful here. Skip the accumulator + recording.
 		ctx := g.tracer.extractHTTP(r.Context(), r.Header)
@@ -445,7 +451,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 		ctx = withTracer(ctx, g.tracer)
 		ctx = withInjectCache(ctx)
 		ctx = withHTTPRequest(ctx, r)
-		streamSSE(ctx, w, route, args)
+		streamIngress(ctx, w, route, args)
 		return
 	}
 
@@ -484,19 +490,23 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// streamSSE dispatches a subscription and pumps the resulting event
-// channel out to the client as text/event-stream. One `data:` frame
-// per event (JSON-encoded payload). When the upstream channel closes,
-// the handler emits `event: complete\ndata: {}` and returns. ctx
-// cancels propagate down to the dispatcher, which releases stream
-// slots and closes the upstream.
+// streamIngress dispatches a subscription and pumps the resulting
+// event channel out to the client. A server-streaming proto method
+// streams as text/event-stream: one `data:` frame per event
+// (JSON-encoded payload), then `event: complete\ndata: {}` when the
+// channel closes. A streamed OpenAPI op relays in its declared media
+// type (see writeStreamItem) with no completion frame, so the client
+// sees the stream the spec describes. An error event mid-stream is
+// written as `event: error` on SSE and ends the response. ctx cancels
+// propagate down to the dispatcher, which releases stream slots and
+// closes the upstream.
 //
 // Pre-dispatch errors (HMAC verify fail, slot-acquire timeout) come
 // back as Reject — written as a regular JSON error envelope, no SSE
 // frame, so HTTP status carries the failure code. Post-stream-open
 // errors are vanishingly rare and already filtered by the broker;
 // when they do occur, the connection just closes.
-func streamSSE(ctx context.Context, w http.ResponseWriter, route *ingressRoute, args map[string]any) {
+func streamIngress(ctx context.Context, w http.ResponseWriter, route *ingressRoute, args map[string]any) {
 	out, err := route.dispatcher.Dispatch(ctx, args)
 	if err != nil {
 		writeIngressDispatchError(w, err)
@@ -512,8 +522,12 @@ func streamSSE(ctx context.Context, w http.ResponseWriter, route *ingressRoute, 
 		writeIngressError(w, http.StatusInternalServerError, "streaming not supported by ResponseWriter")
 		return
 	}
+	mediaType := ir.StreamSSE
+	if route.stream != nil {
+		mediaType = route.stream.MediaType
+	}
 	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
+	h.Set("Content-Type", mediaType)
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
@@ -525,20 +539,93 @@ func streamSSE(ctx context.Context, w http.ResponseWriter, route *ingressRoute, 
 			return
 		case ev, ok := <-ch:
 			if !ok {
-				_, _ = io.WriteString(w, "event: complete\ndata: {}\n\n")
-				flusher.Flush()
+				if route.stream == nil {
+					_, _ = io.WriteString(w, "event: complete\ndata: {}\n\n")
+					flusher.Flush()
+				}
 				return
 			}
-			b, err := json.Marshal(ev)
-			if err != nil {
-				continue
+			if evErr, isErr := ev.(error); isErr {
+				if mediaType == ir.StreamSSE {
+					b, _ := json.Marshal(map[string]string{"message": evErr.Error()})
+					_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", b)
+					flusher.Flush()
+				}
+				return
 			}
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+			if err := writeStreamItem(w, route.stream, ev); err != nil {
+				if errors.Is(err, errSkipItem) {
+					continue
+				}
 				return
 			}
 			flusher.Flush()
 		}
 	}
+}
+
+var errSkipItem = errors.New("skip item")
+
+// writeStreamItem writes one event in the route's framing. stream nil
+// (proto server-streaming) and SSE in data mode write `data: <json>`;
+// SSE envelope mode writes the envelope's data / event / id / retry
+// fields back as SSE fields; JSON Lines and NDJSON write one line per
+// item; json-seq prefixes each item with RS. An item that does not
+// encode returns errSkipItem.
+func writeStreamItem(w io.Writer, stream *ir.OpenAPIStream, ev any) error {
+	if stream != nil && stream.MediaType == ir.StreamSSE && !stream.SSEData {
+		return writeSSEEnvelope(w, ev)
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return errSkipItem
+	}
+	mediaType := ir.StreamSSE
+	if stream != nil {
+		mediaType = stream.MediaType
+	}
+	switch mediaType {
+	case ir.StreamSSE:
+		_, err = fmt.Fprintf(w, "data: %s\n\n", b)
+	case ir.StreamJSONSeq:
+		_, err = fmt.Fprintf(w, "\x1e%s\n", b)
+	default:
+		_, err = fmt.Fprintf(w, "%s\n", b)
+	}
+	return err
+}
+
+// sseFieldValue strips line breaks, which would end an SSE field.
+var sseFieldValue = strings.NewReplacer("\r", "", "\n", "")
+
+func writeSSEEnvelope(w io.Writer, ev any) error {
+	m, ok := ev.(map[string]any)
+	if !ok {
+		return errSkipItem
+	}
+	var sb strings.Builder
+	for _, f := range []string{"event", "id"} {
+		if v, ok := m[f].(string); ok && v != "" {
+			sb.WriteString(f + ": " + sseFieldValue.Replace(v) + "\n")
+		}
+	}
+	if v, ok := m["retry"]; ok && v != nil {
+		fmt.Fprintf(&sb, "retry: %v\n", v)
+	}
+	data, ok := m["data"].(string)
+	if !ok {
+		b, err := json.Marshal(m["data"])
+		if err != nil {
+			return errSkipItem
+		}
+		data = string(b)
+	}
+	for _, line := range strings.Split(data, "\n") {
+		sb.WriteString("data: " + line + "\n")
+	}
+	sb.WriteString("\n")
+	_, err := io.WriteString(w, sb.String())
+	return err
 }
 
 // lookupIngressRoute returns the matching route and any captured

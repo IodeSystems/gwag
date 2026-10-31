@@ -160,7 +160,7 @@ func TestGRPCIngress_SubscriptionAuthHandles(t *testing.T) {
 	md := file.Services().Get(0).Methods().ByName("Greetings")
 	disp := &recordingDispatcher{}
 	g, _ := gat.New()
-	if err := g.SetGRPCRoutes([]gat.GRPCRoute{{Method: md, Stream: grpcSubscription(disp, md.Output())}}); err != nil {
+	if err := g.SetGRPCRoutes([]gat.GRPCRoute{{Method: md, Stream: grpcSubscription(disp, md.Output(), false)}}); err != nil {
 		t.Fatal(err)
 	}
 

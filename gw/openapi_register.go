@@ -75,6 +75,16 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 			if openAPIOp == nil {
 				return fmt.Errorf("openapi: ingest dropped op origin for %s/%s/%s", svc.Namespace, svc.Version, op.Name)
 			}
+			if op.Kind == ir.OpSubscription {
+				// Streamed response: per-subscriber upstream request,
+				// stream caps instead of the unary backpressure /
+				// quota / runtime chain (same posture as the proto
+				// and downstream-GraphQL subscription dispatchers).
+				if st := ir.OpenAPIStreamOf(openAPIOp); st != nil {
+					g.dispatchers.Set(op.SchemaID, newOpenAPIStreamDispatcher(g, src, openAPIOp, st, op.HTTPMethod, op.HTTPPath, headers, metrics))
+					continue
+				}
+			}
 			core := newOpenAPIDispatcher(src, openAPIOp, op.HTTPMethod, op.HTTPPath, headers, metrics, bp)
 			core.svc = svc
 			core.irOp = op

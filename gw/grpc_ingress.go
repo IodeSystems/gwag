@@ -105,7 +105,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 						if disp == nil {
 							continue
 						}
-						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output()), Data: info})
+						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), false), Data: info})
 						continue
 					}
 					inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
@@ -151,7 +151,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 		if g.isInternal(k.namespace) {
 			continue
 		}
-		g.addCanonicalArgsGRPCRoutesLocked(add, k, slot.ir)
+		g.addCanonicalArgsGRPCRoutesLocked(add, k, slot.ir, slot.kind == slotKindOpenAPI)
 	}
 
 	return g.gql.SetGRPCRoutes(routes)
@@ -181,11 +181,13 @@ func grpcUnaryRoute(md protoreflect.MethodDescriptor, h Handler, info *grpcRoute
 // and emits routes that bridge dynamicpb ↔ canonical-args
 // dispatcher: messageToMap on the input → ir.Dispatcher.Dispatch
 // → argsToMessage onto the synthesized response message (which has
-// shape `{value: <output>}` per ir.synthResponseMessage). Streaming
-// methods are skipped — graphql subscriptions and openapi
-// long-poll-as-stream don't have a stable canonical-args bridge
-// from the gRPC side yet. Caller holds g.mu.
-func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(add func(gat.GRPCRoute), key poolKey, services []*ir.Service) {
+// shape `{value: <output>}` per ir.synthResponseMessage).
+// Server-streaming methods are served only when streams is set (an
+// OpenAPI slot: its streamed-response dispatcher takes canonical
+// args); a downstream-GraphQL subscription needs the selection AST,
+// which a gRPC request does not carry, so those stay skipped. Caller
+// holds g.mu.
+func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(add func(gat.GRPCRoute), key poolKey, services []*ir.Service, streams bool) {
 	for _, svc := range services {
 		fds, err := ir.RenderProtoFiles([]*ir.Service{svc})
 		if err != nil || fds == nil || len(fds.File) == 0 {
@@ -206,12 +208,16 @@ func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(add func(gat.GRPCRoute), key 
 				methods := sd.Methods()
 				for j := 0; j < methods.Len(); j++ {
 					md := methods.Get(j)
-					if md.IsStreamingClient() || md.IsStreamingServer() {
+					if md.IsStreamingClient() || (md.IsStreamingServer() && !streams) {
 						continue
 					}
 					sid := ir.MakeSchemaID(key.namespace, key.version, string(md.Name()))
 					disp := g.dispatchers.Get(sid)
 					if disp == nil {
+						continue
+					}
+					if md.IsStreamingServer() {
+						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), isSynthResponseWrapper(md.Output())), Data: noRouteInfo})
 						continue
 					}
 					// A path a proto slot already serves keeps that route.
@@ -456,8 +462,11 @@ const (
 // grpcSubscription serves a server-streaming method through its
 // canonical-args subscription dispatcher: the request becomes args
 // (plus the HMAC handles from metadata), each event a response
-// message.
-func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor) func(context.Context, *dynamicpb.Message, func(proto.Message) error) error {
+// message. wrapInValue projects each event into the synthesized
+// `{value: <event>}` response (a canonical-args op whose event is a
+// scalar or list); see newCanonicalArgsGRPCHandler. An error event
+// ends the stream with that error.
+func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor, wrapInValue bool) func(context.Context, *dynamicpb.Message, func(proto.Message) error) error {
 	return func(ctx context.Context, req *dynamicpb.Message, send func(proto.Message) error) error {
 		args := messageToMap(req)
 		if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -488,6 +497,12 @@ func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescrip
 			case ev, open := <-ch:
 				if !open {
 					return nil
+				}
+				if evErr, isErr := ev.(error); isErr {
+					return evErr
+				}
+				if wrapInValue {
+					ev = map[string]any{"value": coerceCanonicalListValue(ev)}
 				}
 				evMap, ok := ev.(map[string]any)
 				if !ok {

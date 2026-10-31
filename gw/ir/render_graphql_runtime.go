@@ -2,11 +2,13 @@ package ir
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 
 	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
 )
 
 // RuntimeOptions configures RenderGraphQLRuntime.
@@ -538,8 +540,13 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 			Args:              args,
 			Description:       withRef(op.Description, op.Ref),
 			DeprecationReason: op.Deprecated,
-			Subscribe:         dispatch,
+			Subscribe:         subscribeWithExtensions(dispatch),
 			Resolve: func(rp graphql.ResolveParams) (any, error) {
+				// A dispatcher reports a failure after the stream opened
+				// by sending an error as the event.
+				if err, ok := rp.Source.(error); ok {
+					return nil, err
+				}
 				return rp.Source, nil
 			},
 		}, nil
@@ -568,6 +575,31 @@ func buildRuntimeOperation(tb *IRTypeBuilder, op *Operation, registry *DispatchR
 		Resolve:           dispatch,
 		ResolveAppend:     appendDispatch,
 	}, nil
+}
+
+// subscribeWithExtensions keeps an error's extensions on the
+// subscribe path: graphql-go formats a plain resolver error returned
+// from Subscribe without them (the query path keeps them), so an
+// error carrying Extensions is handed back already formatted.
+func subscribeWithExtensions(subscribe graphql.FieldResolveFn) graphql.FieldResolveFn {
+	if subscribe == nil {
+		return nil
+	}
+	return func(rp graphql.ResolveParams) (any, error) {
+		v, err := subscribe(rp)
+		if err == nil {
+			return v, nil
+		}
+		var formatted gqlerrors.FormattedError
+		if errors.As(err, &formatted) {
+			return v, err
+		}
+		var ext gqlerrors.ExtendedError
+		if errors.As(err, &ext) {
+			return v, gqlerrors.FormattedError{Message: err.Error(), Extensions: ext.Extensions()}
+		}
+		return v, err
+	}
 }
 
 // wrapResolveErrors applies wrap to the errors resolve and

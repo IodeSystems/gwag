@@ -347,7 +347,12 @@ func (g *Gateway) addRegistrations(regs []ServiceRegistration) error {
 				continue
 			}
 			if reg.BaseURL != "" && svc.OriginKind == ir.KindOpenAPI {
-				g.registry.Set(op.SchemaID, newOpenAPIDispatcher(reg.BaseURL, svc, op))
+				d := newOpenAPIDispatcher(reg.BaseURL, svc, op)
+				if st := ir.OpenAPIStreamOf(d.operation); op.Kind == ir.OpSubscription && st != nil {
+					g.registry.Set(op.SchemaID, &openAPIStreamDispatcher{openAPIDispatcher: d, stream: st})
+					continue
+				}
+				g.registry.Set(op.SchemaID, d)
 			}
 		}
 	}

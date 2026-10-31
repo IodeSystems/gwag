@@ -146,6 +146,9 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if semSize > 0 {
 		src.sem = make(chan struct{}, semSize)
 	}
+	if ms := g.cfg.backpressure.MaxStreams; ms > 0 {
+		src.streamSem = make(chan struct{}, ms)
+	}
 	src.addReplica(newOpenAPIReplica(src, openAPIReplicaInit{
 		baseURL:    addr,
 		httpClient: httpClient,
@@ -239,6 +242,14 @@ type openAPISource struct {
 	// queueing tracks waiters on the semaphore for the queue-depth
 	// gauge.
 	queueing atomic.Int32
+
+	// streamSem caps simultaneous streamed-response subscriptions
+	// (OpenAPI 3.2 itemSchema ops) against this source; nil when
+	// MaxStreams is 0. HTTP analogue of pool.streamSem; independent of
+	// sem, which gates unary calls. streamInflight feeds the
+	// streams-inflight gauge.
+	streamSem      chan struct{}
+	streamInflight atomic.Int32
 }
 
 // openAPIReplica is one HTTP backend behind an openAPISource. Each
@@ -476,6 +487,9 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 	if semSize > 0 {
 		src.sem = make(chan struct{}, semSize)
 	}
+	if ms := g.cfg.backpressure.MaxStreams; ms > 0 {
+		src.streamSem = make(chan struct{}, ms)
+	}
 	src.addReplica(newOpenAPIReplica(src, openAPIReplicaInit{
 		id:         replicaID,
 		baseURL:    addr,
@@ -692,6 +706,48 @@ func dispatchOpenAPIRaw(
 	httpClient *http.Client,
 	store UploadStore,
 ) ([]byte, error) {
+	req, full, closeups, err := buildOpenAPIRequest(ctx, method, baseURL, pathTemplate, op, gqlArgs, forwardHeaders, headerInjectors, store, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	client := httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	// Whatever the outcome, multipart Upload readers we opened for
+	// this dispatch are ours to close.
+	closeUploads(closeups)
+	if err != nil {
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
+	}
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
+	}
+	if resp.StatusCode >= 400 {
+		return nil, rejectUpstreamStatus(resp.StatusCode,
+			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
+	}
+	return respBytes, nil
+}
+
+// buildOpenAPIRequest builds the upstream request for one OpenAPI
+// dispatch: path + query params, JSON or multipart body, forwarded and
+// injected headers, Accept set to accept. It returns the full URL (for
+// error messages) and the *Upload readers the caller closes once the
+// request has been sent.
+func buildOpenAPIRequest(
+	ctx context.Context,
+	method, baseURL, pathTemplate string,
+	op *openapi3.Operation,
+	gqlArgs map[string]any,
+	forwardHeaders []string,
+	headerInjectors []headerInjector,
+	store UploadStore,
+	accept string,
+) (*http.Request, string, []*Upload, error) {
 	resolvedPath := pathTemplate
 	queryArgs := url.Values{}
 	for _, paramRef := range op.Parameters {
@@ -735,7 +791,7 @@ func dispatchOpenAPIRaw(
 		mpBody, mpType, ups, err := buildMultipartBody(ctx, op, gqlArgs, store)
 		if err != nil {
 			closeUploads(ups)
-			return nil, err
+			return nil, "", nil, err
 		}
 		body = mpBody
 		contentType = mpType
@@ -743,7 +799,7 @@ func dispatchOpenAPIRaw(
 	} else if bv, ok := gqlArgs["body"]; ok && bv != nil {
 		b, err := json.Marshal(bv)
 		if err != nil {
-			return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: marshal body: %s", err.Error()))
+			return nil, "", nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: marshal body: %s", err.Error()))
 		}
 		body = bytes.NewReader(b)
 		contentType = "application/json"
@@ -752,45 +808,24 @@ func dispatchOpenAPIRaw(
 	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
 		closeUploads(multipartCloseups)
-		return nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: build request: %s", err.Error()))
+		return nil, "", nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: build request: %s", err.Error()))
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 	forwardOpenAPIHeaders(ctx, req, forwardHeaders)
 	tracerFromContext(ctx).injectHTTP(ctx, req.Header)
 	injected, err := applyHeaderInjectors(ctx, headerInjectors)
 	if err != nil {
 		closeUploads(multipartCloseups)
-		return nil, err
+		return nil, "", nil, err
 	}
 	for k, v := range injected {
 		req.Header.Set(k, v)
 	}
 	releaseInjectorMap(injected)
-
-	client := httpClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	// Whatever the outcome, multipart Upload readers we opened for
-	// this dispatch are ours to close.
-	closeUploads(multipartCloseups)
-	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
-	}
-	defer resp.Body.Close()
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
-	}
-	if resp.StatusCode >= 400 {
-		return nil, rejectUpstreamStatus(resp.StatusCode,
-			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
-	}
-	return respBytes, nil
+	return req, full, multipartCloseups, nil
 }
 
 // isMultipartOp reports whether the OpenAPI op declares its request

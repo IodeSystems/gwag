@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,8 +83,38 @@ func newOpenAPIDispatcher(baseURL string, svc *ir.Service, op *ir.Operation) *op
 }
 
 func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	req, full, err := d.newRequest(ctx, args, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := outboundHTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gat: %s %s: %w", d.method, full, err)
+	}
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gat: %s %s: read body: %w", d.method, full, err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("gat: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(respBytes)))
+	}
+	if len(respBytes) == 0 {
+		return nil, nil
+	}
+	var out any
+	if err := json.Unmarshal(respBytes, &out); err != nil {
+		return nil, fmt.Errorf("gat: decode response: %w", err)
+	}
+	return out, nil
+}
+
+// newRequest builds the upstream request for one call: path and
+// query params, JSON body, the inbound Authorization header, Accept
+// set to accept. It also returns the full URL for error messages.
+func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any, accept string) (*http.Request, string, error) {
 	if d.operation == nil || d.pathTmpl == "" {
-		return nil, fmt.Errorf("gat: openapi dispatcher not configured")
+		return nil, "", fmt.Errorf("gat: openapi dispatcher not configured")
 	}
 
 	resolvedPath := d.pathTmpl
@@ -124,19 +155,19 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	if bv, ok := args["body"]; ok && bv != nil {
 		b, err := json.Marshal(bv)
 		if err != nil {
-			return nil, fmt.Errorf("gat: marshal body: %w", err)
+			return nil, full, fmt.Errorf("gat: marshal body: %w", err)
 		}
 		body = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, d.method, full, body)
 	if err != nil {
-		return nil, fmt.Errorf("gat: build request: %w", err)
+		return nil, full, fmt.Errorf("gat: build request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 
 	// Forward Authorization header from inbound request.
 	if inbound := HTTPRequestFromContext(ctx); inbound != nil {
@@ -144,25 +175,81 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 			req.Header.Set("Authorization", v)
 		}
 	}
+	return req, full, nil
+}
 
+// openAPIStreamDispatcher serves an OpenAPI operation whose success
+// response is a stream (OpenAPI 3.2 itemSchema on text/event-stream,
+// application/jsonl, application/x-ndjson or application/json-seq)
+// as a GraphQL subscription: one upstream request per subscriber,
+// items decoded as they arrive. The upstream body closes when the
+// subscriber leaves.
+type openAPIStreamDispatcher struct {
+	*openAPIDispatcher
+	stream *ir.OpenAPIStream
+}
+
+// upstreamStatusError is an upstream's HTTP error status. GetStatus
+// lets ErrorCode / HTTPStatus classify it and gives the GraphQL error
+// status/code extensions.
+type upstreamStatusError struct {
+	status int
+	msg    string
+}
+
+func (e *upstreamStatusError) Error() string  { return e.msg }
+func (e *upstreamStatusError) GetStatus() int { return e.status }
+
+func (d *openAPIStreamDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	req, full, err := d.newRequest(ctx, args, d.stream.MediaType)
+	if err != nil {
+		cancel()
+		return nil, withStatusExtensions(err)
+	}
 	resp, err := outboundHTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("gat: %s %s: %w", d.method, full, err)
-	}
-	defer resp.Body.Close()
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("gat: %s %s: read body: %w", d.method, full, err)
+		cancel()
+		return nil, withStatusExtensions(&upstreamStatusError{
+			status: http.StatusBadGateway,
+			msg:    fmt.Sprintf("gat: %s %s: %s", d.method, full, err.Error()),
+		})
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("gat: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(respBytes)))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		cancel()
+		return nil, withStatusExtensions(&upstreamStatusError{
+			status: resp.StatusCode,
+			msg:    fmt.Sprintf("gat: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(b))),
+		})
 	}
-	if len(respBytes) == 0 {
-		return nil, nil
-	}
-	var out any
-	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, fmt.Errorf("gat: decode response: %w", err)
-	}
+
+	// graphql-go only streams a bidirectional chan interface{}.
+	out := make(chan interface{}, 16)
+	go func() {
+		defer close(out)
+		defer cancel()
+		defer resp.Body.Close()
+		r := ir.NewOpenAPIStreamReader(d.stream, resp.Body)
+		for {
+			v, err := r.Next()
+			if err != nil {
+				if errors.Is(err, io.EOF) || ctx.Err() != nil {
+					return
+				}
+				select {
+				case out <- withStatusExtensions(fmt.Errorf("gat: %s %s: stream: %w", d.method, full, err)):
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case out <- v:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	return out, nil
 }
