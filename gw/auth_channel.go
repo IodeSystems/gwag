@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -96,6 +97,22 @@ func WithChannelAuth(pattern string, tier ChannelAuthTier) Option {
 	return func(cfg *config) {
 		cfg.channelAuth = append(cfg.channelAuth, channelAuthRule{Pattern: pattern, Tier: tier})
 	}
+}
+
+// validChannelAuthPattern refuses a pattern with an empty token or a
+// `>` before the last token. Such a pattern matches no channel, so the
+// rule's tier would silently fall back to the default.
+func validChannelAuthPattern(pattern string) error {
+	toks := strings.Split(pattern, ".")
+	for i, t := range toks {
+		switch {
+		case t == "":
+			return errors.New("empty token")
+		case t == ">" && i != len(toks)-1:
+			return errors.New("\">\" must be the last token")
+		}
+	}
+	return nil
 }
 
 // resolveChannelTier picks the tier governing `channel`.

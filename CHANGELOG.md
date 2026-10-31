@@ -22,7 +22,7 @@ changes on MINOR, drops on MAJOR.
 - OpenAPI ingest: a nullable `$ref` (`allOf: [$ref]` or a one-branch `oneOf` with `nullable: true`, or the 3.1 `oneOf: [$ref, {type: null}]`) now becomes a nullable field of the referenced type. It used to fall back to a scalar, so the GraphQL type of such fields changes.
 - **Subscription errors keep their extensions.** An error a subscription dispatcher returns before the stream starts (e.g. a proto stream over `MaxStreams`) now carries `extensions.code` on the GraphQL `error` frame (was message only).
 - **Standalone gwag gateways** now have the `ps/v1` slot: the schema includes `ps.pub` (Query) and `ps_sub` / `ps_stable_sub` (Subscription), and `ps/v1` appears in admin service listings, service stats, and the MCP schema tools, as it already did in cluster mode. `WithChannelBinding` without a cluster no longer panics in `New`.
-- **Channel patterns with a `>` that is not the last token** (e.g. in `WithChannelAuth` / `WithChannelBinding`) now match nothing, as in NATS and gat. gwag used to treat such a `>` as "match the rest".
+- **Channel patterns with a `>` that is not the last token** (e.g. in `WithChannelAuth` / `WithChannelBinding`) now match nothing, as in NATS and gat. gwag used to treat such a `>` as "match the rest". `New` now panics on such a `WithChannelAuth` pattern (or one with an empty token): the rule would match nothing, and its channels would fall back to the default HMAC tier, which can be weaker than the tier the rule declared.
 
 ### Fixed
 - `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.

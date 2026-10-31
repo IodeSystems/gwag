@@ -331,3 +331,20 @@ func TestChannelAuth_EndToEnd_WildcardSubBindsToPattern(t *testing.T) {
 		t.Errorf("Sub on wildcard with pattern-bound HMAC: %v", err)
 	}
 }
+
+// A pattern that matches no channel would drop its rule's tier to the
+// default without a sign; New refuses it.
+func TestWithChannelAuth_RefusesUnmatchablePattern(t *testing.T) {
+	for _, p := range []string{"secret.>.x", "a..b", ""} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%q: New did not panic", p)
+				}
+			}()
+			New(WithChannelAuth(p, ChannelAuthDelegate))
+		}()
+	}
+	g := New(WithChannelAuth("secret.>", ChannelAuthDelegate), WithChannelAuth("a.*.b", ChannelAuthOpen))
+	g.Close()
+}

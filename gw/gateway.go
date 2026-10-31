@@ -1347,6 +1347,11 @@ func New(opts ...Option) *Gateway {
 	// gwag.ps.v1.PubSub is installed on every gateway. With a cluster
 	// it rides NATS (local-only while NATS is down); without one it is
 	// single-node, in-process.
+	for _, r := range cfg.channelAuth {
+		if err := validChannelAuthPattern(r.Pattern); err != nil {
+			panic(fmt.Sprintf("gateway: WithChannelAuth(%q): %v", r.Pattern, err))
+		}
+	}
 	g.initPubSubBus()
 	if err := g.installPubSubSlot(); err != nil {
 		panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))
