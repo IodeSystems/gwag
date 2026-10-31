@@ -6,24 +6,41 @@ gateway-defined; service-declared `stream Resp` methods stay as honest
 per-subscriber gRPC streams.
 
 ```graphql
-type Mutation {
-  ps { pub(channel: String!, payload: String!, hmac: String, ts: Int): Boolean! }
+type Query {
+  ps: PsQueryNamespace!
+}
+type PsQueryNamespace {
+  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  # also under ps.v1 and ps.stable
 }
 type Subscription {
-  ps { sub(channel: String!, hmac: String, ts: Int): ps_Event! }
+  ps_sub(channel: String, hmac: String, ts: String): Gwag_Ps_V1_Event
+  ps_stable_sub(channel: String, hmac: String, ts: String): Gwag_Ps_V1_Event
 }
-type ps_Event {
-  channel: String!
-  payload: String!
-  payload_type: String!   # fully-qualified proto message name; blank if channel is unbound
-  ts: Int!
+type Gwag_Ps_V1_PubResponse {
+  _void: String           # empty message; select it to satisfy GraphQL
+}
+type Gwag_Ps_V1_Event {
+  channel: String
+  payload: String
+  payloadType: String     # fully-qualified proto message name; blank if channel is unbound
+  ts: String              # int64 unix seconds, as a string
 }
 ```
 
+`pub` is a Query field (the internal-proto mapping puts unary methods
+there), the arguments are nullable at the GraphQL level, and `ts` is
+a string because it is an int64. A missing `channel` is rejected by
+the handler.
+
+```graphql
+{ ps { pub(channel: "events.orders.42.update", payload: "{\"id\":42}", hmac: "...", ts: "1700000000") { _void } } }
+```
+
 The backing proto lives at `gw/proto/ps/v1/ps.proto`. The `ps` slot is
-installed in-process when `WithCluster(...)` is set — it dispatches
-through the internal-proto kind, not a network gRPC call, but the IR /
-SDL / admin-listing / control-plane surface is the same as every other
+installed in-process on every gateway — it dispatches through the
+internal-proto kind, not a network gRPC call, but the IR / SDL /
+admin-listing / control-plane surface is the same as every other
 proto service.
 
 Payload is `string` — JSON, base64, agreed-encoding-of-the-day; the
@@ -38,10 +55,8 @@ on `ps.sub`; publishes must use a literal subject.
 
 ```graphql
 subscription {
-  ps {
-    sub(channel: "events.orders.>", hmac: "...", ts: 1700000000) {
-      channel payload payload_type ts
-    }
+  ps_sub(channel: "events.orders.>", hmac: "...", ts: "1700000000") {
+    channel payload payloadType ts
   }
 }
 ```
@@ -50,6 +65,58 @@ The producer signs over the *literal pattern string the client
 requests* — a token for `events.orders.42.update` does not satisfy a
 sub on `events.orders.>`. Operators issuing tokens control the pattern
 surface.
+
+## Transport
+
+`ps.pub` and `ps.sub` run on a `gat.Bus` (see
+[`gat-pubsub.md`](./gat-pubsub.md#other-transports-usebus)). Auth
+tiers, channel bindings, and the per-subject subscription broker
+(one bus subscription per subject, decoded once, fanned out to every
+WebSocket consumer, 32-event buffer per consumer, newest dropped when
+full) sit above the bus and behave the same on every transport.
+
+| Deployment | Transport | Reach |
+|---|---|---|
+| No `WithCluster` | in-process bus | this gateway only |
+| `WithCluster`, NATS connected | NATS core: subject = channel, body = proto-encoded `Event` | every node on the cluster |
+| `WithCluster`, NATS connection down | in-process bus (degraded) | this gateway only |
+
+**Single node.** A gateway without a cluster serves `ps.pub` /
+`ps.sub` in-process. Earlier versions skipped the `ps` slot without a
+cluster and the fields were absent from the schema.
+
+**Degrade.** In cluster mode the gateway watches its NATS connection.
+When it goes down (disconnected, reconnecting, closed), or is not
+connected when the gateway starts, `ps.pub` delivers to this node's
+subscribers only. Events from other nodes do not arrive, and events
+published here do not reach them; nothing is replayed after
+reconnect. When the connection is back, `ps.pub` goes to NATS again.
+nats.go re-sends every open subscription on reconnect; a subscription
+opened while the connection was closed is bound to NATS before
+publishes switch back.
+
+Each event reaches a subscriber once across the switch: every
+subscription is open on both transports, and each publish goes to
+exactly one of them. A publish NATS accepted just before the
+disconnect was detected stays in nats.go's reconnect buffer and is
+delivered through NATS after reconnect, so it can arrive after events
+published locally in the meantime.
+
+Signals:
+
+- Log: a warning when the node degrades, a notice when it recovers,
+  through the embedded NATS server's logger.
+- Metric: `go_api_gateway_pubsub_bus_degraded` gauge (prefix follows
+  `WithMetricPrefix`), `1` while degraded, `0` otherwise.
+- Health: `HealthHandler` adds `"pubsub": "nats" | "local" |
+  "local_degraded"`, and `"degraded": true` while degraded. The status
+  code does not change; a degraded node keeps serving.
+
+Admin events (`admin_events_watchServices`) are published on NATS
+only. They need a cluster, and while NATS is down none arrive.
+
+The wire format in cluster mode is unchanged, so nodes on this
+version and older versions share channels.
 
 ## Auth tiers
 

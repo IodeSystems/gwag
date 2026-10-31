@@ -13,13 +13,21 @@ changes on MINOR, drops on MAJOR.
 - **OpenAPI 3.1 export** (experimental). `WithOpenAPI31()` (gwag), `OpenAPI31(true)` (gat) or `?openapi=3.1` on the OpenAPI schema route writes `"openapi": "3.1.0"` with JSON Schema 2020-12 forms: `nullable` becomes a `"null"` type entry, boolean exclusive bounds become numbers, a schema `example` becomes `examples`. Default stays 3.0.0 until v3. New `ir.RenderOpenAPIWith`, `ir.RenderOpenAPIOptions`, `ir.ParseOpenAPIVersion`. See docs/gat.md "OpenAPI 3.1".
 - **OpenAPI 3.2 `query` and `additionalOperations`.** A QUERY operation becomes a GraphQL Query field with a `body` arg; a custom method becomes a Mutation. gwag, gat and REST ingress send the declared method and body upstream. HEAD / OPTIONS / TRACE / CONNECT operations are still skipped, now with a warning at registration (new `ir.UnsupportedOpenAPIOperations`). Cross-kind OpenAPI 3.0 export puts these methods under the `x-additional-operations` Path Item extension.
 - **OpenAPI 3.2 streamed responses as GraphQL subscriptions.** An upstream OpenAPI operation whose success response has `itemSchema` on `text/event-stream`, `application/jsonl`, `application/x-ndjson` or `application/json-seq` ingests as a subscription (one upstream request per subscriber), in gwag and in gat BYO-IR registrations. gwag also relays it on `IngressHandler` in the declared media type and serves it as a server-streaming gRPC method; streams count against `MaxStreams` / `MaxStreamsTotal`. An operation that also offers `application/json` stays unary. New `ir.OpenAPIStreamOf`, `ir.OpenAPIStream`, `ir.NewOpenAPIStreamReader` (experimental). See docs/gat.md "Streamed responses from an upstream spec".
+- **`gat.Bus`** (experimental): one pub/sub transport interface under gat's `PubSub` and gwag's `ps.pub` / `ps.sub`. Implementations `gat.NewLocalBus`, `gat.NewPeerMeshBus` (what `EnablePeerMesh` installs), and `Gateway.UseBus` to plug one in. `gat.MatchChannel` is the shared NATS-style matcher; `gw/gat/bustest` is a conformance suite for new buses.
+- **`gw/gat/gatnats`** (experimental): `gatnats.New(nc)` is a `gat.Bus` over a NATS connection, in its own package so `gat` does not import nats.go.
+- **Single-node pub/sub.** A gwag gateway without `WithCluster` installs the `ps` slot and serves `ps.pub` / `ps.sub` in-process.
+- **Pub/sub degrade mode.** In cluster mode, when the NATS connection is down, `ps.pub` / `ps.sub` deliver on this node only and switch back to NATS on reconnect. New gauge `go_api_gateway_pubsub_bus_degraded`; `HealthHandler` body gains `pubsub` (`nats` / `local` / `local_degraded`) and `degraded: true` while degraded (status code unchanged). See docs/pubsub.md "Transport".
 
 ### Changed
 - OpenAPI ingest: a nullable `$ref` (`allOf: [$ref]` or a one-branch `oneOf` with `nullable: true`, or the 3.1 `oneOf: [$ref, {type: null}]`) now becomes a nullable field of the referenced type. It used to fall back to a scalar, so the GraphQL type of such fields changes.
 - **Subscription errors keep their extensions.** An error a subscription dispatcher returns before the stream starts (e.g. a proto stream over `MaxStreams`) now carries `extensions.code` on the GraphQL `error` frame (was message only).
+- **Standalone gwag gateways** now have the `ps/v1` slot: the schema includes `ps.pub` (Query) and `ps_sub` / `ps_stable_sub` (Subscription), and `ps/v1` appears in admin service listings, service stats, and the MCP schema tools, as it already did in cluster mode. `WithChannelBinding` without a cluster no longer panics in `New`.
+- **Channel patterns with a `>` that is not the last token** (e.g. in `WithChannelAuth` / `WithChannelBinding`) now match nothing, as in NATS and gat. gwag used to treat such a `>` as "match the rest".
 
 ### Fixed
 - `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.
+- **docs/pubsub.md** showed `ps.pub` as a `Mutation` returning `Boolean!` and `ps.sub` nested under `Subscription.ps`. The real fields are `Query.ps.pub(...)` returning `Gwag_Ps_V1_PubResponse` and `Subscription.ps_sub(...)`, with `ts` as a string and `payloadType` in camelCase.
+- **docs/gat-pubsub.md** described gwag pub/sub as durable; it is NATS core, without persistence or replay.
 
 ## v2.6.0 — 2026-10-30
 

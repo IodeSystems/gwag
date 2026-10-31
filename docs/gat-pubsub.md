@@ -2,10 +2,11 @@
 
 `gat` ships a publish/subscribe primitive with optional best-effort
 cross-node fanout. It is separate from GraphQL subscriptions (which
-gat does not have) and from gwag's NATS-backed pub/sub (durable,
-broker-backed). gat pubsub is in-memory, broker-free, and best-effort
-— the right fit for live-update use cases across a small set of gat
-instances behind a load balancer.
+gat does not have) and from gwag's `ps.pub` / `ps.sub` fields. By
+default gat pubsub is in-memory, broker-free, and best-effort — the
+right fit for live-update use cases across a small set of gat
+instances behind a load balancer. `UseBus` puts NATS or another
+transport under it (see [Other transports](#other-transports-usebus)).
 
 ## Single node
 
@@ -140,6 +141,58 @@ bad or missing signature with `401`. An empty `Auth` disables
 verification — only acceptable on a trusted network, or when an edge
 proxy terminates mTLS in front of the mesh.
 
+## Other transports (UseBus)
+
+`PubSub`, the WebSocket subscribe endpoint, and the peer mesh all run
+on a `gat.Bus`:
+
+```go
+type Bus interface {
+    Publish(channel string, payload []byte) error
+    Subscribe(pattern string, fn func(channel string, payload []byte)) (unsubscribe func(), err error)
+}
+```
+
+`Gateway.UseBus(b)` replaces the default bus. The subscribe-token
+check and the per-subscriber drop-oldest buffer stay in gat and apply
+to every bus. Call it once, before serving traffic; subscriptions
+opened earlier stay on the previous bus. The gateway does not close a
+bus passed to `UseBus`.
+
+| Bus | Package | Reach |
+|---|---|---|
+| `gat.NewLocalBus()` | `gat` (default) | this process |
+| `gat.NewPeerMeshBus(m)` | `gat` (what `EnablePeerMesh` installs) | this process + HTTP peers, one hop |
+| `gatnats.New(nc)` | `gw/gat/gatnats` | every client of the NATS server or cluster |
+
+NATS lives in its own package so `gat` does not import nats.go:
+
+```go
+import "github.com/iodesystems/gwag/v2/gw/gat/gatnats"
+
+nc, _ := nats.Connect(natsURL)
+g.UseBus(gatnats.New(nc))
+```
+
+On gatnats the channel is the NATS subject and the payload is the
+message body. gwag's `ps.pub` / `ps.sub` use the same subject, but
+the body is a proto-encoded `gwag.ps.v1.Event`, so a gat subscriber
+on a gwag channel receives that encoding. Delivery is NATS core: at
+most once, no persistence.
+
+`gat.MatchChannel(pattern, channel)` is the matcher every bus and
+gwag's channel auth use. A `>` that is not the last token matches
+nothing, as in NATS.
+
+A new Bus implementation can run the shared conformance suite in
+`gw/gat/bustest`:
+
+```go
+bustest.Run(t, func(t *testing.T) bustest.Harness {
+    return bustest.Harness{Bus: newMyBus(t), Sync: flushFn}
+})
+```
+
 ## Lifecycle
 
 `Gateway.Close()` stops the peer-fanout goroutines and cancels every
@@ -147,12 +200,12 @@ active subscription. A gateway is single-use after `Close`.
 
 ## When to graduate to gwag
 
-gat pubsub is deliberately lossy and broker-free. Move to full gwag
-(NATS + JetStream) when you need any of: durable subscriptions,
-replay, global ordering, exactly-once semantics, or a mesh larger
-than a handful of nodes. The `Publish` / `Subscribe` call shape is
-close enough that the migration is mostly swapping the gateway
-construction.
+gat pubsub is deliberately lossy. For a mesh larger than a handful of
+nodes, use `gatnats` before reaching for gwag. gwag's `ps.pub` /
+`ps.sub` are also NATS core (no persistence, no replay); what gwag
+adds is the GraphQL surface, per-channel auth tiers, and channel →
+payload-type bindings. Durable subscriptions, replay, and
+exactly-once delivery are not provided by either.
 
 ## Limitations
 
@@ -160,7 +213,6 @@ construction.
   `EnablePeerMesh`. A dynamic `PeerProvider` (DNS-resolved peer sets
   for k8s headless services) is a planned followup.
 - **No persistence, no replay, no durable subscriptions.** An event
-  published while a subscriber is disconnected is gone. Those
-  guarantees graduate to gwag.
+  published while a subscriber is disconnected is gone, on every bus.
 - **Best-effort delivery throughout.** Subscriber buffer overflow and
   peer queue overflow both drop events silently.

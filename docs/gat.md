@@ -173,6 +173,22 @@ With one event type the field and the stream message are that type.
 - `gat.PubSub()` can feed a handler; it is best-effort with no history
   (see [`gat-pubsub.md`](./gat-pubsub.md)).
 
+### Pub/sub transport (`UseBus`, `gatnats`)
+
+`PubSub()` runs on a `gat.Bus`. The default is in-process;
+`EnablePeerMesh` swaps in an HTTP peer fanout; `g.UseBus(b)` takes any
+other `Bus`. `gw/gat/gatnats` is the NATS one, in a separate package
+so `gat` does not depend on nats.go:
+
+```go
+nc, _ := nats.Connect(natsURL)
+g.UseBus(gatnats.New(nc))
+```
+
+Call `UseBus` before serving traffic. Subscribe-token checks and the
+per-subscriber buffer stay in gat on every bus. Details:
+[`gat-pubsub.md`](./gat-pubsub.md#other-transports-usebus).
+
 `gat.Subscribe` (channel source, GraphQL + gRPC only, not on REST) is
 deprecated in favour of `RegisterSSE`.
 
@@ -901,9 +917,11 @@ test against a failure mode that otherwise ships silently.
   but not the recommended path.
 - Streams in gat are adopter-sourced (`gat.RegisterSSE`, above):
   single node, no broker. gat also has a separate
-  publish/subscribe primitive with best-effort cross-node fanout; see
-  [`gat-pubsub.md`](./gat-pubsub.md). The NATS-backed, durable pub/sub
-  stack and proto server-streaming subscriptions remain gwag-only.
+  publish/subscribe primitive, in-process by default, with HTTP peer
+  fanout or NATS (`gatnats`) as options; see
+  [`gat-pubsub.md`](./gat-pubsub.md). gwag's `ps.pub` / `ps.sub`
+  GraphQL fields (auth tiers, channel bindings) and proto
+  server-streaming subscriptions remain gwag-only.
 - gat doesn't manage auth. `net/http` middleware wrapped around the
   router applies to gat's GraphQL/gRPC routes, since they ride on the
   same handler chain. huma middlewares (`api.UseMiddleware` and
