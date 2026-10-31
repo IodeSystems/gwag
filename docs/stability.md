@@ -131,11 +131,10 @@ diffs SDL against a golden file, expect drift on minor bumps.
 projection of an IR service. Identifier casing, summary text, and
 auxiliary `x-*` extensions may evolve as the upstream OpenAPI tooling
 matures. The `paths`/`components/schemas` shape (the parts an
-actual client cares about) stays consistent. The schema routes write a
-synthesized spec as 3.1.0 (3.0.0 through v2.6.0), with nullable,
-exclusive bounds and examples in their 3.1 forms. `WithOpenAPI30` /
-gat `OpenAPI31(false)` / `?openapi=3.0` select 3.0.0. `RenderOpenAPI`
-itself returns 3.0.0.
+actual client cares about) stays consistent. A synthesized spec is
+3.0.0 by default; `WithOpenAPI31` / gat `OpenAPI31` / `?openapi=3.1`
+select 3.1.0, which writes nullable, exclusive bounds and examples in
+their 3.1 forms. The default becomes 3.1.0 in v3.
 
 **Proto FDS layout.** `RenderProtoFiles` projects each IR service
 into a `FileDescriptorSet`. Service / message names are stable;

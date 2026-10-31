@@ -264,8 +264,8 @@ func transformFileDescriptor(
 //   - service=ns[:ver][,...]  — comma-separated namespaces, each
 //     optionally pinned to a version. Empty
 //     selector → all.
-//   - openapi=3.0|3.1 — OpenAPI version of each spec. Empty → 3.0
-//     under WithOpenAPI30, else 3.1.
+//   - openapi=3.0|3.1 — OpenAPI version of each spec. Empty → 3.1
+//     under WithOpenAPI31, else 3.0.
 //
 // Response: application/json, an object
 // `{"<ns>": {"<vN>": <spec>, ...}, ...}`. Single-version namespaces
@@ -283,7 +283,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), !g.cfg.openAPI30)
+		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.cfg.openAPI31)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

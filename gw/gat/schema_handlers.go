@@ -75,7 +75,7 @@ func schemaProtoHandler(g *Gateway) http.Handler {
 // service. When the source was OpenAPI (e.g. huma's spec) the round
 // trip is near-identity; when the source was proto/GraphQL the
 // projection produces a synthesized spec. `?openapi=3.0|3.1` picks the
-// OpenAPI version; the default is 3.1 unless OpenAPI31(false).
+// OpenAPI version; the default is 3.0 unless OpenAPI31 is set.
 func schemaOpenAPIHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

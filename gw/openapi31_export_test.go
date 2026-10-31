@@ -15,10 +15,10 @@ func TestSchemaOpenAPIHandler_Version(t *testing.T) {
 		want  string
 		code  int
 	}{
-		{"default", nil, "", `"openapi": "3.1.0"`, http.StatusOK},
-		{"query30", nil, "?openapi=3.0", `"openapi": "3.0.0"`, http.StatusOK},
-		{"option", []Option{WithOpenAPI30()}, "", `"openapi": "3.0.0"`, http.StatusOK},
-		{"option_query31", []Option{WithOpenAPI30()}, "?openapi=3.1", `"openapi": "3.1.0"`, http.StatusOK},
+		{"default", nil, "", `"openapi": "3.0.0"`, http.StatusOK},
+		{"query31", nil, "?openapi=3.1", `"openapi": "3.1.0"`, http.StatusOK},
+		{"option", []Option{WithOpenAPI31()}, "", `"openapi": "3.1.0"`, http.StatusOK},
+		{"option_query30", []Option{WithOpenAPI31()}, "?openapi=3.0", `"openapi": "3.0.0"`, http.StatusOK},
 		{"bad", nil, "?openapi=2.0", "", http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
