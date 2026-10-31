@@ -12,9 +12,11 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - **OpenAPI 3.1 export** (experimental). `WithOpenAPI31()` (gwag), `OpenAPI31(true)` (gat) or `?openapi=3.1` on the OpenAPI schema route writes `"openapi": "3.1.0"` with JSON Schema 2020-12 forms: `nullable` becomes a `"null"` type entry, boolean exclusive bounds become numbers, a schema `example` becomes `examples`. Default stays 3.0.0 until v3. New `ir.RenderOpenAPIWith`, `ir.RenderOpenAPIOptions`, `ir.ParseOpenAPIVersion`. See docs/gat.md "OpenAPI 3.1".
 - **OpenAPI 3.2 `query` and `additionalOperations`.** A QUERY operation becomes a GraphQL Query field with a `body` arg; a custom method becomes a Mutation. gwag, gat and REST ingress send the declared method and body upstream. HEAD / OPTIONS / TRACE / CONNECT operations are still skipped, now with a warning at registration (new `ir.UnsupportedOpenAPIOperations`). Cross-kind OpenAPI 3.0 export puts these methods under the `x-additional-operations` Path Item extension.
+- **OpenAPI 3.2 streamed responses as GraphQL subscriptions.** An upstream OpenAPI operation whose success response has `itemSchema` on `text/event-stream`, `application/jsonl`, `application/x-ndjson` or `application/json-seq` ingests as a subscription (one upstream request per subscriber), in gwag and in gat BYO-IR registrations. gwag also relays it on `IngressHandler` in the declared media type and serves it as a server-streaming gRPC method; streams count against `MaxStreams` / `MaxStreamsTotal`. An operation that also offers `application/json` stays unary. New `ir.OpenAPIStreamOf`, `ir.OpenAPIStream`, `ir.NewOpenAPIStreamReader` (experimental). See docs/gat.md "Streamed responses from an upstream spec".
 
 ### Changed
 - OpenAPI ingest: a nullable `$ref` (`allOf: [$ref]` or a one-branch `oneOf` with `nullable: true`, or the 3.1 `oneOf: [$ref, {type: null}]`) now becomes a nullable field of the referenced type. It used to fall back to a scalar, so the GraphQL type of such fields changes.
+- **Subscription errors keep their extensions.** An error a subscription dispatcher returns before the stream starts (e.g. a proto stream over `MaxStreams`) now carries `extensions.code` on the GraphQL `error` frame (was message only).
 
 ### Fixed
 - `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.

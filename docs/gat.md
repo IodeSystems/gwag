@@ -176,6 +176,95 @@ With one event type the field and the stream message are that type.
 `gat.Subscribe` (channel source, GraphQL + gRPC only, not on REST) is
 deprecated in favour of `RegisterSSE`.
 
+### Streamed responses from an upstream spec (OpenAPI 3.2 `itemSchema`)
+
+An upstream OpenAPI operation whose success response (200, 201 or
+`default`) declares `itemSchema` on a sequential media type becomes a
+GraphQL subscription. This applies to gat's BYO-IR registrations
+(`ServiceRegistration{Service: ir.IngestOpenAPI(doc), BaseURL: ...}`)
+and to gwag's `AddOpenAPI`. Supported media types:
+
+| Media type | Framing | One event is |
+| ---------- | ------- | ------------ |
+| `text/event-stream` | SSE | see below |
+| `application/jsonl`, `application/x-ndjson` | one JSON value per line | the line, typed by `itemSchema` |
+| `application/json-seq` | RFC 7464, RS before each value | the record, typed by `itemSchema` |
+
+```yaml
+openapi: 3.2.0
+paths:
+  /ticks:
+    get:
+      operationId: ticks
+      parameters: [{name: n, in: query, schema: {type: integer}}]
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              itemSchema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: string
+                    contentMediaType: application/json
+                    contentSchema: {$ref: "#/components/schemas/Tick"}
+```
+
+```graphql
+type Subscription {
+  demo_ticks(n: Int): demo_Tick!  # namespace "demo"
+}
+```
+
+For `text/event-stream`, an `itemSchema` describes the SSE event:
+
+- `data` with `contentSchema` (and `contentMediaType` JSON or unset):
+  the event is the `contentSchema` value, decoded from `data`.
+- `data` without `contentSchema`: the event is the envelope
+  `{data, event, id, retry}`, with `data` as text (decoded as JSON when
+  the `data` property is typed as something other than a string).
+- No `data` property: the `itemSchema` is read as the schema of the
+  JSON in `data`.
+
+SSE parsing follows the `text/event-stream` rules: `data` lines are
+joined with newlines, comment lines (`: heartbeat`) are skipped, CR /
+LF / CRLF line endings are accepted, and an event left unterminated at
+end of stream is dropped.
+
+Behaviour:
+
+- Each subscription opens its own upstream request with the same
+  parameters, body and forwarded headers as a unary call, and
+  `Accept` set to the stream's media type. There is no fan-out or
+  pub/sub between subscribers.
+- An upstream error status before the stream starts is an `error`
+  frame carrying the status (gat: `extensions.status` / `code`; gwag:
+  `extensions.code`). An item that does not decode, or a read failure,
+  ends the subscription with an error. Upstream EOF sends `complete`.
+- The client's `complete`, or a disconnect, closes the upstream body.
+- If a response also declares `application/json` with a schema, the
+  operation stays a unary Query/Mutation and the stream alternative is
+  not exposed.
+- A `text/event-stream` response without `itemSchema` (OpenAPI 3.0 /
+  3.1 style) is not a stream: it stays a unary operation, as before.
+
+gwag only:
+
+- The source's `MaxStreams` and the gateway's `MaxStreamsTotal` cap
+  these streams, as they cap proto server streams; over a cap the
+  subscription is refused with `RESOURCE_EXHAUSTED`. The unary
+  `MaxInflight`, quota and runtime middleware are not applied. The
+  upstream timeout bounds the wait for response headers, not the
+  stream.
+- `IngressHandler` serves the operation at its own path and relays
+  the items in the declared media type (an SSE stream in data mode is
+  written back as `data: <json>` events).
+- The gRPC ingress serves it as a server-streaming method.
+
+gat does not serve BYO-IR OpenAPI operations on `RegisterGRPC` (unary
+or streamed); a host that wants them on gRPC adds `GRPCRoute`s.
+
 ## Request attributes (share a session across fused operations)
 
 One GraphQL request can fuse several operations, and huma middleware
