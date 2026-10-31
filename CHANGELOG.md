@@ -9,6 +9,10 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.9.0 — 2026-10-31
+
+Relay deploys and sub status: `Relay.Shutdown` closes sockets cleanly, and the generated runtime reports each subscription's real state and retries failures.
+
 ### Added
 - **`Relay.Shutdown(ctx)`** sends close 1001 ("server restarting") to every socket, closes them, and answers new ones with 503, so a deploy is not a 1006 for every client. `http.Server.Shutdown` does not touch hijacked connections: call it from `srv.RegisterOnShutdown`.
 - **Relay generated runtime: per-sub status.** `useSub` returns `{status, error}`, and `subscribeRaw` takes an `onState` callback: `pending`, `subscribed` (the relay acked), or `failed` (the mint threw or the relay refused the cap). `setMintRetry` tunes the retry.
