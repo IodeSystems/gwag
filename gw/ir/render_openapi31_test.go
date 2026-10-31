@@ -132,7 +132,7 @@ func TestRenderOpenAPIWith_31(t *testing.T) {
 	before := mustJSON(t, doc)
 	svc := IngestOpenAPI(doc)
 
-	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{Version: "3.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestRenderOpenAPIWith_31(t *testing.T) {
 
 func TestRenderOpenAPIWith_31NullableRef(t *testing.T) {
 	svc := IngestOpenAPI(loadSpec(t, []byte(openapi30RefSpec)))
-	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{Version: "3.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRenderOpenAPIWith_31NullableRef(t *testing.T) {
 // 3.1 form (oneOf with a null branch) ingests back the same.
 func TestIngestOpenAPI_NullableRef(t *testing.T) {
 	svc := IngestOpenAPI(loadSpec(t, []byte(openapi30RefSpec)))
-	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{Version: "3.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestIngestOpenAPI_NullableRef(t *testing.T) {
 
 func TestRenderOpenAPIWith_31Proto(t *testing.T) {
 	svc := greeterService()
-	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{Version: "3.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestRenderOpenAPIWith_31RoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			doc31, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+			doc31, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{Version: "3.1"})
 			if err != nil {
 				t.Fatal(err)
 			}

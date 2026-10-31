@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -553,6 +554,226 @@ func ingestOpenAPIPath(svc *Service, path string, item *openapi3.PathItem) {
 	for _, method := range additionalOpenAPIMethods(item) {
 		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, method, path, item.AdditionalOperations[method]))
 	}
+	// The same, spelled as the x-additional-operations extension (a
+	// 3.0 document).
+	ext := extAdditionalOperations(svc, item)
+	for _, method := range sortedOpMethods(ext) {
+		svc.Operations = append(svc.Operations, ingestOpenAPIOp(svc, method, path, ext[method]))
+	}
+}
+
+// extAdditionalOperations decodes item's x-additional-operations
+// extension, where a 3.0 document keeps QUERY and custom-method
+// operations (RenderOpenAPI and the 3.0 down-conversion write it).
+// $refs into the document's components are resolved, as the loader
+// does for native fields. A method the Path Item has natively, or one
+// a 3.0 Path Item has a field for, is left out.
+func extAdditionalOperations(svc *Service, item *openapi3.PathItem) map[string]*openapi3.Operation {
+	v, ok := item.Extensions[xAdditionalOperations]
+	if !ok {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	ops := map[string]*openapi3.Operation{}
+	if err := json.Unmarshal(raw, &ops); err != nil {
+		return nil
+	}
+	doc, _ := svc.Origin.(*openapi3.T)
+	for m, op := range ops {
+		switch {
+		case op == nil, item.GetOperation(m) != nil, item.AdditionalOperations[m] != nil:
+			delete(ops, m)
+		case m != openapi3.MethodQuery && fixedPathItemMethod(m):
+			delete(ops, m)
+		default:
+			resolveOperationRefs(doc, op)
+		}
+	}
+	return ops
+}
+
+func fixedPathItemMethod(m string) bool {
+	for _, f := range openapi3.PathItemMethods() {
+		if f == m {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedOpMethods(ops map[string]*openapi3.Operation) []string {
+	out := make([]string, 0, len(ops))
+	for m := range ops {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// resolveOperationRefs points the $refs of a decoded operation (its
+// parameters, request body, responses and their schemas) at doc's
+// components.
+func resolveOperationRefs(doc *openapi3.T, op *openapi3.Operation) {
+	if doc == nil || doc.Components == nil {
+		return
+	}
+	c := doc.Components
+	content := func(ct openapi3.Content) {
+		for _, mt := range ct {
+			if mt != nil {
+				resolveSchemaRefs(doc, mt.Schema)
+				resolveSchemaRefs(doc, mt.ItemSchema)
+			}
+		}
+	}
+	for _, p := range op.Parameters {
+		if p == nil {
+			continue
+		}
+		if p.Value == nil {
+			if t := c.Parameters[refLeaf(p.Ref, "#/components/parameters/")]; t != nil {
+				p.Value = t.Value
+			}
+			continue
+		}
+		resolveSchemaRefs(doc, p.Value.Schema)
+		content(p.Value.Content)
+	}
+	if rb := op.RequestBody; rb != nil {
+		if rb.Value == nil {
+			if t := c.RequestBodies[refLeaf(rb.Ref, "#/components/requestBodies/")]; t != nil {
+				rb.Value = t.Value
+			}
+		} else {
+			content(rb.Value.Content)
+		}
+	}
+	if op.Responses != nil {
+		for _, r := range op.Responses.Map() {
+			if r == nil {
+				continue
+			}
+			if r.Value == nil {
+				if t := c.Responses[refLeaf(r.Ref, "#/components/responses/")]; t != nil {
+					r.Value = t.Value
+				}
+				continue
+			}
+			content(r.Value.Content)
+		}
+	}
+}
+
+// resolveSchemaRefs sets the Value of every component $ref in a
+// decoded schema tree. Component schemas are already resolved and are
+// not walked.
+func resolveSchemaRefs(doc *openapi3.T, ref *openapi3.SchemaRef) {
+	if ref == nil {
+		return
+	}
+	if ref.Ref != "" {
+		if ref.Value == nil && doc != nil && doc.Components != nil {
+			if t := doc.Components.Schemas[refLeaf(ref.Ref, "#/components/schemas/")]; t != nil {
+				ref.Value = t.Value
+			}
+		}
+		return
+	}
+	s := ref.Value
+	if s == nil {
+		return
+	}
+	for _, list := range []openapi3.SchemaRefs{s.OneOf, s.AnyOf, s.AllOf, s.PrefixItems} {
+		for _, sub := range list {
+			resolveSchemaRefs(doc, sub)
+		}
+	}
+	for _, m := range []openapi3.Schemas{s.Properties, s.PatternProperties, s.DependentSchemas} {
+		for _, sub := range m {
+			resolveSchemaRefs(doc, sub)
+		}
+	}
+	for _, sub := range []*openapi3.SchemaRef{s.Not, s.Items, s.Contains, s.PropertyNames,
+		s.AdditionalProperties.Schema, s.If, s.Then, s.Else, s.ContentSchema} {
+		resolveSchemaRefs(doc, sub)
+	}
+}
+
+// refLeaf returns the component name of a local $ref under prefix, or
+// "" for any other ref.
+func refLeaf(ref, prefix string) string {
+	name, ok := strings.CutPrefix(ref, prefix)
+	if !ok || strings.Contains(name, "/") {
+		return ""
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(name, "~1", "/"), "~0", "~")
+}
+
+// withExtItemSchema returns op with each response media type's
+// x-item-schema extension (where a 3.0 or 3.1 document keeps a 3.2
+// itemSchema) set as its ItemSchema, so OpenAPIStreamOf sees the
+// stream. op itself is not modified: the result is a copy when there
+// is anything to set.
+func withExtItemSchema(doc *openapi3.T, op *openapi3.Operation) *openapi3.Operation {
+	if op == nil || op.Responses == nil {
+		return op
+	}
+	var out *openapi3.Operation
+	for code, rr := range op.Responses.Map() {
+		if rr == nil || rr.Value == nil {
+			continue
+		}
+		var content openapi3.Content
+		for name, mt := range rr.Value.Content {
+			if mt == nil || mt.ItemSchema != nil {
+				continue
+			}
+			v, ok := mt.Extensions[xItemSchema]
+			if !ok {
+				continue
+			}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				continue
+			}
+			item := &openapi3.SchemaRef{}
+			if err := json.Unmarshal(raw, item); err != nil {
+				continue
+			}
+			resolveSchemaRefs(doc, item)
+			if content == nil {
+				content = make(openapi3.Content, len(rr.Value.Content))
+				for k, v := range rr.Value.Content {
+					content[k] = v
+				}
+			}
+			cp := *mt
+			cp.ItemSchema = item
+			content[name] = &cp
+		}
+		if content == nil {
+			continue
+		}
+		if out == nil {
+			cp := *op
+			cp.Responses = openapi3.NewResponses()
+			cp.Responses.Extensions = op.Responses.Extensions
+			for k, v := range op.Responses.Map() {
+				cp.Responses.Set(k, v)
+			}
+			out = &cp
+		}
+		resp := *rr.Value
+		resp.Content = content
+		out.Responses.Set(code, &openapi3.ResponseRef{Value: &resp})
+	}
+	if out == nil {
+		return op
+	}
+	return out
 }
 
 // xAdditionalOperations is the Path Item extension RenderOpenAPI uses
@@ -617,6 +838,8 @@ func UnsupportedOpenAPIOperations(doc *openapi3.T) []string {
 }
 
 func ingestOpenAPIOp(svc *Service, method, path string, op *openapi3.Operation) *Operation {
+	doc, _ := svc.Origin.(*openapi3.T)
+	op = withExtItemSchema(doc, op)
 	out := &Operation{
 		Name:        op.OperationID,
 		Description: op.Description,

@@ -283,7 +283,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.cfg.openAPI31)
+		renderOpts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), openAPIDefault(g.cfg.openAPI31))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -347,4 +347,11 @@ func stripHiddenFields(
 	for _, nested := range m.NestedType {
 		stripHiddenFields(nested, hides)
 	}
+}
+
+func openAPIDefault(on31 bool) string {
+	if on31 {
+		return "3.1"
+	}
+	return ""
 }

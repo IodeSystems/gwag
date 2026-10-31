@@ -3,12 +3,13 @@ package ir
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
 // OpenAPI31Version is the "openapi" field RenderOpenAPIWith writes
-// when RenderOpenAPIOptions.OpenAPI31 is set. 3.1.0, not 3.1.1: it is
+// for RenderOpenAPIOptions.Version "3.1". 3.1.0, not 3.1.1: it is
 // what huma emits, and some tools match the version string exactly.
 // The two patch releases describe the same schema dialect.
 const OpenAPI31Version = "3.1.0"
@@ -17,55 +18,100 @@ const OpenAPI31Version = "3.1.0"
 //
 // Stability: experimental
 type RenderOpenAPIOptions struct {
-	// OpenAPI31 emits an OpenAPI 3.1 document (OpenAPI31Version)
-	// instead of 3.0.0. Schemas use JSON Schema 2020-12 forms:
-	// `nullable: true` becomes a "null" entry in the type list (or a
-	// {"type": "null"} branch when the schema has no type), boolean
-	// exclusiveMinimum / exclusiveMaximum become numeric bounds, and a
-	// schema `example` becomes `examples: [...]`. An OpenAPI-origin
-	// spec is converted the same way. Off, the output is RenderOpenAPI's:
-	// an OpenAPI-origin spec that is already 3.1 stays 3.1. v3 makes
-	// this the default.
-	OpenAPI31 bool
+	// Version is the OpenAPI version of the result: "3.0", "3.1", or
+	// "" for the default.
+	//
+	// "" gives RenderOpenAPI's document: a synthesized spec is 3.0.0,
+	// an OpenAPI-origin spec is written as its source declared it.
+	//
+	// "3.0" converts a 3.1 or 3.2 source down to 3.0 (OpenAPI30Version);
+	// a 3.0 source or a synthesized spec is unchanged. What 3.0 cannot
+	// express is kept in x- extensions; docs/gat.md "OpenAPI version"
+	// lists each case.
+	//
+	// "3.1" converts to OpenAPI31Version: a 3.0 document up (nullable
+	// becomes a "null" type entry, boolean exclusive bounds become
+	// numbers, a schema example becomes examples), a 3.2 document down.
+	//
+	// v3 makes "3.1" the default.
+	Version string
 }
 
-// ParseOpenAPIVersion reads the `openapi` query parameter of the schema
-// routes: "3.0" or "3.1" (a full "3.0.0" / "3.1.0" also works). Empty
-// gives the server default, def31.
+// ParseOpenAPIVersion reads an OpenAPI version as the schema routes
+// take it in `?openapi=`: "3.0" or "3.1", or a full 3.0.x / 3.1.x
+// version. Empty gives def, the server default, which must itself be
+// "", "3.0" or "3.1".
 //
 // Stability: experimental
-func ParseOpenAPIVersion(v string, def31 bool) (RenderOpenAPIOptions, error) {
-	switch v {
-	case "":
-		return RenderOpenAPIOptions{OpenAPI31: def31}, nil
-	case "3.0", "3.0.0":
-		return RenderOpenAPIOptions{}, nil
-	case "3.1", OpenAPI31Version:
-		return RenderOpenAPIOptions{OpenAPI31: true}, nil
+func ParseOpenAPIVersion(v, def string) (RenderOpenAPIOptions, error) {
+	if v == "" {
+		v = def
+		if v == "" {
+			return RenderOpenAPIOptions{}, nil
+		}
+	}
+	switch mm := openAPIMajorMinor(v); mm {
+	case "3.0", "3.1":
+		return RenderOpenAPIOptions{Version: mm}, nil
 	}
 	return RenderOpenAPIOptions{}, fmt.Errorf("openapi=%q: want 3.0 or 3.1", v)
 }
 
+// openAPIMajorMinor returns "3.y" for "3.y" or "3.y.z" (digits only),
+// else "".
+func openAPIMajorMinor(v string) string {
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return ""
+	}
+	for _, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return ""
+		}
+	}
+	return parts[0] + "." + parts[1]
+}
+
 // RenderOpenAPIWith is RenderOpenAPI with options. The zero value
-// gives the same document as RenderOpenAPI. With OpenAPI31 the result
-// is a converted copy; the service's Origin spec is not modified.
+// gives the same document as RenderOpenAPI. A converted result is a
+// copy; the service's Origin spec is not modified.
 //
 // Stability: experimental
 func RenderOpenAPIWith(svc *Service, opts RenderOpenAPIOptions) (*openapi3.T, error) {
 	doc, err := RenderOpenAPI(svc)
-	if err != nil || !opts.OpenAPI31 {
-		return doc, err
+	if err != nil {
+		return nil, err
 	}
-	return toOpenAPI31(doc)
+	switch opts.Version {
+	case "":
+		return doc, nil
+	case "3.0":
+		if !doc.IsOpenAPI31OrLater() {
+			return doc, nil
+		}
+		return downcastOpenAPI(doc, "3.0")
+	case "3.1":
+		if doc.IsOpenAPI32OrLater() {
+			if doc, err = downcastOpenAPI(doc, "3.1"); err != nil {
+				return nil, err
+			}
+		}
+		return toOpenAPI31(doc)
+	}
+	return nil, fmt.Errorf("openapi: version %q: want 3.0 or 3.1", opts.Version)
 }
 
 // toOpenAPI31 returns a 3.1 copy of doc. The copy goes through JSON so
 // schemas shared with svc.Origin (the same-kind shortcut returns them
 // as-is) are never written to; $ref targets come back as plain refs.
+// Members a 3.0 down-conversion kept in x-gwag-oas31 go back in place.
 func toOpenAPI31(doc *openapi3.T) (*openapi3.T, error) {
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("openapi 3.1: marshal: %w", err)
+	}
+	if raw, err = restoreOAS31(raw); err != nil {
+		return nil, fmt.Errorf("openapi 3.1: restore: %w", err)
 	}
 	out := &openapi3.T{}
 	if err := json.Unmarshal(raw, out); err != nil {

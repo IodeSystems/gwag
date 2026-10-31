@@ -82,7 +82,7 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		opts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), g.openAPI31)
+		opts, err := ir.ParseOpenAPIVersion(r.URL.Query().Get("openapi"), map[bool]string{true: "3.1"}[g.openAPI31])
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
