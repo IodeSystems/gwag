@@ -256,7 +256,7 @@ func (g *Gateway) applyRuntimeBindingsLocked(bindings []ir.ChannelBinding) error
 	psKey := poolKey{namespace: psNamespace, version: psVersion}
 	psSlot, ok := g.slots[psKey]
 	if !ok {
-		return fmt.Errorf("channel binding: ps slot %s/%s not installed (requires cluster)", psNamespace, psVersion)
+		return fmt.Errorf("channel binding: ps slot %s/%s not installed", psNamespace, psVersion)
 	}
 
 	// Check cross-slot uniqueness before mutating.

@@ -7,18 +7,20 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/iodesystems/gwag/v2/gw/gat"
 )
 
-// subBroker shares NATS subscriptions across WebSocket clients
+// subBroker shares Bus subscriptions across WebSocket clients
 // listening on the same subject. With 10k clients on the same channel,
-// the broker holds ONE NATS sub and fans out each message in-process
-// to 10k consumer channels. Per-subject reference counted; the NATS
-// sub is closed when the last consumer leaves.
+// the broker holds ONE bus subscription (one NATS sub in cluster
+// mode) and fans out each message in-process to 10k consumer
+// channels. Per-subject reference counted; the bus subscription is
+// closed when the last consumer leaves.
 type subBroker struct {
-	nc *nats.Conn
+	bus gat.Bus
 
 	mu   sync.Mutex
 	subs map[string]*subFanout // subject → fanout
@@ -27,15 +29,15 @@ type subBroker struct {
 type subFanout struct {
 	subject    string
 	outputDesc protoreflect.MessageDescriptor
-	natsSub    *nats.Subscription
+	unsub      func()
 
 	mu       sync.Mutex
 	nextID   uint64
 	targets  map[uint64]chan any
 }
 
-func newSubBroker(nc *nats.Conn) *subBroker {
-	return &subBroker{nc: nc, subs: map[string]*subFanout{}}
+func newSubBroker(bus gat.Bus) *subBroker {
+	return &subBroker{bus: bus, subs: map[string]*subFanout{}}
 }
 
 // acquire opens (or joins) the fanout for subject and returns a channel
@@ -57,12 +59,12 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 			outputDesc: outputDesc,
 			targets:    map[uint64]chan any{},
 		}
-		sub, err := b.nc.Subscribe(subject, f.deliver)
+		unsub, err := b.bus.Subscribe(subject, f.deliver)
 		if err != nil {
 			b.mu.Unlock()
-			return nil, nil, fmt.Errorf("nats subscribe %s: %w", subject, err)
+			return nil, nil, fmt.Errorf("subscribe %s: %w", subject, err)
 		}
-		f.natsSub = sub
+		f.unsub = unsub
 		b.subs[subject] = f
 	}
 	b.mu.Unlock()
@@ -89,18 +91,19 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 		if !empty {
 			return
 		}
-		// Last consumer left — close the NATS sub and drop the entry.
+		// Last consumer left — close the bus subscription and drop the
+		// entry.
 		b.mu.Lock()
 		if cur, ok := b.subs[subject]; ok && cur == f {
 			delete(b.subs, subject)
-			_ = f.natsSub.Unsubscribe()
+			f.unsub()
 		}
 		b.mu.Unlock()
 	}
 	return ch, release, nil
 }
 
-// deliver decodes the proto-encoded NATS payload once and fans it out
+// deliver decodes the proto-encoded payload once and fans it out
 // to every active target channel. Non-blocking sends: a slow consumer
 // drops events rather than gating the broker. Trade-off note: drop
 // policy keeps healthy consumers fast; consider switching to "kick
@@ -111,10 +114,10 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 // release it once messageToMap has built the canonical payload (the
 // payload is the only thing fanned out — no consumer holds the
 // underlying message).
-func (f *subFanout) deliver(msg *nats.Msg) {
+func (f *subFanout) deliver(_ string, data []byte) {
 	event := acquireDynamicMessage(f.outputDesc)
 	defer releaseDynamicMessage(f.outputDesc, event)
-	if err := proto.Unmarshal(msg.Data, event); err != nil {
+	if err := proto.Unmarshal(data, event); err != nil {
 		return
 	}
 	payload := messageToMap(event)
@@ -172,7 +175,7 @@ type subjectInfo struct {
 
 // activeSubjects returns a snapshot of currently-fanned-out
 // subscription subjects. Empty when the broker hasn't been
-// initialised yet (no cluster, or no subscribe has happened).
+// initialised yet (no subscribe has happened).
 func (g *Gateway) activeSubjects() []subjectInfo {
 	g.mu.Lock()
 	br := g.broker

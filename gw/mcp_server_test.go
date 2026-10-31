@@ -99,6 +99,14 @@ func TestMCPHandler_RoundTrip(t *testing.T) {
 	if err := decodeToolJSON(listRes, &listEntries); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
+	// The built-in ps.pub / ps.sub are on every gateway; drop them.
+	kept := listEntries[:0]
+	for _, e := range listEntries {
+		if e.Namespace != psNamespace {
+			kept = append(kept, e)
+		}
+	}
+	listEntries = kept
 	if len(listEntries) != 2 {
 		t.Errorf("schema_list entries=%d, want 2: %+v", len(listEntries), listEntries)
 	}

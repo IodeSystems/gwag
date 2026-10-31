@@ -42,14 +42,41 @@ type PeerMesh struct {
 	Auth  []byte
 }
 
-// EnablePeerMesh turns on best-effort cross-node fanout. After this,
+// EnablePeerMesh turns on best-effort cross-node fanout: it is
+// UseBus(NewPeerMeshBus(m)) plus mounting the PeerPublishPath receive
+// endpoint on RegisterHTTP / RegisterHuma. After this,
 // PubSub().Publish delivers locally and also fire-and-forgets the
 // event to every peer; each peer's receive handler fans it out
 // locally only (one hop — no re-broadcast). Call once, before
-// serving traffic; Gateway.Close stops the peer goroutines.
+// serving traffic; Gateway.Close stops the peer goroutines. A later
+// UseBus replaces the mesh bus.
 //
 // Stability: experimental
 func (g *Gateway) EnablePeerMesh(m PeerMesh) {
+	mb := NewPeerMeshBus(m)
+	g.mesh = mb
+	g.pubsub.setBus(mb)
+}
+
+// PeerMeshBus is the Bus behind EnablePeerMesh: local delivery plus a
+// best-effort HTTP POST of every published event to each peer. Events
+// received from peers (Handler) are delivered locally only, which
+// caps fanout at one hop. Each peer has a bounded queue (drop when
+// full) and a circuit breaker.
+//
+// Stability: experimental
+type PeerMeshBus struct {
+	local *LocalBus
+	mesh  *peerMesh
+}
+
+var _ Bus = (*PeerMeshBus)(nil)
+
+// NewPeerMeshBus starts one sender goroutine per peer. Close stops
+// them.
+//
+// Stability: experimental
+func NewPeerMeshBus(m PeerMesh) *PeerMeshBus {
 	mesh := &peerMesh{
 		auth:   m.Auth,
 		client: &http.Client{Timeout: peerPublishTimeout},
@@ -65,7 +92,34 @@ func (g *Gateway) EnablePeerMesh(m PeerMesh) {
 		mesh.wg.Add(1)
 		go pc.run(mesh.client, mesh.auth, &mesh.wg)
 	}
-	g.mesh = mesh
+	return &PeerMeshBus{local: NewLocalBus(), mesh: mesh}
+}
+
+// Publish delivers locally and enqueues the event for every peer.
+//
+// Stability: experimental
+func (b *PeerMeshBus) Publish(channel string, payload []byte) error {
+	if err := b.local.Publish(channel, payload); err != nil {
+		return err
+	}
+	b.mesh.fanout(channel, payload)
+	return nil
+}
+
+// Subscribe registers a local subscription; peers deliver into it
+// through Handler.
+//
+// Stability: experimental
+func (b *PeerMeshBus) Subscribe(pattern string, fn func(channel string, payload []byte)) (func(), error) {
+	return b.local.Subscribe(pattern, fn)
+}
+
+// Close stops the peer sender goroutines after they drain their
+// queues.
+//
+// Stability: experimental
+func (b *PeerMeshBus) Close() {
+	b.mesh.stop()
 }
 
 // peerEnvelope is the wire shape POSTed between mesh peers. Payload
@@ -175,12 +229,21 @@ func verifyPeerBody(key, body []byte, sigHex string) bool {
 	return hmac.Equal([]byte(want), []byte(sigHex))
 }
 
-// peerPublishHandler returns the http.Handler for PeerPublishPath: it
-// verifies the HMAC, decodes the envelope, and fans the event out
-// LOCAL-ONLY. Using pubsub.Publish (not g.publish) is the loop guard — a
-// received event never re-broadcasts to peers, capping fanout at one
-// hop.
+// peerPublishHandler returns the mesh receive handler for
+// PeerPublishPath, or 404 when no mesh is enabled.
 func (g *Gateway) peerPublishHandler() http.Handler {
+	if g.mesh == nil {
+		return http.NotFoundHandler()
+	}
+	return g.mesh.Handler()
+}
+
+// Handler is the http.Handler for PeerPublishPath: it verifies the
+// HMAC, decodes the envelope, and delivers the event LOCAL-ONLY. Not
+// re-sending to peers is the loop guard that caps fanout at one hop.
+//
+// Stability: experimental
+func (b *PeerMeshBus) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -191,11 +254,7 @@ func (g *Gateway) peerPublishHandler() http.Handler {
 			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		var key []byte
-		if g.mesh != nil {
-			key = g.mesh.auth
-		}
-		if !verifyPeerBody(key, body, r.Header.Get(peerSignatureHeader)) {
+		if !verifyPeerBody(b.mesh.auth, body, r.Header.Get(peerSignatureHeader)) {
 			http.Error(w, "bad signature", http.StatusUnauthorized)
 			return
 		}
@@ -204,7 +263,7 @@ func (g *Gateway) peerPublishHandler() http.Handler {
 			http.Error(w, "invalid envelope", http.StatusBadRequest)
 			return
 		}
-		g.pubsub.Publish(ev.Channel, ev.Payload)
+		_ = b.local.Publish(ev.Channel, ev.Payload)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

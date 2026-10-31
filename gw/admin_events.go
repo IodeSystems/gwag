@@ -95,7 +95,7 @@ func (g *Gateway) AddAdminEvents() error {
 // requested namespace and returns a channel of decoded ServiceChange
 // events.
 func (g *Gateway) adminEventsWatchServicesHandler(ctx context.Context, args map[string]any) (any, error) {
-	broker := g.subscriptionBroker()
+	broker := g.adminEventsBroker()
 	if broker == nil {
 		return nil, fmt.Errorf("gateway: subscription broker not available")
 	}

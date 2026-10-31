@@ -23,13 +23,10 @@ const (
 )
 
 // installPubSubSlot registers gwag.ps.v1.PubSub as an internal-proto
-// slot wired to the gateway's NATS broker. Idempotent: a same-hash
-// re-install (e.g. when New is followed by an explicit AddProto of the
-// same proto under (ps, v1)) returns existed=true via registerSlotLocked
-// and is a no-op. The slot is installed regardless of whether a cluster
-// is configured — the schema is consistent across deployment shapes;
-// individual handler calls error with a clear "requires cluster"
-// message when no NATS connection is available.
+// slot wired to the gateway's subscription broker over g.psBus.
+// Idempotent: a same-hash re-install (e.g. when New is followed by an
+// explicit AddProto of the same proto under (ps, v1)) returns
+// existed=true via registerSlotLocked and is a no-op.
 //
 // Caller does NOT hold g.mu.
 func (g *Gateway) installPubSubSlot() error {
@@ -50,8 +47,8 @@ func (g *Gateway) installPubSubSlot() error {
 	)
 }
 
-// psPub publishes a single Event onto the NATS subject named by the
-// request's `channel` field. Wildcards are rejected — they're only
+// psPub publishes a single Event onto the pub/sub Bus (the NATS
+// subject in cluster mode) named by the request's `channel` field. Wildcards are rejected — they're only
 // meaningful at subscribe time. The Event is proto-encoded so
 // subscribers' broker fan-out (which decodes against the Event
 // descriptor) sees a typed payload.
@@ -62,9 +59,6 @@ func (g *Gateway) installPubSubSlot() error {
 // against WithSubscriptionAuth. The delegate fall-through lands in
 // the follow-up commit; for now `delegate+hmac` runs the HMAC path.
 func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
-	if g.cfg.cluster == nil {
-		return nil, fmt.Errorf("gateway: ps.pub requires a configured cluster (NATS)")
-	}
 	m := req.ProtoReflect()
 	fields := m.Descriptor().Fields()
 	channel := m.Get(fields.ByName("channel")).String()
@@ -103,7 +97,7 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	if err != nil {
 		return nil, fmt.Errorf("ps.pub: marshal event: %w", err)
 	}
-	if err := g.cfg.cluster.Conn.Publish(channel, b); err != nil {
+	if err := g.psBus.Publish(channel, b); err != nil {
 		return nil, fmt.Errorf("ps.pub: publish: %w", err)
 	}
 	return &psv1.PubResponse{}, nil
@@ -113,7 +107,7 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 // wildcards permitted at this layer; the auth tier will eventually
 // constrain which channels a token can reach). Returns the broker's
 // fan-out chan; the release goroutine fires on ctx cancel so the per-
-// subject NATS subscription drops when the last listener leaves.
+// subject bus subscription drops when the last listener leaves.
 //
 // Stream-cap accounting (per-pool + gateway-wide stream sems used by
 // upstream-proto subscribeNATS) does not apply here: there is no
@@ -132,9 +126,6 @@ func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 		return nil, err
 	}
 	broker := g.subscriptionBroker()
-	if broker == nil {
-		return nil, fmt.Errorf("gateway: ps.sub requires a configured cluster (NATS)")
-	}
 	eventDesc := psv1.File_gw_proto_ps_v1_ps_proto.Messages().ByName("Event")
 	source, release, err := broker.acquire(channel, eventDesc)
 	if err != nil {

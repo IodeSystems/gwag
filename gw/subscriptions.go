@@ -2,15 +2,28 @@ package gateway
 
 import "encoding/json"
 
-// subscriptionBroker returns the gateway's shared subBroker, lazy-
-// initialized on first use. nil when no cluster is configured.
+// subscriptionBroker returns the ps.sub broker, lazy-initialized on
+// first use over the gateway's pub/sub Bus (g.psBus: NATS with local
+// fallback in cluster mode, local otherwise). Never nil.
 func (g *Gateway) subscriptionBroker() *subBroker {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.broker == nil && g.cfg.cluster != nil {
-		g.broker = newSubBroker(g.cfg.cluster.Conn)
+	if g.broker == nil {
+		g.broker = newSubBroker(g.psBus)
 	}
 	return g.broker
+}
+
+// adminEventsBroker returns the broker admin_events_watchServices
+// subscribes through: the shared broker in cluster mode, nil without
+// a cluster (as before the pub/sub Bus). Admin events are published
+// on raw NATS (publishServiceChange), never on the local bus, so the
+// failover bus only ever delivers them from NATS.
+func (g *Gateway) adminEventsBroker() *subBroker {
+	if g.cfg.cluster == nil {
+		return nil
+	}
+	return g.subscriptionBroker()
 }
 
 // lookupPool returns the proto pool for (ns, ver) under g.mu.

@@ -1,7 +1,9 @@
 package gat_test
 
 import (
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/iodesystems/gwag/v2/gw/gat"
 	"github.com/iodesystems/gwag/v2/gw/gat/bustest"
@@ -11,6 +13,50 @@ func TestLocalBus_Conformance(t *testing.T) {
 	bustest.Run(t, func(t *testing.T) bustest.Harness {
 		return bustest.Harness{Bus: gat.NewLocalBus()}
 	})
+}
+
+func TestPeerMeshBus_Conformance(t *testing.T) {
+	bustest.Run(t, func(t *testing.T) bustest.Harness {
+		b := gat.NewPeerMeshBus(gat.PeerMesh{})
+		t.Cleanup(b.Close)
+		return bustest.Harness{Bus: b}
+	})
+}
+
+// TestPeerMeshBus_CrossNode: a publish on A reaches A's subscriber
+// (local) and B's subscriber (via B's Handler) once each.
+func TestPeerMeshBus_CrossNode(t *testing.T) {
+	key := []byte("k")
+	bB := gat.NewPeerMeshBus(gat.PeerMesh{Auth: key})
+	defer bB.Close()
+	srvB := httptest.NewServer(bB.Handler())
+	defer srvB.Close()
+	bA := gat.NewPeerMeshBus(gat.PeerMesh{Peers: []string{srvB.URL}, Auth: key})
+	defer bA.Close()
+
+	gotA, gotB := make(chan string, 4), make(chan string, 4)
+	unA, _ := bA.Subscribe("e.*", func(c string, p []byte) { gotA <- c + "=" + string(p) })
+	unB, _ := bB.Subscribe("e.*", func(c string, p []byte) { gotB <- c + "=" + string(p) })
+	defer unA()
+	defer unB()
+
+	if err := bA.Publish("e.1", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	for name, ch := range map[string]chan string{"A": gotA, "B": gotB} {
+		select {
+		case s := <-ch:
+			if s != "e.1=x" {
+				t.Errorf("%s got %q", name, s)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: timeout", name)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if len(gotA)+len(gotB) != 0 {
+		t.Errorf("duplicate deliveries: A=%d B=%d", len(gotA), len(gotB))
+	}
 }
 
 func TestLocalBus_RejectsEmpty(t *testing.T) {

@@ -153,6 +153,7 @@ type prometheusMetrics struct {
 	reqSelf         *prometheus.HistogramVec
 	pubNoBinding    prometheus.Counter
 	wsRejected      *prometheus.CounterVec
+	busDegraded     prometheus.Gauge
 	callerHeaders   []string
 	callerExtractor CallerIDExtractor
 	callerLimiter   *callerLimiter
@@ -228,7 +229,11 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		Name: p + "_ws_rejected_total",
 		Help: "graphql-transport-ws Upgrade requests rejected by WithWSLimit. reason=max_per_ip|rate_limit.",
 	}, []string{"reason"})
-	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected)
+	busDegraded := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: p + "_pubsub_bus_degraded",
+		Help: "1 while this node's ps.pub/ps.sub run local-only because the cluster NATS connection is down; 0 otherwise (including single-node gateways).",
+	})
+	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected, busDegraded)
 	return &prometheusMetrics{
 		registry:     reg,
 		prefix:       p,
@@ -247,6 +252,7 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		reqSelf:      reqSelf,
 		pubNoBinding: pubNoBinding,
 		wsRejected:   wsRejected,
+		busDegraded:  busDegraded,
 	}
 }
 
@@ -316,6 +322,17 @@ func (m *prometheusMetrics) RecordPubNoBinding() {
 
 func (m *prometheusMetrics) RecordWSRejected(reason string) {
 	m.wsRejected.WithLabelValues(reason).Inc()
+}
+
+// setPubSubBusDegraded drives the pubsub_bus_degraded gauge. Not on
+// the Metrics interface (adding a method would break custom
+// implementations); custom sinks read Gateway health instead.
+func (m *prometheusMetrics) setPubSubBusDegraded(degraded bool) {
+	if degraded {
+		m.busDegraded.Set(1)
+	} else {
+		m.busDegraded.Set(0)
+	}
 }
 
 // classifyError maps an error to a stable label value. gRPC status

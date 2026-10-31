@@ -11,6 +11,12 @@ import (
 //   - 200 + JSON when serving normally.
 //   - 503 + JSON when Drain has been called.
 //
+// The body's "pubsub" field is the ps.pub / ps.sub transport: "nats",
+// "local" (no cluster), or "local_degraded" (cluster NATS connection
+// down; this node delivers locally only). Degraded pub/sub adds
+// "degraded": true but keeps the status code — the node still
+// serves.
+//
 // Mount alongside the GraphQL handler; load balancers poll this to
 // take the gateway out of rotation when it goes 503.
 //
@@ -29,6 +35,11 @@ func (g *Gateway) HealthHandler() http.Handler {
 		}
 		if g.cfg.cluster != nil {
 			body["node_id"] = g.cfg.cluster.NodeID
+		}
+		mode := g.pubSubBusMode()
+		body["pubsub"] = mode
+		if mode == pubSubModeDegraded {
+			body["degraded"] = true
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)

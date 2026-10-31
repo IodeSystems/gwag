@@ -219,6 +219,14 @@ func TestAdminHuma_ServicesHistory_Window1m(t *testing.T) {
 	if out.Window != "1m" {
 		t.Errorf("window=%q, want 1m", out.Window)
 	}
+	// The built-in ps/v1 slot is on every gateway; drop its row.
+	svcs := out.Services[:0]
+	for _, s := range out.Services {
+		if s.Namespace != psNamespace {
+			svcs = append(svcs, s)
+		}
+	}
+	out.Services = svcs
 	if len(out.Services) != 1 {
 		t.Fatalf("want 1 service row (greeter/v1), got %d: %+v", len(out.Services), out.Services)
 	}
@@ -454,6 +462,14 @@ func TestAdminHuma_ServicesStats_Aggregate(t *testing.T) {
 	if out.Window != "1m" {
 		t.Errorf("window=%q, want 1m", out.Window)
 	}
+	// The built-in ps/v1 slot is on every gateway; drop its row.
+	svcs := out.Services[:0]
+	for _, s := range out.Services {
+		if s.Namespace != psNamespace {
+			svcs = append(svcs, s)
+		}
+	}
+	out.Services = svcs
 	if len(out.Services) != 2 {
 		t.Fatalf("got %d rows, want 2 (greeter/v1 + users/v1): %+v", len(out.Services), out.Services)
 	}
@@ -884,6 +900,14 @@ func TestAdminHuma_MCPSchema_AdminRoutesRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&listOut); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
+	// The built-in ps.pub / ps.sub are on every gateway; drop them.
+	entries := listOut.Entries[:0]
+	for _, e := range listOut.Entries {
+		if !strings.HasPrefix(e.Path, psNamespace+".") {
+			entries = append(entries, e)
+		}
+	}
+	listOut.Entries = entries
 	if len(listOut.Entries) != 2 {
 		t.Fatalf("list entries=%d, want 2: %+v", len(listOut.Entries), listOut.Entries)
 	}

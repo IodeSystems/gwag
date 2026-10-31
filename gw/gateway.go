@@ -97,6 +97,13 @@ type Gateway struct {
 	peers      *peerTracker
 	broker     *subBroker
 
+	// psBus is the ps.pub / ps.sub transport under broker: a
+	// failoverBus (NATS, local while NATS is down) in cluster mode, a
+	// gat.LocalBus otherwise. psFailover is the same value when it is
+	// a failoverBus, nil otherwise.
+	psBus      gat.Bus
+	psFailover *failoverBus
+
 	// tracer wraps the configured OpenTelemetry TracerProvider plus a
 	// W3C TraceContext propagator. Always non-nil — when WithTracer is
 	// unset it adapts a noop provider so ingress / dispatch sites can
@@ -1337,18 +1344,15 @@ func New(opts ...Option) *Gateway {
 		}
 	}
 	g.gql = g.newGraphQLIngress()
-	// Auto-install gwag.ps.v1.PubSub when a cluster is bound — the
-	// pub/sub primitive needs NATS to do anything useful. Standalone
-	// gateways skip the install (schema doesn't surface ps.pub/ps.sub),
-	// matching how ps.pub/ps.sub error out when called without a
-	// cluster.
-	if cfg.cluster != nil {
-		if err := g.installPubSubSlot(); err != nil {
-			panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))
-		}
-		if cfg.subAuth.Insecure {
-			cfg.cluster.Server.Warnf("gateway: subscriptions are in insecure mode — any client can publish and subscribe without HMAC verification")
-		}
+	// gwag.ps.v1.PubSub is installed on every gateway. With a cluster
+	// it rides NATS (local-only while NATS is down); without one it is
+	// single-node, in-process.
+	g.initPubSubBus()
+	if err := g.installPubSubSlot(); err != nil {
+		panic(fmt.Sprintf("gateway: install pubsub slot: %v", err))
+	}
+	if cfg.cluster != nil && cfg.subAuth.Insecure {
+		cfg.cluster.Server.Warnf("gateway: subscriptions are in insecure mode — any client can publish and subscribe without HMAC verification")
 	}
 	// Apply runtime channel bindings (WithChannelBinding) to the
 	// gateway-internal ps slot. Runs through the same cross-slot
@@ -1378,6 +1382,9 @@ func (g *Gateway) Close() {
 		_ = c.Close()
 	}
 	tracker.stop()
+	if g.psFailover != nil {
+		g.psFailover.Close()
+	}
 	g.lifeCancel()
 	if owned {
 		if fs, ok := store.(*FilesystemUploadStore); ok {

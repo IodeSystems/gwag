@@ -649,7 +649,8 @@ service S { rpc Echo(OrderUpdate) returns (OrderUpdate); }
 }
 
 // TestWithChannelBinding_NoPSSlot pins that applying runtime bindings
-// when the ps slot doesn't exist (no cluster) returns a clear error.
+// when the ps slot doesn't exist returns a clear error. New installs
+// the slot on every gateway, so the test removes it.
 func TestWithChannelBinding_NoPSSlot(t *testing.T) {
 	g := New(
 		WithoutMetrics(),
@@ -657,6 +658,9 @@ func TestWithChannelBinding_NoPSSlot(t *testing.T) {
 		WithAdminToken([]byte("test")),
 	)
 	defer g.Close()
+	g.mu.Lock()
+	delete(g.slots, poolKey{namespace: psNamespace, version: psVersion})
+	g.mu.Unlock()
 
 	err := g.applyRuntimeBindingsLocked([]ir.ChannelBinding{
 		{Pattern: "events.foo", MessageFQN: "example.Foo"},

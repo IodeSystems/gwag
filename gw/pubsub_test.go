@@ -164,13 +164,12 @@ func TestPubSub_RejectsWildcardOnPublish(t *testing.T) {
 	}
 }
 
-// TestPubSub_NoClusterSkipsInstall pins the boot-time gate: a
-// standalone gateway (no WithCluster) does not register the ps/v1
-// slot, so ps.pub / ps.sub do not appear in the schema. This matches
-// the proto-streaming Subscription path which also requires a cluster
-// to function — keeping the public surface tied to deployment
-// capability instead of advertising fields that always error.
-func TestPubSub_NoClusterSkipsInstall(t *testing.T) {
+// TestPubSub_NoClusterInstallsLocal pins single-node pub/sub: a
+// standalone gateway (no WithCluster) registers the ps/v1 slot on a
+// local bus. (Before the pub/sub Bus, the slot was skipped without a
+// cluster; this test replaced TestPubSub_NoClusterSkipsInstall.)
+// TestPubSub_SingleNodeRoundTrip covers delivery.
+func TestPubSub_NoClusterInstallsLocal(t *testing.T) {
 	g := New(WithoutMetrics(), WithoutBackpressure())
 	t.Cleanup(g.Close)
 
@@ -181,14 +180,17 @@ func TestPubSub_NoClusterSkipsInstall(t *testing.T) {
 	}
 	_, ok := g.slots[poolKey{namespace: psNamespace, version: psVersion}]
 	g.mu.Unlock()
-	if ok {
-		t.Fatal("ps/v1 slot was installed without cluster; expected to be skipped")
+	if !ok {
+		t.Fatal("ps/v1 slot not installed without cluster")
 	}
-	if d := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub")); d != nil {
-		t.Error("Pub dispatcher registered without cluster")
+	if d := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Pub")); d == nil {
+		t.Error("Pub dispatcher not registered without cluster")
 	}
-	if d := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Sub")); d != nil {
-		t.Error("Sub dispatcher registered without cluster")
+	if d := g.dispatchers.Get(ir.MakeSchemaID(psNamespace, psVersion, "Sub")); d == nil {
+		t.Error("Sub dispatcher not registered without cluster")
+	}
+	if got := g.pubSubBusMode(); got != pubSubModeLocal {
+		t.Errorf("pubSubBusMode = %q, want %q", got, pubSubModeLocal)
 	}
 }
 

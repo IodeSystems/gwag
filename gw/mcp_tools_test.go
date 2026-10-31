@@ -75,6 +75,14 @@ func TestMCPSchemaList_AutoIncludeWithExclude(t *testing.T) {
 		t.Fatalf("SetMCPConfig: %v", err)
 	}
 	rows := gw.mcpSchemaList()
+	// The built-in ps.pub / ps.sub are on every gateway; drop them.
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.Namespace != psNamespace {
+			kept = append(kept, r)
+		}
+	}
+	rows = kept
 	if len(rows) != 1 || rows[0].Path != "things.getThing" {
 		t.Fatalf("AutoInclude + Exclude(*.create*): %+v want only things.getThing", rows)
 	}

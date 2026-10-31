@@ -142,7 +142,7 @@ type Gateway struct {
 	// endpoint — nil until EnableSubscribeAuth is called (endpoint
 	// open).
 	pubsub  *pubSub
-	mesh    *peerMesh
+	mesh    *PeerMeshBus
 	subAuth []byte
 
 	// Ingress hooks (ingress_hooks.go); all nil / off by default.
@@ -949,48 +949,39 @@ func (g *Gateway) UseBus(b Bus) {
 // Stability: experimental
 func (g *Gateway) Close() {
 	if g.mesh != nil {
-		g.mesh.stop()
+		g.mesh.Close()
 	}
 	g.pubsub.closeAll()
 }
 
 // PubSub is the publish/subscribe handle returned by Gateway.PubSub.
-// Publish delivers to local subscribers and, when a peer mesh is
-// configured, fans out best-effort to peer gat instances; Subscribe
-// is always local-only.
+// Publish hands the event to the gateway's Bus (UseBus): local
+// subscribers by default, plus peer gat instances with a peer mesh,
+// or every node on the NATS cluster with gatnats.
 //
 // Stability: experimental
 type PubSub struct {
 	g *Gateway
 }
 
-// Publish delivers payload to every local subscriber whose pattern
-// matches channel.
+// Publish delivers payload to every subscriber whose pattern matches
+// channel, through the gateway's Bus. Best-effort: a Bus error drops
+// the event.
 //
 // Stability: experimental
 func (p *PubSub) Publish(channel string, payload []byte) {
-	p.g.publish(channel, payload)
+	p.g.pubsub.Publish(channel, payload)
 }
 
 // Subscribe registers a subscriber for channels matching pattern
 // (NATS-style: `*` one segment, `>` the rest). Returns an event
-// channel and a cancel func. Subscriptions are local to this gateway
-// — peers deliver into it via the mesh receive path, not by
-// subscribing remotely.
+// channel and a cancel func. The subscription is opened on the
+// gateway's Bus; with a peer mesh it is local and peers deliver into
+// it through the mesh receive endpoint.
 //
 // Stability: experimental
 func (p *PubSub) Subscribe(pattern string) (<-chan Event, func()) {
 	return p.g.pubsub.Subscribe(pattern)
-}
-
-// publish is the gateway-internal publish entry point behind the
-// PubSub facade: local fanout, plus best-effort cross-node fanout
-// when a peer mesh is configured.
-func (g *Gateway) publish(channel string, payload []byte) {
-	g.pubsub.Publish(channel, payload)
-	if g.mesh != nil {
-		g.mesh.fanout(channel, payload)
-	}
 }
 
 // defaultMaxOperations bounds the operations one GraphQL request may
