@@ -38,16 +38,16 @@ func appendProtoMessage(dst []byte, msg protoreflect.Message, selSet *ast.Select
 		// using the cached field info. Real GraphQL queries always
 		// carry a selection on object fields.
 		for _, info := range fieldInfosFor(msg.Descriptor()) {
-			if !msg.Has(info.fd) {
+			if !msg.Has(info.FD) {
 				continue
 			}
 			if !first {
 				dst = append(dst, ',')
 			}
 			first = false
-			dst = appendJSONString(dst, info.jsonKey)
+			dst = appendJSONString(dst, info.JSONKey)
 			dst = append(dst, ':')
-			dst = appendProtoFieldValue(dst, info.fd, msg.Get(info.fd), nil)
+			dst = appendProtoFieldValue(dst, info.FD, msg.Get(info.FD), nil)
 		}
 	}
 	return append(dst, '}')
@@ -258,7 +258,7 @@ func appendProtoDefault(dst []byte, fd protoreflect.FieldDescriptor) []byte {
 }
 
 // protoFieldByJSONKey returns a per-descriptor map[jsonKey]fd.
-// Memoised next to fieldInfoCache to avoid the per-call walk through
+// Memoised like protocodec.FieldInfos to avoid the per-call walk through
 // the slice-of-fieldInfos that fieldInfosFor returns.
 var protoJSONKeyCache sync.Map // map[protoreflect.MessageDescriptor]map[string]protoreflect.FieldDescriptor
 
@@ -269,7 +269,7 @@ func protoFieldByJSONKey(md protoreflect.MessageDescriptor) map[string]protorefl
 	infos := fieldInfosFor(md)
 	out := make(map[string]protoreflect.FieldDescriptor, len(infos))
 	for _, info := range infos {
-		out[info.jsonKey] = info.fd
+		out[info.JSONKey] = info.FD
 	}
 	if v, loaded := protoJSONKeyCache.LoadOrStore(md, out); loaded {
 		return v.(map[string]protoreflect.FieldDescriptor)

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/protocodec"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -119,6 +120,11 @@ func registrationsForProto(fd protoreflect.FileDescriptor, target string) ([]Ser
 // method. It owns the dynamicpb marshal / unmarshal bridge and runs
 // grpc.ClientConn.Invoke per dispatch — no pool, no replicas, no
 // backpressure (gat is the embedded, simple-start variant).
+// protoCodec is gat's GraphQL-canonical <-> dynamicpb conversion, the
+// walker shared with gwag. The zero Options: bytes fields take only a
+// string, and every present arg is written.
+var protoCodec protocodec.Options
+
 type protoDispatcher struct {
 	conn       *grpc.ClientConn
 	fullMethod string
@@ -129,14 +135,14 @@ type protoDispatcher struct {
 // Dispatch satisfies ir.Dispatcher.
 func (d *protoDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	req := dynamicpb.NewMessage(d.inputDesc)
-	if err := protoArgsToMessage(args, req); err != nil {
+	if err := protoCodec.ArgsToMessage(args, req); err != nil {
 		return nil, fmt.Errorf("gat: encode %s: %w", d.fullMethod, err)
 	}
 	resp := dynamicpb.NewMessage(d.outputDesc)
 	if err := d.conn.Invoke(ctx, d.fullMethod, req, resp); err != nil {
 		return nil, fmt.Errorf("gat: invoke %s: %w", d.fullMethod, err)
 	}
-	return protoMessageToMap(resp), nil
+	return protocodec.MessageToMap(resp), nil
 }
 
 // compileProtoFile compiles a .proto from disk with imports anchored

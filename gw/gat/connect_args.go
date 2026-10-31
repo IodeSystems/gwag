@@ -17,7 +17,7 @@ package gat
 // differential test in connect_args_test.go pins the two against each
 // other with protojson as the oracle.
 //
-// Not to be confused with protoMessageToMap in proto_convert.go: that
+// Not to be confused with protocodec.MessageToMap: that
 // one serves the proto-UPSTREAM dispatcher, which speaks the
 // GraphQL-canonical convention (lowerCamel keys, integer enums). The
 // two conventions are genuinely different and cannot share a walker.
@@ -43,7 +43,7 @@ func messageToArgs(msg *dynamicpb.Message) map[string]any {
 
 // rangeToMap walks the populated fields of m. Range visits only what
 // is set, which is exactly the EmitUnpopulated: false contract, and
-// avoids the descriptor-wide scan protoMessageToMap does.
+// avoids the descriptor-wide scan protocodec.MessageToMap does.
 func rangeToMap(m protoreflect.Message) map[string]any {
 	out := make(map[string]any, m.Descriptor().Fields().Len())
 	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {

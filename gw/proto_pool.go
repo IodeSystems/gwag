@@ -15,7 +15,7 @@ import (
 // underlying message header instead of re-allocating.
 //
 // Keyed by descriptor identity (the interface value), not FullName —
-// see fieldInfoCache for the same reasoning. Two gateways in the same
+// see protocodec.FieldInfos for the same reasoning. Two gateways in the same
 // process can register the same .proto and hold distinct
 // MessageDescriptor instances; dynamicpb refuses to mix them.
 //

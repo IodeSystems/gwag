@@ -46,7 +46,7 @@ func viaProtojson(t *testing.T, msg *dynamicpb.Message) map[string]any {
 
 // argsTestFileDesc builds a descriptor exercising every kind the
 // walker branches on, including a snake_case field name — the case
-// where the GraphQL-canonical protoMessageToMap would have diverged
+// where the GraphQL-canonical protocodec.MessageToMap would have diverged
 // (it lowerCamels the key, so `user_id` would arrive as `userId` and
 // bindInput would drop it).
 func argsTestFileDesc(t *testing.T) protoreflect.MessageDescriptor {
