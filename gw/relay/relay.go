@@ -126,11 +126,6 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c.SetReadLimit(readLimit)
-	// Reads take no context: closing the conn is what ends a blocked read.
-	go func() {
-		<-ctx.Done()
-		_ = c.Close()
-	}()
 
 	out := make(chan outFrame, r.queue)
 
@@ -154,8 +149,10 @@ func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 		}
 	}
 
-	// writer
+	// writer. It closes the conn on the way out: reads take no context, so
+	// that is what ends a blocked read.
 	go func() {
+		defer func() { _ = c.Close() }()
 		for {
 			select {
 			case <-ctx.Done():
