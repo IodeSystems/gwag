@@ -30,6 +30,8 @@ changes on MINOR, drops on MAJOR.
 - **Channel patterns with a `>` that is not the last token** (e.g. in `WithChannelAuth` / `WithChannelBinding`) now match nothing, as in NATS and gat. gwag used to treat such a `>` as "match the rest". `New` now panics on such a `WithChannelAuth` pattern (or one with an empty token): the rule would match nothing, and its channels would fall back to the default HMAC tier, which can be weaker than the tier the rule declared.
 
 ### Fixed
+- **Proto `map<K,V>` fields** in gRPC args and responses (gwag and gat) panicked in the codec. They now convert as a JSON object: string keys, values in proto3 JSON form (enum names, base64 bytes, 64-bit integers as strings).
+- **`uint64` / `fixed64` args** above 2^63-1 were refused, and negative values wrapped. They now parse over the full unsigned range, and a negative value is an error. `uint32` args refuse negative values too.
 - `ClusterOptions.ClientListen` with port 0 now picks a free port. natsd read 0 as its default 4222.
 - **docs/pubsub.md** showed `ps.pub` as a `Mutation` returning `Boolean!` and `ps.sub` nested under `Subscription.ps`. The real fields are `Query.ps.pub(...)` returning `Gwag_Ps_V1_PubResponse` and `Subscription.ps_sub(...)`, with `ts` as a string and `payloadType` in camelCase.
 - **docs/gat-pubsub.md** described gwag pub/sub as durable; it is NATS core, without persistence or replay.

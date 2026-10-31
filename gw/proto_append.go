@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/base64"
 	"math"
+	"sort"
 	"strconv"
 	"sync"
 	"unicode/utf8"
@@ -135,6 +136,9 @@ func appendProtoSelection(dst []byte, msg protoreflect.Message, selSet *ast.Sele
 // appendProtoFieldValue dispatches on list vs scalar; recurses into
 // nested messages with the sub-selection.
 func appendProtoFieldValue(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value, selSet *ast.SelectionSet) []byte {
+	if fd.IsMap() {
+		return appendProtoMap(dst, fd, v.Map())
+	}
 	if fd.IsList() {
 		dst = append(dst, '[')
 		l := v.List()
@@ -147,6 +151,29 @@ func appendProtoFieldValue(dst []byte, fd protoreflect.FieldDescriptor, v protor
 		return append(dst, ']')
 	}
 	return appendProtoLeaf(dst, fd, v, selSet)
+}
+
+// appendProtoMap emits a map field as a JSON object (the IR types it
+// as the JSON scalar, so there is no sub-selection). Keys are sorted,
+// as encoding/json sorts them on the map path.
+func appendProtoMap(dst []byte, fd protoreflect.FieldDescriptor, mp protoreflect.Map) []byte {
+	keys := make([]protoreflect.MapKey, 0, mp.Len())
+	mp.Range(func(k protoreflect.MapKey, _ protoreflect.Value) bool {
+		keys = append(keys, k)
+		return true
+	})
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	valFd := fd.MapValue()
+	dst = append(dst, '{')
+	for i, k := range keys {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendJSONString(dst, k.String())
+		dst = append(dst, ':')
+		dst = appendProtoLeaf(dst, valFd, mp.Get(k), nil)
+	}
+	return append(dst, '}')
 }
 
 // appendProtoLeaf emits a single (non-list) proto value as JSON.

@@ -8,12 +8,15 @@
 // primitives), 64-bit integers as decimal strings, enums as int32
 // numbers (the Value graphql-go enum configs are built with).
 //
-// Map fields (proto `map<K,V>`) are not handled: both directions take
-// the message path and dynamicpb panics on the type mismatch.
+// Map fields (proto `map<K,V>`) are a JSON object both ways (the IR
+// types them as the JSON scalar): keys are strings, values take the
+// proto3 JSON forms (enum names, base64 bytes), like protojson.
 package protocodec
 
 import (
+	"encoding/base64"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,6 +121,25 @@ func (o Options) ArgsToMessage(args map[string]any, msg *dynamicpb.Message) erro
 // SetField writes one GraphQL-canonical value into fd on msg. A list
 // field takes []any and appends to whatever the field already holds.
 func (o Options) SetField(msg *dynamicpb.Message, fd protoreflect.FieldDescriptor, v any) error {
+	if fd.IsMap() {
+		entries, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("expected object, got %T", v)
+		}
+		mp := msg.Mutable(fd).Map()
+		for k, item := range entries {
+			key, err := mapKey(fd.MapKey(), k)
+			if err != nil {
+				return err
+			}
+			val, err := o.toProtoScalar(fd.MapValue(), item)
+			if err != nil {
+				return fmt.Errorf("key %q: %w", k, err)
+			}
+			mp.Set(key, val)
+		}
+		return nil
+	}
 	if fd.IsList() {
 		items, ok := v.([]any)
 		if !ok {
@@ -156,7 +178,7 @@ func (o Options) toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoref
 		}
 		return protoreflect.ValueOfInt32(int32(n)), nil
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		n, err := toInt64(v)
+		n, err := toUint64(v)
 		if err != nil {
 			return protoreflect.Value{}, err
 		}
@@ -168,11 +190,11 @@ func (o Options) toProtoScalar(fd protoreflect.FieldDescriptor, v any) (protoref
 		}
 		return protoreflect.ValueOfInt64(n), nil
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		n, err := toInt64(v)
+		n, err := toUint64(v)
 		if err != nil {
 			return protoreflect.Value{}, err
 		}
-		return protoreflect.ValueOfUint64(uint64(n)), nil
+		return protoreflect.ValueOfUint64(n), nil
 	case protoreflect.FloatKind:
 		f, err := toFloat64(v)
 		if err != nil {
@@ -252,6 +274,64 @@ func toInt64(v any) (int64, error) {
 	}
 }
 
+// toUint64 is toInt64 for unsigned fields: a string takes the full
+// uint64 range, and a negative number is an error instead of wrapping.
+func toUint64(v any) (uint64, error) {
+	if s, ok := v.(string); ok {
+		return strconv.ParseUint(s, 10, 64)
+	}
+	n, err := toInt64(v)
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("negative value %d for unsigned field", n)
+	}
+	return uint64(n), nil
+}
+
+// mapKey parses a JSON object key into a key of kind fd.
+func mapKey(fd protoreflect.FieldDescriptor, k string) (protoreflect.MapKey, error) {
+	var v protoreflect.Value
+	switch fd.Kind() {
+	case protoreflect.StringKind:
+		v = protoreflect.ValueOfString(k)
+	case protoreflect.BoolKind:
+		b, err := strconv.ParseBool(k)
+		if err != nil {
+			return protoreflect.MapKey{}, fmt.Errorf("map key %q: %w", k, err)
+		}
+		v = protoreflect.ValueOfBool(b)
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
+		n, err := strconv.ParseInt(k, 10, 32)
+		if err != nil {
+			return protoreflect.MapKey{}, fmt.Errorf("map key %q: %w", k, err)
+		}
+		v = protoreflect.ValueOfInt32(int32(n))
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		n, err := strconv.ParseInt(k, 10, 64)
+		if err != nil {
+			return protoreflect.MapKey{}, fmt.Errorf("map key %q: %w", k, err)
+		}
+		v = protoreflect.ValueOfInt64(n)
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		n, err := strconv.ParseUint(k, 10, 32)
+		if err != nil {
+			return protoreflect.MapKey{}, fmt.Errorf("map key %q: %w", k, err)
+		}
+		v = protoreflect.ValueOfUint32(uint32(n))
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		n, err := strconv.ParseUint(k, 10, 64)
+		if err != nil {
+			return protoreflect.MapKey{}, fmt.Errorf("map key %q: %w", k, err)
+		}
+		v = protoreflect.ValueOfUint64(n)
+	default:
+		return protoreflect.MapKey{}, fmt.Errorf("unhandled map key kind: %v", fd.Kind())
+	}
+	return v.MapKey(), nil
+}
+
 func toFloat64(v any) (float64, error) {
 	switch x := v.(type) {
 	case float64:
@@ -290,6 +370,9 @@ func MessageToMap(msg *dynamicpb.Message) map[string]any {
 // ValueToAny renders the value of field fd (list or singular) as a
 // GraphQL-canonical value.
 func ValueToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
+	if fd.IsMap() {
+		return mapToAny(fd, v.Map())
+	}
 	if fd.IsList() {
 		l := v.List()
 		out := make([]any, l.Len())
@@ -334,4 +417,62 @@ func scalarToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 		return MessageToMap(sub)
 	}
 	return nil
+}
+
+// mapToAny renders a map field as the JSON scalar's value: string
+// keys, values in their proto3 JSON forms (see jsonValueToAny).
+func mapToAny(fd protoreflect.FieldDescriptor, mp protoreflect.Map) map[string]any {
+	out := make(map[string]any, mp.Len())
+	valFd := fd.MapValue()
+	mp.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+		out[k.String()] = jsonValueToAny(valFd, v)
+		return true
+	})
+	return out
+}
+
+// jsonValueToAny renders one value inside a JSON scalar, where no
+// GraphQL type serialises it: enums as their names, bytes as base64,
+// nested messages with every set field. Matches the append path's
+// output for the same value.
+func jsonValueToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
+	switch fd.Kind() {
+	case protoreflect.EnumKind:
+		if ev := fd.Enum().Values().ByNumber(v.Enum()); ev != nil {
+			return string(ev.Name())
+		}
+		return int32(v.Enum())
+	case protoreflect.BytesKind:
+		return base64.StdEncoding.EncodeToString(v.Bytes())
+	case protoreflect.FloatKind, protoreflect.DoubleKind:
+		if f := v.Float(); math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil
+		}
+		return v.Float()
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		m := v.Message()
+		infos := FieldInfos(m.Descriptor())
+		out := make(map[string]any, len(infos))
+		for _, info := range infos {
+			if !m.Has(info.FD) {
+				continue
+			}
+			fv := m.Get(info.FD)
+			switch {
+			case info.FD.IsMap():
+				out[info.JSONKey] = mapToAny(info.FD, fv.Map())
+			case info.FD.IsList():
+				l := fv.List()
+				items := make([]any, l.Len())
+				for i := range items {
+					items[i] = jsonValueToAny(info.FD, l.Get(i))
+				}
+				out[info.JSONKey] = items
+			default:
+				out[info.JSONKey] = jsonValueToAny(info.FD, fv)
+			}
+		}
+		return out
+	}
+	return scalarToAny(fd, v)
 }
