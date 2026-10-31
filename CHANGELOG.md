@@ -9,6 +9,10 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.7.0 — 2026-10-31
+
+OpenAPI 3.2 ingest, a 3.0 / 3.1 export option with down-conversion, base64 validation, and one pub/sub transport under gat and gwag.
+
 ### Migration
 - **OpenAPI `format: byte` outside `multipart/form-data` is now a GraphQL `String`**, not `Upload`, and `contentEncoding: base64` ingests the same way. Clients pass base64 text. It used to reach the upstream as a multipart body or query value holding a Go struct. `format: byte` in `multipart/form-data` is still `Upload`.
 - **Proto `bytes` fields are base64 both ways** (proto3 JSON). GraphQL args used to take the raw string, and output was base64 on gwag's default path but the raw string on gat and gwag's map path. Clients that send raw text to a `bytes` arg must base64-encode it; gat clients reading `bytes` output must decode it. Input accepts standard or URL-safe base64, padded or not. Upload-marked `bytes` fields are unchanged.

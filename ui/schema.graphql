@@ -121,6 +121,17 @@ enum Gateway_Adminevents_V1_ServiceChange_Action {
   ACTION_UNSPECIFIED
 }
 
+type Gwag_Ps_V1_Event {
+  channel: String
+  payload: String
+  payloadType: String
+  ts: String
+}
+
+type Gwag_Ps_V1_PubResponse {
+  _void: String
+}
+
 """Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly)."""
 scalar JSON
 
@@ -131,8 +142,23 @@ type Mutation {
   admin: AdminMutationNamespace!
 }
 
+type PsQueryNamespace {
+  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  stable: PsStableQueryNamespace!
+  v1: PsV1QueryNamespace!
+}
+
+type PsStableQueryNamespace {
+  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+}
+
+type PsV1QueryNamespace {
+  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+}
+
 type Query {
   admin: AdminQueryNamespace!
+  ps: PsQueryNamespace!
 }
 
 type Subscription {
@@ -162,6 +188,8 @@ type Subscription {
     """
     namespace: String
   ): Gateway_Adminevents_V1_ServiceChange
+  ps_stable_sub(channel: String, hmac: String, ts: String): Gwag_Ps_V1_Event
+  ps_sub(channel: String, hmac: String, ts: String): Gwag_Ps_V1_Event
 }
 
 """The `Upload` scalar represents a file streamed in via the graphql-multipart-request-spec wire format (https://github.com/jaydenseric/graphql-multipart-request-spec). Input-only: serialization back to JSON returns null."""
