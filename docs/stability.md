@@ -81,6 +81,13 @@ compiled FileDescriptorSet" path was retired pre-1.0. A future kind
 (e.g. WSDL) would land as a new oneof variant alongside, not as a
 replacement.
 
+**Proto syntax.** proto3 and edition 2023 are supported. proto2 files
+compile and dispatch through the same path, but nothing specific to
+proto2 is supported: extensions are not exposed, declared
+`[default = …]` values are not shown (an unset field reads null), and
+`required` response fields are nullable in GraphQL. Groups convert
+like nested messages. Edition 2024 is refused by protocompile.
+
 **IR data shape.** Every type in `gw/ir` that represents the
 intermediate representation (`Service`, `Operation`, `OperationGroup`,
 `Type`, `Field`, `Arg`, `EnumValue`, `ChannelBinding`, `MapType`,
