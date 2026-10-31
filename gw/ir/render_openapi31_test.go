@@ -48,8 +48,8 @@ const openapi30Spec = `{
   }
 }`
 
-// openapi30RefSpec adds the 3.0 nullable-$ref idiom (allOf + nullable),
-// which ingest does not model, so it stays out of the round-trip test.
+// openapi30RefSpec adds the 3.0 nullable-$ref idioms (allOf or a
+// one-branch oneOf, + nullable).
 const openapi30RefSpec = `{
   "openapi": "3.0.3",
   "info": {"title": "shop", "version": "1.0.0"},
@@ -192,6 +192,26 @@ func TestRenderOpenAPIWith_31NullableRef(t *testing.T) {
 			s.OneOf[0].Ref != "#/components/schemas/Item" ||
 			!s.OneOf[1].Value.Type.Is(openapi3.TypeNull) {
 			t.Errorf("%s = %s", name, mustJSON(t, s))
+		}
+	}
+}
+
+// Both nullable-$ref spellings ingest as a nullable Item field, and the
+// 3.1 form (oneOf with a null branch) ingests back the same.
+func TestIngestOpenAPI_NullableRef(t *testing.T) {
+	svc := IngestOpenAPI(loadSpec(t, []byte(openapi30RefSpec)))
+	out, err := RenderOpenAPIWith(svc, RenderOpenAPIOptions{OpenAPI31: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, s := range map[string]*Service{"3.0": svc, "3.1": IngestOpenAPI(loadSpec(t, mustJSON(t, out)))} {
+		if n := len(s.Types["Box"].Fields); n != 2 {
+			t.Fatalf("%s: Box has %d fields", label, n)
+		}
+		for _, f := range s.Types["Box"].Fields {
+			if f.Type.Named != "Item" || !f.Nullable {
+				t.Errorf("%s %s: type %s nullable %v", label, f.Name, typeRefString(f.Type), f.Nullable)
+			}
 		}
 	}
 }

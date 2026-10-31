@@ -172,6 +172,18 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 		return f
 	}
 	s := ref.Value
+	// A nullable or annotated $ref: `allOf: [$ref]` (+ `nullable`), or
+	// a oneOf / anyOf whose only non-null branch is one schema (the
+	// 3.1 spelling `oneOf: [$ref, {type: null}]`). Project the inner
+	// schema; the wrapper adds nullability and its description.
+	if inner, null := openapiNullableWrapper(s); inner != nil {
+		g := openapiPropToField(svc, pathHint, name, inner, required)
+		g.Nullable = g.Nullable || null || s.Nullable || openapiTypeHasNull(s)
+		if s.Description != "" {
+			g.Description = s.Description
+		}
+		return g
+	}
 	f.Description = s.Description
 	f.Ref = extString(s.Extensions, xRefExtension)
 	f.Annotations = extAnnotations(s.Extensions)
@@ -452,6 +464,40 @@ func synthesizeInlineUnion(svc *Service, hint string, s *openapi3.Schema) string
 }
 
 // primaryOpenAPIType pulls the single non-null type out of an
+// openapiNullableWrapper returns the one schema s wraps, or nil:
+// `allOf` with a single entry and no shape of its own, or `oneOf` /
+// `anyOf` with exactly one branch besides `{type: null}` branches
+// (or a single branch with `nullable`). null reports whether a null branch was dropped.
+func openapiNullableWrapper(s *openapi3.Schema) (inner *openapi3.SchemaRef, null bool) {
+	if len(s.Properties) > 0 || (s.Type != nil && len(*s.Type) > 0 && !(len(*s.Type) == 1 && (*s.Type)[0] == "null")) {
+		return nil, false
+	}
+	switch {
+	case len(s.AllOf) == 1 && len(s.OneOf) == 0 && len(s.AnyOf) == 0:
+		return s.AllOf[0], false
+	case len(s.AllOf) == 0 && (len(s.OneOf) == 0) != (len(s.AnyOf) == 0):
+		branches := s.OneOf
+		if len(branches) == 0 {
+			branches = s.AnyOf
+		}
+		for _, b := range branches {
+			if b != nil && b.Ref == "" && b.Value != nil && b.Value.Type != nil && len(*b.Value.Type) == 1 && (*b.Value.Type)[0] == "null" {
+				null = true
+				continue
+			}
+			if inner != nil {
+				return nil, false
+			}
+			inner = b
+		}
+		if !null && !s.Nullable {
+			return nil, false // a one-branch union stays a union
+		}
+		return inner, null
+	}
+	return nil, false
+}
+
 // OpenAPI 3.1 multi-type list (Schema.Type is now []string-shaped).
 // Mirrors gw/openapi.go's primaryType but local to the ir package.
 // openapiTypeHasNull reports whether an OpenAPI 3.1 type list includes
