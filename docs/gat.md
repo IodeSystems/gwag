@@ -765,20 +765,21 @@ Three views over the same IR projection:
 - `/api/schema/openapi` (or huma's `/openapi.json`) →
   `openapi-typescript`, `openapi-fetch`, `kubb`, `orval`
 
-### OpenAPI 3.1 (`OpenAPI31`)
+### OpenAPI version (`OpenAPI31`)
 
 `/api/schema/openapi` writes a synthesized spec (proto or GraphQL
-source) as `"openapi": "3.0.0"`. An OpenAPI source (huma's spec, an
-ingested upstream) is written as its source declared it. To get 3.1.0
-for every service:
+source, or an ingested 3.0 upstream) as `"openapi": "3.1.0"`. An
+OpenAPI 3.1 or 3.2 source (huma's spec, an ingested upstream) is
+written as its source declared it. For a client whose codegen reads
+3.0 only:
 
 ```go
-g.OpenAPI31(true)
+g.OpenAPI31(false)
 ```
 
-or per request, `GET /api/schema/openapi?openapi=3.1` (`?openapi=3.0`
-asks for the default output when the option is on). In 3.1 output,
-schemas use the JSON Schema 2020-12 forms:
+or per request, `GET /api/schema/openapi?openapi=3.0`
+(`?openapi=3.1` asks for 3.1 when the option is off). The 3.1 output
+uses the JSON Schema 2020-12 forms:
 
 | 3.0                                     | 3.1                                       |
 | --------------------------------------- | ----------------------------------------- |
@@ -788,11 +789,11 @@ schemas use the JSON Schema 2020-12 forms:
 | `example: x`                            | `examples: [x]`                           |
 
 A nullable `enum` also gets `null` in its values. `?openapi=3.0` does
-not convert a 3.1 source down to 3.0. In gwag the same switch is
-`WithOpenAPI31()` and the same query parameter on
-`SchemaOpenAPIHandler`. From Go, `ir.RenderOpenAPIWith(svc,
-ir.RenderOpenAPIOptions{OpenAPI31: true})`. Experimental; v3 makes
-3.1 the default.
+not convert a 3.1 source down to 3.0. In gwag, `WithOpenAPI30()`
+selects 3.0, and `SchemaOpenAPIHandler` takes the same query
+parameter. From Go, `ir.RenderOpenAPIWith(svc,
+ir.RenderOpenAPIOptions{OpenAPI31: true})`; `ir.RenderOpenAPI` itself
+still returns 3.0. Experimental.
 
 ## Trap: parameters on an unexported field
 

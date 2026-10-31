@@ -97,7 +97,7 @@ type Gateway struct {
 	// unversioned copy of the latest version. Set via VersionedOnly().
 	versionedOnly bool
 
-	// openAPI31 makes the OpenAPI schema route emit 3.1 (OpenAPI31).
+	// openAPI31: the OpenAPI schema route emits 3.1 (OpenAPI31, default on).
 	openAPI31 bool
 
 	// allowEmbeddedParams downgrades the embedded-parameter check from a
@@ -196,6 +196,7 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 		registry:       ir.NewDispatchRegistry(),
 		pubsub:         newPubSub(),
 		emptyNilSlices: true,
+		openAPI31:      true,
 		maxBody:        defaultMaxRequestBytes,
 		maxOps:         defaultMaxOperations,
 	}
@@ -234,12 +235,13 @@ func (g *Gateway) VersionedOnly(b bool) *Gateway {
 	return g
 }
 
-// OpenAPI31 makes {prefix}/schema/openapi emit OpenAPI 3.1.0 instead
-// of 3.0.0 (default off): nullable schemas become type lists with
-// "null", exclusive bounds become numbers, a schema example becomes
-// examples. A request can pick either with `?openapi=3.0` or
-// `?openapi=3.1`. v3 makes 3.1 the default. Call before serving.
-// Returns g for chaining.
+// OpenAPI31 picks the OpenAPI version {prefix}/schema/openapi emits
+// for a synthesized spec (default on: 3.1.0). Off emits 3.0.0, where
+// nullable schemas carry `nullable: true` instead of a "null" type
+// entry and exclusive bounds are booleans. A request can pick either
+// with `?openapi=3.0` or `?openapi=3.1`. A spec gat re-emits from an
+// OpenAPI source (huma) keeps the source's version. Call before
+// serving. Returns g for chaining.
 //
 // Stability: experimental
 func (g *Gateway) OpenAPI31(b bool) *Gateway {

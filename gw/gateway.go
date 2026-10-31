@@ -254,8 +254,8 @@ type config struct {
 	// connectErrorCodes: WithConnectErrorCodes.
 	connectErrorCodes bool
 
-	// openAPI31: WithOpenAPI31.
-	openAPI31 bool
+	// openAPI30: WithOpenAPI30.
+	openAPI30 bool
 
 	// upstreamTimeout is the default per-call timeout for unary
 	// upstream dispatch (WithUpstreamTimeout); 0 → none.
@@ -754,16 +754,17 @@ func WithConnectErrorCodes() Option {
 	return func(cfg *config) { cfg.connectErrorCodes = true }
 }
 
-// WithOpenAPI31 makes SchemaOpenAPIHandler emit OpenAPI 3.1.0 instead
-// of 3.0.0: nullable schemas become type lists with "null", exclusive
-// bounds become numbers, a schema example becomes examples. A request
-// can pick either with `?openapi=3.0` or `?openapi=3.1`. Only the
-// exported spec changes; REST ingress routing does not. v3 makes this
-// the default.
+// WithOpenAPI30 makes SchemaOpenAPIHandler emit OpenAPI 3.0.0 instead
+// of the default 3.1.0: nullable schemas carry `nullable: true`
+// instead of a "null" type entry, exclusive bounds are booleans, a
+// schema example stays `example`. For clients whose codegen reads 3.0
+// only. A request can pick either with `?openapi=3.0` or
+// `?openapi=3.1`. Only the exported spec changes; REST ingress
+// routing does not.
 //
 // Stability: experimental
-func WithOpenAPI31() Option {
-	return func(cfg *config) { cfg.openAPI31 = true }
+func WithOpenAPI30() Option {
+	return func(cfg *config) { cfg.openAPI30 = true }
 }
 
 // WithoutMetrics disables metrics. /metrics returns 404; dispatches
