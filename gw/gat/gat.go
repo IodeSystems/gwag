@@ -922,11 +922,24 @@ func (g *Gateway) Services() []*ir.Service {
 // PubSub returns the gateway's publish/subscribe handle. It is always
 // available — single-node (in-process) out of the box. Call
 // EnablePeerMesh to add best-effort cross-node fanout to a set of
-// peer gat instances.
+// peer gat instances, or UseBus to put another transport (e.g.
+// gatnats) under it.
 //
 // Stability: experimental
 func (g *Gateway) PubSub() *PubSub {
 	return &PubSub{g: g}
+}
+
+// UseBus sets the transport under PubSub and the WebSocket subscribe
+// endpoint. The default is a LocalBus (this process only). The
+// subscribe-token check and the per-subscriber drop-oldest queue stay
+// in gat and apply to every bus. Call once, before serving traffic:
+// subscriptions opened before the call stay on the previous bus. A
+// nil b restores a fresh LocalBus. The gateway does not close b.
+//
+// Stability: experimental
+func (g *Gateway) UseBus(b Bus) {
+	g.pubsub.setBus(b)
 }
 
 // Close releases gateway resources: it stops the peer-mesh fanout
@@ -974,7 +987,7 @@ func (p *PubSub) Subscribe(pattern string) (<-chan Event, func()) {
 // PubSub facade: local fanout, plus best-effort cross-node fanout
 // when a peer mesh is configured.
 func (g *Gateway) publish(channel string, payload []byte) {
-	g.pubsub.publishLocal(channel, payload)
+	g.pubsub.Publish(channel, payload)
 	if g.mesh != nil {
 		g.mesh.fanout(channel, payload)
 	}

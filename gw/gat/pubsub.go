@@ -3,6 +3,7 @@ package gat
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Event is one published message. Channel is the concrete dotted
@@ -21,27 +22,48 @@ type Event struct {
 // oldest queued event dropped rather than stalling the publisher.
 const subscriberQueueDepth = 64
 
-// pubSub is gat's in-process publish/subscribe primitive: a registry
-// of pattern subscribers with NATS-style channel matching. It is the
-// single-node foundation — peer fanout (cross-node) layers on top by
-// calling publishLocal on received events.
+// pubSub is gat's publish/subscribe layer: per-subscriber buffered
+// queues (drop-oldest, subscriberQueueDepth) on top of a Bus. The Bus
+// moves events (LocalBus by default; a peer mesh or NATS when
+// configured); pubSub owns the queues and closes them on cancel or
+// Gateway.Close.
 //
 // Concurrent-safe: Publish / Subscribe / a subscription's cancel may
 // all be called from different goroutines.
 type pubSub struct {
-	mu     sync.RWMutex
+	bus atomic.Pointer[busBox]
+
+	mu     sync.Mutex
 	subs   map[int]*subscription
 	nextID int
 }
 
+// busBox lets an interface value sit behind an atomic.Pointer, keeping
+// the publish path lock-free.
+type busBox struct{ Bus }
+
 type subscription struct {
-	id      int
-	pattern []string // tokenised match pattern
-	ch      chan Event
+	ch    chan Event
+	unsub func()
 }
 
 func newPubSub() *pubSub {
-	return &pubSub{subs: map[int]*subscription{}}
+	ps := &pubSub{subs: map[int]*subscription{}}
+	ps.bus.Store(&busBox{NewLocalBus()})
+	return ps
+}
+
+// setBus swaps the transport. Subscriptions already open stay on the
+// previous bus; call before serving traffic.
+func (ps *pubSub) setBus(b Bus) {
+	if b == nil {
+		b = NewLocalBus()
+	}
+	ps.bus.Store(&busBox{b})
+}
+
+func (ps *pubSub) currentBus() Bus {
+	return ps.bus.Load().Bus
 }
 
 // Subscribe registers a subscriber for every channel matching
@@ -49,27 +71,34 @@ func newPubSub() *pubSub {
 // rest). It returns a receive-only channel of events and a cancel
 // func; calling cancel removes the subscription and closes the
 // channel. The channel is buffered (subscriberQueueDepth); a consumer
-// that falls behind loses the oldest events.
+// that falls behind loses the oldest events. If the bus rejects the
+// pattern, the returned channel is already closed.
 //
 // Stability: experimental
 func (ps *pubSub) Subscribe(pattern string) (<-chan Event, func()) {
+	ch := make(chan Event, subscriberQueueDepth)
+	unsub, err := ps.currentBus().Subscribe(pattern, func(channel string, payload []byte) {
+		deliver(ch, Event{Channel: channel, Payload: payload})
+	})
+	if err != nil {
+		close(ch)
+		return ch, func() {}
+	}
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
 	id := ps.nextID
 	ps.nextID++
-	sub := &subscription{
-		id:      id,
-		pattern: strings.Split(pattern, "."),
-		ch:      make(chan Event, subscriberQueueDepth),
-	}
+	sub := &subscription{ch: ch, unsub: unsub}
 	ps.subs[id] = sub
+	ps.mu.Unlock()
 	var once sync.Once
 	cancel := func() {
 		once.Do(func() {
 			ps.mu.Lock()
-			defer ps.mu.Unlock()
-			if _, ok := ps.subs[id]; ok {
-				delete(ps.subs, id)
+			_, ok := ps.subs[id]
+			delete(ps.subs, id)
+			ps.mu.Unlock()
+			if ok {
+				sub.unsub()
 				close(sub.ch)
 			}
 		})
@@ -78,47 +107,25 @@ func (ps *pubSub) Subscribe(pattern string) (<-chan Event, func()) {
 }
 
 // closeAll cancels every active subscription and closes its channel.
-// Called by Gateway.Close; after it runs, Publish is a no-op (no
-// subscribers) and Subscribe still works on a fresh subscription.
+// Called by Gateway.Close; after it runs, Publish reaches no existing
+// subscriber and Subscribe still works on a fresh subscription.
 func (ps *pubSub) closeAll() {
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	for id, sub := range ps.subs {
-		delete(ps.subs, id)
+	subs := ps.subs
+	ps.subs = map[int]*subscription{}
+	ps.mu.Unlock()
+	for _, sub := range subs {
+		sub.unsub()
 		close(sub.ch)
 	}
 }
 
-// Publish delivers payload to every local subscriber whose pattern
-// matches `channel`. This is the public entry point — for a gateway
-// with peers, Publish also triggers cross-node fanout (see
-// peerPublish). publishLocal is the local-only half, reused by the
-// peer receive handler so a received event fans out without
-// re-broadcasting.
+// Publish hands the event to the bus. Delivery is best-effort; a bus
+// error (e.g. a disconnected transport) drops the event.
 //
 // Stability: experimental
 func (ps *pubSub) Publish(channel string, payload []byte) {
-	ps.publishLocal(channel, payload)
-}
-
-// publishLocal fans an event out to matching local subscribers only.
-// Send is non-blocking: if a subscriber's buffer is full the oldest
-// event is dropped to make room, keeping the publisher unblocked.
-func (ps *pubSub) publishLocal(channel string, payload []byte) {
-	segments := strings.Split(channel, ".")
-	ps.mu.RLock()
-	targets := make([]*subscription, 0, len(ps.subs))
-	for _, sub := range ps.subs {
-		if matchChannel(sub.pattern, segments) {
-			targets = append(targets, sub)
-		}
-	}
-	ps.mu.RUnlock()
-
-	ev := Event{Channel: channel, Payload: payload}
-	for _, sub := range targets {
-		deliver(sub.ch, ev)
-	}
+	_ = ps.currentBus().Publish(channel, payload)
 }
 
 // deliver does a best-effort send: if ch is full, drop the oldest
@@ -140,22 +147,8 @@ func deliver(ch chan Event, ev Event) {
 	}
 }
 
-// matchChannel reports whether a tokenised subscription pattern
-// matches a tokenised concrete channel. `*` matches exactly one
-// segment; `>` matches one or more trailing segments and must be the
-// final pattern token.
+// matchChannel is the tokenised form of MatchChannel, kept for the
+// table test that predates it.
 func matchChannel(pattern, channel []string) bool {
-	for i, tok := range pattern {
-		if tok == ">" {
-			// `>` must be last and needs at least one segment to cover.
-			return i == len(pattern)-1 && i < len(channel)
-		}
-		if i >= len(channel) {
-			return false
-		}
-		if tok != "*" && tok != channel[i] {
-			return false
-		}
-	}
-	return len(pattern) == len(channel)
+	return MatchChannel(strings.Join(pattern, "."), strings.Join(channel, "."))
 }

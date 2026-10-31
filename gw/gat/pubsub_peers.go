@@ -177,7 +177,7 @@ func verifyPeerBody(key, body []byte, sigHex string) bool {
 
 // peerPublishHandler returns the http.Handler for PeerPublishPath: it
 // verifies the HMAC, decodes the envelope, and fans the event out
-// LOCAL-ONLY. Using publishLocal (not publish) is the loop guard — a
+// LOCAL-ONLY. Using pubsub.Publish (not g.publish) is the loop guard — a
 // received event never re-broadcasts to peers, capping fanout at one
 // hop.
 func (g *Gateway) peerPublishHandler() http.Handler {
@@ -204,7 +204,7 @@ func (g *Gateway) peerPublishHandler() http.Handler {
 			http.Error(w, "invalid envelope", http.StatusBadRequest)
 			return
 		}
-		g.pubsub.publishLocal(ev.Channel, ev.Payload)
+		g.pubsub.Publish(ev.Channel, ev.Payload)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

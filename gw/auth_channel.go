@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/iodesystems/gwag/v2/gw/gat"
 )
 
 // ChannelAuthTier is the auth posture applied to a pub/sub channel
@@ -209,31 +211,10 @@ func (g *Gateway) verifyChannelHMAC(channel, hmacB64 string, ts int64) error {
 
 // subjectMatchesPattern reports whether the NATS-style `pattern`
 // (with optional `*` and `>` tokens) matches the literal `subject`.
-//
-// Examples:
-//
-//	matchSubject("events.orders.>", "events.orders.42.update") → true
-//	matchSubject("events.*.update", "events.orders.update")     → true
-//	matchSubject("events.orders.>", "events.orders")            → false (> needs ≥1 token)
+// It is gat.MatchChannel — one matcher shared by gat's buses and
+// gwag's channel auth / channel bindings.
 func subjectMatchesPattern(pattern, subject string) bool {
-	if pattern == "" || subject == "" {
-		return false
-	}
-	p := strings.Split(pattern, ".")
-	s := strings.Split(subject, ".")
-	for i, tok := range p {
-		if tok == ">" {
-			// `>` matches one-or-more remaining tokens.
-			return i < len(s)
-		}
-		if i >= len(s) {
-			return false
-		}
-		if tok != "*" && tok != s[i] {
-			return false
-		}
-	}
-	return len(p) == len(s)
+	return gat.MatchChannel(pattern, subject)
 }
 
 // patternsIntersect reports whether two NATS-style patterns share
