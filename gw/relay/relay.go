@@ -45,6 +45,11 @@ type Relay struct {
 	coalesce bool
 	compress bool
 	frames   *frameCache // WithCompression only
+
+	mu      sync.Mutex
+	conns   map[*websocket.Conn]context.CancelFunc // live sockets, for Shutdown
+	closing bool                                   // Shutdown ran; refuse new sockets
+	serving sync.WaitGroup                         // one per entry in conns
 }
 
 // Option configures a Relay.
@@ -84,7 +89,7 @@ func WithoutCoalescing() Option { return func(r *Relay) { r.coalesce = false } }
 // By default the source is wrapped in Coalesce, so the relay holds one upstream
 // subscription per channel regardless of how many local clients watch it.
 func New(secret []byte, src Source, opts ...Option) *Relay {
-	r := &Relay{secret: secret, now: time.Now, queue: 64, writeTO: 5 * time.Second, coalesce: true}
+	r := &Relay{secret: secret, now: time.Now, queue: 64, writeTO: 5 * time.Second, coalesce: true, conns: map[*websocket.Conn]context.CancelFunc{}}
 	for _, o := range opts {
 		o(r)
 	}
@@ -105,6 +110,10 @@ func New(secret []byte, src Source, opts ...Option) *Relay {
 // wrap with the caller's origin policy when serving cross-origin.
 func (r *Relay) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if r.isClosing() {
+			http.Error(w, "relay: shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		up := websocket.Upgrader{
 			CheckOrigin:       func(*http.Request) bool { return true },
 			EnableCompression: r.compress,
@@ -118,6 +127,76 @@ func (r *Relay) Handler() http.Handler {
 	})
 }
 
+// Shutdown tells every client the server is restarting (close 1001, "server
+// restarting"), closes every socket, and refuses new ones with 503. It returns
+// once all connections have ended and released their Source subscriptions, or
+// with ctx's error if ctx ends first; sockets are closed either way. A client
+// too slow to take the close frame within the write timeout is closed without
+// it. A Relay does not serve again after Shutdown.
+//
+// http.Server.Shutdown does not touch hijacked connections, so register this:
+//
+//	srv.RegisterOnShutdown(func() { _ = relay.Shutdown(ctx) })
+func (r *Relay) Shutdown(ctx context.Context) error {
+	r.mu.Lock()
+	r.closing = true
+	conns := make(map[*websocket.Conn]context.CancelFunc, len(r.conns))
+	for c, cancel := range r.conns {
+		conns[c] = cancel
+	}
+	r.mu.Unlock()
+
+	deadline := time.Now().Add(r.writeTO)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	msg := websocket.FormatCloseMessage(websocket.CloseGoingAway, "server restarting")
+	for c, cancel := range conns {
+		// One goroutine per socket: a stalled client must not hold up the rest.
+		go func() {
+			_ = c.WriteControl(websocket.CloseMessage, msg, deadline)
+			cancel()
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		r.serving.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *Relay) isClosing() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closing
+}
+
+// track records a live socket, or reports false once Shutdown has begun.
+func (r *Relay) track(c *websocket.Conn, cancel context.CancelFunc) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing {
+		return false
+	}
+	r.conns[c] = cancel
+	r.serving.Add(1)
+	return true
+}
+
+func (r *Relay) untrack(c *websocket.Conn) {
+	r.mu.Lock()
+	delete(r.conns, c)
+	r.mu.Unlock()
+	r.serving.Done()
+}
+
 // serve runs one connection: a single writer goroutine drains the outbound
 // buffer, while this goroutine reads control frames and (un)subscribes the
 // Source. gorilla permits one concurrent reader + one concurrent writer, which is
@@ -125,6 +204,10 @@ func (r *Relay) Handler() http.Handler {
 func (r *Relay) serve(ctx context.Context, c *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if !r.track(c, cancel) {
+		return // Shutdown began during the upgrade
+	}
+	defer r.untrack(c)
 	c.SetReadLimit(readLimit)
 
 	out := make(chan outFrame, r.queue)

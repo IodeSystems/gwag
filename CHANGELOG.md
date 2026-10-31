@@ -9,6 +9,9 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **`Relay.Shutdown(ctx)`** sends close 1001 ("server restarting") to every socket, closes them, and answers new ones with 503, so a deploy is not a 1006 for every client. `http.Server.Shutdown` does not touch hijacked connections: call it from `srv.RegisterOnShutdown`.
+
 ## v2.8.0 — 2026-10-31
 
 Relay liveness and cheap compression: a `ping` op, a heartbeat and live state in the generated runtime, and `WithCompression`, which compresses a fan-out once rather than once per socket.

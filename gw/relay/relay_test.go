@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -263,4 +265,110 @@ func TestRelay_Compression(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRelay_Shutdown(t *testing.T) {
+	secret := []byte("k")
+	src := newFakeSource()
+	r := New(secret, src)
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	tok, _ := Sign(secret, Cap{Channel: "ch"})
+
+	var conns []*websocket.Conn
+	for range 3 {
+		c, _, err := websocket.Dial(context.Background(), url, nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer func() { _ = c.CloseNow() }()
+		writeFrame(t, c, inFrame{Op: "sub", ID: "1", Token: tok})
+		if ack := readFrame(t, c); ack.Op != "ack" {
+			t.Fatalf("want ack, got %+v", ack)
+		}
+		conns = append(conns, c)
+	}
+
+	// A client reads concurrently, as a browser does: that is what takes the
+	// close frame.
+	codes := make(chan websocket.CloseError, len(conns))
+	for _, c := range conns {
+		go func() {
+			_, _, err := c.Read(context.Background())
+			var ce websocket.CloseError
+			errors.As(err, &ce)
+			codes <- ce
+		}()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := r.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	for range conns {
+		if ce := <-codes; ce.Code != websocket.StatusGoingAway || ce.Reason != "server restarting" {
+			t.Errorf("close = %+v", ce)
+		}
+	}
+	if n := src.count("ch"); n != 0 {
+		t.Errorf("%d source subs left after Shutdown", n)
+	}
+
+	if _, resp, err := websocket.Dial(context.Background(), url, nil); err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("dial after Shutdown: err=%v resp=%+v", err, resp)
+	}
+	if err := r.Shutdown(ctx); err != nil {
+		t.Errorf("second Shutdown: %v", err)
+	}
+}
+
+// A client that never reads must not hold Shutdown past its context.
+func TestRelay_ShutdownHonorsContext(t *testing.T) {
+	secret := []byte("k")
+	src := newFakeSource()
+	r := New(secret, src)
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	c, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.CloseNow() }()
+	tok, _ := Sign(secret, Cap{Channel: "ch"})
+	writeFrame(t, c, inFrame{Op: "sub", ID: "1", Token: tok})
+	if ack := readFrame(t, c); ack.Op != "ack" {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := r.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Shutdown took %s", d)
+	}
+	waitFor(t, func() bool { return src.count("ch") == 0 })
+}
+
+func TestRelay_NoConnsLeftTracked(t *testing.T) {
+	r := New([]byte("k"), newFakeSource())
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	c, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	writeFrame(t, c, inFrame{Op: "ping", ID: "hb"})
+	if f := readFrame(t, c); f.Op != "pong" {
+		t.Fatalf("want pong, got %+v", f)
+	}
+	_ = c.CloseNow()
+	waitFor(t, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.conns) == 0
+	})
 }
