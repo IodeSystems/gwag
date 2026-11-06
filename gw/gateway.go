@@ -2250,9 +2250,14 @@ type rejection struct {
 	// status is the upstream's HTTP error status, when the rejection
 	// relays one; 0 otherwise.
 	status int
+	// cause is the transport error behind an upstream failure, kept
+	// so gat.ErrorCode sees a context deadline or cancellation.
+	cause error
 }
 
 func (r *rejection) Error() string { return r.Msg }
+
+func (r *rejection) Unwrap() error { return r.cause }
 
 // GetStatus is the rejection as an HTTP status: the upstream's, when
 // it relays one, else its Code's. gat.ErrorCode reads it to pick the

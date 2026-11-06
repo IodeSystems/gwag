@@ -171,7 +171,7 @@ func (d *openAPIStreamDispatcher) open(ctx context.Context, args map[string]any)
 		if ctx.Err() == nil {
 			r.health.failure(policy)
 		}
-		return fail(rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", d.method, full, err.Error())))
+		return fail(rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", d.method, full, err.Error()), err))
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

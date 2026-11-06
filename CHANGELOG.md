@@ -15,6 +15,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Changed
 - OpenAPI streamed responses (SSE, JSONL, NDJSON, json-seq): an item that fails to decode is skipped and logged (rate limited) instead of ending the subscription with an error. The subscriber sees no event for it. Errors from the body itself still end the stream. `ir.OpenAPIStreamReader.Next` no longer returns decode errors; `OnSkip` reports them.
+- REST ingress: an OpenAPI or GraphQL upstream that fails on a context deadline answers 504 (was 500), and one that fails on cancellation answers 499 (was 500). `gat.ErrorCode` now checks `context.Canceled` / `DeadlineExceeded` ahead of a `GetStatus()` method, so the gRPC ingress gives DeadlineExceeded / Canceled for the same errors (was Internal).
 
 ### Fixed
 - gat BYO OpenAPI dispatch errors carry the upstream HTTP status, so an upstream 404 / 409 / 503 is NotFound / AlreadyExists / Unavailable over gRPC and has `status` / `code` GraphQL error extensions, instead of Internal with none. Transport failures are 502, undecodable responses 502, argument validation 400.

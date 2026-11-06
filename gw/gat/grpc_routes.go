@@ -329,14 +329,14 @@ func withHeaderMetadata(ctx context.Context, h http.Header) context.Context {
 //
 //   - a *connect.Error, or an error with a gRPC status
 //     (status.FromError), keeps its code;
+//   - context.Canceled and context.DeadlineExceeded, also wrapped in
+//     another error, map to Canceled and DeadlineExceeded;
 //   - an error with an HTTP status (a GetStatus() int method, as huma's
 //     errors have) maps by status: 400 InvalidArgument, 401
 //     Unauthenticated, 403 PermissionDenied, 404 and 410 NotFound, 409
 //     AlreadyExists, 412 FailedPrecondition, 413 and 429
 //     ResourceExhausted, 501 Unimplemented, 502, 503 and 504
 //     Unavailable, other 4xx InvalidArgument, other 5xx Internal;
-//   - context.Canceled and context.DeadlineExceeded map to Canceled and
-//     DeadlineExceeded;
 //   - anything else is Internal.
 //
 // Wrapped errors are unwrapped. err must not be nil.
@@ -350,16 +350,16 @@ func ErrorCode(err error) connect.Code {
 	if st, ok := status.FromError(err); ok {
 		return connect.Code(st.Code())
 	}
-	type statusError interface{ GetStatus() int }
-	var se statusError
-	if errors.As(err, &se) {
-		return httpStatusToConnectCode(se.GetStatus())
-	}
 	switch {
 	case errors.Is(err, context.Canceled):
 		return connect.CodeCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.CodeDeadlineExceeded
+	}
+	type statusError interface{ GetStatus() int }
+	var se statusError
+	if errors.As(err, &se) {
+		return httpStatusToConnectCode(se.GetStatus())
 	}
 	return connect.CodeInternal
 }

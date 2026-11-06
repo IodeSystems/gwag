@@ -292,9 +292,10 @@ const (
 	upstreamClass5xx                            // upstream answered 5xx
 )
 
-// rejectUpstream is Reject plus the ejection class.
-func rejectUpstream(class upstreamClass, code Code, msg string) error {
-	return &rejection{Code: code, Msg: msg, upstream: class}
+// rejectUpstream is Reject plus the ejection class and the transport
+// error behind it (nil when there is none).
+func rejectUpstream(class upstreamClass, code Code, msg string, cause error) error {
+	return &rejection{Code: code, Msg: msg, upstream: class, cause: cause}
 }
 
 // rejectUpstreamStatus rejects with an upstream's HTTP error status,

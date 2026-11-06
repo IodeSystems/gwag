@@ -719,12 +719,12 @@ func dispatchOpenAPIRaw(
 	// this dispatch are ours to close.
 	closeUploads(closeups)
 	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", method, full, err.Error()), err)
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()), err)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, rejectUpstreamStatus(resp.StatusCode,

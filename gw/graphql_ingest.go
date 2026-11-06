@@ -543,12 +543,12 @@ func dispatchGraphQL(
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()), err)
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()))
+		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()), err)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, rejectUpstreamStatus(resp.StatusCode,
