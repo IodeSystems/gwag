@@ -10,10 +10,12 @@ changes on MINOR, drops on MAJOR.
 ## Unreleased
 
 ### Added
-- **`ir.TypeRef.List` / `ir.ListType`** (experimental): the element of a repeated slot can itself be a list, with its own element nullability. `TypeRef.IsList()` and `TypeRef.Leaf()` go with it.
+- **`ir.TypeRef.List` / `ir.ListType`** (experimental): the element of a repeated slot can itself be a list, with its own element nullability. `TypeRef.IsList()` and `TypeRef.Leaf()` go with it. `ir.IsListRow(md)` and `ir.IsMapValueBox(md)` identify the proto row and map-value boxes.
 
 ### Fixed
-- Nested lists flattened. An OpenAPI array of array (huma `[][2]float64`), a downstream-GraphQL `[[T]]`, and an MCP array of array rendered as `[T]`, so a query that sent `[[1,2]]` failed validation. They now render as nested GraphQL lists in both directions, export as nested OpenAPI arrays, and export to proto as a repeated `<Field>Row { repeated T value = 1; }` box.
+- Nested lists flattened. An OpenAPI array of array (huma `[][2]float64`), a downstream-GraphQL `[[T]]`, and an MCP array of array rendered as `[T]`, so a query that sent `[[1,2]]` failed validation. They now render as nested GraphQL lists in both directions, export as nested OpenAPI arrays, and export to proto as a repeated `<Field>Row { repeated T value = 1; }` box. gRPC ingress (gat huma ops, and gwag OpenAPI / GraphQL slots) unboxes rows on the way in and boxes them on the way out, so the handler or upstream sees plain nested arrays.
+- Map of map over gRPC ingress. gat huma ops and gwag OpenAPI / GraphQL slots took a `map<K, map<K, V>>` through its `<Field>Value` proto box without unboxing, so handlers and upstreams saw `{"a":{"value":{...}}}` and responses came back empty. Boxes now convert in both directions.
+- gat gRPC ingress: a huma map with 64-bit integer values (`map[string]int`) failed to bind, since protojson sends int64 as a decimal string and map values had no string-to-number path. Maps are now walked like structs.
 
 ## v2.9.0 — 2026-10-31
 

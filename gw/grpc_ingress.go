@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 
 	"github.com/iodesystems/gwag/v2/gw/gat"
+	"github.com/iodesystems/gwag/v2/gw/internal/protocodec"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -105,7 +106,7 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 						if disp == nil {
 							continue
 						}
-						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), false), Data: info})
+						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), false, false), Data: info})
 						continue
 					}
 					inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
@@ -217,7 +218,7 @@ func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(add func(gat.GRPCRoute), key 
 						continue
 					}
 					if md.IsStreamingServer() {
-						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), isSynthResponseWrapper(md.Output())), Data: noRouteInfo})
+						add(gat.GRPCRoute{Method: md, Stream: grpcSubscription(disp, md.Output(), isSynthResponseWrapper(md.Output()), true), Data: noRouteInfo})
 						continue
 					}
 					// A path a proto slot already serves keeps that route.
@@ -249,10 +250,16 @@ func (g *Gateway) addCanonicalArgsGRPCRoutesLocked(add func(gat.GRPCRoute), key 
 // it through the route's Release once encoded.
 func newCanonicalArgsGRPCHandler(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor) Handler {
 	wrapInValue := isSynthResponseWrapper(outputDesc)
+	boxOut := protocodec.HasBoxes(outputDesc)
 	return Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 		var args map[string]any
 		if reqMsg, ok := req.(*dynamicpb.Message); ok && reqMsg != nil {
 			args = messageToMap(reqMsg)
+			if md := reqMsg.Descriptor(); protocodec.HasBoxes(md) {
+				// Nested lists arrive as row boxes; the dispatcher
+				// wants plain lists.
+				protocodec.Unbox(md, args)
+			}
 		} else {
 			args = map[string]any{}
 		}
@@ -275,6 +282,9 @@ func newCanonicalArgsGRPCHandler(disp ir.Dispatcher, outputDesc protoreflect.Mes
 			// argsToMessage doesn't carry a primitive-only path.
 			releaseDynamicMessage(outputDesc, respMsg)
 			return nil, fmt.Errorf("ingress: cannot project %T into %s", result, outputDesc.FullName())
+		}
+		if boxOut {
+			protocodec.Box(outputDesc, payload)
 		}
 		if err := argsToMessage(payload, respMsg); err != nil {
 			releaseDynamicMessage(outputDesc, respMsg)
@@ -464,11 +474,17 @@ const (
 // (plus the HMAC handles from metadata), each event a response
 // message. wrapInValue projects each event into the synthesized
 // `{value: <event>}` response (a canonical-args op whose event is a
-// scalar or list); see newCanonicalArgsGRPCHandler. An error event
-// ends the stream with that error.
-func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor, wrapInValue bool) func(context.Context, *dynamicpb.Message, func(proto.Message) error) error {
+// scalar or list); see newCanonicalArgsGRPCHandler. listRows (set for
+// descriptors rendered from a non-proto IR) converts nested-list row
+// boxes, see protocodec.Box. An error event ends the stream
+// with that error.
+func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescriptor, wrapInValue, listRows bool) func(context.Context, *dynamicpb.Message, func(proto.Message) error) error {
+	boxOut := listRows && protocodec.HasBoxes(outputDesc)
 	return func(ctx context.Context, req *dynamicpb.Message, send func(proto.Message) error) error {
 		args := messageToMap(req)
+		if listRows && protocodec.HasBoxes(req.Descriptor()) {
+			protocodec.Unbox(req.Descriptor(), args)
+		}
 		if md, ok := metadata.FromIncomingContext(ctx); ok {
 			if v := md.Get(mdSubscribeHMAC); len(v) > 0 {
 				args["hmac"] = v[0]
@@ -507,6 +523,9 @@ func grpcSubscription(disp ir.Dispatcher, outputDesc protoreflect.MessageDescrip
 				evMap, ok := ev.(map[string]any)
 				if !ok {
 					continue
+				}
+				if boxOut {
+					protocodec.Box(outputDesc, evMap)
 				}
 				outMsg := acquireDynamicMessage(outputDesc)
 				if err := argsToMessage(evMap, outMsg); err != nil {

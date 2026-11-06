@@ -602,8 +602,8 @@ func renderProtoMapEntry(f *Field, pkg, parent string) (entry *descriptorpb.Desc
 			mapEntryField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
 				"."+qualifyNested(wrapper, pkg, parent)))
 	case val.IsList():
-		// A list as a map value: box it like a nested map.
-		wrapper := protoMapValueName(f.Name)
+		// A list as a map value: box it as a list row (see IsListRow).
+		wrapper := protoListRowName(f.Name)
 		inner := &Field{Name: "value", Type: val.List.Elem, Repeated: true}
 		fd, nested := renderProtoField(inner, 1, pkg, qualifyLocal(wrapper, parent))
 		box := &descriptorpb.DescriptorProto{Name: stringPtr(wrapper)}
@@ -683,6 +683,43 @@ func validProtoMapKey(k descriptorpb.FieldDescriptorProto_Type) bool {
 // `points` → `PointsRow`.
 func protoListRowName(field string) string {
 	return strings.TrimSuffix(protoMapEntryName(field), "Entry") + "Row"
+}
+
+// IsListRow reports whether md is the box RenderProtoFiles emits for
+// one inner list of a nested list: a message nested in another
+// message, named `<Field>Row`, whose only field is `repeated value`.
+// gRPC ingress unboxes a row to a plain list on the way in and boxes
+// a list on the way out. Only messages rendered from a non-proto IR
+// carry this meaning; a proto-origin service's own messages are
+// never treated as rows.
+//
+// Stability: experimental
+func IsListRow(md protoreflect.MessageDescriptor) bool {
+	if md == nil || !strings.HasSuffix(string(md.Name()), "Row") || md.Fields().Len() != 1 {
+		return false
+	}
+	if _, nested := md.Parent().(protoreflect.MessageDescriptor); !nested {
+		return false
+	}
+	f := md.Fields().Get(0)
+	return f.Name() == "value" && f.IsList()
+}
+
+// IsMapValueBox reports whether md is the box RenderProtoFiles emits
+// for an inner map of a map of maps: a message nested in another
+// message, named `<Field>Value` (see protoMapValueName), whose only
+// field is `map value`. Same ingress contract as IsListRow.
+//
+// Stability: experimental
+func IsMapValueBox(md protoreflect.MessageDescriptor) bool {
+	if md == nil || !strings.HasSuffix(string(md.Name()), "Value") || md.Fields().Len() != 1 {
+		return false
+	}
+	if _, nested := md.Parent().(protoreflect.MessageDescriptor); !nested {
+		return false
+	}
+	f := md.Fields().Get(0)
+	return f.Name() == "value" && f.IsMap()
 }
 
 func protoMapValueName(field string) string {

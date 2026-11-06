@@ -314,6 +314,9 @@ func assignValue(dst reflect.Value, v any) error {
 		if target.Kind() == reflect.Struct {
 			return assignMapToStruct(target, m)
 		}
+		if target.Kind() == reflect.Map {
+			return assignMapToMap(target, m)
+		}
 	}
 
 	// Slice walk.
@@ -335,6 +338,37 @@ func assignValue(dst reflect.Value, v any) error {
 		return err
 	}
 	return json.Unmarshal(b, dst.Addr().Interface())
+}
+
+// assignMapToMap fills a Go map from a JSON-shaped object, applying
+// assignValue to each value so int64-as-string values (protojson's
+// form) reach numeric map values. Keys are JSON object keys: strings,
+// parsed for a numeric key type the way encoding/json does.
+func assignMapToMap(dst reflect.Value, m map[string]any) error {
+	t := dst.Type()
+	out := reflect.MakeMapWithSize(t, len(m))
+	for k, v := range m {
+		key := reflect.New(t.Key()).Elem()
+		switch {
+		case t.Key().Kind() == reflect.String:
+			key.SetString(k)
+		case isNumericKind(t.Key().Kind()):
+			if err := assignNumericFromString(key, k); err != nil {
+				return fmt.Errorf("key %q: %w", k, err)
+			}
+		default:
+			if err := json.Unmarshal([]byte(strconv.Quote(k)), key.Addr().Interface()); err != nil {
+				return fmt.Errorf("key %q: %w", k, err)
+			}
+		}
+		val := reflect.New(t.Elem()).Elem()
+		if err := assignValue(val, v); err != nil {
+			return fmt.Errorf("[%q]: %w", k, err)
+		}
+		out.SetMapIndex(key, val)
+	}
+	dst.Set(out)
+	return nil
 }
 
 func isNumericKind(k reflect.Kind) bool {

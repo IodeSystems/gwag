@@ -28,6 +28,8 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
 // messageToArgs converts msg into the args map bindInput expects.
@@ -120,6 +122,23 @@ func valueToAny(fd protoreflect.FieldDescriptor, v protoreflect.Value) any {
 		// to the bare number.
 		return float64(num)
 	case protoreflect.MessageKind, protoreflect.GroupKind:
+		if ir.IsListRow(fd.Message()) {
+			// One inner list of a nested list: the row box is a
+			// proto artefact; the handler wants the list itself.
+			row := fd.Message().Fields().Get(0)
+			if !v.Message().Has(row) {
+				return []any{}
+			}
+			return fieldToAny(row, v.Message().Get(row))
+		}
+		if ir.IsMapValueBox(fd.Message()) {
+			// Map of map: the Value box is a proto artefact too.
+			inner := fd.Message().Fields().Get(0)
+			if !v.Message().Has(inner) {
+				return map[string]any{}
+			}
+			return fieldToAny(inner, v.Message().Get(inner))
+		}
 		return rangeToMap(v.Message())
 	}
 	return nil

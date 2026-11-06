@@ -1,6 +1,7 @@
 package gat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/protocodec"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -296,6 +298,19 @@ func jsonToDynamic(body any, msg *dynamicpb.Message) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal body: %w", err)
+	}
+	if md := msg.Descriptor(); protocodec.HasBoxes(md) {
+		// Nested lists: box each inner list as its proto row message.
+		// UseNumber keeps 64-bit integers exact through the detour.
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.UseNumber()
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return fmt.Errorf("marshal body: %w", err)
+		}
+		if b, err = json.Marshal(protocodec.Box(md, v)); err != nil {
+			return fmt.Errorf("marshal body: %w", err)
+		}
 	}
 	opts := protojson.UnmarshalOptions{DiscardUnknown: true}
 	if err := opts.Unmarshal(b, msg); err != nil {
