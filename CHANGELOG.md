@@ -17,6 +17,7 @@ changes on MINOR, drops on MAJOR.
 - OpenAPI streamed responses (SSE, JSONL, NDJSON, json-seq): an item that fails to decode is skipped and logged (rate limited) instead of ending the subscription with an error. The subscriber sees no event for it. Errors from the body itself still end the stream. `ir.OpenAPIStreamReader.Next` no longer returns decode errors; `OnSkip` reports them.
 - REST ingress: an OpenAPI or GraphQL upstream that fails on a context deadline answers 504 (was 500), and one that fails on cancellation answers 499 (was 500). `gat.ErrorCode` now checks `context.Canceled` / `DeadlineExceeded` ahead of a `GetStatus()` method, so the gRPC ingress gives DeadlineExceeded / Canceled for the same errors (was Internal).
 - Base64 validation (`WithValidation` / gat `Validation`) now also covers multipart string parts that are not file uploads, and `oneOf` / `anyOf` with several branches (passes when any branch of matching JSON type accepts). Responses are checked in `warn` mode only and never fail a call.
+- Proto list fields render non-null elements: `[Book!]` (was `[Book]`), in GraphQL and in the OpenAPI export. A proto list element can never be null. Input lists now refuse a null element at validation.
 
 ### Fixed
 - gat BYO OpenAPI dispatch errors carry the upstream HTTP status, so an upstream 404 / 409 / 503 is NotFound / AlreadyExists / Unavailable over gRPC and has `status` / `code` GraphQL error extensions, instead of Internal with none. Transport failures are 502, undecodable responses 502, argument validation 400.

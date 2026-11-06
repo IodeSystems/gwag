@@ -116,11 +116,12 @@ func ingestProtoMethod(md protoreflect.MethodDescriptor, fileProto *descriptorpb
 		// a list arg, a map field the JSON scalar.
 		pf := ingestProtoField(f)
 		op.Args = append(op.Args, &Arg{
-			Name:        string(f.Name()),
-			Type:        pf.Type,
-			Repeated:    pf.Repeated,
-			Required:    !f.HasOptionalKeyword() && f.Cardinality() == protoreflect.Required,
-			Description: stringFromComments(f),
+			Name:         string(f.Name()),
+			Type:         pf.Type,
+			Repeated:     pf.Repeated,
+			ItemRequired: pf.ItemRequired,
+			Required:     !f.HasOptionalKeyword() && f.Cardinality() == protoreflect.Required,
+			Description:  stringFromComments(f),
 		})
 	}
 	return op
@@ -231,7 +232,9 @@ func ingestProtoField(f protoreflect.FieldDescriptor) *Field {
 		return out
 	}
 	if f.IsList() {
+		// A proto list element can never be null.
 		out.Repeated = true
+		out.ItemRequired = true
 	}
 	out.Type = fieldTypeRef(f)
 	return out
