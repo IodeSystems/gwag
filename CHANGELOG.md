@@ -11,9 +11,13 @@ changes on MINOR, drops on MAJOR.
 
 ### Added
 - `gwag` binary (`gwag up`, plain serve, `gwag serve --graphql` / `--mcp`) mounts `gw.ConnectHandler()` at `/api/connect/`: every registered proto service over Connect, gRPC-Web and gRPC (`/api/connect/package.Service/Method`).
+- gat `RegisterGRPC` serves the OpenAPI operations of a BYO `ServiceRegistration` (unary, and `itemSchema` streams as server streams). They were in the GraphQL schema and the rendered proto, but a gRPC client got Unimplemented. Nested lists and maps are unboxed on the way in and boxed on the way out.
 
 ### Changed
 - OpenAPI streamed responses (SSE, JSONL, NDJSON, json-seq): an item that fails to decode is skipped and logged (rate limited) instead of ending the subscription with an error. The subscriber sees no event for it. Errors from the body itself still end the stream. `ir.OpenAPIStreamReader.Next` no longer returns decode errors; `OnSkip` reports them.
+
+### Fixed
+- gat BYO OpenAPI dispatch errors carry the upstream HTTP status, so an upstream 404 / 409 / 503 is NotFound / AlreadyExists / Unavailable over gRPC and has `status` / `code` GraphQL error extensions, instead of Internal with none. Transport failures are 502, undecodable responses 502, argument validation 400.
 
 ## v2.10.0 — 2026-11-06
 

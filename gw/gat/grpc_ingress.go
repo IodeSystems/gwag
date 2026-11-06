@@ -72,6 +72,8 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 		streamsByName[st.op.OperationID] = st
 	}
 
+	byo := g.byoOps()
+
 	prefix = strings.TrimRight(prefix, "/")
 
 	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
@@ -81,6 +83,26 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 				md := sd.Methods().Get(j)
 				name := string(md.Name())
 				procedure := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+				if op, ok := byo[string(sd.FullName())+"/"+name]; ok {
+					if md.IsStreamingServer() {
+						mux.Handle(prefix+procedure, connect.NewServerStreamHandler(
+							procedure,
+							byoStream(g, op, md, procedure),
+							connect.WithSchema(md),
+							connect.WithRequestInitializer(newRequestInitializer(nil)),
+							connect.WithCodec(fastProtoCodec{}),
+						))
+					} else {
+						mux.Handle(prefix+procedure, connect.NewUnaryHandler(
+							procedure,
+							byoUnary(g, op, md, procedure),
+							connect.WithSchema(md),
+							connect.WithRequestInitializer(newRequestInitializer(nil)),
+							connect.WithCodec(fastProtoCodec{}),
+						))
+					}
+					continue
+				}
 				if st, ok := streamsByName[name]; ok && md.IsStreamingServer() {
 					mux.Handle(prefix+procedure, connect.NewServerStreamHandler(
 						procedure,
