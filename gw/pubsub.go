@@ -14,9 +14,8 @@ import (
 
 // gwag.ps.v1 is the gateway-bundled pub/sub primitive — installed at
 // (psNamespace, psVersion) on every gateway via installPubSubSlot.
-// Renders as Mutation.ps.pub / Subscription.ps_sub through the existing
-// nested-namespace convention. Auth tiers and channel-binding registry
-// land in the follow-up commits per docs/plan.md Tier 1 Pub/Sub.
+// Renders as Query.ps.pub / Subscription.ps_sub through the existing
+// nested-namespace convention.
 const (
 	psNamespace = "ps"
 	psVersion   = "v1"

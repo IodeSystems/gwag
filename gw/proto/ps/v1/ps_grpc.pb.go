@@ -28,8 +28,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // PubSub is the gateway-internal pub/sub primitive. It renders as
-// `Mutation.ps.pub(channel, payload, hmac, ts)` and
-// `Subscription.ps.sub(channel, hmac, ts) -> ps.Event` via the same
+// `Query.ps.pub(channel, payload, hmac, ts)` and
+// `Subscription.ps_sub(channel, hmac, ts) -> ps.Event` via the same
 // nested-namespace convention `admin.listPeers` already uses.
 //
 // The proto exists for IR / SDL / MCP / admin-listing parity with every
@@ -89,8 +89,8 @@ type PubSub_SubClient = grpc.ServerStreamingClient[Event]
 // for forward compatibility.
 //
 // PubSub is the gateway-internal pub/sub primitive. It renders as
-// `Mutation.ps.pub(channel, payload, hmac, ts)` and
-// `Subscription.ps.sub(channel, hmac, ts) -> ps.Event` via the same
+// `Query.ps.pub(channel, payload, hmac, ts)` and
+// `Subscription.ps_sub(channel, hmac, ts) -> ps.Event` via the same
 // nested-namespace convention `admin.listPeers` already uses.
 //
 // The proto exists for IR / SDL / MCP / admin-listing parity with every

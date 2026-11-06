@@ -5,8 +5,8 @@ package gwag.ps.v1;
 option go_package = "github.com/iodesystems/gwag/v2/gw/proto/ps/v1;psv1";
 
 // PubSub is the gateway-internal pub/sub primitive. It renders as
-// `Mutation.ps.pub(channel, payload, hmac, ts)` and
-// `Subscription.ps.sub(channel, hmac, ts) -> ps.Event` via the same
+// `Query.ps.pub(channel, payload, hmac, ts)` and
+// `Subscription.ps_sub(channel, hmac, ts) -> ps.Event` via the same
 // nested-namespace convention `admin.listPeers` already uses.
 //
 // The proto exists for IR / SDL / MCP / admin-listing parity with every
