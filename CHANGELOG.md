@@ -16,6 +16,7 @@ changes on MINOR, drops on MAJOR.
 - Nested lists flattened. An OpenAPI array of array (huma `[][2]float64`), a downstream-GraphQL `[[T]]`, and an MCP array of array rendered as `[T]`, so a query that sent `[[1,2]]` failed validation. They now render as nested GraphQL lists in both directions, export as nested OpenAPI arrays, and export to proto as a repeated `<Field>Row { repeated T value = 1; }` box. gRPC ingress (gat huma ops, and gwag OpenAPI / GraphQL slots) unboxes rows on the way in and boxes them on the way out, so the handler or upstream sees plain nested arrays.
 - Map of map over gRPC ingress. gat huma ops and gwag OpenAPI / GraphQL slots took a `map<K, map<K, V>>` through its `<Field>Value` proto box without unboxing, so handlers and upstreams saw `{"a":{"value":{...}}}` and responses came back empty. Boxes now convert in both directions.
 - gat gRPC ingress: a huma map with 64-bit integer values (`map[string]int`) failed to bind, since protojson sends int64 as a decimal string and map values had no string-to-number path. Maps are now walked like structs.
+- An inline literal for a `JSON` or custom-scalar argument (`cells: {a: {x: 1}}`) reached handlers and upstreams as GraphQL AST nodes; gat failed to bind it. It now parses to plain values (`ir.JSONLiteral`, experimental). A variable nested inside such a literal is refused at validation; pass the whole argument as a variable.
 
 ## v2.9.0 — 2026-10-31
 

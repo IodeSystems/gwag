@@ -208,7 +208,71 @@ func StandardScalarsWith(longAsNumber bool) (long *graphql.Scalar, jsonValue *gr
 		Description:  "Untyped JSON value (used as a fallback for OpenAPI schemas that can't be mapped exactly).",
 		Serialize:    func(v any) any { return v },
 		ParseValue:   func(v any) any { return v },
-		ParseLiteral: func(v ast.Value) any { return v },
+		ParseLiteral: JSONLiteral,
 	})
 	return long, jsonValue
+}
+
+// JSONLiteral converts an inline GraphQL literal for an untyped scalar
+// (JSON, or a custom scalar) into the plain Go value a variable of the
+// same shape would carry: map[string]any, []any, string, bool, nil,
+// int64 (json.Number when outside int64), float64. An enum literal
+// becomes its name.
+//
+// A variable nested inside the literal (`{a: $x}`) cannot be resolved
+// here (ParseLiteral receives no variables), so the whole literal
+// yields nil and validation reports an invalid value. Pass the whole
+// argument as a variable instead.
+//
+// Stability: experimental
+func JSONLiteral(v ast.Value) any {
+	out, ok := jsonLiteral(v)
+	if !ok {
+		return nil
+	}
+	return out
+}
+
+func jsonLiteral(v ast.Value) (any, bool) {
+	switch x := v.(type) {
+	case *ast.ObjectValue:
+		m := make(map[string]any, len(x.Fields))
+		for _, f := range x.Fields {
+			fv, ok := jsonLiteral(f.Value)
+			if !ok {
+				return nil, false
+			}
+			m[f.Name.Value] = fv
+		}
+		return m, true
+	case *ast.ListValue:
+		l := make([]any, len(x.Values))
+		for i, e := range x.Values {
+			ev, ok := jsonLiteral(e)
+			if !ok {
+				return nil, false
+			}
+			l[i] = ev
+		}
+		return l, true
+	case *ast.StringValue:
+		return x.Value, true
+	case *ast.BooleanValue:
+		return x.Value, true
+	case *ast.IntValue:
+		if n, err := strconv.ParseInt(x.Value, 10, 64); err == nil {
+			return n, true
+		}
+		return json.Number(x.Value), true
+	case *ast.FloatValue:
+		f, err := strconv.ParseFloat(x.Value, 64)
+		if err != nil {
+			return json.Number(x.Value), true
+		}
+		return f, true
+	case *ast.EnumValue:
+		return x.Value, true
+	}
+	// *ast.Variable, or anything unknown.
+	return nil, false
 }

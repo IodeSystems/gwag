@@ -677,7 +677,7 @@ func openAPISharedScalars() (*graphql.Scalar, *graphql.Scalar) {
 		Description:  "Untyped JSON value (used as a fallback for OpenAPI schemas the gateway can't map exactly).",
 		Serialize:    func(v any) any { return v },
 		ParseValue:   func(v any) any { return v },
-		ParseLiteral: func(v ast.Value) any { return v },
+		ParseLiteral: ir.JSONLiteral,
 	})
 	return long, jsonScalar
 }

@@ -230,7 +230,7 @@ func (b *IRTypeBuilder) jsonScalar() *graphql.Scalar {
 		Description:  "Untyped JSON value (used as a fallback for IR map / unmappable scalar shapes).",
 		Serialize:    func(v any) any { return v },
 		ParseValue:   func(v any) any { return v },
-		ParseLiteral: func(v ast.Value) any { return v },
+		ParseLiteral: JSONLiteral,
 	})
 	return b.jsonValue
 }
@@ -652,7 +652,7 @@ func (b *IRTypeBuilder) scalarFor(t *Type) *graphql.Scalar {
 		Description:  withRef(t.Description, t.Ref),
 		Serialize:    func(v any) any { return v },
 		ParseValue:   func(v any) any { return v },
-		ParseLiteral: func(v ast.Value) any { return v },
+		ParseLiteral: JSONLiteral,
 	})
 	b.scalars[t.Name] = s
 	return s
