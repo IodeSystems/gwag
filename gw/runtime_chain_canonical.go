@@ -34,7 +34,7 @@ func wrapCanonicalDispatcherWithChain(inner ir.Dispatcher, chain Middleware, inp
 	if inputDesc == nil {
 		return inner
 	}
-	return &canonicalChainedDispatcher{
+	d := &canonicalChainedDispatcher{
 		inner:     inner,
 		chain:     chain,
 		inputDesc: inputDesc,
@@ -42,6 +42,12 @@ func wrapCanonicalDispatcherWithChain(inner ir.Dispatcher, chain Middleware, inp
 		version:   version,
 		op:        opName,
 	}
+	// Only claim the append capability when inner has it: the renderer
+	// treats an AppendDispatcher that cannot append as a hard error.
+	if ad, ok := inner.(ir.AppendDispatcher); ok {
+		return &canonicalChainedAppendDispatcher{canonicalChainedDispatcher: d, innerAppend: ad}
+	}
+	return d
 }
 
 type canonicalChainedDispatcher struct {
@@ -54,22 +60,56 @@ type canonicalChainedDispatcher struct {
 }
 
 func (d *canonicalChainedDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
+	var result any
+	err := d.run(ctx, args, func(ctx context.Context, a map[string]any) (err error) {
+		result, err = d.inner.Dispatch(ctx, a)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// canonicalChainedAppendDispatcher keeps the byte-splice fast path
+// alive through the runtime chain: the chain still sees and may mutate
+// the proto-shape request, then the post-chain args go to
+// innerAppend.DispatchAppend.
+type canonicalChainedAppendDispatcher struct {
+	*canonicalChainedDispatcher
+	innerAppend ir.AppendDispatcher
+}
+
+func (d *canonicalChainedAppendDispatcher) DispatchAppend(ctx context.Context, args map[string]any, dst []byte) ([]byte, error) {
+	out := dst
+	err := d.run(ctx, args, func(ctx context.Context, a map[string]any) (err error) {
+		out, err = d.innerAppend.DispatchAppend(ctx, a, dst)
+		return err
+	})
+	if err != nil {
+		return dst, err
+	}
+	return out, nil
+}
+
+// run executes the runtime chain over args and invokes call with the
+// post-chain canonical args as the terminal step.
+func (d *canonicalChainedDispatcher) run(ctx context.Context, args map[string]any, call func(context.Context, map[string]any) error) error {
 	ctx = withDispatchOpInfo(ctx, d.namespace, d.version, d.op)
 	req := acquireDynamicMessage(d.inputDesc)
 	defer releaseDynamicMessage(d.inputDesc, req)
 	if err := argsToMessage(args, req); err != nil {
-		return nil, fmt.Errorf("runtime chain: encode args: %w", err)
+		return fmt.Errorf("runtime chain: encode args: %w", err)
 	}
 
-	// Capture inner's result via closure so we can return any-typed
-	// values (the chain is proto-typed). The trailing handler runs
-	// last — by then the chain has applied its mutations to req.
-	var result any
+	// The terminal handler runs last: by then the chain has applied
+	// its mutations to req. call's result is captured by the closure
+	// since the chain is proto-typed.
 	var resultErr error
 	terminal := Handler(func(ctx context.Context, postChain protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
 		dyn, ok := postChain.(*dynamicpb.Message)
 		if !ok {
-			result, resultErr = d.inner.Dispatch(ctx, args)
+			resultErr = call(ctx, args)
 			return postChain, resultErr
 		}
 		modified := messageToMap(dyn)
@@ -87,18 +127,19 @@ func (d *canonicalChainedDispatcher) Dispatch(ctx context.Context, args map[stri
 		// the caller's AST (which carries the pre-mutation literal).
 		// No-op for openapi/proto inner dispatchers — they don't
 		// consult forward info.
-		innerCtx := withoutGraphQLForwardInfo(ctx)
-		result, resultErr = d.inner.Dispatch(innerCtx, modified)
+		resultErr = call(withoutGraphQLForwardInfo(ctx), modified)
 		return postChain, resultErr
 	})
 
 	chained := d.chain(terminal)
 	if _, err := chained(ctx, req); err != nil {
-		return nil, err
+		return err
 	}
-	return result, resultErr
+	return resultErr
 }
 
+var _ ir.Dispatcher = (*canonicalChainedDispatcher)(nil)
+var _ ir.AppendDispatcher = (*canonicalChainedAppendDispatcher)(nil)
 var _ ir.Dispatcher = (*canonicalChainedDispatcher)(nil)
 
 // hasRuntimeMiddleware reports whether any registered Transform
