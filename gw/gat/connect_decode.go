@@ -256,6 +256,9 @@ func decodableMessage(md protoreflect.MessageDescriptor) bool {
 	}
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
+		if isBoxField(fields.Get(i)) {
+			return false
+		}
 		if fields.Get(i).Kind() == protoreflect.GroupKind {
 			return false
 		}

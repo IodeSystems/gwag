@@ -120,6 +120,9 @@ func planStruct(t reflect.Type, md protoreflect.MessageDescriptor, depth int) (*
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
+		if isBoxField(fd) {
+			return nil, fmt.Errorf("field %s is a list-row or map-value box", fd.Name())
+		}
 		// Proto field names are the IR arg / property names verbatim
 		// (see synthRequestMessage in gw/ir/render_proto.go), which are
 		// the JSON property names the handler's struct tags carry.

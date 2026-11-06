@@ -79,6 +79,18 @@ var (
 	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
 )
 
+// isBoxField reports whether fd holds a nested-list row or a map-value
+// box (a list element, a map value, or a plain message field). The
+// plan builders decline these explicitly: the slow path converts them
+// to plain lists and maps, and the fast plans do not.
+func isBoxField(fd protoreflect.FieldDescriptor) bool {
+	md := fd.Message()
+	if fd.IsMap() {
+		md = fd.MapValue().Message()
+	}
+	return md != nil && (ir.IsListRow(md) || ir.IsMapValueBox(md))
+}
+
 // buildBindPlan pairs an operation's proto input message with the Go
 // input type. A nil return means "not provably equivalent" and is a
 // normal outcome; the caller falls back to messageToArgs + bindInput.
@@ -107,6 +119,9 @@ func buildBindPlan(inputType reflect.Type, op *ir.Operation, bodyArg string, md 
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
 		name := string(fd.Name())
+		if isBoxField(fd) {
+			return nil
+		}
 
 		if bodyArg != "" && name == bodyArg {
 			if bodyIdx == nil {
@@ -177,6 +192,11 @@ func buildStructBind(t reflect.Type, md protoreflect.MessageDescriptor, depth in
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
+		if isBoxField(fd) {
+			// Row and map-value boxes are proto artefacts the slow
+			// path unboxes (protocodec); no plan reproduces that.
+			return nil
+		}
 		idx, ok := byName[string(fd.Name())]
 		if !ok {
 			// No Go field for this proto field: the map path would have
