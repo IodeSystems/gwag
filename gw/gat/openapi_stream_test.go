@@ -32,6 +32,8 @@ const tickStreamSpec = `{
     "/seq": {"get": {"operationId": "seq",
       "parameters": [{"name": "n", "in": "query", "required": true, "schema": {"type": "integer"}}],
       "responses": {"200": {"description": "ok", "content": {"application/json-seq": {"itemSchema": {"$ref": "#/components/schemas/Tick"}}}}}}},
+    "/bad": {"get": {"operationId": "bad",
+      "responses": {"200": {"description": "ok", "content": {"application/jsonl": {"itemSchema": {"$ref": "#/components/schemas/Tick"}}}}}}},
     "/forever": {"get": {"operationId": "forever",
       "responses": {"200": {"description": "ok", "content": {"application/x-ndjson": {"itemSchema": {"$ref": "#/components/schemas/Tick"}}}}}}},
     "/denied": {"get": {"operationId": "denied",
@@ -58,6 +60,9 @@ func tickUpstream(t *testing.T) (*httptest.Server, chan struct{}) {
 		switch r.URL.Path {
 		case "/denied":
 			http.Error(w, "nope", http.StatusForbidden)
+			return
+		case "/bad":
+			fmt.Fprint(w, "{\"n\":1}\nnot json\n{\"n\":2}\n")
 			return
 		case "/forever":
 			for i := 1; ; i++ {
@@ -178,5 +183,90 @@ func TestOpenAPIStream_UpstreamErrorStatus(t *testing.T) {
 	e := errs[0]
 	if !strings.Contains(e.Message, "403") || e.Extensions["status"] != 403.0 || e.Extensions["code"] != "permission_denied" {
 		t.Fatalf("error = %+v", e)
+	}
+}
+
+func TestOpenAPIStream_BadItemSkipped(t *testing.T) {
+	srv, _ := newStreamGat(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn := dialGraphQLWS(t, ctx, srv.URL, "")
+	wsSend(t, ctx, conn, subscribeMsg("1", `subscription { ticks_bad { n } }`))
+	var got []int
+	for {
+		m := wsRecv(t, ctx, conn)
+		if m.Type == "complete" {
+			break
+		}
+		if m.Type != "next" {
+			t.Fatalf("frame %s %s", m.Type, m.Payload)
+		}
+		var p struct {
+			Data map[string]struct{ N int } `json:"data"`
+		}
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, p.Data["ticks_bad"].N)
+	}
+	if fmt.Sprint(got) != "[1 2]" {
+		t.Fatalf("ticks = %v, want [1 2]", got)
+	}
+}
+
+const unionStreamSpec = `{
+  "openapi": "3.2.0",
+  "info": {"title": "pets", "version": "1.0.0"},
+  "paths": {
+    "/events": {"get": {"operationId": "events",
+      "responses": {"200": {"description": "ok", "content": {"application/jsonl": {"itemSchema": {"$ref": "#/components/schemas/Event"}}}}}}}
+  },
+  "components": {"schemas": {
+    "Event": {"oneOf": [{"$ref": "#/components/schemas/Cat"}, {"$ref": "#/components/schemas/Dog"}],
+      "discriminator": {"propertyName": "kind", "mapping": {"cat": "#/components/schemas/Cat", "dog": "#/components/schemas/Dog"}}},
+    "Cat": {"type": "object", "required": ["kind", "lives"], "properties": {"kind": {"type": "string"}, "lives": {"type": "integer"}}},
+    "Dog": {"type": "object", "required": ["kind", "good"], "properties": {"kind": {"type": "string"}, "good": {"type": "boolean"}}}
+  }}
+}`
+
+func TestOpenAPIStream_UnionItemSchema(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "{\"kind\":\"cat\",\"lives\":9}\n{\"kind\":\"dog\",\"good\":true}\n")
+	}))
+	defer up.Close()
+	doc, err := openapi3.NewLoader().LoadFromData([]byte(unionStreamSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := ir.IngestOpenAPI(doc)
+	svc.Namespace, svc.Version = "pets", "v1"
+	ir.PopulateSchemaIDs(svc)
+	g, err := gat.New(gat.ServiceRegistration{Service: svc, BaseURL: up.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn := dialGraphQLWS(t, ctx, srv.URL, "")
+	wsSend(t, ctx, conn, subscribeMsg("1", `subscription { pets_events { __typename ... on pets_Cat { lives } ... on pets_Dog { good } } }`))
+	var got []string
+	for {
+		m := wsRecv(t, ctx, conn)
+		if m.Type == "complete" {
+			break
+		}
+		if m.Type != "next" {
+			t.Fatalf("frame %s %s", m.Type, m.Payload)
+		}
+		got = append(got, string(m.Payload))
+	}
+	want := []string{
+		`{"data":{"pets_events":{"__typename":"pets_Cat","lives":9}}}`,
+		`{"data":{"pets_events":{"__typename":"pets_Dog","good":true}}}`,
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
