@@ -19,7 +19,7 @@ type statusExtendedError struct {
 	status int
 }
 
-func (e *statusExtendedError) Error() string { return e.err.Error() }
+func (e *statusExtendedError) Error() string  { return e.err.Error() }
 func (e *statusExtendedError) Unwrap() error  { return e.err }
 func (e *statusExtendedError) GetStatus() int { return e.status }
 
@@ -29,6 +29,14 @@ func (e *statusExtendedError) Extensions() map[string]any {
 		"code":   httpStatusToConnectCode(e.status).String(),
 	}
 }
+
+// ctxEndedError is an upstream call the caller's own context ended. It
+// carries no status, so ErrorCode reads Canceled / DeadlineExceeded
+// from the wrapped context error.
+type ctxEndedError struct{ err error }
+
+func (e *ctxEndedError) Error() string { return e.err.Error() }
+func (e *ctxEndedError) Unwrap() error { return e.err }
 
 // withStatusExtensions wraps a non-nil handler error so the GraphQL error
 // carries status/code extensions. An error that already exposes Extensions is
@@ -42,6 +50,9 @@ func withStatusExtensions(err error) error {
 		Extensions() map[string]any
 	}
 	if _, ok := err.(extended); ok {
+		return err
+	}
+	if _, ok := err.(*ctxEndedError); ok {
 		return err
 	}
 	status := http.StatusInternalServerError

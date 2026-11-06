@@ -87,28 +87,45 @@ func newOpenAPIDispatcher(baseURL string, svc *ir.Service, op *ir.Operation) *op
 func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (any, error) {
 	req, full, err := d.newRequest(ctx, args, "application/json")
 	if err != nil {
-		return nil, err
+		return nil, withStatusExtensions(err)
 	}
 	resp, err := outboundHTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("gat: %s %s: %w", d.method, full, err)
+		return nil, withStatusExtensions(upstreamFailure(ctx, d.method, full, err))
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("gat: %s %s: read body: %w", d.method, full, err)
+		return nil, withStatusExtensions(upstreamFailure(ctx, d.method, full, fmt.Errorf("read body: %w", err)))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("gat: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(respBytes)))
+		return nil, withStatusExtensions(&upstreamStatusError{
+			status: resp.StatusCode,
+			msg:    fmt.Sprintf("gat: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(respBytes))),
+		})
 	}
 	if len(respBytes) == 0 {
 		return nil, nil
 	}
 	var out any
 	if err := json.Unmarshal(respBytes, &out); err != nil {
-		return nil, fmt.Errorf("gat: decode response: %w", err)
+		return nil, withStatusExtensions(&upstreamStatusError{
+			status: http.StatusBadGateway,
+			msg:    fmt.Sprintf("gat: decode response: %s", err),
+		})
 	}
 	return out, nil
+}
+
+// upstreamFailure is a failed upstream round trip with no HTTP status:
+// 502, unless the caller's own context ended it, which keeps its
+// error so ErrorCode reports Canceled / DeadlineExceeded.
+func upstreamFailure(ctx context.Context, method, full string, err error) error {
+	err = fmt.Errorf("gat: %s %s: %w", method, full, err)
+	if ctx.Err() != nil {
+		return &ctxEndedError{err}
+	}
+	return &upstreamStatusError{status: http.StatusBadGateway, msg: err.Error()}
 }
 
 // newRequest builds the upstream request for one call: path and
@@ -119,7 +136,7 @@ func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any,
 		return nil, "", fmt.Errorf("gat: openapi dispatcher not configured")
 	}
 	if err := d.validator.Validate(args, d.gateway.validation); err != nil {
-		return nil, "", fmt.Errorf("gat: %w", err)
+		return nil, "", &upstreamStatusError{status: http.StatusBadRequest, msg: "gat: " + err.Error()}
 	}
 
 	resolvedPath := d.pathTmpl
