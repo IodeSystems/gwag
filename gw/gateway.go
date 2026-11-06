@@ -251,8 +251,8 @@ type config struct {
 	tracerProvider oteltrace.TracerProvider
 	backpressure   BackpressureOptions
 
-	// connectErrorCodes: WithConnectErrorCodes.
-	connectErrorCodes bool
+	// legacyErrorCodes: WithLegacyErrorCodes.
+	legacyErrorCodes bool
 
 	// openAPIVersion: WithOpenAPIVersion ("", "3.0" or "3.1").
 	openAPIVersion string
@@ -743,18 +743,32 @@ func WithMetricPrefix(prefix string) Option {
 	return func(cfg *config) { cfg.metricPrefix = prefix }
 }
 
-// WithConnectErrorCodes gives GraphQL errors gat's extensions shape,
-// {"status": 404, "code": "not_found"}: the error's gRPC / Connect code
-// in lower case (gat.ErrorCode) and its HTTP status, instead of the
-// upper-case Code name ({"code": "NOT_FOUND"}). The code is the one the
-// gRPC and REST ingresses use for the same error, so an upstream 409
-// is "already_exists" rather than "INVALID_ARGUMENT". Errors that carry
-// their own extensions (other than Reject's) are left alone;
-// retryAfterSeconds is kept. v3 makes this the default.
+// WithConnectErrorCodes was the opt-in for gat's error extensions
+// shape, {"status": 404, "code": "not_found"}. That shape is the
+// default since v2.11.0, so this option does nothing.
+//
+// Deprecated: the default. Use WithLegacyErrorCodes for the old shape.
 //
 // Stability: experimental
 func WithConnectErrorCodes() Option {
-	return func(cfg *config) { cfg.connectErrorCodes = true }
+	return func(cfg *config) { cfg.legacyErrorCodes = false }
+}
+
+// WithLegacyErrorCodes restores the GraphQL error extensions from
+// before v2.11.0: a Reject error carries its upper-case Code name
+// ({"code": "NOT_FOUND"}) and other dispatch errors carry no code.
+// The default is gat's shape, {"status": 404, "code": "not_found"}:
+// the error's gRPC / Connect code in lower case (gat.ErrorCode) and
+// its HTTP status, the code the gRPC and REST ingresses use for the
+// same error (an upstream 409 is "already_exists", not
+// "INVALID_ARGUMENT"). Errors that carry their own extensions (other
+// than Reject's) are left alone; retryAfterSeconds is kept.
+//
+// For migration only; it goes away in v3.
+//
+// Stability: experimental
+func WithLegacyErrorCodes() Option {
+	return func(cfg *config) { cfg.legacyErrorCodes = true }
 }
 
 // WithOpenAPIVersion sets the OpenAPI version SchemaOpenAPIHandler

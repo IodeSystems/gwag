@@ -552,8 +552,8 @@ func TestOpenAPIE2E_BackpressureTimesOutAndRejects(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
-	if !strings.Contains(body, "RESOURCE_EXHAUSTED") {
-		t.Errorf("expected RESOURCE_EXHAUSTED, got %s", body)
+	if !strings.Contains(body, `"code":"resource_exhausted","status":429`) {
+		t.Errorf("expected resource_exhausted, got %s", body)
 	}
 
 	cm.mu.Lock()
@@ -655,7 +655,7 @@ func TestOpenAPIE2E_RecordDispatchFires(t *testing.T) {
 
 func TestOpenAPIE2E_ErrorClassification(t *testing.T) {
 	// HTTP statuses from the backend should map to specific gateway
-	// Codes (carried via Reject) so the `code` label on
+	// codes (carried via Reject) so the `code` label on
 	// go_api_gateway_dispatch_duration_seconds reflects the error
 	// shape rather than always reading "internal".
 	cases := []struct {
@@ -663,13 +663,13 @@ func TestOpenAPIE2E_ErrorClassification(t *testing.T) {
 		status   int
 		wantCode string
 	}{
-		{"bad-request", http.StatusBadRequest, "INVALID_ARGUMENT"},
-		{"unauthorized", http.StatusUnauthorized, "UNAUTHENTICATED"},
-		{"forbidden", http.StatusForbidden, "PERMISSION_DENIED"},
-		{"not-found", http.StatusNotFound, "NOT_FOUND"},
-		{"too-many-requests", http.StatusTooManyRequests, "RESOURCE_EXHAUSTED"},
-		{"server-error", http.StatusInternalServerError, "INTERNAL"},
-		{"bad-gateway", http.StatusBadGateway, "INTERNAL"},
+		{"bad-request", http.StatusBadRequest, `"code":"invalid_argument","status":400`},
+		{"unauthorized", http.StatusUnauthorized, `"code":"unauthenticated","status":401`},
+		{"forbidden", http.StatusForbidden, `"code":"permission_denied","status":403`},
+		{"not-found", http.StatusNotFound, `"code":"not_found","status":404`},
+		{"too-many-requests", http.StatusTooManyRequests, `"code":"resource_exhausted","status":429`},
+		{"server-error", http.StatusInternalServerError, `"code":"internal","status":500`},
+		{"bad-gateway", http.StatusBadGateway, `"code":"unavailable","status":502`},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -690,13 +690,13 @@ func TestOpenAPIE2E_ErrorClassification(t *testing.T) {
 
 func TestOpenAPIE2E_TransportErrorClassifiesAsInternal(t *testing.T) {
 	// Backend that closes immediately produces a transport-layer
-	// error in client.Do — must classify as INTERNAL.
+	// error in client.Do — must classify as internal.
 	f := newOpenAPIE2EFixture(t)
 	f.backend.Close() // backend gone before dispatch
 	q := `{"query":"{ test { getThing(id:\"1\") { id } } }"}`
 	_, body := f.postGraphQL(t, q, nil)
-	if !strings.Contains(body, "INTERNAL") {
-		t.Errorf("expected INTERNAL code, got %s", body)
+	if !strings.Contains(body, `"code":"internal","status":500`) {
+		t.Errorf("expected internal code, got %s", body)
 	}
 }
 

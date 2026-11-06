@@ -34,10 +34,10 @@ func postGraphQLQuery(t *testing.T, h http.Handler, query string) gqlErrorBody {
 	return body
 }
 
-// An upstream error status reaches GraphQL as Reject's upper-case Code
-// by default, and as gat's {status, code} shape (lower-case Connect
-// code, the one the gRPC and REST ingresses use) under
-// WithConnectErrorCodes.
+// An upstream error status reaches GraphQL as gat's {status, code}
+// shape by default (lower-case Connect code, the one the gRPC and REST
+// ingresses use). WithConnectErrorCodes is a no-op and keeps that
+// shape; WithLegacyErrorCodes gives Reject's upper-case Code.
 func TestConnectErrorCodes_UpstreamStatus(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var code int
@@ -51,8 +51,10 @@ func TestConnectErrorCodes_UpstreamStatus(t *testing.T) {
 		upstream int
 		want     map[string]any
 	}{
-		{"default 404", nil, 404, map[string]any{"code": "NOT_FOUND"}},
-		{"default 409", nil, 409, map[string]any{"code": "INVALID_ARGUMENT"}},
+		{"default 404", nil, 404, map[string]any{"code": "not_found", "status": float64(404)}},
+		{"default 409", nil, 409, map[string]any{"code": "already_exists", "status": float64(409)}},
+		{"legacy 404", []Option{WithLegacyErrorCodes()}, 404, map[string]any{"code": "NOT_FOUND"}},
+		{"legacy 409", []Option{WithLegacyErrorCodes()}, 409, map[string]any{"code": "INVALID_ARGUMENT"}},
 		{"connect 404", []Option{WithConnectErrorCodes()}, 404, map[string]any{"code": "not_found", "status": float64(404)}},
 		{"connect 409", []Option{WithConnectErrorCodes()}, 409, map[string]any{"code": "already_exists", "status": float64(409)}},
 		{"connect 503", []Option{WithConnectErrorCodes()}, 503, map[string]any{"code": "unavailable", "status": float64(503)}},
@@ -77,8 +79,8 @@ func TestConnectErrorCodes_UpstreamStatus(t *testing.T) {
 	}
 }
 
-// Pub/sub auth failures carry PERMISSION_DENIED (was no code), lower
-// case under WithConnectErrorCodes.
+// Pub/sub auth failures carry permission_denied + status 403 by
+// default; WithLegacyErrorCodes gives PERMISSION_DENIED.
 func TestConnectErrorCodes_ChannelAuth(t *testing.T) {
 	cluster, err := StartCluster(ClusterOptions{
 		NodeName:      "errcodes-test",
@@ -97,7 +99,8 @@ func TestConnectErrorCodes_ChannelAuth(t *testing.T) {
 		opts []Option
 		want map[string]any
 	}{
-		{"default", nil, map[string]any{"code": "PERMISSION_DENIED"}},
+		{"default", nil, map[string]any{"code": "permission_denied", "status": float64(403)}},
+		{"legacy", []Option{WithLegacyErrorCodes()}, map[string]any{"code": "PERMISSION_DENIED"}},
 		{"connect", []Option{WithConnectErrorCodes()}, map[string]any{"code": "permission_denied", "status": float64(403)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,5 +127,28 @@ func TestConnectErrorCodes_ChannelAuth(t *testing.T) {
 				t.Errorf("extensions %v, want %v", e.Extensions, tc.want)
 			}
 		})
+	}
+}
+
+// WithLegacyErrorCodes restores the pre-v2.11.0 output exactly: Reject
+// keeps its upper-case Code name, and no status key is added.
+func TestLegacyErrorCodes_RestoresOldOutput(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var code int
+		_, _ = fmt.Sscanf(r.URL.Path, "/things/%d", &code)
+		w.WriteHeader(code)
+	}))
+	defer backend.Close()
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test")), WithLegacyErrorCodes())
+	defer gw.Close()
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To(backend.URL), As("test")); err != nil {
+		t.Fatal(err)
+	}
+	for upstream, want := range map[int]string{404: "NOT_FOUND", 409: "INVALID_ARGUMENT"} {
+		q := fmt.Sprintf(`{ test { getThing(id:"%d") { id name } } }`, upstream)
+		got := postGraphQLQuery(t, gw.Handler(), q).Errors[0].Extensions
+		if fmt.Sprint(got) != fmt.Sprint(map[string]any{"code": want}) {
+			t.Errorf("upstream %d: extensions %v, want only code %s", upstream, got, want)
+		}
 	}
 }

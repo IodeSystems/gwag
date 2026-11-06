@@ -8,7 +8,7 @@ import (
 )
 
 // connectCodedError gives a resolver error gat's GraphQL extensions
-// shape, {status, code}, under WithConnectErrorCodes. Error, Unwrap and
+// shape, {status, code}, by default (WithLegacyErrorCodes turns it off). Error, Unwrap and
 // GetStatus delegate, so every other reader sees the wrapped error.
 type connectCodedError struct {
 	err error
@@ -41,7 +41,7 @@ func (e *connectCodedError) Extensions() map[string]any {
 }
 
 // connectErrorCodes is the ir.RuntimeOptions.WrapError gwag installs
-// under WithConnectErrorCodes. A Reject error is reshaped; an error
+// by default (WithLegacyErrorCodes turns it off). A Reject error is reshaped; an error
 // that carries other extensions (a downstream GraphQL error, a
 // subscription auth failure) keeps them.
 func connectErrorCodes(err error) error {

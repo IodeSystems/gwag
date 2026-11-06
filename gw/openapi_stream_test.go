@@ -206,7 +206,7 @@ func TestOpenAPIStream_Errors(t *testing.T) {
 	if err != nil || m.Type != msgError {
 		t.Fatalf("want error frame, got %+v %v", m, err)
 	}
-	if p := string(m.Payload); !strings.Contains(p, "403") || !strings.Contains(p, `"code":"`+CodePermissionDenied.String()+`"`) {
+	if p := string(m.Payload); !strings.Contains(p, `"code":"permission_denied"`) || !strings.Contains(p, `"status":403`) {
 		t.Fatalf("error payload %s", p)
 	}
 

@@ -303,7 +303,7 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte("nope"))
 			},
-			wantCode: "UNAUTHENTICATED",
+			wantCode: `"code":"unauthenticated","status":401`,
 		},
 		{
 			name: "http-404",
@@ -311,7 +311,7 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte("missing"))
 			},
-			wantCode: "NOT_FOUND",
+			wantCode: `"code":"not_found","status":404`,
 		},
 		{
 			name: "http-500",
@@ -319,7 +319,7 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte("boom"))
 			},
-			wantCode: "INTERNAL",
+			wantCode: `"code":"internal","status":500`,
 		},
 		{
 			name: "remote-graphql-error",
@@ -327,7 +327,7 @@ func TestGraphQLIngest_ErrorClassification(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"errors":[{"message":"bad"}]}`))
 			},
-			wantCode: "INTERNAL",
+			wantCode: `"code":"internal","status":500`,
 		},
 	}
 	for _, tc := range cases {
@@ -477,8 +477,8 @@ func TestGraphQLIngest_BackpressureTimesOutAndRejects(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
-	if !strings.Contains(body, "RESOURCE_EXHAUSTED") {
-		t.Errorf("expected RESOURCE_EXHAUSTED, got %s", body)
+	if !strings.Contains(body, `"code":"resource_exhausted","status":429`) {
+		t.Errorf("expected resource_exhausted, got %s", body)
 	}
 
 	cm.mu.Lock()

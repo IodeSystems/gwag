@@ -458,8 +458,8 @@ func TestQuotaEnforce_E2E_UnavailableSurfaces429Extension(t *testing.T) {
 		t.Fatalf("expected errors[] in response, got %s", rr.Body.String())
 	}
 	ext := body.Errors[0].Extensions
-	if ext.Code != "RESOURCE_EXHAUSTED" {
-		t.Errorf("error code=%q, want RESOURCE_EXHAUSTED (body=%s)", ext.Code, rr.Body.String())
+	if ext.Code != "resource_exhausted" {
+		t.Errorf("error code=%q, want resource_exhausted (body=%s)", ext.Code, rr.Body.String())
 	}
 	if ext.RetryAfterSeconds < 5 || ext.RetryAfterSeconds > 12 {
 		t.Errorf("retryAfterSeconds=%d, want ~emergencyTTL (~8)", ext.RetryAfterSeconds)
@@ -529,8 +529,8 @@ func TestQuota_E2E_DeniedSurfaces429WithRetryAfter(t *testing.T) {
 		t.Fatalf("expected errors[] in response, got %s", rr.Body.String())
 	}
 	ext := body.Errors[0].Extensions
-	if ext.Code != "RESOURCE_EXHAUSTED" {
-		t.Errorf("error code=%q, want RESOURCE_EXHAUSTED (body=%s)", ext.Code, rr.Body.String())
+	if ext.Code != "resource_exhausted" {
+		t.Errorf("error code=%q, want resource_exhausted (body=%s)", ext.Code, rr.Body.String())
 	}
 	if ext.RetryAfterSeconds < 10 || ext.RetryAfterSeconds > 14 {
 		t.Errorf("retryAfterSeconds=%d, want ~12", ext.RetryAfterSeconds)

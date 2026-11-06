@@ -499,8 +499,8 @@ func TestEnforceCallerID_E2E_AnonymousSurfaces401Code(t *testing.T) {
 	if len(body.Errors) == 0 {
 		t.Fatalf("expected errors[] in response, got %s", rr.Body.String())
 	}
-	if body.Errors[0].Extensions.Code != "UNAUTHENTICATED" {
-		t.Errorf("error code=%q, want UNAUTHENTICATED (body=%s)", body.Errors[0].Extensions.Code, rr.Body.String())
+	if body.Errors[0].Extensions.Code != "unauthenticated" {
+		t.Errorf("error code=%q, want unauthenticated (body=%s)", body.Errors[0].Extensions.Code, rr.Body.String())
 	}
 }
 

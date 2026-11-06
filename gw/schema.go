@@ -99,7 +99,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 	}
 	annotations := ir.NewAnnotationIndex()
 	var wrapError func(error) error
-	if g.cfg.connectErrorCodes {
+	if !g.cfg.legacyErrorCodes {
 		wrapError = connectErrorCodes
 	}
 	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, ir.RuntimeOptions{

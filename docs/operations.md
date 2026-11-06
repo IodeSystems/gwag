@@ -164,15 +164,19 @@ there too.
 
 ## GraphQL error codes
 
-A `Reject` error carries its `Code` name in `extensions.code`
-(`{"code": "NOT_FOUND"}`); other dispatch errors carry no code.
-`gateway.WithConnectErrorCodes()` (experimental) switches to gat's
-shape on every dispatch error: `{"status": 404, "code": "not_found"}`,
-the lower-case gRPC code the gRPC and REST ingresses use for the same
-error, plus its HTTP status. An upstream 409 is then `already_exists`
-(it is `INVALID_ARGUMENT` by default). `retryAfterSeconds` is kept;
-errors with their own extensions (downstream GraphQL errors,
-`subscribeAuthCode`) are left alone. v3 makes this the default.
+A dispatch error carries gat's extensions shape:
+`{"status": 404, "code": "not_found"}`. `code` is the lower-case gRPC
+code, the same one the gRPC and REST ingresses use for that error.
+`status` is the HTTP status. An upstream 409 is `already_exists`; an
+upstream 502 is `unavailable`. `retryAfterSeconds` is kept. Errors that
+carry their own extensions (downstream GraphQL errors,
+`subscribeAuthCode`) are left alone.
+
+Before v2.11.0 a `Reject` error carried its upper-case `Code` name
+(`{"code": "NOT_FOUND"}`), other dispatch errors carried no code, and
+an upstream 409 was `INVALID_ARGUMENT`. `gateway.WithLegacyErrorCodes()`
+restores that output. It is for migration and is removed in v3.
+`WithConnectErrorCodes()` is deprecated and does nothing.
 
 ## WebSocket upgrade caps
 

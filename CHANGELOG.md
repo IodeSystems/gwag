@@ -12,12 +12,17 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - `gwag` binary (`gwag up`, plain serve, `gwag serve --graphql` / `--mcp`) mounts `gw.ConnectHandler()` at `/api/connect/`: every registered proto service over Connect, gRPC-Web and gRPC (`/api/connect/package.Service/Method`).
 - gat `RegisterGRPC` serves the OpenAPI operations of a BYO `ServiceRegistration` (unary, and `itemSchema` streams as server streams). They were in the GraphQL schema and the rendered proto, but a gRPC client got Unimplemented. Nested lists and maps are unboxed on the way in and boxed on the way out.
+- **`WithLegacyErrorCodes()`** (experimental) keeps the GraphQL error extensions from before v2.11 (`{code: "NOT_FOUND"}` on a Reject, no code on other errors). For migration; removed in v3.
 
 ### Changed
 - OpenAPI streamed responses (SSE, JSONL, NDJSON, json-seq): an item that fails to decode is skipped and logged (rate limited) instead of ending the subscription with an error. The subscriber sees no event for it. Errors from the body itself still end the stream. `ir.OpenAPIStreamReader.Next` no longer returns decode errors; `OnSkip` reports them.
 - REST ingress: an OpenAPI or GraphQL upstream that fails on a context deadline answers 504 (was 500), and one that fails on cancellation answers 499 (was 500). `gat.ErrorCode` now checks `context.Canceled` / `DeadlineExceeded` ahead of a `GetStatus()` method, so the gRPC ingress gives DeadlineExceeded / Canceled for the same errors (was Internal).
 - Base64 validation (`WithValidation` / gat `Validation`) now also covers multipart string parts that are not file uploads, and `oneOf` / `anyOf` with several branches (passes when any branch of matching JSON type accepts). Responses are checked in `warn` mode only and never fail a call.
+- **GraphQL error extensions default to gat's shape**, `{status: 404, code: "not_found"}`: the lower-case gRPC code the gRPC and REST ingresses give the same error, plus its HTTP status, on every dispatch error. Was the upper-case `Code` name on a Reject and no code otherwise; an upstream 409 is now `already_exists` (was `INVALID_ARGUMENT`). Planned for v3, moved forward.
 - Proto list fields render non-null elements: `[Book!]` (was `[Book]`), in GraphQL and in the OpenAPI export. A proto list element can never be null. Input lists now refuse a null element at validation.
+
+### Deprecated
+- `WithConnectErrorCodes()` does nothing; its shape is the default.
 
 ### Fixed
 - gat BYO OpenAPI dispatch errors carry the upstream HTTP status, so an upstream 404 / 409 / 503 is NotFound / AlreadyExists / Unavailable over gRPC and has `status` / `code` GraphQL error extensions, instead of Internal with none. Transport failures are 502, undecodable responses 502, argument validation 400.
@@ -25,6 +30,9 @@ changes on MINOR, drops on MAJOR.
 - OpenAPI 3.1 to 3.0 downgrade: an operation whose security was only `mutualTLS` lost its `security` and inherited the document-level requirements, so it read stricter than the source. It now gets `security: []`; the original stays in `x-gwag-oas31` and returns on the way back to 3.1.
 - OpenAPI export dropped nullability on fields it built from the IR (GraphQL, proto and MCP origins). A list element that may be null (`[Int]`, `[[Int]!]`) now renders `items` with `nullable: true` (3.0) or `type: [X, "null"]` / `oneOf: [$ref, {type: null}]` (3.1); a `$ref` element becomes `allOf: [$ref], nullable: true`. A required-but-nullable field renders nullable. Re-ingest gives the same nullability.
 - Cross-kind OpenAPI export (GraphQL or proto origin): an op's list parameter, list request body and list response exported as the element schema. They export as arrays now; map args as objects.
+
+### Migration
+- GraphQL clients that match `extensions.code` against upper-case names (`NOT_FOUND`) must match lower-case gRPC codes (`not_found`), or the server sets `WithLegacyErrorCodes()` until they do. Codes can also differ beyond case: an upstream 409 is `already_exists`, an upstream 502/503/504 is `unavailable`.
 
 ## v2.10.0 — 2026-11-06
 
