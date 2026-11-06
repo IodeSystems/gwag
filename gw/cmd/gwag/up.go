@@ -150,6 +150,7 @@ func upCmd(args []string) int {
 	mux := http.NewServeMux()
 	mux.Handle("/api/graphql", gw.Handler())
 	mux.Handle("/api/ingress/", http.StripPrefix("/api/ingress", gw.IngressHandler()))
+	mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
 	mux.Handle("/api/schema", gw.SchemaHandler())
 	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
 	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())

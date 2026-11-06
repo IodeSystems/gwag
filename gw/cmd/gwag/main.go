@@ -304,6 +304,7 @@ func runGateway() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", gw.MetricsHandler())
 	mux.Handle("/health", gw.HealthHandler())
+	mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
 	if *mcpEnable {
 		gw.MountMCP(mux)
 		log.Printf("MCP server at /mcp (admin-bearer gated)")

@@ -146,6 +146,11 @@ routes over Connect, gRPC-Web and gRPC on a plain `http.Handler`, at
 mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
 ```
 
+The `gwag` binary mounts it at `/api/connect/` in `gwag up`, the plain
+serve path, and `gwag serve --graphql` / `--mcp`. There is no flag to
+disable it. The lite `gwag serve --openapi` / `--proto` path (no
+gateway) does not serve it.
+
 Both run on gat's gRPC ingress and behave the same: `Unavailable` while
 draining, per-pool backpressure on unary proto calls, the
 `gateway.grpc` span and request metrics. The subscription auth handles

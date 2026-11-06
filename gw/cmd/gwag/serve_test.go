@@ -2,14 +2,21 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc"
+
+	greeterv1 "github.com/iodesystems/gwag/v2/examples/multi/gen/greeter/v1"
+	gateway "github.com/iodesystems/gwag/v2/gw"
 )
 
 const petsSpec = `{
@@ -101,10 +108,10 @@ func TestLoadOpenAPIRegistration_NamespaceFromFilenameWhenNoTitle(t *testing.T) 
 
 func TestServeCmd_RejectsMissingArgs(t *testing.T) {
 	cases := [][]string{
-		{},                                          // no source
-		{"--openapi", "spec.yaml", "--proto", "x"},  // both sources
-		{"--openapi", "spec.yaml"},                  // no --to
-		{"--proto", "x.proto"},                      // no --to
+		{}, // no source
+		{"--openapi", "spec.yaml", "--proto", "x"}, // both sources
+		{"--openapi", "spec.yaml"},                 // no --to
+		{"--proto", "x.proto"},                     // no --to
 	}
 	// Redirect stderr so the usage messages don't pollute test output.
 	origStderr := os.Stderr
@@ -123,3 +130,52 @@ func TestServeCmd_RejectsMissingArgs(t *testing.T) {
 // silence unused
 var _ = bytes.Buffer{}
 var _ = io.Discard
+
+type connectGreeter struct {
+	greeterv1.UnimplementedGreeterServiceServer
+}
+
+func (connectGreeter) Hello(_ context.Context, req *greeterv1.HelloRequest) (*greeterv1.HelloResponse, error) {
+	return &greeterv1.HelloResponse{Greeting: "hello " + req.GetName()}, nil
+}
+
+// The full-gateway serve mux serves registered proto services over
+// Connect at /api/connect/.
+func TestFullGatewayMux_ConnectCall(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	be := grpc.NewServer()
+	greeterv1.RegisterGreeterServiceServer(be, connectGreeter{})
+	go func() { _ = be.Serve(lis) }()
+	t.Cleanup(be.Stop)
+
+	gw := gateway.New(gateway.WithoutMetrics(), gateway.WithoutBackpressure())
+	t.Cleanup(gw.Close)
+	if err := gw.AddProto("../../../examples/multi/protos/greeter.proto",
+		gateway.To(lis.Addr().String()), gateway.As("greeter")); err != nil {
+		t.Fatalf("AddProto: %v", err)
+	}
+
+	srv := httptest.NewServer(fullGatewayMux(gw, false))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/connect/greeter.v1.GreeterService/Hello",
+		"application/json", strings.NewReader(`{"name":"world"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var out struct{ Greeting string }
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if out.Greeting != "hello world" {
+		t.Fatalf("greeting %q (body %s)", out.Greeting, body)
+	}
+}

@@ -4,7 +4,7 @@
 //   - --openapi PATH --to URL       embedded gat translator (no NATS,
 //   - --proto   PATH --to HOST:PORT  no admin, no metrics)
 //   - --graphql URL                  full gateway — metrics, backpressure,
-//                                    subscription proxy, optional --mcp
+//     subscription proxy, optional --mcp
 //
 // --mcp is supported with every source. With --graphql it rides on the
 // full gateway path that's already there; with --openapi / --proto it
@@ -154,16 +154,7 @@ func serveFullGateway(src fullGatewaySource, addr, namespace, version string, en
 		}
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/api/graphql", gw.Handler())
-	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
-	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())
-	mux.Handle("/api/schema/openapi", gw.SchemaOpenAPIHandler())
-	mux.Handle("/api/metrics", gw.MetricsHandler())
-	mux.Handle("/api/health", gw.HealthHandler())
-	if enableMCP {
-		gw.MountMCP(mux)
-	}
+	mux := fullGatewayMux(gw, enableMCP)
 
 	log.Printf("gwag serve: %s → POST %s/api/graphql", label, strings.TrimRight(addr, "/"))
 	if enableMCP {
@@ -174,6 +165,25 @@ func serveFullGateway(src fullGatewaySource, addr, namespace, version string, en
 		return 1
 	}
 	return 0
+}
+
+// fullGatewayMux is the HTTP surface of the --graphql / --mcp serve
+// path. /api/connect/ serves every registered proto service over
+// Connect, gRPC-Web and gRPC (experimental), at
+// /api/connect/package.Service/Method.
+func fullGatewayMux(gw *gateway.Gateway, enableMCP bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/api/graphql", gw.Handler())
+	mux.Handle("/api/connect/", http.StripPrefix("/api/connect", gw.ConnectHandler()))
+	mux.Handle("/api/schema/graphql", gw.SchemaHandler())
+	mux.Handle("/api/schema/proto", gw.SchemaProtoHandler())
+	mux.Handle("/api/schema/openapi", gw.SchemaOpenAPIHandler())
+	mux.Handle("/api/metrics", gw.MetricsHandler())
+	mux.Handle("/api/health", gw.HealthHandler())
+	if enableMCP {
+		gw.MountMCP(mux)
+	}
+	return mux
 }
 
 // serveGat is the lite path used by --openapi / --proto: embedded gat
