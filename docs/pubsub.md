@@ -28,10 +28,24 @@ type Gwag_Ps_V1_Event {
 }
 ```
 
-`pub` is a Query field (the internal-proto mapping puts unary methods
-there), the arguments are nullable at the GraphQL level, and `ts` is
-a string because it is an int64. A missing `channel` is rejected by
-the handler.
+`pub` is a Query field, not a Mutation (the internal-proto mapping
+puts unary methods there). The arguments are nullable at the GraphQL
+level. `ts` is a string because it is an int64. The response is an
+empty message: select `_void`, which is always null.
+
+The handler checks in this order: `channel` is not empty (error
+`ps.pub: channel required`), `channel` has no `*` or `>` (error
+`ps.pub: wildcards not valid on publish`), channel auth, then the
+binding checks (see Contract enforcement). The first two are plain Go
+errors, not typed rejects.
+
+`hmac` is base64 (standard alphabet) HMAC-SHA256 over
+`<channel>\n<ts>`. `ts` is unix seconds and must be within the skew
+window of the gateway clock (`SubscriptionAuthOptions.SkewWindow`,
+default 5 minutes) in both directions. Only the secret with an empty
+kid verifies: `pub` and `ps_sub` have no `kid` argument. The gateway
+sets `Event.ts` itself, from its clock at publish; it is not the `ts`
+argument.
 
 ```graphql
 { ps { pub(channel: "events.orders.42.update", payload: "{\"id\":42}", hmac: "...", ts: "1700000000") { _void } } }
@@ -51,7 +65,7 @@ cross-referenced against `/api/schema/proto?service=...`.
 
 NATS subjects: `events.<namespace>.<thing>.<subject>` — free-form,
 dot-segmented. Wildcards (`*` for one segment, `>` for the rest) work
-on `ps.sub`; publishes must use a literal subject.
+on `ps_sub`; publishes must use a literal subject.
 
 ```graphql
 subscription {
@@ -68,7 +82,7 @@ surface.
 
 ## Transport
 
-`ps.pub` and `ps.sub` run on a `gat.Bus` (see
+`ps.pub` and `ps_sub` run on a `gat.Bus` (see
 [`gat-pubsub.md`](./gat-pubsub.md#other-transports-usebus)). Auth
 tiers, channel bindings, and the per-subject subscription broker
 (one bus subscription per subject, decoded once, fanned out to every
@@ -82,7 +96,7 @@ full) sit above the bus and behave the same on every transport.
 | `WithCluster`, NATS connection down | in-process bus (degraded) | this gateway only |
 
 **Single node.** A gateway without a cluster serves `ps.pub` /
-`ps.sub` in-process. Earlier versions skipped the `ps` slot without a
+`ps_sub` in-process. Earlier versions skipped the `ps` slot without a
 cluster and the fields were absent from the schema.
 
 **Degrade.** In cluster mode the gateway watches its NATS connection.
@@ -126,7 +140,7 @@ Patterns share the NATS wildcard grammar.
 | Tier | What |
 |---|---|
 | `ChannelAuthOpen` | No auth; `hmac` / `ts` ignored. Dev / public channels. |
-| `ChannelAuthHMAC` | HMAC token over `(channel, ts)`, signed by `WithSubscriptionAuth`'s secret. Hot-path crypto-fast. |
+| `ChannelAuthHMAC` | HMAC token over `(channel, ts)`, signed by `WithSubscriptionAuth`'s secret. |
 | `ChannelAuthDelegate` | HMAC first, then a delegate authorizer at `_pubsub_auth/v1` (same fall-through posture as `_admin_auth/v1`). Use when authz needs request context the gateway doesn't carry. |
 
 ```go
@@ -146,12 +160,17 @@ can't leak events from a stricter pattern through a permissive one.
 
 The `ChannelAuthDelegate` proto (`gw/proto/pubsubauth/v1/pubsubauth.proto`)
 mirrors `AdminAuthorizer`'s shape: the authorizer is registered under
-namespace `_pubsub_auth`, version `v1`, and answers `Authorize` per
-subscribe. Codes: `OK` accepts, `DENIED` rejects without falling
+namespace `_pubsub_auth`, version `v1`, and answers `Authorize` on
+every `pub` and every `ps_sub` open on a delegate-tier channel (the
+request has a `wildcard` flag). Codes: `OK` accepts, `DENIED` rejects without falling
 through; `UNAVAILABLE` / `NOT_CONFIGURED` / `UNSPECIFIED` / transport
 error all fall through to HMAC-only (which already verified).
 
-A refused `pub` or `sub` (missing, stale or wrong HMAC, no secret
+`WithSubscriptionAuth(SubscriptionAuthOptions{Insecure: true})` (or
+`WithoutSubscriptionAuth`) skips the HMAC check and the delegate on
+every tier except `Open`, which never checks. Dev only.
+
+A refused `pub` or `ps_sub` (missing, stale or wrong HMAC, no secret
 configured, delegate `DENIED`) fails with `PERMISSION_DENIED`: GraphQL
 `extensions.code`, gRPC PermissionDenied, REST 403.
 
@@ -190,12 +209,12 @@ The runtime path takes the FQN directly so the caller doesn't need
 the generated Go type available at construction. The cross-slot
 uniqueness rule below applies to both paths.
 
-On `Sub` delivery the gateway stamps `Event.payload_type` with the
-matched binding's FQN. Subscribers fetch the descriptor at any time
+On delivery the gateway stamps `Event.payload_type` (GraphQL `payloadType`) at
+`pub` time with the matched binding's FQN. Subscribers fetch the descriptor at any time
 via `/api/schema/proto?service=...` for validation or codegen. List
 the active registry through the admin endpoint
-`GET /api/admin/bindings` (rows: `channel_pattern → payload_type →
-namespace/version → tier`).
+`GET /api/admin/bindings` (rows: `pattern`, `messageFQN`, `namespace`,
+`version`; no tier). The tier comes from `WithChannelAuth`.
 
 **Tier policy inherits.** `unstable` slots' bindings overwrite on
 rebake; `vN` slots' bindings lock by `(pattern, payload_fqn)` —
@@ -212,8 +231,8 @@ Defaults are documentation-only — broker stays permissive. Two
 independent strictness axes:
 
 - `WithChannelBindingEnforce()` — **shape strictness.** At Pub entry,
-  parse payload as the bound proto message; reject mismatch with
-  `InvalidArgument`. Mirrors `WithCallerIDEnforce` / `WithQuotaEnforce`.
+  parse payload as protojson of the bound proto message (first
+  matching binding); reject mismatch with `InvalidArgument`. Mirrors `WithCallerIDEnforce` / `WithQuotaEnforce`.
   No-op for runtime bindings whose FQN isn't resolvable against a
   registered descriptor.
 - `WithStrictPayloadTypes()` — **coverage strictness.** Reject Pub
@@ -237,7 +256,7 @@ auto-injected HMAC args — auth for the upstream stream is the
 upstream's responsibility.
 
 If a service wants multi-listener fan-out for a stream, it calls
-`ps.pub` from the handler and clients call `ps.sub` on the same
+`ps.pub` from the handler and clients call `ps_sub` on the same
 channel. The two shapes don't pretend to be each other.
 
 ## Signing tokens
@@ -278,9 +297,9 @@ now opens a per-subscriber gRPC stream upstream — no auth injection,
 no implicit fan-out.
 
 If you relied on the implicit fan-out, switch to explicit `ps.pub`
-on the service side and `ps.sub(channel: ..., ...)` on the client
+on the service side and `ps_sub(channel: ..., ...)` on the client
 side. If you relied on the auto-injected auth args, the HMAC gate
-now belongs to `ps.sub` via `WithChannelAuth`.
+now belongs to `ps_sub` via `WithChannelAuth`.
 
 ## See also
 
