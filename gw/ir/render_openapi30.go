@@ -184,7 +184,7 @@ func (c *downcaster) document() {
 	if comps != nil {
 		c.components(comps)
 	}
-	c.security(root)
+	c.security(root, false)
 	if d, ok := root["jsonSchemaDialect"].(string); ok && (c.to30 || c.from32) {
 		if defaultSchemaDialects[d] {
 			delete(root, "jsonSchemaDialect")
@@ -422,7 +422,7 @@ func (c *downcaster) operation(op jmap, ptr string) {
 			c.callback(cbs[name], ptr+"/callbacks/"+escapePointer(name))
 		}
 	}
-	c.security(op)
+	c.security(op, true)
 }
 
 func (c *downcaster) callback(v any, ptr string) {
@@ -698,7 +698,15 @@ func (c *downcaster) components(comps jmap) {
 // security drops mutualTLS schemes (3.1) from owner's security
 // requirements for a 3.0 target, keeping the original list in
 // owner's xOAS31. A requirement that needed one is dropped.
-func (c *downcaster) security(owner jmap) {
+//
+// When nothing expressible is left, the document drops `security`
+// (no requirement). An operation sets `security: []` instead: absent
+// would inherit the document-level requirements, which this
+// operation never had (it needed only mutualTLS), so it would read
+// stricter in 3.0. The empty list says "no 3.0 scheme applies"; the
+// transport-level requirement stays in xOAS31 and returns on the way
+// back up to 3.1.
+func (c *downcaster) security(owner jmap, isOp bool) {
 	list, ok := owner["security"].([]any)
 	if !ok || !c.to30 || len(c.mtls) == 0 {
 		return
@@ -728,9 +736,12 @@ func (c *downcaster) security(owner jmap) {
 		owner[xOAS31] = b
 	}
 	b["security"] = deepCopy(list)
-	if len(out) == 0 {
+	switch {
+	case len(out) == 0 && isOp:
+		owner["security"] = []any{}
+	case len(out) == 0:
 		delete(owner, "security")
-	} else {
+	default:
 		owner["security"] = out
 	}
 }

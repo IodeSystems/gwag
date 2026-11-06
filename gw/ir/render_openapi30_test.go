@@ -285,7 +285,7 @@ func TestDowncast31To30(t *testing.T) {
 		"components/x-gwag-oas31/pathItems/Ops/get/operationId":                    `"listOps"`,
 		"security":                        `[{"bearer":[]}]`,
 		"x-gwag-oas31/security":           `[{"bearer":[]},{"mtls":[]}]`,
-		"paths/~1items/post/security":     `null`,
+		"paths/~1items/post/security":     `[]`,
 		"paths/~1items/post/x-gwag-oas31": `{"security":[{"mtls":[]}]}`,
 	} {
 		if got := jstr(t, jget(t, out, path)); got != want {
@@ -582,5 +582,64 @@ func TestIngestOpenAPI_XAdditionalOperations(t *testing.T) {
 		if !strings.Contains(back, want) {
 			t.Errorf("lacks %q:\n%s", want, back)
 		}
+	}
+}
+
+const openapi31MTLS = `{
+  "openapi": "3.1.0",
+  "info": {"title": "shop", "version": "1.0.0"},
+  "security": [{"bearer": []}],
+  "paths": {
+    "/only": {"post": {"operationId": "onlyMtls", "security": [{"mtls": []}], "responses": {"200": {"description": "ok"}}}},
+    "/mixed": {"post": {"operationId": "mixed", "security": [{"mtls": []}, {"bearer": []}], "responses": {"200": {"description": "ok"}}}},
+    "/inherit": {"post": {"operationId": "inherit", "responses": {"200": {"description": "ok"}}}}
+  },
+  "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}, "mtls": {"type": "mutualTLS"}}}
+}`
+
+// An operation that needs only mutualTLS must not inherit the
+// document-level security in 3.0: it gets `security: []` and the
+// original requirement in x-gwag-oas31.
+func TestDowncast31To30_MutualTLSOnlyOp(t *testing.T) {
+	out, _ := downcast(t, openapi31MTLS, "3.0")
+	for path, want := range map[string]string{
+		"paths/~1only/post/security":                   `[]`,
+		"paths/~1only/post/x-gwag-oas31":               `{"security":[{"mtls":[]}]}`,
+		"paths/~1mixed/post/security":                  `[{"bearer":[]}]`,
+		"paths/~1mixed/post/x-gwag-oas31":              `{"security":[{"mtls":[]},{"bearer":[]}]}`,
+		"paths/~1inherit/post/security":                `null`,
+		"paths/~1inherit/post/x-gwag-oas31":            `null`,
+		"security":                                     `[{"bearer":[]}]`,
+		"components/x-gwag-oas31/securitySchemes/mtls": `{"type":"mutualTLS"}`,
+	} {
+		if got := jstr(t, jget(t, out, path)); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", path, got, want)
+		}
+	}
+	// Back up to 3.1 the original requirements return.
+	up, err := RenderOpenAPIWith(IngestOpenAPI(loadSpec(t, mustJSON(t, out))), RenderOpenAPIOptions{Version: "3.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jstr(t, jget(t, up, "paths/~1only/post/security")); got != `[{"mtls":[]}]` {
+		t.Errorf("3.1 only-mtls security = %s", got)
+	}
+	if got := jstr(t, jget(t, up, "paths/~1mixed/post/security")); got != `[{"mtls":[]},{"bearer":[]}]` {
+		t.Errorf("3.1 mixed security = %s", got)
+	}
+}
+
+// A document whose only requirement is mutualTLS drops `security`
+// and records the original.
+func TestDowncast31To30_MutualTLSOnlyDocLevel(t *testing.T) {
+	src := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"security":[{"mtls":[]}],
+	  "paths":{"/a":{"get":{"operationId":"a","responses":{"200":{"description":"ok"}}}}},
+	  "components":{"securitySchemes":{"mtls":{"type":"mutualTLS"}}}}`
+	out, _ := downcast(t, src, "3.0")
+	if v := jget(t, out, "security"); v != nil {
+		t.Errorf("doc security = %s, want none", jstr(t, v))
+	}
+	if got := jstr(t, jget(t, out, "x-gwag-oas31/security")); got != `[{"mtls":[]}]` {
+		t.Errorf("x-gwag-oas31/security = %s", got)
 	}
 }
