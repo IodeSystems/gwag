@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -72,16 +74,42 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 	metrics := g.cfg.metrics
 	bpOpts := g.cfg.backpressure
 	var routes []gat.GRPCRoute
-	seen := map[string]bool{}
+	// Two slots can declare the same fully-qualified procedure. The
+	// first slot in (namespace, version) order owns it; the rest are
+	// skipped and named in one warning per service. Iterating the
+	// slots map directly made the owner random per rebuild.
+	keys := make([]poolKey, 0, len(g.slots))
+	for k := range g.slots {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].namespace != keys[j].namespace {
+			return keys[i].namespace < keys[j].namespace
+		}
+		return keys[i].version < keys[j].version
+	})
+	owner := map[string]poolKey{}
+	var cur poolKey
+	warned := map[string]bool{}
 	add := func(r gat.GRPCRoute) {
-		path := methodLabel(r.Method.Parent().(protoreflect.ServiceDescriptor), r.Method)
-		if seen[path] {
+		sd := r.Method.Parent().(protoreflect.ServiceDescriptor)
+		path := methodLabel(sd, r.Method)
+		if o, ok := owner[path]; ok {
+			if o != cur && !warned[string(sd.FullName())+"|"+cur.namespace+"/"+cur.version] {
+				warned[string(sd.FullName())+"|"+cur.namespace+"/"+cur.version] = true
+				slog.Warn("gwag: gRPC procedure declared by two slots; the first in namespace/version order serves it",
+					"service", string(sd.FullName()),
+					"served_by", o.namespace+"/"+o.version,
+					"skipped", cur.namespace+"/"+cur.version)
+			}
 			return
 		}
-		seen[path] = true
+		owner[path] = cur
 		routes = append(routes, r)
 	}
-	for _, slot := range g.slots {
+	for _, key := range keys {
+		slot := g.slots[key]
+		cur = key
 		switch slot.kind {
 		case slotKindProto:
 			p := slot.proto
@@ -145,7 +173,9 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 	// already includes backpressureMiddleware (see
 	// openapi_register / graphql_register) so the route carries no
 	// backpressure of its own.
-	for k, slot := range g.slots {
+	for _, k := range keys {
+		slot := g.slots[k]
+		cur = k
 		if slot.kind == slotKindProto || slot.kind == slotKindInternalProto {
 			continue
 		}
