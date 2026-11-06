@@ -781,10 +781,17 @@ g.Validation("warn") // "strict" (default), "warn" or "off"
 - `off`: no check.
 
 In gwag the option is `WithValidation("warn")`. Errors and logs carry
-the field path, not the value. Not checked: multipart bodies (a
-`format: byte` property there is a file), and a `oneOf` / `anyOf` with
-several branches, where the value may belong to another branch.
-Responses are not checked. Proto `bytes` args always fail on bad
+the field path, not the value.
+
+Also checked: string parts of a `multipart/form-data` body that are not
+files (`contentEncoding: base64`, or `format: byte` inside `allOf` /
+`oneOf` / a nullable wrapper, or nested in an object part; a plain
+`format: byte` part is a file and is skipped). A `oneOf` / `anyOf` with
+several branches passes when any branch whose JSON type fits the value
+accepts it.
+
+Responses are checked in `warn` mode only, and only logged: `strict`
+would turn an upstream's bad bytes into a client error. Proto `bytes` args always fail on bad
 base64, in every mode: they cannot be encoded. Experimental.
 
 ### OpenAPI version (`OpenAPIVersion`)

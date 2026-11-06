@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -163,4 +166,49 @@ func TestWithValidation_PanicsOnUnknownMode(t *testing.T) {
 		}
 	}()
 	WithValidation("lenient")
+}
+
+// A response with bad base64 is never an error. Warn mode logs it;
+// strict (the default) and off stay quiet.
+func TestOpenAPI_ResponseValidationWarnOnly(t *testing.T) {
+	for _, tc := range []struct {
+		mode   string
+		logged bool
+	}{{"", false}, {"strict", false}, {"off", false}, {"warn", true}} {
+		t.Run("mode="+tc.mode, func(t *testing.T) {
+			var logs bytes.Buffer
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":"bad bytes!"}`))
+			}))
+			t.Cleanup(backend.Close)
+			opts := []Option{WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("test-token"))}
+			if tc.mode != "" {
+				opts = append(opts, WithValidation(tc.mode))
+			}
+			gw := New(opts...)
+			t.Cleanup(gw.Close)
+			if err := gw.AddOpenAPIBytes([]byte(openAPIByteSpec), To(backend.URL), As("test")); err != nil {
+				t.Fatalf("AddOpenAPIBytes: %v", err)
+			}
+			query, _ := json.Marshal(map[string]any{
+				"query": `mutation { test { putBlob(tag: "dGFn", body: {data: "aGk="}) { data } } }`,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(string(query)))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			gw.Handler().ServeHTTP(rr, req)
+			if want := `{"data":{"test":{"putBlob":{"data":"bad bytes!"}}}}`; strings.TrimSpace(rr.Body.String()) != want {
+				t.Errorf("response = %s, want %s", rr.Body.String(), want)
+			}
+			if got := strings.Contains(logs.String(), "response has invalid base64 in"); got != tc.logged {
+				t.Errorf("logged=%v: %q", got, logs.String())
+			}
+			if strings.Contains(logs.String(), "bad bytes!") {
+				t.Error("log carries the value")
+			}
+		})
+	}
 }

@@ -114,6 +114,7 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 			msg:    fmt.Sprintf("gat: decode response: %s", err),
 		})
 	}
+	d.validator.ValidateResponse(out, d.gateway.validation)
 	return out, nil
 }
 

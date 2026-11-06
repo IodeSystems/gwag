@@ -81,6 +81,8 @@ func (d *openAPIDispatcher) Dispatch(ctx context.Context, args map[string]any) (
 	if err == nil && len(respBytes) > 0 {
 		if uerr := json.Unmarshal(respBytes, &resp); uerr != nil {
 			err = Reject(CodeInternal, fmt.Sprintf("openapi: decode response: %s", uerr.Error()))
+		} else {
+			d.validator.ValidateResponse(resp, d.validation)
 		}
 	}
 	elapsed := time.Since(start)
@@ -192,6 +194,15 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	}
 	if len(respBytes) == 0 {
 		return append(dst, "null"...), nil
+	}
+
+	if d.validation == ir.ValidationWarn {
+		// Warn mode only logs; decoding costs a pass, so strict and
+		// off skip it.
+		var decoded any
+		if json.Unmarshal(respBytes, &decoded) == nil {
+			d.validator.ValidateResponse(decoded, d.validation)
+		}
 	}
 
 	info := graphQLForwardInfoFrom(ctx)
