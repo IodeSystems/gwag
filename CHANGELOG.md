@@ -20,6 +20,7 @@ changes on MINOR, drops on MAJOR.
 ### Fixed
 - gat BYO OpenAPI dispatch errors carry the upstream HTTP status, so an upstream 404 / 409 / 503 is NotFound / AlreadyExists / Unavailable over gRPC and has `status` / `code` GraphQL error extensions, instead of Internal with none. Transport failures are 502, undecodable responses 502, argument validation 400.
 - gRPC ingress: two proto slots declaring the same fully-qualified procedure were served by a random one per schema rebuild. The first slot in (namespace, version) order now serves it, and each rebuild logs one warning per service naming the serving and skipped slots.
+- OpenAPI export dropped nullability on fields it built from the IR (GraphQL, proto and MCP origins). A list element that may be null (`[Int]`, `[[Int]!]`) now renders `items` with `nullable: true` (3.0) or `type: [X, "null"]` / `oneOf: [$ref, {type: null}]` (3.1); a `$ref` element becomes `allOf: [$ref], nullable: true`. A required-but-nullable field renders nullable. Re-ingest gives the same nullability.
 
 ## v2.10.0 — 2026-11-06
 

@@ -227,11 +227,10 @@ func renderOpenAPIEnum(t *Type) *openapi3.SchemaRef {
 // synthesis path where args collapse into one body schema.
 func renderOpenAPIArgFieldSchema(a *Arg) *openapi3.SchemaRef {
 	if a.Repeated {
-		inner := renderOpenAPIRefForType(a.Type)
 		return &openapi3.SchemaRef{
 			Value: &openapi3.Schema{
 				Type:  &openapi3.Types{"array"},
-				Items: inner,
+				Items: openapiItemSchema(renderOpenAPIRefForType(a.Type), a.ItemRequired),
 			},
 		}
 	}
@@ -251,13 +250,16 @@ func renderOpenAPIArgFieldSchema(a *Arg) *openapi3.SchemaRef {
 
 func renderOpenAPIFieldSchema(f *Field) *openapi3.SchemaRef {
 	if f.Repeated {
-		inner := renderOpenAPIRefForType(f.Type)
-		return &openapi3.SchemaRef{
+		arr := &openapi3.SchemaRef{
 			Value: &openapi3.Schema{
 				Type:  &openapi3.Types{"array"},
-				Items: inner,
+				Items: openapiItemSchema(renderOpenAPIRefForType(f.Type), f.ItemRequired),
 			},
 		}
+		if f.Nullable {
+			arr.Value.Nullable = true
+		}
+		return arr
 	}
 	if f.Type.IsMap() {
 		val := renderOpenAPIRefForType(f.Type.Map.ValueType)
@@ -270,7 +272,38 @@ func renderOpenAPIFieldSchema(f *Field) *openapi3.SchemaRef {
 			},
 		}
 	}
+	if f.Nullable {
+		return openapiNullable(renderOpenAPIRefForType(f.Type))
+	}
 	return renderOpenAPIRefForType(f.Type)
+}
+
+// openapiItemSchema marks a list element nullable unless the IR says
+// each element is non-null.
+func openapiItemSchema(elem *openapi3.SchemaRef, itemRequired bool) *openapi3.SchemaRef {
+	if itemRequired {
+		return elem
+	}
+	return openapiNullable(elem)
+}
+
+// openapiNullable returns ref as a nullable schema, in the 3.0 form
+// the 3.1 downcaster converts from. A $ref cannot carry siblings, so
+// it becomes `allOf: [$ref], nullable: true`; an inline schema gets
+// `nullable: true` on a copy.
+func openapiNullable(ref *openapi3.SchemaRef) *openapi3.SchemaRef {
+	if ref == nil {
+		return ref
+	}
+	if ref.Ref != "" || ref.Value == nil {
+		return &openapi3.SchemaRef{Value: &openapi3.Schema{
+			AllOf:    openapi3.SchemaRefs{ref},
+			Nullable: true,
+		}}
+	}
+	v := *ref.Value
+	v.Nullable = true
+	return &openapi3.SchemaRef{Value: &v}
 }
 
 func renderOpenAPIRefForType(r TypeRef) *openapi3.SchemaRef {
@@ -296,7 +329,7 @@ func renderOpenAPIRefForType(r TypeRef) *openapi3.SchemaRef {
 		return &openapi3.SchemaRef{
 			Value: &openapi3.Schema{
 				Type:  &openapi3.Types{"array"},
-				Items: renderOpenAPIRefForType(r.List.Elem),
+				Items: openapiItemSchema(renderOpenAPIRefForType(r.List.Elem), r.List.ItemRequired),
 			},
 		}
 	}
