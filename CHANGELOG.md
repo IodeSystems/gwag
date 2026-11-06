@@ -9,6 +9,10 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.10.0 — 2026-11-06
+
+Nested lists and maps: `[][2]float64`, `[[T]]` and map of map render and dispatch correctly over GraphQL, OpenAPI and gRPC, and inline `JSON` literals parse.
+
 ### Added
 - **`ir.TypeRef.List` / `ir.ListType`** (experimental): the element of a repeated slot can itself be a list, with its own element nullability. `TypeRef.IsList()` and `TypeRef.Leaf()` go with it. `ir.IsListRow(md)` and `ir.IsMapValueBox(md)` identify the proto row and map-value boxes.
 
