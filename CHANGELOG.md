@@ -9,6 +9,10 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+## v2.11.0 — 2026-11-06
+
+GraphQL error extensions default to gat's `{status, code}` shape (see Migration), proto lists render non-null elements, Connect ingress in the `gwag` binary, gRPC for gat BYO OpenAPI ops, and a sweep of export, validation and ingress fixes.
+
 ### Added
 - `gwag` binary (`gwag up`, plain serve, `gwag serve --graphql` / `--mcp`) mounts `gw.ConnectHandler()` at `/api/connect/`: every registered proto service over Connect, gRPC-Web and gRPC (`/api/connect/package.Service/Method`).
 - gat `RegisterGRPC` serves the OpenAPI operations of a BYO `ServiceRegistration` (unary, and `itemSchema` streams as server streams). They were in the GraphQL schema and the rendered proto, but a gRPC client got Unimplemented. Nested lists and maps are unboxed on the way in and boxed on the way out.
