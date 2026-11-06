@@ -31,6 +31,15 @@ for arg; do
     esac
 done
 
+# Seed dist/ first: UI codegen compiles the gateway (go run … --gen),
+# whose //go:embed all:dist fails on an empty dist/ in a fresh clone.
+# Also keeps --no-ui builds working without a pnpm install.
+if [[ ! -f ui/dist/index.html ]]; then
+    echo "==> ui: dist/ empty, seeding from ui/fallback/"
+    mkdir -p ui/dist
+    cp ui/fallback/index.html ui/dist/index.html
+fi
+
 if [[ $DO_UI == 1 ]]; then
     echo "==> ui: pnpm install"
     (cd ui && pnpm install --frozen-lockfile 2>/dev/null || pnpm install)
@@ -54,14 +63,6 @@ if [[ $DO_UI == 1 ]]; then
     echo "==> ui: pnpm run lint"
     (cd ui && pnpm run lint)
 fi
-# Ensure dist/ is non-empty even on first-run / --no-ui builds, so the
-# embed succeeds without forcing a pnpm install on every Go iteration.
-if [[ ! -f ui/dist/index.html ]]; then
-    echo "==> ui: dist/ empty, seeding from ui/fallback/"
-    mkdir -p ui/dist
-    cp ui/fallback/index.html ui/dist/index.html
-fi
-
 if [[ $DO_GO == 1 ]]; then
     echo "==> go: build ./..."
     go build ./...
