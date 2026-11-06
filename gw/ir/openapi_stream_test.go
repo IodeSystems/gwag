@@ -3,9 +3,12 @@ package ir
 import (
 	"context"
 	"io"
+	"log"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
@@ -198,12 +201,73 @@ func TestOpenAPIStreamReader(t *testing.T) {
 	}
 }
 
-func TestOpenAPIStreamReader_BadItem(t *testing.T) {
-	r := NewOpenAPIStreamReader(&OpenAPIStream{MediaType: StreamJSONL}, strings.NewReader("{\"n\":1}\nnope\n"))
-	if _, err := r.Next(); err != nil {
-		t.Fatalf("first: %v", err)
+// A malformed item is skipped and reported through OnSkip; the items
+// around it still come through, in every framing.
+func TestOpenAPIStreamReader_BadItemSkipped(t *testing.T) {
+	ticks := []any{map[string]any{"n": 1.0}, map[string]any{"n": 2.0}}
+	cases := []struct {
+		name string
+		s    *OpenAPIStream
+		body string
+	}{
+		{"jsonl", &OpenAPIStream{MediaType: StreamJSONL}, "{\"n\":1}\nnope\n{\"n\":2}\n"},
+		{"ndjson", &OpenAPIStream{MediaType: StreamNDJSON}, "{\"n\":1}\n{\"n\":\n{\"n\":2}\n"},
+		{"json-seq", &OpenAPIStream{MediaType: StreamJSONSeq}, "\x1e{\"n\":1}\n\x1e{\"n\":\n\x1e{\"n\":2}\n"},
+		{"sse data JSON", &OpenAPIStream{MediaType: StreamSSE, SSEData: true}, "data: {\"n\":1}\n\ndata: nope\n\ndata: {\"n\":2}\n\n"},
+		{"sse envelope JSON data", &OpenAPIStream{MediaType: StreamSSE, sseDataJSON: true},
+			"data: {\"n\":1}\n\ndata: nope\n\ndata: {\"n\":2}\n\n"},
 	}
-	if _, err := r.Next(); err == nil || err == io.EOF {
-		t.Fatalf("want decode error, got %v", err)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := NewOpenAPIStreamReader(c.s, strings.NewReader(c.body))
+			skipped := 0
+			r.OnSkip = func(error) { skipped++ }
+			var got []any
+			for {
+				v, err := r.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("Next: %v", err)
+				}
+				if m, ok := v.(map[string]any); ok && c.s.sseDataJSON {
+					v = m["data"]
+				}
+				got = append(got, v)
+			}
+			if !reflect.DeepEqual(got, ticks) {
+				t.Errorf("got %#v want %#v", got, ticks)
+			}
+			if skipped != 1 {
+				t.Errorf("skipped = %d, want 1", skipped)
+			}
+		})
+	}
+}
+
+// A record cut off at EOF is a bad item too: skipped, then EOF.
+func TestOpenAPIStreamReader_TruncatedTail(t *testing.T) {
+	r := NewOpenAPIStreamReader(&OpenAPIStream{MediaType: StreamJSONSeq}, strings.NewReader("\x1e{\"n\":1}\n\x1e{\"n\":"))
+	skipped := 0
+	r.OnSkip = func(error) { skipped++ }
+	if _, err := r.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Next(); err != io.EOF || skipped != 1 {
+		t.Fatalf("err=%v skipped=%d", err, skipped)
+	}
+}
+
+func TestSkipLogger_RateLimited(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f := NewSkipLogger("x", time.Hour)
+	for i := 0; i < 5; i++ {
+		f(io.ErrUnexpectedEOF)
+	}
+	if n := strings.Count(buf.String(), "skipped malformed"); n != 1 {
+		t.Fatalf("logged %d lines, want 1:\n%s", n, buf.String())
 	}
 }

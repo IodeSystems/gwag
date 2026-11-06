@@ -12,6 +12,9 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - `gwag` binary (`gwag up`, plain serve, `gwag serve --graphql` / `--mcp`) mounts `gw.ConnectHandler()` at `/api/connect/`: every registered proto service over Connect, gRPC-Web and gRPC (`/api/connect/package.Service/Method`).
 
+### Changed
+- OpenAPI streamed responses (SSE, JSONL, NDJSON, json-seq): an item that fails to decode is skipped and logged (rate limited) instead of ending the subscription with an error. The subscriber sees no event for it. Errors from the body itself still end the stream. `ir.OpenAPIStreamReader.Next` no longer returns decode errors; `OnSkip` reports them.
+
 ## v2.10.0 — 2026-11-06
 
 Nested lists and maps: `[][2]float64`, `[[T]]` and map of map render and dispatch correctly over GraphQL, OpenAPI and gRPC, and inline `JSON` literals parse.

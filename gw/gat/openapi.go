@@ -237,6 +237,7 @@ func (d *openAPIStreamDispatcher) Dispatch(ctx context.Context, args map[string]
 		defer cancel()
 		defer resp.Body.Close()
 		r := ir.NewOpenAPIStreamReader(d.stream, resp.Body)
+		r.OnSkip = ir.NewSkipLogger(fmt.Sprintf("gat: %s %s", d.method, full), 10*time.Second)
 		for {
 			v, err := r.Next()
 			if err != nil {

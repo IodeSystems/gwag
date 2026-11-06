@@ -54,7 +54,7 @@ type tickUpstreamState struct {
 
 // tickUpstream streams ticks 1..n in each path's framing with a flush
 // per tick. /forever streams until the client leaves; /denied
-// answers 403; /bad sends one tick then a line that is not JSON.
+// answers 403; /bad sends tick 1, a line that is not JSON, tick 2.
 func tickUpstream(t *testing.T) (*httptest.Server, *tickUpstreamState) {
 	t.Helper()
 	st := &tickUpstreamState{gone: make(chan struct{}, 4), accept: make(chan string, 16)}
@@ -75,7 +75,7 @@ func tickUpstream(t *testing.T) (*httptest.Server, *tickUpstreamState) {
 			http.Error(w, "nope", http.StatusForbidden)
 			return
 		case "/bad":
-			fmt.Fprint(w, "{\"n\":1}\nnot json\n")
+			fmt.Fprint(w, "{\"n\":1}\nnot json\n{\"n\":2}\n")
 			return
 		case "/forever":
 			for i := 1; ; i++ {
@@ -210,14 +210,16 @@ func TestOpenAPIStream_Errors(t *testing.T) {
 		t.Fatalf("error payload %s", p)
 	}
 
-	// Bad item mid-stream: one tick, then an error, then the end.
+	// Bad item mid-stream: skipped, the stream goes on.
 	subscribeWS(t, ctx, conn, "2", `subscription { ticks_bad { n } }`)
-	if m, err := readWS(conn, ctx); err != nil || m.Type != msgNext {
-		t.Fatalf("want next, got %+v %v", m, err)
+	for _, want := range []string{`"n":1`, `"n":2`} {
+		m, err := readWS(conn, ctx)
+		if err != nil || m.Type != msgNext || !strings.Contains(string(m.Payload), want) {
+			t.Fatalf("want next with %s, got %+v %v", want, m, err)
+		}
 	}
-	m, err = readWS(conn, ctx)
-	if err != nil || m.Type != msgError || !strings.Contains(string(m.Payload), "decode") {
-		t.Fatalf("want decode error frame, got %+v %v", m, err)
+	if m, err := readWS(conn, ctx); err != nil || m.Type != msgComplete {
+		t.Fatalf("want complete, got %+v %v", m, err)
 	}
 }
 
@@ -355,5 +357,57 @@ func TestOpenAPIStream_GRPCServerStream(t *testing.T) {
 	}
 	if fmt.Sprint(got) != "[1 2 3]" {
 		t.Fatalf("ticks = %v, want [1 2 3]", got)
+	}
+}
+
+const unionStreamSpec = `{
+  "openapi": "3.2.0",
+  "info": {"title": "pets", "version": "1.0.0"},
+  "paths": {
+    "/events": {"get": {"operationId": "events",
+      "responses": {"200": {"description": "ok", "content": {"application/jsonl": {"itemSchema": {"$ref": "#/components/schemas/Event"}}}}}}}
+  },
+  "components": {"schemas": {
+    "Event": {"oneOf": [{"$ref": "#/components/schemas/Cat"}, {"$ref": "#/components/schemas/Dog"}],
+      "discriminator": {"propertyName": "kind", "mapping": {"cat": "#/components/schemas/Cat", "dog": "#/components/schemas/Dog"}}},
+    "Cat": {"type": "object", "required": ["kind", "lives"], "properties": {"kind": {"type": "string"}, "lives": {"type": "integer"}}},
+    "Dog": {"type": "object", "required": ["kind", "good"], "properties": {"kind": {"type": "string"}, "good": {"type": "boolean"}}}
+  }}
+}`
+
+func TestOpenAPIStream_UnionItemSchema(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "{\"kind\":\"cat\",\"lives\":9}\n{\"kind\":\"dog\",\"good\":true}\n")
+	}))
+	defer up.Close()
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithoutSubscriptionAuth(), WithAdminToken([]byte("test")))
+	defer gw.Close()
+	if err := gw.AddOpenAPIBytes([]byte(unionStreamSpec), To(up.URL), As("pets")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn := streamWS(t, ctx, gw)
+	subscribeWS(t, ctx, conn, "1", `subscription { pets_events { __typename ... on pets_Cat { lives } ... on pets_Dog { good } } }`)
+	var got []string
+	for {
+		m, err := readWS(conn, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == msgComplete {
+			break
+		}
+		if m.Type != msgNext {
+			t.Fatalf("frame %s %s", m.Type, m.Payload)
+		}
+		got = append(got, string(m.Payload))
+	}
+	want := []string{
+		`{"data":{"pets_events":{"__typename":"pets_Cat","lives":9}}}`,
+		`{"data":{"pets_events":{"__typename":"pets_Dog","good":true}}}`,
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }

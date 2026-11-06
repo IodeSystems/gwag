@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
@@ -194,8 +196,47 @@ type OpenAPIStreamReader struct {
 	s  *OpenAPIStream
 	sc *bufio.Scanner
 
+	// OnSkip, when set, is called with the decode error of each item
+	// Next skipped. An item that does not decode is dropped and the
+	// stream continues (RFC 7464 §2.4 for json-seq; the same for the
+	// other framings, whose framing still resyncs at the next line or
+	// blank line). Errors from the body or an over-long item still end
+	// the stream through Next.
+	OnSkip func(error)
+
 	// SSE parse state (the text/event-stream interpretation rules).
 	lastID string
+}
+
+func (r *OpenAPIStreamReader) skip(err error) {
+	if r.OnSkip != nil {
+		r.OnSkip(err)
+	}
+}
+
+// NewSkipLogger returns an OnSkip func that logs the first skipped
+// item and then at most one line per interval, with the count
+// suppressed in between. Safe for one reader goroutine.
+//
+// Stability: experimental
+func NewSkipLogger(prefix string, interval time.Duration) func(error) {
+	var (
+		last       time.Time
+		suppressed int
+	)
+	return func(err error) {
+		now := time.Now()
+		if !last.IsZero() && now.Sub(last) < interval {
+			suppressed++
+			return
+		}
+		if suppressed > 0 {
+			log.Printf("%s: skipped malformed stream item: %v (%d more skipped since last log)", prefix, err, suppressed)
+		} else {
+			log.Printf("%s: skipped malformed stream item: %v", prefix, err)
+		}
+		last, suppressed = now, 0
+	}
 }
 
 // NewOpenAPIStreamReader reads the items of body, framed per
@@ -217,7 +258,7 @@ func NewOpenAPIStreamReader(s *OpenAPIStream, body io.Reader) *OpenAPIStreamRead
 }
 
 // Next returns the next item, decoded as encoding/json decodes into
-// `any`. It returns io.EOF when the stream ends; an SSE event left
+// `any`. Items that fail to decode are skipped (see OnSkip). It returns io.EOF when the stream ends; an SSE event left
 // unterminated at the end is dropped, as text/event-stream has it.
 func (r *OpenAPIStreamReader) Next() (any, error) {
 	if r.s.MediaType == StreamSSE {
@@ -230,7 +271,8 @@ func (r *OpenAPIStreamReader) Next() (any, error) {
 		}
 		var v any
 		if err := json.Unmarshal(b, &v); err != nil {
-			return nil, fmt.Errorf("decode %s item: %w", r.s.MediaType, err)
+			r.skip(fmt.Errorf("decode %s item: %w", r.s.MediaType, err))
+			continue
 		}
 		return v, nil
 	}
@@ -258,7 +300,14 @@ func (r *OpenAPIStreamReader) nextSSE() (any, error) {
 				continue
 			}
 			payload := strings.TrimSuffix(data.String(), "\n")
-			return r.sseEvent(payload, event, retry, hasRetry)
+			v, err := r.sseEvent(payload, event, retry, hasRetry)
+			if err != nil {
+				r.skip(err)
+				data.Reset()
+				hasData, event, hasRetry = false, "", false
+				continue
+			}
+			return v, nil
 		}
 		if line[0] == ':' {
 			continue // comment / heartbeat

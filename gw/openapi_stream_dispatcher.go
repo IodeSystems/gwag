@@ -200,6 +200,7 @@ func (d *openAPIStreamDispatcher) open(ctx context.Context, args map[string]any)
 			close(ch)
 		}()
 		reader := ir.NewOpenAPIStreamReader(d.stream, resp.Body)
+		reader.OnSkip = ir.NewSkipLogger(fmt.Sprintf("openapi: %s %s", d.method, full), 10*time.Second)
 		for {
 			v, err := reader.Next()
 			if err != nil {
