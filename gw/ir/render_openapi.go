@@ -360,6 +360,16 @@ func primitiveOpenAPI(s ScalarKind) *openapi3.SchemaRef {
 	return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}
 }
 
+// renderOpenAPIOutputSchema is the response schema for op's output,
+// with its list wrapping (OutputRepeated, OutputItemRequired).
+func renderOpenAPIOutputSchema(op *Operation) *openapi3.SchemaRef {
+	return renderOpenAPIArgFieldSchema(&Arg{
+		Type:         *op.Output,
+		Repeated:     op.OutputRepeated,
+		ItemRequired: op.OutputItemRequired,
+	})
+}
+
 func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Operation {
 	if op.OriginKind == KindOpenAPI {
 		if oop, ok := op.Origin.(*openapi3.Operation); ok && oop != nil {
@@ -434,7 +444,7 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 						In:          a.OpenAPILocation,
 						Required:    a.Required,
 						Description: a.Description,
-						Schema:      renderOpenAPIRefForType(a.Type),
+						Schema:      renderOpenAPIArgFieldSchema(a),
 					},
 				})
 				continue
@@ -473,7 +483,7 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 							Description: a.Description,
 							Content: openapi3.Content{
 								"application/json": &openapi3.MediaType{
-									Schema: renderOpenAPIRefForType(a.Type),
+									Schema: renderOpenAPIArgFieldSchema(a),
 								},
 							},
 						},
@@ -486,7 +496,7 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 						In:          "query",
 						Required:    a.Required,
 						Description: a.Description,
-						Schema:      renderOpenAPIRefForType(a.Type),
+						Schema:      renderOpenAPIArgFieldSchema(a),
 					},
 				})
 			default:
@@ -496,7 +506,7 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 						In:          a.OpenAPILocation,
 						Required:    a.Required,
 						Description: a.Description,
-						Schema:      renderOpenAPIRefForType(a.Type),
+						Schema:      renderOpenAPIArgFieldSchema(a),
 					},
 				})
 			}
@@ -509,7 +519,7 @@ func renderOpenAPIOp(svc *Service, op *Operation, method string) *openapi3.Opera
 				Description: &desc,
 				Content: openapi3.Content{
 					"application/json": &openapi3.MediaType{
-						Schema: renderOpenAPIRefForType(*op.Output),
+						Schema: renderOpenAPIOutputSchema(op),
 					},
 				},
 			},

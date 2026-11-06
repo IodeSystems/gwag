@@ -23,6 +23,7 @@ changes on MINOR, drops on MAJOR.
 - gRPC ingress: two proto slots declaring the same fully-qualified procedure were served by a random one per schema rebuild. The first slot in (namespace, version) order now serves it, and each rebuild logs one warning per service naming the serving and skipped slots.
 - OpenAPI 3.1 to 3.0 downgrade: an operation whose security was only `mutualTLS` lost its `security` and inherited the document-level requirements, so it read stricter than the source. It now gets `security: []`; the original stays in `x-gwag-oas31` and returns on the way back to 3.1.
 - OpenAPI export dropped nullability on fields it built from the IR (GraphQL, proto and MCP origins). A list element that may be null (`[Int]`, `[[Int]!]`) now renders `items` with `nullable: true` (3.0) or `type: [X, "null"]` / `oneOf: [$ref, {type: null}]` (3.1); a `$ref` element becomes `allOf: [$ref], nullable: true`. A required-but-nullable field renders nullable. Re-ingest gives the same nullability.
+- Cross-kind OpenAPI export (GraphQL or proto origin): an op's list parameter, list request body and list response exported as the element schema. They export as arrays now; map args as objects.
 
 ## v2.10.0 — 2026-11-06
 
