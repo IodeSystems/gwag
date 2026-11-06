@@ -303,6 +303,8 @@ func (b *IRTypeBuilder) Input(ref TypeRef, repeated, required, itemRequired bool
 
 func (b *IRTypeBuilder) outputBase(ref TypeRef) (graphql.Output, error) {
 	switch {
+	case ref.IsList():
+		return b.Output(ref.List.Elem, true, false, ref.List.ItemRequired)
 	case ref.IsMap():
 		return b.options.MapType, nil
 	case ref.IsNamed():
@@ -319,6 +321,8 @@ func (b *IRTypeBuilder) outputBase(ref TypeRef) (graphql.Output, error) {
 
 func (b *IRTypeBuilder) inputBase(ref TypeRef) (graphql.Input, error) {
 	switch {
+	case ref.IsList():
+		return b.Input(ref.List.Elem, true, false, ref.List.ItemRequired)
 	case ref.IsMap():
 		return b.jsonScalar(), nil
 	case ref.IsNamed():

@@ -292,6 +292,14 @@ func renderOpenAPIRefForType(r TypeRef) *openapi3.SchemaRef {
 			},
 		}
 	}
+	if r.IsList() {
+		return &openapi3.SchemaRef{
+			Value: &openapi3.Schema{
+				Type:  &openapi3.Types{"array"},
+				Items: renderOpenAPIRefForType(r.List.Elem),
+			},
+		}
+	}
 	return primitiveOpenAPI(r.Builtin)
 }
 

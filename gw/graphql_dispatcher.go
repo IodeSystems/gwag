@@ -539,8 +539,8 @@ func buildGraphQLCanonicalQuery(m *graphQLMirror, op *ir.Operation, opLabel stri
 	// Object/Interface/Union output with no selectable fields means
 	// we can't synthesize a valid query — graphql requires a
 	// non-empty selection set on composite return types.
-	if selection == "" && op.Output != nil && op.Output.IsNamed() {
-		if t := intro.Types[op.Output.Named]; t != nil {
+	if selection == "" && op.Output != nil && op.Output.Leaf().IsNamed() {
+		if t := intro.Types[op.Output.Leaf().Named]; t != nil {
 			switch t.Kind {
 			case "OBJECT", "INTERFACE", "UNION":
 				return "", nil
@@ -606,6 +606,13 @@ func graphQLArgTypeString(a *ir.Arg) string {
 }
 
 func graphQLTypeNameForRef(r ir.TypeRef) string {
+	if r.IsList() {
+		elem := graphQLTypeNameForRef(r.List.Elem)
+		if r.List.ItemRequired {
+			elem += "!"
+		}
+		return "[" + elem + "]"
+	}
 	if r.IsNamed() {
 		return r.Named
 	}
@@ -633,6 +640,8 @@ func buildCanonicalSelectionSet(intro *introspectionSchema, out *ir.TypeRef) str
 	if out == nil || intro == nil {
 		return ""
 	}
+	leaf := out.Leaf()
+	out = &leaf
 	if out.IsBuiltin() || !out.IsNamed() {
 		return ""
 	}

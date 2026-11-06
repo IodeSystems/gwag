@@ -531,6 +531,20 @@ func renderProtoField(f *Field, defaultNumber int32, pkg, parent string) (*descr
 		}
 		out.TypeName = stringPtr("." + qualified)
 		out.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
+	case f.Type.IsList():
+		// proto has no list of lists: each inner list is boxed in a
+		// synthesised `<Field>Row { repeated T value = 1; }`, rendered
+		// recursively for deeper nesting. The box is hosted by parent.
+		row := protoListRowName(f.Name)
+		inner := &Field{Name: "value", Type: f.Type.List.Elem, Repeated: true}
+		fd, nested := renderProtoField(inner, 1, pkg, qualifyLocal(row, parent))
+		box := &descriptorpb.DescriptorProto{Name: stringPtr(row)}
+		box.Field = append(box.Field, fd)
+		box.NestedType = append(box.NestedType, nested...)
+		out.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+		out.TypeName = stringPtr("." + qualifyNested(row, pkg, parent))
+		out.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
+		return out, []*descriptorpb.DescriptorProto{box}
 	case f.Type.IsMap():
 		entry, extra := renderProtoMapEntry(f, pkg, parent)
 		out.TypeName = stringPtr("." + qualifyNested(entry.GetName(), pkg, parent))
@@ -579,6 +593,18 @@ func renderProtoMapEntry(f *Field, pkg, parent string) (entry *descriptorpb.Desc
 		// map<string, map<string, map<string, T>>> renders correctly.
 		wrapper := protoMapValueName(f.Name)
 		inner := &Field{Name: "value", Type: val}
+		fd, nested := renderProtoField(inner, 1, pkg, qualifyLocal(wrapper, parent))
+		box := &descriptorpb.DescriptorProto{Name: stringPtr(wrapper)}
+		box.Field = append(box.Field, fd)
+		box.NestedType = append(box.NestedType, nested...)
+		extra = append(extra, box)
+		entry.Field = append(entry.Field,
+			mapEntryField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+				"."+qualifyNested(wrapper, pkg, parent)))
+	case val.IsList():
+		// A list as a map value: box it like a nested map.
+		wrapper := protoMapValueName(f.Name)
+		inner := &Field{Name: "value", Type: val.List.Elem, Repeated: true}
 		fd, nested := renderProtoField(inner, 1, pkg, qualifyLocal(wrapper, parent))
 		box := &descriptorpb.DescriptorProto{Name: stringPtr(wrapper)}
 		box.Field = append(box.Field, fd)
@@ -653,6 +679,12 @@ func validProtoMapKey(k descriptorpb.FieldDescriptorProto_Type) bool {
 
 // protoMapValueName names the wrapper that boxes a map value proto3
 // cannot hold directly. `sets` → `SetsValue`.
+// protoListRowName names the box for one inner list of a nested list:
+// `points` → `PointsRow`.
+func protoListRowName(field string) string {
+	return strings.TrimSuffix(protoMapEntryName(field), "Entry") + "Row"
+}
+
 func protoMapValueName(field string) string {
 	return strings.TrimSuffix(protoMapEntryName(field), "Entry") + "Value"
 }

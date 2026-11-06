@@ -385,19 +385,36 @@ func graphqlInputToIRField(f wireGraphQLInputValue) *Field {
 }
 
 // graphqlTypeRef walks a (NON_NULL → LIST → NON_NULL → NAMED) wrapper
-// chain and returns a TypeRef pointing at the innermost named type
-// (or a primitive scalar). Repeated/Required are derived separately
-// since they're field properties, not type-ref properties.
+// chain and returns the TypeRef of the slot's element: the named type
+// (or a primitive scalar), or a nested List when the element is itself
+// a list (`[[T]]`). The outer list and its nullability are field
+// properties (Repeated/Required/ItemRequired), derived separately.
 func graphqlTypeRef(r *wireGraphQLTypeRef) *TypeRef {
-	if r == nil {
+	cur := stripNonNullRef(r)
+	if cur != nil && cur.Kind == "LIST" {
+		cur = stripNonNullRef(cur.OfType)
+	}
+	return graphqlElemRef(cur)
+}
+
+func stripNonNullRef(r *wireGraphQLTypeRef) *wireGraphQLTypeRef {
+	for r != nil && r.Kind == "NON_NULL" {
+		r = r.OfType
+	}
+	return r
+}
+
+func graphqlElemRef(cur *wireGraphQLTypeRef) *TypeRef {
+	if cur == nil {
 		return nil
 	}
-	cur := r
-	for cur.Kind == "NON_NULL" || cur.Kind == "LIST" {
-		if cur.OfType == nil {
+	if cur.Kind == "LIST" {
+		inner := cur.OfType
+		elem := graphqlElemRef(stripNonNullRef(inner))
+		if elem == nil {
 			return nil
 		}
-		cur = cur.OfType
+		return &TypeRef{List: &ListType{Elem: *elem, ItemRequired: inner != nil && inner.Kind == "NON_NULL"}}
 	}
 	if cur.Name == "" {
 		return nil

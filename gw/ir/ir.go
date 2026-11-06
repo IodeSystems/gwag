@@ -391,15 +391,23 @@ type Field struct {
 	Example   any
 }
 
-// TypeRef points at a primitive scalar, a named Type, or a map.
-// Exactly one of Builtin / Named / Map is populated; Repeated is
-// orthogonal and lives on Field.
+// TypeRef points at a primitive scalar, a named Type, a map, or a
+// list. Exactly one of Builtin / Named / Map / List is populated;
+// Repeated is orthogonal and lives on Field. List is only the
+// element of a Repeated slot: a Field `[[Float!]!]!` is Repeated,
+// ItemRequired, with Type = List{Elem: Float, ItemRequired: true}.
 //
 // Stability: stable
 type TypeRef struct {
 	Builtin ScalarKind
 	Named   string
 	Map     *MapType
+
+	// List is a nested list: the element of a Repeated slot that is
+	// itself a list (OpenAPI array of array, GraphQL `[[T]]`).
+	//
+	// Stability: experimental
+	List *ListType
 
 	// ScalarName, on an integer Builtin, renders the value in GraphQL
 	// as its own scalar of that name instead of Int / Long: a JSON
@@ -428,6 +436,15 @@ const ScalarExtension = "x-gwag-scalar"
 type MapType struct {
 	KeyType   TypeRef
 	ValueType TypeRef
+}
+
+// ListType is one inner list level of a nested list. Elem may be a
+// List again for deeper nesting.
+//
+// Stability: experimental
+type ListType struct {
+	Elem         TypeRef
+	ItemRequired bool // each element of this inner list is non-null
 }
 
 // ScalarKind enumerates the primitive types every format speaks.
@@ -494,7 +511,25 @@ func flattenGroupOps(g *OperationGroup, prefix string, out *[]*Operation) {
 // (no Service.Types lookup needed).
 //
 // Stability: stable
-func (r TypeRef) IsBuiltin() bool { return r.Builtin != ScalarUnknown && r.Named == "" && r.Map == nil }
+func (r TypeRef) IsBuiltin() bool {
+	return r.Builtin != ScalarUnknown && r.Named == "" && r.Map == nil && r.List == nil
+}
+
+// IsList reports whether this is a nested list ref.
+//
+// Stability: experimental
+func (r TypeRef) IsList() bool { return r.List != nil }
+
+// Leaf returns the innermost non-list ref: r itself unless r is a
+// nested list.
+//
+// Stability: experimental
+func (r TypeRef) Leaf() TypeRef {
+	for r.List != nil {
+		r = r.List.Elem
+	}
+	return r
+}
 
 // IsMap reports whether this is a map ref.
 //

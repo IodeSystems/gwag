@@ -9,6 +9,12 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- **`ir.TypeRef.List` / `ir.ListType`** (experimental): the element of a repeated slot can itself be a list, with its own element nullability. `TypeRef.IsList()` and `TypeRef.Leaf()` go with it.
+
+### Fixed
+- Nested lists flattened. An OpenAPI array of array (huma `[][2]float64`), a downstream-GraphQL `[[T]]`, and an MCP array of array rendered as `[T]`, so a query that sent `[[1,2]]` failed validation. They now render as nested GraphQL lists in both directions, export as nested OpenAPI arrays, and export to proto as a repeated `<Field>Row { repeated T value = 1; }` box.
+
 ## v2.9.0 — 2026-10-31
 
 Relay deploys and sub status: `Relay.Shutdown` closes sockets cleanly, and the generated runtime reports each subscription's real state and retries failures.

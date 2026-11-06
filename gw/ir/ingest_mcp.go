@@ -174,7 +174,11 @@ func mcpTypeRef(svc *Service, hint string, raw json.RawMessage) (ref TypeRef, re
 	case "number":
 		return TypeRef{Builtin: ScalarDouble}, false, desc
 	case "array":
-		itemRef, _, _ := mcpTypeRef(svc, hint+"Item", s.Items)
+		itemRef, itemRepeated, _ := mcpTypeRef(svc, hint+"Item", s.Items)
+		if itemRepeated {
+			// Array of array: the element is itself a list.
+			itemRef = TypeRef{List: &ListType{Elem: itemRef}}
+		}
 		return itemRef, true, desc
 	case "object":
 		if len(s.Properties) > 0 {

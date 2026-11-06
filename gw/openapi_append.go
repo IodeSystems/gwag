@@ -68,6 +68,11 @@ func (w openAPIWalker) appendValue(dst []byte, raw json.RawMessage, selSet *ast.
 		if selSet == nil {
 			return append(dst, raw...), nil
 		}
+		if outRef != nil && outRef.IsList() {
+			// Inner list of a nested list: its elements take the
+			// list's element ref.
+			return w.appendList(dst, raw, selSet, &outRef.List.Elem)
+		}
 		return w.appendList(dst, raw, selSet, outRef)
 	default:
 		return append(dst, raw...), nil

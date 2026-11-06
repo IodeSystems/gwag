@@ -312,6 +312,8 @@ func typeRefSummary(ref ir.TypeRef, repeated, required, itemRequired bool) strin
 	switch {
 	case ref.IsBuiltin():
 		inner = scalarKindName(ref.Builtin)
+	case ref.IsList():
+		inner = typeRefSummary(ref.List.Elem, true, false, ref.List.ItemRequired)
 	case ref.IsMap():
 		inner = "Map<" + typeRefSummary(ref.Map.KeyType, false, false, false) + ", " + typeRefSummary(ref.Map.ValueType, false, false, false) + ">"
 	case ref.IsNamed():
@@ -509,6 +511,9 @@ func collectTypeClosureFromType(s *ir.Service, root *ir.Type) []schemaExpandType
 func walkTypeRefClosure(s *ir.Service, ref ir.TypeRef, visited map[string]bool, out *[]schemaExpandType) {
 	switch {
 	case ref.IsBuiltin():
+		return
+	case ref.IsList():
+		walkTypeRefClosure(s, ref.List.Elem, visited, out)
 		return
 	case ref.IsMap():
 		walkTypeRefClosure(s, ref.Map.KeyType, visited, out)

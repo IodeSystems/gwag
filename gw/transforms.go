@@ -168,7 +168,7 @@ func (n nullableTypeRewrite) apply(svcs []*ir.Service) {
 				continue
 			}
 			for _, f := range t.Fields {
-				if f.Type.IsNamed() && f.Type.Named == n.Name {
+				if f.Type.Leaf().IsNamed() && f.Type.Leaf().Named == n.Name {
 					f.Required = false
 				}
 			}
@@ -183,7 +183,7 @@ func (n nullableTypeRewrite) apply(svcs []*ir.Service) {
 func nullableArgsOfType(ops []*ir.Operation, name string) {
 	for _, op := range ops {
 		for _, a := range op.Args {
-			if a.Type.IsNamed() && a.Type.Named == name {
+			if a.Type.Leaf().IsNamed() && a.Type.Leaf().Named == name {
 				a.Required = false
 			}
 		}

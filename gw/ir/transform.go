@@ -104,7 +104,7 @@ func Hides(svcs []*Service, hide map[string]bool) {
 			}
 			n := 0
 			for _, f := range t.Fields {
-				if f.Type.IsNamed() && hide[f.Type.Named] {
+				if f.Type.Leaf().IsNamed() && hide[f.Type.Leaf().Named] {
 					continue
 				}
 				t.Fields[n] = f
@@ -127,7 +127,7 @@ func Hides(svcs []*Service, hide map[string]bool) {
 func hideOpArgs(op *Operation, hide map[string]bool) {
 	n := 0
 	for _, a := range op.Args {
-		if a.Type.IsNamed() && hide[a.Type.Named] {
+		if a.Type.Leaf().IsNamed() && hide[a.Type.Leaf().Named] {
 			continue
 		}
 		op.Args[n] = a

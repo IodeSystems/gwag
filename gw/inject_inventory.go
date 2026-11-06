@@ -235,7 +235,7 @@ func landingsForType(svcs []*ir.Service, name string) []injectorLanding {
 		// Args on top-level operations.
 		for _, op := range svc.Operations {
 			for _, a := range op.Args {
-				if a.Type.IsNamed() && a.Type.Named == name {
+				if a.Type.Leaf().IsNamed() && a.Type.Leaf().Named == name {
 					out = append(out, injectorLanding{
 						Kind: "arg", Namespace: svc.Namespace, Version: svc.Version,
 						Op: op.Name, ArgName: a.Name,
@@ -253,7 +253,7 @@ func landingsForType(svcs []*ir.Service, name string) []injectorLanding {
 				continue
 			}
 			for _, f := range t.Fields {
-				if f.Type.IsNamed() && f.Type.Named == name {
+				if f.Type.Leaf().IsNamed() && f.Type.Leaf().Named == name {
 					out = append(out, injectorLanding{
 						Kind: "field", Namespace: svc.Namespace, Version: svc.Version,
 						TypeName: t.Name, FieldName: f.Name,
@@ -268,7 +268,7 @@ func landingsForType(svcs []*ir.Service, name string) []injectorLanding {
 func collectTypeArgsInGroup(grp *ir.OperationGroup, svc *ir.Service, name string, out *[]injectorLanding) {
 	for _, op := range grp.Operations {
 		for _, a := range op.Args {
-			if a.Type.IsNamed() && a.Type.Named == name {
+			if a.Type.Leaf().IsNamed() && a.Type.Leaf().Named == name {
 				*out = append(*out, injectorLanding{
 					Kind: "arg", Namespace: svc.Namespace, Version: svc.Version,
 					Op: op.Name, ArgName: a.Name,

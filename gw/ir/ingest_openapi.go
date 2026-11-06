@@ -253,6 +253,10 @@ func openapiPropToField(svc *Service, pathHint, name string, ref *openapi3.Schem
 			} else if s.Items != nil {
 				item := openapiPropToField(svc, pathHint+"Item", "item", s.Items, false)
 				f.Type = item.Type
+				if item.Repeated {
+					// Array of array: the element is itself a list.
+					f.Type = TypeRef{List: &ListType{Elem: item.Type, ItemRequired: item.ItemRequired}}
+				}
 				f.ItemRequired = !item.Nullable
 			} else {
 				f.Type = TypeRef{Builtin: ScalarString}
