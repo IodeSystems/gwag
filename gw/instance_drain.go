@@ -120,7 +120,8 @@ type instanceDrains struct {
 	flagged    map[string]bool // regIDs whose replicas carry draining=true
 	gone       []string        // regIDs forgotten while a request existed
 
-	// ready is the coverage source. nil → defaultReadyInstances.
+	// ready is the coverage source; nil → g.defaultReadyInstances
+	// (the start gate's readyOwnersLocked).
 	ready readyInstancesFunc
 
 	tickMu   sync.Mutex
@@ -213,19 +214,20 @@ func (d *instanceDrains) forgetLocked(regID string) {
 	delete(d.flagged, regID)
 }
 
-// defaultReadyInstances counts every registered instance serving the
-// line.
-func (d *instanceDrains) defaultReadyInstances(ns, line string) []string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	var out []string
-	k := poolKey{namespace: ns, version: line}
-	for id, rec := range d.regs {
-		if _, ok := rec.lines[k]; ok {
-			out = append(out, id)
-		}
+// defaultReadyInstances is the start gate's notion of ready
+// (readyOwnersLocked): non-draining replicas in the (ns, line) slot,
+// so WAITING bindings never count as cover. A ready replica with no
+// registration (boot-time, in-process) is reported as "", which no
+// drain can target, so it always covers. Takes g.mu; called with no
+// lock held.
+func (g *Gateway) defaultReadyInstances(ns, line string) []string {
+	g.mu.Lock()
+	owners, ownerless := g.readyOwnersLocked(ns, line)
+	g.mu.Unlock()
+	for i := 0; i < ownerless; i++ {
+		owners = append(owners, "")
 	}
-	return out
+	return owners
 }
 
 // resolveInstance maps an operator-typed name (registration_id, or an
@@ -303,7 +305,7 @@ func (g *Gateway) coverageReasons(target string) []string {
 	ready := d.ready
 	d.mu.Unlock()
 	if ready == nil {
-		ready = d.defaultReadyInstances
+		ready = g.defaultReadyInstances
 	}
 
 	available := func(id string) bool {
@@ -422,6 +424,8 @@ func (g *Gateway) drainTickOnce(ctx context.Context) {
 			g.setInstanceRoutingLocked(id, false)
 		}
 		g.mu.Unlock()
+		// Back in the ready set: waiters may now pass the gate.
+		g.kickGate()
 		d.mu.Lock()
 		for _, id := range unflag {
 			if _, ok := d.requests[id]; !ok {
@@ -467,6 +471,9 @@ func (g *Gateway) drainTickOnce(ctx context.Context) {
 		}
 		switch {
 		case blocked:
+			if !ld.stoppedSince.IsZero() {
+				g.kickGate() // routing resumed: back in the ready set
+			}
 			ld.stoppedSince = time.Time{}
 		case ld.stoppedSince.IsZero():
 			ld.stoppedSince = now

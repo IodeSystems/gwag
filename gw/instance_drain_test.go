@@ -490,3 +490,106 @@ func TestInstanceDrain_ClusterCrossNode(t *testing.T) {
 	waitDrainState(t, b.gw, regA, cpv1.DrainState_DRAIN_STATE_SAFE_TO_STOP, 10*time.Second)
 	waitDrainState(t, a.gw, regA, cpv1.DrainState_DRAIN_STATE_SAFE_TO_STOP, 10*time.Second)
 }
+
+// Start gate and drain share one notion of ready: a WAITING instance
+// is not cover, and a draining instance does not open a new
+// dependent's gate.
+func TestInstanceDrain_GateInteraction(t *testing.T) {
+	_, addrA := startGreeterServer(t)
+	_, addrW := startGreeterServer(t)
+	g, _ := newStandalone(t)
+	registerOn(t, g, greeterReq(t, addrA, "greeter-a", "v1"))
+	registerOn(t, g, libraryConsumerReq(t, "v1"))
+
+	// A second greeter/v1 instance, WAITING on a missing dependency.
+	w := greeterReq(t, addrW, "greeter-w", "v1")
+	w.Services[0].Depends = []*cpv1.Dependency{{Service: "users", Lines: []string{"v1"}}}
+	resp, err := g.ControlPlane().Register(context.Background(), w)
+	if err != nil {
+		t.Fatalf("Register waiting: %v", err)
+	}
+	if b := resp.GetBindings(); len(b) != 1 || b[0].GetState() != cpv1.InstanceState_INSTANCE_STATE_WAITING {
+		t.Fatalf("greeter-w bindings=%v, want WAITING", b)
+	}
+
+	dr := drainRPC(t, g, "greeter-a", false)
+	if dr.GetState() != cpv1.DrainState_DRAIN_STATE_BLOCKED {
+		t.Fatalf("state=%v, want BLOCKED (waiting greeter-w is not cover)", dr.GetState())
+	}
+	if r := dr.GetReasons(); len(r) != 1 || !strings.Contains(r[0], "library/v1") {
+		t.Fatalf("reasons=%v", r)
+	}
+	// Blocked: greeter-a is still routable, so the gate still sees it.
+	g.mu.Lock()
+	n := g.readyInstancesLocked("greeter", "v1")
+	g.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("ready greeter/v1=%d while blocked, want 1", n)
+	}
+	drainRPC(t, g, "greeter-a", true)
+
+	// Without dependents the drain proceeds; a consumer registering
+	// now must wait, since the only v1 instance is draining.
+	g2, _ := newStandalone(t)
+	registerOn(t, g2, greeterReq(t, addrA, "greeter-a", "v1"))
+	waitDrainState(t, g2, "greeter-a", cpv1.DrainState_DRAIN_STATE_SAFE_TO_STOP, 5*time.Second)
+	resp, err = g2.ControlPlane().Register(context.Background(), libraryConsumerReq(t, "v1"))
+	if err != nil {
+		t.Fatalf("Register consumer: %v", err)
+	}
+	if b := resp.GetBindings(); len(b) != 1 || b[0].GetState() != cpv1.InstanceState_INSTANCE_STATE_WAITING {
+		t.Fatalf("consumer bindings=%v, want WAITING (dependency is draining)", b)
+	}
+	// Cancelling the drain puts greeter-a back; the consumer passes.
+	drainRPC(t, g2, "greeter-a", true)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, info := listServiceInfo(t, g2, "library", "v1")
+		if info != nil && info.GetReplicaCount() == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("consumer never left WAITING after cancel: %v", info)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The drain ops are self-ingested into GraphQL `admin`.
+func TestInstanceDrain_AdminGraphQL(t *testing.T) {
+	_, addrA := startGreeterServer(t)
+	g, gql := newStandalone(t)
+	regA := registerOn(t, g, greeterReq(t, addrA, "greeter-a", "v1"))
+	mux, spec, err := g.AdminHumaRouter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminSrv := httptest.NewServer(mux)
+	t.Cleanup(adminSrv.Close)
+	if err := g.AddOpenAPIBytes(spec, As("admin"), To(adminSrv.URL)); err != nil {
+		t.Fatalf("self-ingest: %v", err)
+	}
+	post := func(q string) string {
+		t.Helper()
+		b, _ := json.Marshal(map[string]string{"query": q})
+		resp, err := http.Post(gql.URL+"/graphql", "application/json", strings.NewReader(string(b)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(body), `"errors"`) {
+			t.Fatalf("graphql errors: %s", body)
+		}
+		return string(body)
+	}
+	body := post(`mutation { admin { drainInstance(instance: "greeter-a", body: {}) { registrationId state reasons inflight lines } } }`)
+	// draining or safe_to_stop, depending on the settle window.
+	if !strings.Contains(body, regA) || !strings.Contains(body, `"lines":["greeter/v1"]`) || strings.Contains(body, `"state":"serving"`) {
+		t.Fatalf("drainInstance: %s", body)
+	}
+	body = post(`{ admin { listInstances { instances { registrationId instanceId state } } listServices { services { namespace drains { registrationId state } } } } }`)
+	if strings.Count(body, regA) != 2 || !strings.Contains(body, `"greeter-a"`) {
+		t.Fatalf("listInstances/listServices: %s", body)
+	}
+}
