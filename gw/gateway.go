@@ -95,6 +95,7 @@ type Gateway struct {
 	cfg        *config
 	cp         *controlPlane
 	gate       gateState // start gate (start_gate.go)
+	lifecycle  *lifecycleMetrics // nil unless the default Prometheus sink is in use
 	peers      *peerTracker
 	broker     *subBroker
 
@@ -1404,6 +1405,9 @@ func New(opts ...Option) *Gateway {
 		if pm := unwrapPrometheusMetrics(cfg.metrics); pm != nil {
 			pm.registry.MustRegister(newPlanCacheCollector(g.planCache, pm.prefix))
 		}
+	}
+	if pm != nil {
+		g.lifecycle = newLifecycleMetrics(g, pm)
 	}
 	g.gql = g.newGraphQLIngress()
 	// gwag.ps.v1.PubSub is installed on every gateway. With a cluster

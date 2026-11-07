@@ -724,9 +724,15 @@ func (cp *controlPlane) DrainInstance(ctx context.Context, req *cpv1.DrainInstan
 func (g *Gateway) drainInstance(ctx context.Context, name string, cancel bool) (instanceDrainStatus, error) {
 	regID, err := g.drains.resolveInstance(name)
 	if err != nil {
+		g.lifecycle.recordDrainRequest(cancel, false, err)
 		return instanceDrainStatus{}, err
 	}
-	if err := g.requestInstanceDrain(ctx, regID, cancel); err != nil {
+	g.drains.mu.Lock()
+	_, existed := g.drains.requests[regID]
+	g.drains.mu.Unlock()
+	err = g.requestInstanceDrain(ctx, regID, cancel)
+	g.lifecycle.recordDrainRequest(cancel, existed, err)
+	if err != nil {
 		return instanceDrainStatus{}, err
 	}
 	return g.instanceDrainStatus(ctx, regID), nil

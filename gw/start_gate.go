@@ -511,6 +511,8 @@ func (cp *controlPlane) gateLoop() {
 }
 
 func (cp *controlPlane) evaluateGate() {
+	cp.gw.lifecycle.observeGate()
+	defer cp.gw.lifecycle.observeGate()
 	if cp.gw.registryKV() != nil {
 		cp.promoteCluster()
 		return

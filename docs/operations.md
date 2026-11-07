@@ -113,6 +113,25 @@ go_api_gateway_subscribe_auth_total{namespace,version,method,code}
 - `kind` is `unary` or `stream` — splits queries from subscriptions
   on the same backpressure metrics.
 
+Service-lifecycle metrics (start gate, drain, dependencies). All are
+per-node views, like usage; gauges are computed at scrape time, so a
+series disappears with its instance or line. They are exported only
+with the default Prometheus sink (not `WithMetrics(custom)` or
+`WithoutMetrics()`).
+
+```
+go_api_gateway_service_instances{namespace,version,state}                    (gauge) ready|waiting|degraded
+go_api_gateway_service_drain_instances{namespace,version,drain_state}        (gauge) draining|blocked|safe_to_stop
+go_api_gateway_start_gate_transitions_total{namespace,version,from,to}       none|waiting|ready|degraded|removed
+go_api_gateway_dependency_unmet{consumer_namespace,consumer_version,provider} (gauge) 1 = no accepted line has a ready instance
+go_api_gateway_line_sunsetable{namespace,version}                            (gauge) 1 = sunset-able
+go_api_gateway_drain_requests_total{outcome}                                 requested|already_requested|cancelled|unknown_instance|error
+```
+
+`line_sunsetable` uses the admin dependency graph's rule and its
+default 1h usage window. READY/DEGRADED transitions are sampled every
+2s and at scrape, so a flip shorter than that can go uncounted.
+
 Mount alongside the GraphQL endpoint:
 
 ```go
