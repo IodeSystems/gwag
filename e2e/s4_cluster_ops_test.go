@@ -112,11 +112,14 @@ func TestS4ClusterOps(t *testing.T) {
 			return nil
 		})
 		// And the registry and peers streams finished moving to 3
-		// replicas. Seen in 1 of 3 runs, before and after expiry
-		// markers: the registry stuck in a 2-replica group with n2,
-		// so the kill left it without a quorum until n2 came back
-		// (/api/admin/peers 500 for 75s). With markers, the entries
-		// that expired meanwhile also left the survivors' routing.
+		// replicas. Still required with the default `odd` policy,
+		// which skips R2 but not the R1 -> R3 move: a kill during it
+		// leaves the stream without a quorum until the node returns.
+		// Without this wait, 2 of 3 runs failed as before (8984
+		// failed calls, "orders" missing from n1's schema, peers
+		// notice timeout). A 3-node cluster before the move is R1:
+		// the stream lives on one node, and killing that node loses
+		// the registry and peers state.
 		cluster.WaitStreamsReplicated(t, 3, 75*time.Second)
 		before := map[string]*harness.Scrape{}
 		for _, g := range survivors {
