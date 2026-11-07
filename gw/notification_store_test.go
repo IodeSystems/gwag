@@ -164,7 +164,7 @@ func TestNotifications_Cluster(t *testing.T) {
 	})
 	var nodes []*Gateway
 	add := func(cl *Cluster) {
-		g := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")),
+		g := New(WithCluster(cl), WithClusterReplicas(ClusterReplicasAuto), WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")),
 			WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsFull, strongTestSecret)))
 		t.Cleanup(g.Close)
 		ctx, cancel := context.WithCancel(context.Background())
