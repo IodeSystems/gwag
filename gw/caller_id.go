@@ -53,7 +53,10 @@ const PublicCallerIDMetadata = "caller-id"
 //
 // Stability: stable
 func WithCallerIDExtractor(ex CallerIDExtractor) Option {
-	return func(cfg *config) { cfg.callerIDExtractor = ex }
+	return func(cfg *config) {
+		cfg.callerIDExtractor = ex
+		cfg.callerIDPublic = false
+	}
 }
 
 // WithCallerIDPublic installs the "public" extractor: trust the
@@ -66,7 +69,10 @@ func WithCallerIDExtractor(ex CallerIDExtractor) Option {
 //
 // Stability: stable
 func WithCallerIDPublic() Option {
-	return WithCallerIDExtractor(publicCallerIDExtractor)
+	return func(cfg *config) {
+		cfg.callerIDExtractor = publicCallerIDExtractor
+		cfg.callerIDPublic = true
+	}
 }
 
 // publicCallerIDExtractor is the implementation backing
