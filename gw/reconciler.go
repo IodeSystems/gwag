@@ -24,8 +24,9 @@ type reconciler struct {
 	mu    sync.Mutex
 	conns map[string]*reconcilerConn
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel    context.CancelFunc
+	done      chan struct{}
+	sweepDone chan struct{}
 }
 
 type reconcilerConn struct {
@@ -38,16 +39,18 @@ type reconcilerConn struct {
 	refs int
 }
 
-func (g *Gateway) startReconciler(ctx context.Context, kv jetstream.KeyValue) (*reconciler, error) {
+func (g *Gateway) startReconciler(ctx context.Context, kv jetstream.KeyValue, ttl time.Duration) (*reconciler, error) {
 	rctx, cancel := context.WithCancel(ctx)
 	r := &reconciler{
-		gw:     g,
-		kv:     kv,
-		conns:  map[string]*reconcilerConn{},
-		cancel: cancel,
-		done:   make(chan struct{}),
+		gw:        g,
+		kv:        kv,
+		conns:     map[string]*reconcilerConn{},
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		sweepDone: make(chan struct{}),
 	}
 	go r.watchLoop(rctx)
+	go r.sweepLoop(rctx, ttl)
 	return r, nil
 }
 
@@ -57,6 +60,7 @@ func (r *reconciler) stop() {
 	}
 	r.cancel()
 	<-r.done
+	<-r.sweepDone
 	r.mu.Lock()
 	for _, c := range r.conns {
 		_ = c.pool.Close()
@@ -313,6 +317,73 @@ func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	if rep != nil {
 		r.releaseConn(rep.addr)
 	}
+}
+
+// sweepLoop is the backstop for a delete the watch can no longer
+// deliver. An expired entry leaves a delete marker
+// (openExpiringBucket), but the marker itself expires one TTL later.
+// A watch stalled past that (its consumer lived on a node that died,
+// or this node sat in a partition's minority) resumes after the
+// marker is gone and would keep the entry for good.
+//
+// Every ttl/2 the sweep looks up each registry key this node holds.
+// A key missing for at least ttl is dropped as if its delete had
+// arrived. Not sooner: until the marker expires a stalled watch can
+// still deliver it, in order after any Put written before it (a
+// client's failover registration), and dropping first would open a
+// gap on this node. The lookup goes to the stream leader (kvKeyGone);
+// no leader, no drop.
+func (r *reconciler) sweepLoop(ctx context.Context, ttl time.Duration) {
+	defer close(r.sweepDone)
+	tk := time.NewTicker(ttl / 2)
+	defer tk.Stop()
+	missing := map[string]time.Time{} // key → first lookup that missed
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tk.C:
+		}
+		now := time.Now()
+		next := map[string]time.Time{}
+		for _, key := range r.gw.registryInstanceKeys() {
+			gctx, cancel := kvCtx(ctx)
+			gone, err := kvKeyGone(gctx, r.gw.cfg.cluster.Conn, registryBucketName, key)
+			cancel()
+			if err != nil || !gone {
+				continue // present, or the leader did not answer: keep it
+			}
+			first, ok := missing[key]
+			if !ok {
+				first = now
+			}
+			if now.Sub(first) < ttl {
+				next[key] = first
+				continue
+			}
+			ns, ver, rid, ok := parseReplicaKey(key)
+			if !ok {
+				continue
+			}
+			r.gw.cfg.cluster.Server.Warnf("reconciler: %s is gone from the registry without a delete event; dropping it", key)
+			r.handleDelete(ns, ver, rid)
+		}
+		missing = next
+	}
+}
+
+// registryInstanceKeys lists the registry keys of the instances this
+// node applied from the registry KV.
+func (g *Gateway) registryInstanceKeys() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for id, inst := range g.gate.instances {
+		if inst.replicaID != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (r *reconciler) acquireConn(addr string) (grpc.ClientConnInterface, error) {

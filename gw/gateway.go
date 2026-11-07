@@ -356,6 +356,11 @@ type config struct {
 	// per-stream lock load — see gw/grpc_conn_pool.go.
 	grpcConnPoolSize int
 
+	// clusterKVTTL overrides the TTL of the peers and registry KV
+	// buckets (peerTTL / registryTTL). 0 → the defaults. Set only by
+	// tests, which cannot wait 30s for an expiry.
+	clusterKVTTL time.Duration
+
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
 	// (all three: unstable / stable / vN). See WithAllowTier.

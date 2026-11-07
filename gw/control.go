@@ -780,7 +780,7 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	// expired by JetStream once the TTL elapsed without a refresh, so
 	// presence implies a recent heartbeat.
 	if _, err := t.peers.Get(kctx, req.GetNodeId()); err == nil {
-		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), peerTTL)
+		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), t.peerTTL)
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, fmt.Errorf("controlplane: peer lookup: %w", err)
 	}
