@@ -4,52 +4,11 @@ package e2e
 
 import (
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/iodesystems/gwag/v2/e2e/harness"
 )
-
-// TestKnownBugHealthBeforeRegistryReady: a restarted cluster node
-// answers /api/health 200 ("serving") before it has replayed the
-// registry, so a load balancer that trusts the health check sends it
-// traffic that fails with `Cannot query field "orders" on type
-// "Query"`. /api/health is the only readiness signal the gateway
-// exposes. Timing dependent: the window is the registry replay, so the
-// test restarts the node several times and polls tightly.
-func TestKnownBugHealthBeforeRegistryReady(t *testing.T) {
-	knownBug(t, "/api/health is 200 before a restarted cluster node routes registered services")
-	env := harness.New(t)
-	cluster := env.Cluster(3, harness.GatewayOpts{})
-	orders := env.Fixture(cluster.Nodes[0], harness.FixtureOpts{Namespace: "orders"})
-	n2 := cluster.Nodes[1]
-	probe := &http.Client{Timeout: time.Second}
-	ctx := harness.Ctx(t, 5*time.Minute)
-
-	for attempt := 1; attempt <= 6; attempt++ {
-		n2.Proc.Restart()
-		var firstErr error
-		harness.Eventually(t, 30*time.Second, "n2 health 200", func() error {
-			resp, err := probe.Get(n2.BaseURL() + "/api/health")
-			if err != nil {
-				return err
-			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("HTTP %d", resp.StatusCode)
-			}
-			return nil
-		})
-		// The first call after the first 200, exactly what an LB does.
-		_, firstErr = orders.EchoVia(ctx, n2, "v1", "right-after-health")
-		if firstErr != nil {
-			t.Fatalf("attempt %d: /api/health was 200 but the first call failed: %v", attempt, firstErr)
-		}
-		n2.WaitReady()
-		cluster.WaitNodes(t, cluster.Names(), 60*time.Second)
-	}
-}
 
 // TestKnownBugClusterPeersMetricNeverDrops: cluster_peers is documented
 // as "Live gateway peers including this node". The gauge counts the

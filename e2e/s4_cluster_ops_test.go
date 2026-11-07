@@ -124,6 +124,26 @@ func TestS4ClusterOps(t *testing.T) {
 			})
 		}
 
+		// billing's registration, held by n2's control plane. It dies
+		// with n2; the fixture registers again once n2 is back.
+		billingReg := func(g *harness.Gateway) []string {
+			ss, err := g.Admin().Services(ctx)
+			if err != nil {
+				return nil
+			}
+			var ids []string
+			if svc := ss.Service(billing.Opts.Namespace, "v1"); svc != nil {
+				for _, in := range svc.Instances {
+					ids = append(ids, in.RegistrationID)
+				}
+			}
+			return ids
+		}
+		oldBillingReg := billingReg(n1)
+		if len(oldBillingReg) != 1 {
+			t.Fatalf("n1 lists billing registrations %v, want one", oldBillingReg)
+		}
+
 		n2.Proc.Kill()
 		killedAt := time.Now()
 		lb.WaitOutOfRotation(t, n2, 5*time.Second)
@@ -188,15 +208,31 @@ func TestS4ClusterOps(t *testing.T) {
 			}
 		})
 
-		// /api/health answers 200 before a restarted node has replayed
-		// the registry (see TestKnownBugHealthBeforeRegistryReady), so
-		// the operator keeps the node out of rotation until it routes.
+		// Not /api/health alone here, unlike the rolling upgrade. Only
+		// the control plane that took a registration refreshes its
+		// registry entry (30s TTL), so billing's entry expires while
+		// n2 is down. The expiry raises no delete event: n1 and n3
+		// keep routing billing, but a node that replays the registry
+		// after the expiry (n2 now, or any node the roll restarts
+		// later) does not see billing until the fixture registers
+		// again through the restarted n2, on its next heartbeat. The
+		// operator keeps n2 out of rotation until it routes, and the
+		// roll waits for the new registration.
 		lb.Pull(n2)
 		n2.Proc.Restart()
 		restartedAt := time.Now()
 		n2.WaitReady()
 		t.Logf("n2 healthy %s after restart (start to /api/health 200 and control plane)", time.Since(restartedAt).Round(time.Millisecond))
 		cluster.WaitPeers(3, 60*time.Second)
+		harness.Eventually(t, 60*time.Second, "billing registers again through n2", func() error {
+			ids := billingReg(n2)
+			for _, id := range ids {
+				if id != oldBillingReg[0] {
+					return nil
+				}
+			}
+			return fmt.Errorf("n2 lists billing registrations %v, old %s", ids, oldBillingReg[0])
+		})
 		for _, f := range fixtures {
 			f := f
 			harness.Eventually(t, 60*time.Second, "n2 routes "+f.Opts.Namespace, func() error {
@@ -279,8 +315,8 @@ func TestS4ClusterOps(t *testing.T) {
 		sdl := mustSDL(t, ctx, n1)
 
 		type timing struct {
-			node          string
-			healthy, full time.Duration
+			node  string
+			ready time.Duration
 		}
 		var timings []timing
 		for _, g := range cluster.Nodes {
@@ -294,30 +330,22 @@ func TestS4ClusterOps(t *testing.T) {
 			}
 			// The LB's own probe sees the node gone.
 			lb.WaitOutOfRotation(t, g, 5*time.Second)
+			// From here the LB's health probe alone decides when the
+			// node takes calls again.
+			lb.Restore(g)
 
 			ok0, _ := load.Counts()
 			load.WaitOK(t, ok0+100, 30*time.Second) // traffic keeps flowing on the other two
 
 			g.Proc.Restart()
 			t0 := time.Now()
-			g.WaitReady() // /api/health 200 and the control plane accepts
-			healthy := time.Since(t0)
+			lb.WaitInRotation(t, g, 60*time.Second)
+			timings = append(timings, timing{g.Name, time.Since(t0)})
+			g.WaitReady() // and the control plane accepts
 			// The restarted node has a new node id; its old peer entry
-			// lingers until the 30s TTL, so match on names.
+			// lingers until the 30s TTL, so match on names. Converged
+			// before the next node goes down.
 			cluster.WaitNodes(t, cluster.Names(), 60*time.Second)
-			// Healthy is not ready: wait until the node routes both
-			// services before the LB may send to it.
-			for _, f := range fixtures {
-				f := f
-				harness.Eventually(t, 60*time.Second, g.Name+" routes "+f.Opts.Namespace, func() error {
-					_, err := f.EchoVia(ctx, g, "v1", "probe")
-					return err
-				})
-			}
-			full := time.Since(t0)
-			lb.Restore(g)
-			lb.WaitInRotation(t, g, 10*time.Second)
-			timings = append(timings, timing{g.Name, healthy, full})
 
 			// The node takes its share of traffic again before the
 			// next one goes down.
@@ -333,9 +361,9 @@ func TestS4ClusterOps(t *testing.T) {
 		res := load.Stop()
 		t.Logf("rolling upgrade: %s; %s", res, lb.StatsString())
 		for _, tm := range timings {
-			t.Logf("%s: start to /api/health 200: %s; start to routing both services: %s", tm.node, tm.healthy.Round(time.Millisecond), tm.full.Round(time.Millisecond))
-			if tm.healthy > 20*time.Second {
-				t.Errorf("%s took %s to become healthy, want under 20s", tm.node, tm.healthy)
+			t.Logf("%s: start to /api/health 200 (in LB rotation): %s", tm.node, tm.ready.Round(time.Millisecond))
+			if tm.ready > 20*time.Second {
+				t.Errorf("%s took %s to become ready, want under 20s", tm.node, tm.ready)
 			}
 		}
 		res.RequireNoFailures(t)
@@ -372,6 +400,44 @@ func TestS4ClusterOps(t *testing.T) {
 			}
 		})
 	})
+}
+
+// TestS4HealthAfterRegistryReplay: a restarted cluster node answers
+// /api/health 200 only after it has replayed the registry, so the
+// first call a load balancer sends on that 200 routes. Before the fix
+// it failed with `Cannot query field "orders" on type "Query"`. The
+// window is the registry replay, so the test restarts the node several
+// times and polls tightly.
+func TestS4HealthAfterRegistryReplay(t *testing.T) {
+	env := harness.New(t)
+	cluster := env.Cluster(3, harness.GatewayOpts{})
+	orders := env.Fixture(cluster.Nodes[0], harness.FixtureOpts{Namespace: "orders"})
+	n2 := cluster.Nodes[1]
+	probe := &http.Client{Timeout: time.Second}
+	ctx := harness.Ctx(t, 5*time.Minute)
+
+	for attempt := 1; attempt <= 6; attempt++ {
+		n2.Proc.Restart()
+		var firstErr error
+		harness.Eventually(t, 30*time.Second, "n2 health 200", func() error {
+			resp, err := probe.Get(n2.BaseURL() + "/api/health")
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
+			return nil
+		})
+		// The first call after the first 200, exactly what an LB does.
+		_, firstErr = orders.EchoVia(ctx, n2, "v1", "right-after-health")
+		if firstErr != nil {
+			t.Fatalf("attempt %d: /api/health was 200 but the first call failed: %v", attempt, firstErr)
+		}
+		n2.WaitReady()
+		cluster.WaitNodes(t, cluster.Names(), 60*time.Second)
+	}
 }
 
 func mustSDL(t *testing.T, ctx context.Context, g *harness.Gateway) string {
