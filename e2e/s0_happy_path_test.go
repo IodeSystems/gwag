@@ -57,7 +57,7 @@ func TestS0HappyPath(t *testing.T) {
 		}},
 		// Connect reads the caller from gRPC metadata, which Connect
 		// carries as the Caller-Id header; it ignores X-Caller-Id.
-		{"connect orders v1", orders, "v1", "s0/connect", "grpc", func() (harness.Echo, error) {
+		{"connect orders v1", orders, "v1", "s0/connect", "connect", func() (harness.Echo, error) {
 			return orders.EchoConnect(ctx, "v1", "hi", harness.Header("Caller-Id", "s0/connect"))
 		}},
 	}
