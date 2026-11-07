@@ -70,7 +70,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		need := g.adminRouteNeed(r)
 		bearer := bearerFromRequest(r)
-		if need == adminRoleAnonymous && r.Header.Get("Authorization") == "" {
+		if need == adminRoleAnonymous && bearer == "" {
 			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), adminRoleAnonymous)))
 			return
 		}
