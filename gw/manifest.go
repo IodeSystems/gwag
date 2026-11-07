@@ -78,6 +78,9 @@ func manifestFromBinding(b *cpv1.ServiceBinding) (serviceManifest, error) {
 // what the admin API reports. Caller holds g.mu.
 func (g *Gateway) setSlotManifestLocked(key poolKey, m serviceManifest) {
 	if s := g.slots[key]; s != nil {
+		if s.manifest.Public != m.Public {
+			g.publicGen.Add(1)
+		}
 		s.manifest = m
 	}
 }

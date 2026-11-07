@@ -186,9 +186,9 @@ side routing.
 |---|---|---|
 | `/api/graphql` (queries, subscriptions) | public | GraphQL + WebSocket upgrade for subscriptions |
 | `/api/graphql` (mutations) | bearer (transitive) | `admin_*` dispatch through `/api/admin/*` — operator sends `Authorization: Bearer <token>` to `/api/graphql`; gateway forwards on outbound dispatch |
-| `/api/schema`, `/api/schema/graphql` | public | SDL (or `?format=json` for introspection) |
-| `/api/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
-| `/api/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
+| `/api/schema`, `/api/schema/graphql` | by role: public services without a token | SDL (or `?format=json` for introspection) |
+| `/api/schema/proto?service=...` | by role | FileDescriptorSet (transformed) |
+| `/api/schema/openapi?service=...` | by role | Re-emit ingested OpenAPI specs |
 | `/api/admin/*` graph / status / services reads | public services only without a token | see [admin-auth.md](./admin-auth.md) |
 | `/api/admin/*` other reads | dev or admin bearer | peers, instances, injectors, MCP, external dependents |
 | `/api/admin/*` writes | admin bearer (external dependents: dev) | huma mutations (forget, sign, drain) |

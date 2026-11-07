@@ -341,26 +341,76 @@ func (g *Gateway) adminRoleFromBearer(ctx context.Context, bearer, method, path 
 	return role
 }
 
-// adminRoleFromRequestContext resolves the role of a GraphQL request:
-// the Authorization header of the HTTP request (or WebSocket
-// handshake), else `authorization` in the graphql-transport-ws
-// connection_init payload (browsers cannot set WebSocket headers).
-func (g *Gateway) adminRoleFromRequestContext(ctx context.Context, method, path string) adminRole {
-	bearer := ""
-	if r := HTTPRequestFromContext(ctx); r != nil {
-		bearer = bearerFromRequest(r)
+// RoleTokenHeader is the request header that carries a gwag role
+// token (the admin or dev token, or a token the AdminAuthorizer
+// delegate accepts) on the GraphQL endpoint and the schema exports,
+// as the bare hex value or "Bearer <hex>". Use it instead of
+// Authorization where Authorization belongs to the end user: the
+// gateway forwards Authorization to OpenAPI upstreams by default
+// (ForwardHeaders), and does not forward this header unless a
+// ForwardHeaders list names it.
+//
+// Stability: stable
+const RoleTokenHeader = "X-Gwag-Token"
+
+// roleTokenFromRequest returns the role token r presents: the
+// RoleTokenHeader value, else the Authorization bearer. dedicated is
+// true when it came from RoleTokenHeader.
+func roleTokenFromRequest(r *http.Request) (tok string, dedicated bool) {
+	if v := strings.TrimSpace(r.Header.Get(RoleTokenHeader)); v != "" {
+		return trimBearer(v), true
 	}
-	if bearer == "" {
-		if p := gat.ConnectionInitPayload(ctx); len(p) > 0 {
-			var m map[string]any
-			if json.Unmarshal(p, &m) == nil {
-				for k, v := range m {
-					if s, ok := v.(string); ok && strings.EqualFold(k, "authorization") && strings.HasPrefix(s, "Bearer ") {
-						bearer = strings.TrimSpace(s[len("Bearer "):])
-					}
-				}
-			}
+	return bearerFromRequest(r), false
+}
+
+// roleTokenFromInitPayload is roleTokenFromRequest for the
+// graphql-transport-ws connection_init payload (browsers cannot set
+// WebSocket headers): key "x-gwag-token", else "authorization"
+// ("Bearer <hex>"); keys match case-insensitively.
+func roleTokenFromInitPayload(p []byte) (tok string, dedicated bool) {
+	if len(p) == 0 {
+		return "", false
+	}
+	var m map[string]any
+	if json.Unmarshal(p, &m) != nil {
+		return "", false
+	}
+	for k, v := range m {
+		if s, ok := v.(string); ok && strings.EqualFold(k, RoleTokenHeader) && strings.TrimSpace(s) != "" {
+			return trimBearer(strings.TrimSpace(s)), true
 		}
 	}
-	return g.adminRoleFromBearer(ctx, bearer, method, path)
+	for k, v := range m {
+		if s, ok := v.(string); ok && strings.EqualFold(k, "authorization") && strings.HasPrefix(s, "Bearer ") {
+			tok = strings.TrimSpace(s[len("Bearer "):])
+		}
+	}
+	return tok, false
+}
+
+// trimBearer drops an optional "Bearer " prefix.
+func trimBearer(s string) string {
+	if len(s) > len("Bearer ") && strings.EqualFold(s[:len("Bearer ")], "Bearer ") {
+		return strings.TrimSpace(s[len("Bearer "):])
+	}
+	return s
+}
+
+// roleTokenFromContext returns the role token of a GraphQL request:
+// from the HTTP request (or WebSocket handshake), else from the
+// connection_init payload.
+func roleTokenFromContext(ctx context.Context) (tok string, dedicated bool) {
+	if r := HTTPRequestFromContext(ctx); r != nil {
+		if tok, dedicated = roleTokenFromRequest(r); tok != "" {
+			return tok, dedicated
+		}
+	}
+	return roleTokenFromInitPayload(gat.ConnectionInitPayload(ctx))
+}
+
+// adminRoleFromRequestContext resolves the role of a GraphQL request
+// (see roleTokenFromContext). An invalid token is anonymous.
+func (g *Gateway) adminRoleFromRequestContext(ctx context.Context, method, path string) adminRole {
+	tok, _ := roleTokenFromContext(ctx)
+	return g.adminRoleFromBearer(ctx, tok, method, path)
 }

@@ -422,6 +422,9 @@ func emitSchemaSDL() {
 	}
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/schema/graphql", nil)
+	// The full schema: without a role token the export shows public
+	// services only, and the admin surface is not one.
+	req.Header.Set(gateway.RoleTokenHeader, gw.AdminTokenHex())
 	gw.SchemaHandler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		log.Fatalf("schema render: status=%d body=%s", rr.Code, rr.Body.String())

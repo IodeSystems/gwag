@@ -65,8 +65,50 @@ GET / HEAD / OPTIONS open, everything else admin.
   `connection_init` payload.
 
 Admin visibility only: calls to services through GraphQL, REST, gRPC
-or Connect are not affected, and `/api/schema/*` plus GraphQL
-introspection still describe every service.
+or Connect are not affected.
+
+**Schema views.** The schema follows the same roles:
+
+| Surface | no token | dev, admin |
+|---|---|---|
+| `/api/schema/graphql` (SDL, `?format=json`), `/api/schema/proto`, `/api/schema/openapi` | public services only; `?service=` does not widen it | every service |
+| GraphQL `__schema` / `__type` (HTTP, batches, WebSocket) | types and fields of public services, plus the built-in scalars (`Upload`, `Long`, `JSON`, ...) and the introspection types | every service |
+| gRPC `ControlPlane.ListServices` | public services, scrubbed like `GET /admin/services` | every service |
+
+This hides the schema; it is not access control. A query that names a
+field of a non-public service still runs for anyone who knows the
+field. To accept only the documents your clients ship with, use
+`WithTrustedDocuments(..., enforce)`; `WithoutIntrospection()` turns
+introspection off for every role.
+
+How a caller presents the token:
+
+- Schema exports and GraphQL: `X-Gwag-Token: <hex>` (also
+  `X-Gwag-Token: Bearer <hex>`), or `Authorization: Bearer <hex>`.
+  Prefer `X-Gwag-Token` on the GraphQL endpoint. `Authorization`
+  there usually belongs to the end user and is forwarded to OpenAPI
+  upstreams by default (`ForwardHeaders`), so a dev token sent in it
+  reaches every upstream. `X-Gwag-Token` is not forwarded unless a
+  `ForwardHeaders` list names it, and it wins when both are sent.
+- WebSocket: `x-gwag-token` (or `authorization: "Bearer <hex>"`) in the
+  `connection_init` payload, or the handshake headers.
+- gRPC: `authorization: Bearer <hex>` or `x-gwag-token` metadata.
+
+On the GraphQL endpoint a token that is not a gwag token (an end
+user's JWT) gives the public view, never an error. On the schema
+exports it is 401, and on `ListServices` `Unauthenticated`, as on the
+admin routes. Schema exports answer with `X-Gwag-Schema-View: full`
+or `public`; `ListServices` with `x-gwag-schema-view` response
+metadata. `gwag services list`, `schema fetch` and `schema diff` send
+the login's token (`--bearer` overrides) and print a note when the
+answer is the public view.
+
+An anonymous document that selects `__schema` or `__type` is validated
+and run against the public view as a whole: if it also selects a
+field of a non-public service, it is refused. Documents without
+introspection are untouched. The public view is built on first use
+after each schema rebuild and cached; when every service is public
+it is the full schema.
 
 **Dev token rotation.** `POST /admin/dev-token/rotate` (admin only,
 GraphQL `admin.rotateDevToken`) replaces the dev token on that node,
