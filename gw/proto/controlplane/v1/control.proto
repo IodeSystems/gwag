@@ -165,6 +165,36 @@ message ServiceBinding {
   // (WithUpstreamTimeout); a default of 0 means no timeout. Frozen
   // at first registration.
   uint32 timeout_ms = 9;
+
+  // Manifest: the services this binding calls through the gateway,
+  // each with the lines (versions) the binding ships clients for.
+  // Example: {service: "library", lines: ["v1", "v2"]}. Empty = no
+  // declared dependencies (old clients). Stored on the
+  // (namespace, version) slot and replicated across the cluster;
+  // the latest registration's value is the one reported.
+  repeated Dependency depends = 10;
+
+  // Manifest: the team that owns this binding and how to reach it.
+  // Unset = no declared owner.
+  Owner owner = 11;
+}
+
+// Dependency names one provider service and the lines a consumer
+// accepts. A dependency is satisfied when any accepted line is
+// served.
+message Dependency {
+  // Namespace of the provider service (ServiceBinding.namespace).
+  string service = 1;
+  // Accepted lines of the provider: "vN" or "unstable". At least one.
+  repeated string lines = 2;
+}
+
+// Owner is the team responsible for a service binding.
+message Owner {
+  // Team name, e.g. "catalog".
+  string team = 1;
+  // How to reach the team: email, chat channel, or URL. Free-form.
+  string contact = 2;
 }
 
 message RegisterResponse {
@@ -244,11 +274,10 @@ message ListServicesRequest {}
 
 message ListServicesResponse {
   repeated ServiceInfo services = 1;
-  // Field 2 was `string environment` (cluster's --environment label).
-  // Dropped along with the flag in plan §4 — operators pick distinct
-  // ClusterName values directly when they need physical isolation.
+  // Field 2 was `string environment`, tied to the NATS cluster name;
+  // dropped in plan §4. The name came back as field 4 (a label only),
+  // with the same JSON meaning, so only the number stays reserved.
   reserved 2;
-  reserved "environment";
   // Per-namespace stable alias target. Keys are namespaces; values
   // are the integer N such that <ns>.stable currently aliases vN.
   // Plan §4: monotonic; advances at registration, decreases only via
@@ -256,6 +285,11 @@ message ListServicesResponse {
   // current stable target" by matching ServiceInfo.version == fmt
   // ("v%d", stable_vn[namespace]).
   map<string, uint32> stable_vn = 3;
+  // Name of the environment (cluster) this gateway belongs to, from
+  // the gateway's --environment flag (WithEnvironment). Empty = not
+  // set. A label only: it does not change routing or the NATS
+  // cluster name.
+  string environment = 4;
 }
 
 message ServiceInfo {
@@ -271,6 +305,11 @@ message ServiceInfo {
   // from `version` + the namespace's latest `vN`; the renderer
   // OR-combines both — either source lights up `@deprecated` in SDL.
   string manual_deprecation_reason = 5;
+  // Manifest of the latest registration on this (namespace, version):
+  // see ServiceBinding.depends / ServiceBinding.owner. Empty for
+  // services registered without a manifest (boot-time AddProto etc.).
+  repeated Dependency depends = 6;
+  Owner owner = 7;
 }
 
 // SubscribeAuthCode is the result of an attempted subscribe. Both the
