@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+// The fixture replaces PACKAGE with fixture.<namespace>.<version> before
+// it compiles and registers this file, so every (namespace, version)
+// gets its own gRPC service name. Not compiled by protoc; no generated
+// code.
+package PACKAGE;
+
+// FixtureService is the e2e fixture's echo service.
+service FixtureService {
+  // Echo returns the message and the instance that served it.
+  rpc Echo(EchoRequest) returns (EchoResponse);
+}
+
+// EchoRequest is the input for Echo.
+message EchoRequest {
+  // Message to echo back.
+  string msg = 1;
+}
+
+// EchoResponse is the Echo reply.
+message EchoResponse {
+  // The request message.
+  string msg = 1;
+  // Instance id of the fixture process that served the call.
+  string instance = 2;
+  // Namespace the call was served under.
+  string namespace = 3;
+  // Version line the call was served under.
+  string version = 4;
+  // Call number on this fixture process, starting at 1.
+  int64 call = 5;
+}
