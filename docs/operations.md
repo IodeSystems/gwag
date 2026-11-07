@@ -22,11 +22,49 @@ Wire `/health` to your load balancer's health check.
    to expire.
 5. After Drain returns, run your gRPC/`Cluster.Close()` teardown.
 
-HTTP unary queries are *not* actively drained — they're sub-second and
-finish on their own once the LB stops sending new traffic.
+`Drain` does not wait for unary HTTP requests. `gateway.ServeHTTP`
+does, and every long-running mode uses it: `gwag` (default mode),
+`gwag up`, `gwag serve` (both the full-gateway and the lite
+`--openapi` / `--proto` paths) and the example gateway. On SIGTERM or
+SIGINT it runs, in order:
 
-The example wires SIGTERM to a 30-second drain, so a `kubectl delete`
-or `docker stop` triggers the right behaviour automatically.
+1. `Drain` (full-gateway modes; the lite `serve` path has no gateway
+   and no `/health`). `/health` goes 503, WebSockets are cancelled
+   and waited on. WebSockets are hijacked connections, so
+   `http.Server.Shutdown` cannot see them; this step ends them.
+2. Sleep `--shutdown-delay` (default `0`). The node keeps serving
+   while the LB sees the 503.
+3. `http.Server.Shutdown`: close the listener, wait for in-flight
+   requests (GraphQL, REST, Connect, MCP, SSE). Bounded by
+   `--shutdown-timeout` (default 30 s); after that the remaining
+   connections are closed.
+4. gRPC `GracefulStop`, then `Cluster.Close()`.
+
+A second signal exits at once.
+
+`--shutdown-delay` must cover the LB's detection time: probe
+interval times unhealthy threshold. With the default `0` the listener
+closes right after the drain, and requests the LB sends before its
+next probe fail with connection refused. The default is `0` because
+an interactive Ctrl-C should not wait; set it in deployments (for
+example `--shutdown-delay 10s` with a 5 s probe, and a Kubernetes
+`terminationGracePeriodSeconds` above delay + timeout). In Kubernetes
+a `preStop` sleep is an alternative.
+
+`--shutdown-timeout` bounds the stream drain and, separately, the
+request wait, so the worst case is about delay + 2 x timeout. An
+open SSE response counts as an in-flight request: it holds `Shutdown`
+until the client leaves or the timeout closes it.
+
+`gateway.NewHTTPServer` sets `ReadHeaderTimeout` 10 s (Slowloris) and
+`IdleTimeout` 120 s (above common 60 s LB idle timeouts). It sets no
+`ReadTimeout` and no `WriteTimeout`: either would cut slow uploads,
+SSE responses and subscriptions. Bound unary latency with
+`--upstream-timeout`.
+
+The example wires `--shutdown-timeout` to 30 s by default, so a
+`kubectl delete` or `docker stop` triggers the right behaviour
+automatically.
 
 ## Backpressure
 

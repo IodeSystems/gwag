@@ -223,6 +223,8 @@ func runGateway() {
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists (and reloads) its boot admin token; empty = in-memory only. Set a writable path so 'gwag sign --gateway --bearer $(cat <dir>/admin-token)' works against this gateway instead of local --secret signing.")
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
+	shutdownDelay := flag.Duration("shutdown-delay", 0, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes; 0 = close at once")
+	shutdownTimeout := flag.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
@@ -291,16 +293,17 @@ func runGateway() {
 		log.Printf("registered mcp upstream %s (%s) → namespace %s", target, transport, ns)
 	}
 
+	var cpSrv *grpc.Server
 	if *cpAddr != "" {
 		cpLis, err := net.Listen("tcp", *cpAddr)
 		if err != nil {
 			log.Fatalf("listen control plane: %v", err)
 		}
-		srv := grpc.NewServer(grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
-		cpv1.RegisterControlPlaneServer(srv, gw.ControlPlane())
+		cpSrv = grpc.NewServer(grpc.UnknownServiceHandler(gw.GRPCUnknownHandler()))
+		cpv1.RegisterControlPlaneServer(cpSrv, gw.ControlPlane())
 		go func() {
 			log.Printf("control plane listening on %s", *cpAddr)
-			if err := srv.Serve(cpLis); err != nil {
+			if err := cpSrv.Serve(cpLis); err != nil {
 				log.Fatalf("control plane serve: %v", err)
 			}
 		}()
@@ -316,7 +319,16 @@ func runGateway() {
 	}
 	mux.Handle("/", gw.Handler())
 	log.Printf("listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
+	err = gateway.ServeHTTP(gateway.NewHTTPServer(*addr, mux), gw, gateway.ShutdownOptions{
+		Delay:   *shutdownDelay,
+		Timeout: *shutdownTimeout,
+		Teardown: func() {
+			if cpSrv != nil {
+				cpSrv.GracefulStop()
+			}
+		},
+	})
+	if err != nil {
 		log.Fatal(err)
 	}
 }

@@ -44,6 +44,8 @@ func serveCmd(args []string) int {
 	namespace := fs.String("namespace", "", "Override the GraphQL namespace; defaults to spec-derived")
 	version := fs.String("version", "", "Override the GraphQL version; defaults to spec-derived (\"v1\" for OpenAPI / GraphQL)")
 	enableMCP := fs.Bool("mcp", false, "Mount /mcp (admin-bearer gated). With --openapi / --proto, promotes the run from the lite gat path onto the full gateway so /mcp shares dispatch and metrics with every other ingress.")
+	shutdownDelay := fs.Duration("shutdown-delay", 0, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes; 0 = close at once")
+	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpInclude := &stringListValue{}
 	fs.Var(mcpInclude, "mcp-include", "MCP allowlist glob (repeatable). Implies --mcp.")
 	fs.Usage = func() {
@@ -84,6 +86,7 @@ func serveCmd(args []string) int {
 		return 2
 	}
 
+	shut := gateway.ShutdownOptions{Delay: *shutdownDelay, Timeout: *shutdownTimeout}
 	mcpOn := *enableMCP || len(mcpInclude.values) > 0
 
 	// --graphql always uses the full gateway. --openapi / --proto promote
@@ -97,9 +100,9 @@ func serveCmd(args []string) int {
 			protoPath:   *protoPath,
 			target:      *target,
 		}
-		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values)
+		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values, shut)
 	}
-	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version)
+	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version, shut)
 }
 
 // fullGatewaySource carries exactly one source (graphqlURL, openapiPath,
@@ -116,7 +119,7 @@ type fullGatewaySource struct {
 // subscription proxy) wrapping one upstream of any supported kind.
 // /mcp is optional via --mcp. No NATS, no admin UI, no cluster — those
 // ride on `gwag up`.
-func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string) int {
+func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, shut gateway.ShutdownOptions) int {
 	gwOpts := []gateway.Option{}
 	if enableMCP && len(mcpIncludes) > 0 {
 		gwOpts = append(gwOpts, gateway.WithMCPInclude(mcpIncludes...))
@@ -160,7 +163,7 @@ func serveFullGateway(src fullGatewaySource, addr, namespace, version string, en
 	if enableMCP {
 		log.Printf("gwag serve: MCP at /mcp  (admin token = %s)", gw.AdminTokenHex())
 	}
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := gateway.ServeHTTP(gateway.NewHTTPServer(addr, mux), gw, shut); err != nil {
 		fmt.Fprintf(os.Stderr, "gwag serve: %v\n", err)
 		return 1
 	}
@@ -188,7 +191,7 @@ func fullGatewayMux(gw *gateway.Gateway, enableMCP bool) *http.ServeMux {
 
 // serveGat is the lite path used by --openapi / --proto: embedded gat
 // translator, no metrics, no admin.
-func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version string) int {
+func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version string, shut gateway.ShutdownOptions) int {
 	var (
 		regs []gat.ServiceRegistration
 		err  error
@@ -230,7 +233,9 @@ func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version s
 	}
 	log.Printf("gwag serve: %s → %s", regs[0].Service.Namespace, target)
 	log.Printf("gwag serve: listening on %s; POST %s/graphql", addr, strings.TrimRight(pretty, "/"))
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	// The lite path has no Gateway: nothing to drain, no health endpoint.
+	// Shutdown still waits for in-flight requests.
+	if err := gateway.ServeHTTP(gateway.NewHTTPServer(addr, mux), nil, shut); err != nil {
 		fmt.Fprintf(os.Stderr, "gwag serve: %v\n", err)
 		return 1
 	}

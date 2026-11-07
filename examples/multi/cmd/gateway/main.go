@@ -26,10 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
 	"net/http/httptest"
 
@@ -86,6 +83,8 @@ func main() {
 	maxInflight := flag.Int("max-inflight", gateway.DefaultBackpressure.MaxInflight, "Per-pool unary dispatch concurrency cap; 0 disables")
 	maxStreams := flag.Int("max-streams", gateway.DefaultBackpressure.MaxStreams, "Per-pool subscription stream cap; 0 disables")
 	maxStreamsTotal := flag.Int("max-streams-total", gateway.DefaultBackpressure.MaxStreamsTotal, "Gateway-wide subscription stream cap; 0 disables")
+	shutdownDelay := flag.Duration("shutdown-delay", 0, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes; 0 = close at once")
+	shutdownTimeout := flag.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
 	upstreamTimeout := flag.Duration("upstream-timeout", 0, "Per-call timeout for unary upstream dispatch; 0 disables")
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
@@ -324,31 +323,18 @@ func main() {
 	if err := gw.AddAdminEvents(); err != nil {
 		log.Fatalf("AddAdminEvents: %v", err)
 	}
-	go func() {
-		log.Printf("graphql listening on %s", *httpAddr)
-		if err := http.ListenAndServe(*httpAddr, mux); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
-
-	// Graceful drain: /health flips to 503 immediately so the LB pulls
-	// us out, active subscriptions get cancelled, then we wait up to
-	// 30s for streams to finish. After that, gRPC and NATS shut down.
-	log.Printf("draining...")
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := gw.Drain(drainCtx); err != nil {
-		log.Printf("drain returned: %v (proceeding with shutdown)", err)
-	} else {
-		log.Printf("drained cleanly")
+	log.Printf("graphql listening on %s", *httpAddr)
+	err = gateway.ServeHTTP(gateway.NewHTTPServer(*httpAddr, mux), gw, gateway.ShutdownOptions{
+		Delay:   *shutdownDelay,
+		Timeout: *shutdownTimeout,
+		Teardown: func() {
+			srv.GracefulStop()
+			cluster.Close()
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
-	drainCancel()
-
-	srv.GracefulStop()
-	cluster.Close()
 }
 
 // clientIP returns the caller's IP for the worked-example injectors.

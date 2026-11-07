@@ -12,7 +12,6 @@
 package main
 
 import (
-	"context"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -20,11 +19,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
 	"google.golang.org/grpc"
 
@@ -56,6 +52,8 @@ func upCmd(args []string) int {
 	signerSecret := fs.String("signer-secret", "", "Hex-encoded bearer for SignSubscriptionToken (admin token also works)")
 	environment := fs.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
+	shutdownDelay := fs.Duration("shutdown-delay", 0, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes; 0 = close at once")
+	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	fs.Usage = func() {
@@ -224,27 +222,19 @@ func upCmd(args []string) int {
 		}
 	}
 
-	go func() {
-		log.Printf("graphql listening on %s", *httpAddr)
-		if err := http.ListenAndServe(*httpAddr, mux); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
-
-	log.Printf("draining...")
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := gw.Drain(drainCtx); err != nil {
-		log.Printf("drain returned: %v", err)
-	} else {
-		log.Printf("drained cleanly")
+	log.Printf("graphql listening on %s", *httpAddr)
+	err = gateway.ServeHTTP(gateway.NewHTTPServer(*httpAddr, mux), gw, gateway.ShutdownOptions{
+		Delay:   *shutdownDelay,
+		Timeout: *shutdownTimeout,
+		Teardown: func() {
+			srv.GracefulStop()
+			cluster.Close()
+		},
+	})
+	if err != nil {
+		log.Printf("http: %v", err)
+		return 1
 	}
-	drainCancel()
-	srv.GracefulStop()
-	cluster.Close()
 	return 0
 }
 
