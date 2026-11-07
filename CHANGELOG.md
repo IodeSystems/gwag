@@ -30,6 +30,9 @@ changes on MINOR, drops on MAJOR.
 - A control-plane binding with `depends` is not added to its pool until every dependency has a ready instance on at least one accepted line: until then it has no schema fields, takes no traffic and does not advance `stable`. It joins on its own when the dependencies register (standalone or on any cluster node). Bindings without `depends` register exactly as before. In cluster mode the registry KV value gains `waiting` (omitted when false).
 - `ListServices` / `GET /admin/services` also list a (namespace, version) whose instances are all waiting, with `replica_count` 0.
 
+### Fixed
+- Admin `deprecate` (`POST /admin/services/{namespace}/{version}/deprecate`): an empty `reason` is now a 422 with a `body.reason` field error (GraphQL `extensions.fields`); it was a 500.
+
 ## v2.11.0 — 2026-11-06
 
 GraphQL error extensions default to gat's `{status, code}` shape (see Migration), proto lists render non-null elements, Connect ingress in the `gwag` binary, gRPC for gat BYO OpenAPI ops, and a sweep of export, validation and ingress fixes.

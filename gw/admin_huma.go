@@ -1064,7 +1064,7 @@ type deprecateIn struct {
 	Namespace string `path:"namespace"`
 	Version   string `path:"version"`
 	Body      struct {
-		Reason string `json:"reason"`
+		Reason string `json:"reason" minLength:"1" doc:"Why this version is deprecated; surfaces as @deprecated in SDL."`
 	}
 }
 

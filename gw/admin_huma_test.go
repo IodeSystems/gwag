@@ -1023,3 +1023,24 @@ func TestAdminHuma_DeprecatedStats_RejectsBadWindow(t *testing.T) {
 		t.Fatalf("expected non-200 for bad window; got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// An empty deprecate reason is refused by huma's input check, so the admin UI's
+// form gets a field error on `body.reason` instead of a bare control-plane error.
+func TestAdminHuma_DeprecateEmptyReasonIsFieldError(t *testing.T) {
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")))
+	t.Cleanup(gw.Close)
+	stampSlot(t, gw, "users", "v1", "")
+
+	h := newAdminRouter(t, gw)
+	req := httptest.NewRequest(http.MethodPost, "/admin/services/users/v1/deprecate", strings.NewReader(`{"reason":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d, want 422; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"location":"body.reason"`) {
+		t.Fatalf("body has no body.reason error detail: %s", rr.Body.String())
+	}
+}
