@@ -108,11 +108,14 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 // fan-out chan; the release goroutine fires on ctx cancel so the per-
 // subject bus subscription drops when the last listener leaves.
 //
-// Stream-cap accounting (per-pool + gateway-wide stream sems used by
-// upstream-proto subscribeNATS) does not apply here: there is no
-// upstream pool. The gateway-wide cap could be folded in alongside
-// auth tiers; deferred until that workstream lands so the broker
-// primitive ships in isolation.
+// Stream accounting: each open ps_sub counts once in streamGlobal
+// (streams_inflight_total, health active_streams, Drain's wait) and in
+// psStreams (pool_streams_inflight{ps,v1}; ps has no upstream pool, the
+// gateway-owned slot stands in). The decrement runs on ctx cancel, the
+// same signal that releases the broker, so client close and Drain
+// balance. Stream caps (MaxStreams / MaxStreamsTotal) do not apply: there
+// is no upstream pool to protect. Downstream-GraphQL subscriptions
+// never reach psSub, so nothing is counted twice.
 func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 	channel, _ := args["channel"].(string)
 	if channel == "" {
@@ -130,9 +133,14 @@ func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	m := g.cfg.metrics
+	m.SetStreamsInflight(psNamespace, psVersion, int(g.psStreams.Add(1)))
+	m.SetStreamsInflightTotal(int(g.streamGlobal.Add(1)))
 	go func() {
 		<-ctx.Done()
 		release()
+		m.SetStreamsInflight(psNamespace, psVersion, int(g.psStreams.Add(-1)))
+		m.SetStreamsInflightTotal(int(g.streamGlobal.Add(-1)))
 	}()
 	return source, nil
 }

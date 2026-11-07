@@ -51,14 +51,11 @@ func TestKnownBugHealthBeforeRegistryReady(t *testing.T) {
 	}
 }
 
-// TestKnownBugClusterPeersMetricNeverDrops: cluster_peers is documented
-// as "Live gateway peers including this node". The gauge counts the
-// peer tracker's watch set, which only grows: a peer that dies is
-// removed from /api/admin/peers when its KV entry expires, but the
-// expiry raises no delete event, so the gauge keeps counting it, and a
-// restarted node (new node id) is counted twice.
-func TestKnownBugClusterPeersMetricNeverDrops(t *testing.T) {
-	knownBug(t, "cluster_peers does not drop when a peer dies and double counts a restarted peer")
+// TestClusterPeersMetricTracksLiveNodes: cluster_peers counts this node
+// plus the remote nodes it holds a NATS route to. A killed peer drops
+// out within seconds (not after the peers KV entry's TTL), and a
+// restarted node (new node id) replaces its predecessor.
+func TestClusterPeersMetricTracksLiveNodes(t *testing.T) {
 	env := harness.New(t)
 	cluster := env.Cluster(3, harness.GatewayOpts{})
 	n1, n2 := cluster.Nodes[0], cluster.Nodes[1]
@@ -87,6 +84,9 @@ func TestKnownBugClusterPeersMetricNeverDrops(t *testing.T) {
 	want("n1 counts 3 peers", n1, 3)
 
 	n2.Proc.Kill()
+	// The gauge follows NATS routes, so it drops long before the peers
+	// KV entry expires (peerTTL) and /api/admin/peers drops n2.
+	want("n1 counts 2 peers after n2 died", n1, 2)
 	harness.Eventually(t, 75*time.Second, "n1's /api/admin/peers drops n2", func() error {
 		n, err := n1.PeerCount(ctx)
 		if err != nil {
@@ -97,7 +97,6 @@ func TestKnownBugClusterPeersMetricNeverDrops(t *testing.T) {
 		}
 		return nil
 	})
-	want("n1 counts 2 peers after n2 died", n1, 2)
 
 	n2.Proc.Restart()
 	n2.WaitReady()

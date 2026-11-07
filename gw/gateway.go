@@ -138,6 +138,7 @@ type Gateway struct {
 	streamGlobalSem chan struct{}
 	streamGlobal    atomic.Int32 // active count
 	streamGlobalQ   atomic.Int32 // waiting count
+	psStreams       atomic.Int32 // open ps_sub streams (pool_streams_inflight{ps,v1})
 
 	// draining flips to true on Drain(). Health returns 503; new
 	// WebSocket upgrades, gRPC ingress calls and REST ingress calls

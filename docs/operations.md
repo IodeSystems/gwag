@@ -207,8 +207,8 @@ Admin auth denials are already counted in `admin_auth_total`
 | `pool_backoff_total` | counter | `namespace`, `version`, `method`, `kind`, `reason` | Dispatches refused by backpressure (`reason=wait_timeout`). |
 | `pool_queue_depth` | gauge | `namespace`, `version`, `kind` | Dispatches waiting for a pool slot. |
 | `replica_queue_depth` | gauge | `namespace`, `version`, `kind`, `replica` | Dispatches waiting for a per-replica slot (`MaxConcurrencyPerInstance`). |
-| `pool_streams_inflight` | gauge | `namespace`, `version` | Active subscription streams in a pool. |
-| `streams_inflight_total` | gauge | none | Active subscription streams, gateway-wide. |
+| `pool_streams_inflight` | gauge | `namespace`, `version` | Active subscription streams in a pool. Open `ps_sub` pub/sub subscriptions count under `namespace="ps"`, `version="v1"` (the gateway's own slot; it has no upstream pool). |
+| `streams_inflight_total` | gauge | none | Active subscription streams, gateway-wide: proto and OpenAPI upstream streams plus open `ps_sub` subscriptions. Same value as `active_streams` in `/api/health`; Drain waits for it to reach 0. Downstream-GraphQL fanouts are counted by `graphql_sub_fanouts_active`, not here. |
 | `graphql_sub_fanout_total` | counter | `namespace`, `event` | Downstream-GraphQL subscription fanout `open` / `close`. |
 | `graphql_sub_fanouts_active` | gauge | `namespace` | Active downstream-GraphQL fanouts. |
 | `upstream_retries_total` | counter | `namespace`, `version`, `reason` | A call re-sent to another replica because the first attempt provably never reached an upstream (see "Upstream timeouts, retries, ejection"). `reason`: `unavailable` (gRPC, no transport stream), `no_connection` (HTTP, no connection). Default sink only. |
@@ -224,7 +224,7 @@ Admin auth denials are already counted in `admin_auth_total`
 | `schema_rebuild_duration_seconds` | histogram | none | Duration of those rebuilds. Default sink only. |
 | `registrations_total` | counter | `kind`, `outcome` | Registrations seen by this node. `kind`: `proto`, `openapi`, `graphql`, `mcp`, `internalproto`. `outcome`: `created`, `joined` (another replica of an identical schema), `swapped` (`unstable` slot replaced), `rejected`. Includes the gateway's own pub/sub slot at boot. Default sink only. |
 | `registered_services` | gauge | `kind` | Registered services on this node, internal slots excluded (scrape time). Default sink only. |
-| `cluster_peers` | gauge | none | Live gateway peers including this node; 0 when not clustered (scrape time). Default sink only. |
+| `cluster_peers` | gauge | none | This node plus the distinct remote cluster nodes it has a live NATS route to; 0 when not clustered (scrape time). A killed peer drops within seconds; a restarted node (new node id) replaces its old id. Read from NATS route state, not the peers KV bucket, so `/api/admin/peers` can still list a dead peer for up to its 30s TTL after the gauge drops. Default sink only. |
 | `build_info` | gauge | `version`, `go_version` | Always 1. `version` is the module version from the build, `devel` when unknown. Default sink only. |
 
 The scrape-time gauges take the gateway's registry lock briefly; a

@@ -73,8 +73,16 @@ func TestS8SubscriptionFailover(t *testing.T) {
 		harness.Eventually(t, 10*time.Second, "A lists one consumer on the channel", func() error {
 			return wantConsumers(ctx, nodeA, channel, 1)
 		})
-		if err := wantConsumers(ctx, nodeB, channel, 0); err != nil {
-			t.Error(err)
+		harness.Eventually(t, 10*time.Second, "A counts one stream", func() error {
+			return wantStreams(ctx, nodeA, 1)
+		})
+		for _, n := range []*harness.Gateway{nodeB, nodeC} {
+			if err := wantConsumers(ctx, n, channel, 0); err != nil {
+				t.Error(err)
+			}
+			if err := wantStreams(ctx, n, 0); err != nil {
+				t.Error(err)
+			}
 		}
 	})
 
@@ -208,11 +216,9 @@ func TestS8SubscriptionFailover(t *testing.T) {
 	// ---- 3. gauges with the subscription open --------------------------
 	t.Run("gauges while subscribed", func(t *testing.T) {
 		s := nodeA.MustScrape(t)
-		// ps_sub is served by the broker, not by an upstream pool, so
-		// the pool stream gauges do not count it. See
-		// TestKnownBugPubSubStreamGauges.
-		t.Logf("A streams_inflight_total=%v pool_streams_inflight=%v (ps_sub is not counted)",
-			s.Counter("streams_inflight_total", nil), s.Counter("pool_streams_inflight", nil))
+		if err := wantStreams(ctx, nodeA, 1); err != nil {
+			t.Error(err)
+		}
 		if v := s.Counter("pubsub_bus_degraded", nil); v != 0 {
 			t.Errorf("A pubsub_bus_degraded = %v, want 0", v)
 		}
@@ -254,6 +260,12 @@ func TestS8SubscriptionFailover(t *testing.T) {
 		harness.Eventually(t, 10*time.Second, "C lists one consumer on the channel", func() error {
 			return wantConsumers(ctx, nodeC, channel, 1)
 		})
+		harness.Eventually(t, 10*time.Second, "C counts one stream", func() error {
+			return wantStreams(ctx, nodeC, 1)
+		})
+		if err := wantStreams(ctx, nodeB, 0); err != nil {
+			t.Error(err)
+		}
 	})
 	harness.Eventually(t, 60*time.Second, "C receives 100 events", func() error {
 		if n := count(nodeC.Name); n < 100 {
@@ -335,7 +347,30 @@ func TestS8SubscriptionFailover(t *testing.T) {
 		harness.Eventually(t, 10*time.Second, "C lists no consumer", func() error {
 			return wantConsumers(ctx, nodeC, channel, 0)
 		})
+		harness.Eventually(t, 10*time.Second, "C counts no stream", func() error {
+			return wantStreams(ctx, nodeC, 0)
+		})
 	})
+}
+
+// wantStreams checks the three stream gauges on g: streams_inflight_total,
+// pool_streams_inflight{ps,v1} and the health body's active_streams.
+func wantStreams(ctx context.Context, g *harness.Gateway, want int) error {
+	s, err := g.Scrape(ctx)
+	if err != nil {
+		return err
+	}
+	total := s.Counter("streams_inflight_total", nil)
+	pool := s.Counter("pool_streams_inflight", harness.Labels{"namespace": "ps", "version": "v1"})
+	body, status, err := g.Health(ctx)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("%s health %d %v", g.Name, status, err)
+	}
+	active, _ := body["active_streams"].(float64)
+	if int(total) != want || int(pool) != want || int(active) != want {
+		return fmt.Errorf("%s streams: total=%v pool{ps,v1}=%v health=%v, want %d", g.Name, total, pool, active, want)
+	}
+	return nil
 }
 
 // wantConsumers checks the node's /api/admin/channels row for subject.
