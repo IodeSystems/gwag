@@ -63,6 +63,11 @@ func (g *Gateway) upstreamPolicyFor(timeout time.Duration) upstreamPolicy {
 type replicaHealth struct {
 	fails        atomic.Int32
 	ejectedUntil atomic.Int64 // unix nanos; 0 → never ejected / reset
+
+	// draining is set while the replica's registration is being
+	// drained (instance_drain.go). Unlike ejection, a draining
+	// replica is never picked, even when it is the last one.
+	draining atomic.Bool
 }
 
 // success resets the failure streak. One atomic load on the common
@@ -94,9 +99,9 @@ type healthReplica interface {
 }
 
 // pickHealthy returns the least-loaded replica of rs that is not in
-// tried, preferring replicas that are not ejected. The scan starts at
+// tried and not draining, preferring replicas that are not ejected. The scan starts at
 // hint so ties rotate (hint 0 → first-wins). ok is false only when
-// every replica is in tried. time.Now is read only when some
+// every replica is in tried or draining. time.Now is read only when some
 // replica carries an ejection timestamp.
 func pickHealthy[R healthReplica](rs []R, hint uint64, tried []R) (best R, ok bool) {
 	n := len(rs)
@@ -114,6 +119,9 @@ func pickHealthy[R healthReplica](rs []R, hint uint64, tried []R) (best R, ok bo
 			idx = 0
 		}
 		if len(tried) > 0 && containsReplica(tried, r) {
+			continue
+		}
+		if r.healthState().draining.Load() {
 			continue
 		}
 		ejected := false

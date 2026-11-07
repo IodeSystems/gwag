@@ -184,6 +184,9 @@ type Gateway struct {
 	life       context.Context
 	lifeCancel context.CancelFunc
 
+	// drains is the per-instance drain state (instance_drain.go).
+	drains instanceDrains
+
 	// warnedEventsAuth tracks (namespace, version) tuples we've already
 	// emitted a deprecation warning for, so heartbeat-driven re-registers
 	// don't spam logs. Keyed on "<ns>:<ver>". The SubscriptionAuthorizer

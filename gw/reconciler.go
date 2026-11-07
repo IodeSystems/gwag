@@ -129,6 +129,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		err := g.addOpenAPISourceLocked(ns, ver, v.Addr, v.OpenAPISpec, hash, v.RegID, replicaID, int(v.MaxConcurrency), int(v.MaxConcurrencyPerInstance), msDuration(v.TimeoutMs))
 		if err == nil {
 			g.setSlotManifestLocked(poolKey{namespace: ns, version: ver}, v.serviceManifest)
+			g.noteInstanceLine(v.RegID, v.InstanceID, v.Addr, ns, ver, replicaID, v.serviceManifest)
 		}
 		g.mu.Unlock()
 		if err != nil {
@@ -144,6 +145,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		err := g.addGraphQLSourceLocked(ns, ver, v.GraphQLEndpoint, v.GraphQLIntrospection, hash, v.RegID, replicaID, msDuration(v.TimeoutMs))
 		if err == nil {
 			g.setSlotManifestLocked(poolKey{namespace: ns, version: ver}, v.serviceManifest)
+			g.noteInstanceLine(v.RegID, v.InstanceID, v.GraphQLEndpoint, ns, ver, replicaID, v.serviceManifest)
 		}
 		g.mu.Unlock()
 		if err != nil {
@@ -158,6 +160,7 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 	if p := g.protoSlot(poolKey{namespace: ns, version: ver}); p != nil {
 		if existing := p.findReplicaByID(replicaID); existing != nil {
 			g.setSlotManifestLocked(poolKey{namespace: ns, version: ver}, v.serviceManifest)
+			g.noteInstanceLine(v.RegID, v.InstanceID, v.Addr, ns, ver, replicaID, v.serviceManifest)
 			return // already known
 		}
 	}
@@ -196,10 +199,12 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		return
 	}
 	g.setSlotManifestLocked(poolKey{namespace: ns, version: ver}, v.serviceManifest)
+	g.noteInstanceLine(v.RegID, v.InstanceID, v.Addr, ns, ver, replicaID, v.serviceManifest)
 }
 
 func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
+	g.forgetInstanceReplica(ns, ver, replicaID)
 	g.mu.Lock()
 	key := poolKey{namespace: ns, version: ver}
 	// Slot kind decides which removal path applies — the slot is the

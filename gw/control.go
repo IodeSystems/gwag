@@ -499,6 +499,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	}
 	for _, p := range prep {
 		reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
+		cp.gw.noteInstanceLine(id, req.GetInstanceId(), req.GetAddr(), p.namespace, p.version, "", p.manifest)
 	}
 	reg.lastBeatMs.Store(time.Now().UnixMilli())
 	cp.regs[id] = reg
@@ -555,6 +556,7 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 		return &cpv1.DeregisterResponse{}, nil
 	}
 	delete(cp.regs, reg.id)
+	cp.gw.forgetInstance(reg.id)
 
 	// Standalone mode: drop pool replicas + OpenAPI sources owned by
 	// this registration, and release the conn if one was acquired
