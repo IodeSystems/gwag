@@ -1,28 +1,23 @@
 import { createFileRoute } from '@tanstack/react-router';
-import {
-  Button,
-  Paper,
-  Snackbar,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-} from '@mui/material';
+import { Button } from '@mui/material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
 import { client } from '@/api/client';
 import { PeersQuery, ForgetPeerMutation } from '@/api/operations';
+import { DataTable, EmptyState, Page, Panel, useToast, type Column } from '@/ui';
 
 export const Route = createFileRoute('/peers')({
   component: Peers,
 });
 
+interface Peer {
+  nodeId?: string | null;
+  name?: string | null;
+  joinedUnixMs?: unknown;
+}
+
 function Peers() {
   const qc = useQueryClient();
-  const [toast, setToast] = useState<string | null>(null);
+  const toast = useToast();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['peers'],
@@ -34,61 +29,56 @@ function Peers() {
     mutationFn: (nodeId: string) => client.request(ForgetPeerMutation, { nodeId }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['peers'] });
-      setToast('peer forgotten');
+      toast.success('peer forgotten');
     },
-    onError: (e: Error) => setToast(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
-  if (isLoading) return <Typography>Loading…</Typography>;
-  if (error) return <Typography color="error">{error.message}</Typography>;
+  const peers: Peer[] = (data?.admin?.listPeers?.peers ?? []).filter(
+    (p): p is NonNullable<typeof p> => p != null,
+  );
 
-  const peers = data?.admin?.listPeers?.peers ?? [];
+  const columns: Column<Peer>[] = [
+    { id: 'nodeId', header: 'Node ID', mono: true, cell: (p) => p.nodeId },
+    { id: 'name', header: 'Name', cell: (p) => p.name },
+    {
+      id: 'joined',
+      header: 'Joined',
+      cell: (p) =>
+        p.joinedUnixMs ? new Date(Number(p.joinedUnixMs)).toLocaleString() : '',
+    },
+    {
+      id: 'action',
+      header: 'Action',
+      align: 'right',
+      cell: (p) => (
+        <Button
+          size="small"
+          color="warning"
+          disabled={forget.isPending}
+          onClick={() => p.nodeId && forget.mutate(p.nodeId)}
+        >
+          Forget
+        </Button>
+      ),
+    },
+  ];
 
   return (
-    <>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Node ID</TableCell>
-              <TableCell>Name</TableCell>
-              <TableCell>Joined</TableCell>
-              <TableCell align="right">Action</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {peers.map((p, i) => (
-              <TableRow key={i}>
-                <TableCell>
-                  <code style={{ fontSize: '0.75rem' }}>{p?.nodeId}</code>
-                </TableCell>
-                <TableCell>{p?.name}</TableCell>
-                <TableCell>
-                  {p?.joinedUnixMs
-                    ? new Date(Number(p.joinedUnixMs)).toLocaleString()
-                    : ''}
-                </TableCell>
-                <TableCell align="right">
-                  <Button
-                    size="small"
-                    color="warning"
-                    disabled={forget.isPending}
-                    onClick={() => p?.nodeId && forget.mutate(p.nodeId)}
-                  >
-                    Forget
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-      <Snackbar
-        open={toast !== null}
-        autoHideDuration={3000}
-        onClose={() => setToast(null)}
-        message={toast ?? ''}
-      />
-    </>
+    <Page title="Peers" subtitle="Gateways in this cluster.">
+      <Panel flush>
+        {error ? (
+          <EmptyState compact title="Failed to load peers" description={error.message} />
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={peers}
+            loading={isLoading}
+            getRowId={(p) => p.nodeId ?? ''}
+            emptyTitle="No peers"
+          />
+        )}
+      </Panel>
+    </Page>
   );
 }
