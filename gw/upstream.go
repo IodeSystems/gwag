@@ -43,6 +43,10 @@ type upstreamPolicy struct {
 	timeout    time.Duration // 0 → no per-call deadline
 	ejectAfter int32         // 0 → ejection off
 	ejectFor   time.Duration
+
+	// tm records retries, timeouts and ejections; nil when metrics
+	// are off or not Prometheus.
+	tm *trafficMetrics
 }
 
 // upstreamPolicyFor resolves the per-service timeout against the
@@ -55,6 +59,7 @@ func (g *Gateway) upstreamPolicyFor(timeout time.Duration) upstreamPolicy {
 		timeout:    timeout,
 		ejectAfter: int32(g.cfg.ejectAfter),
 		ejectFor:   g.cfg.ejectFor,
+		tm:         g.tm,
 	}
 }
 
@@ -82,12 +87,23 @@ func (h *replicaHealth) success() {
 // failure extends the streak and (re-)ejects the replica once the
 // streak reaches p.ejectAfter. A replica readmitted after cooldown
 // keeps its streak, so its first failure ejects it again.
-func (h *replicaHealth) failure(p *upstreamPolicy) {
+func (h *replicaHealth) failure(p *upstreamPolicy) (ejected bool) {
 	if p.ejectAfter <= 0 {
-		return
+		return false
 	}
 	if h.fails.Add(1) >= p.ejectAfter {
-		h.ejectedUntil.Store(time.Now().Add(p.ejectFor).UnixNano())
+		now := time.Now()
+		// A new ejection: not ejected before, or the cooldown ran out.
+		ejected = h.ejectedUntil.Load() <= now.UnixNano()
+		h.ejectedUntil.Store(now.Add(p.ejectFor).UnixNano())
+	}
+	return ejected
+}
+
+// failed records a failure on h and counts the ejection it causes.
+func (p *upstreamPolicy) failed(h *replicaHealth, ns, ver, replica string) {
+	if h.failure(p) {
+		p.tm.ejection(ns, ver, replica)
 	}
 }
 

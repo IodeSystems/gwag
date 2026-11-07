@@ -163,13 +163,14 @@ func (d *openAPIStreamDispatcher) open(ctx context.Context, args map[string]any)
 			resp.Body.Close()
 		}
 		if ctx.Err() == nil {
-			r.health.failure(policy)
+			policy.failed(&r.health, d.ns, d.ver, r.baseURL)
 		}
+		policy.tm.timeout(d.ns, d.ver)
 		return fail(Reject(CodeInternal, fmt.Sprintf("openapi: %s/%s %s: upstream timeout after %s", d.ns, d.ver, d.label, policy.timeout)))
 	}
 	if err != nil {
 		if ctx.Err() == nil {
-			r.health.failure(policy)
+			policy.failed(&r.health, d.ns, d.ver, r.baseURL)
 		}
 		return fail(rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: %s", d.method, full, err.Error()), err))
 	}
@@ -177,7 +178,7 @@ func (d *openAPIStreamDispatcher) open(ctx context.Context, args map[string]any)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
 		if resp.StatusCode >= 500 {
-			r.health.failure(policy)
+			policy.failed(&r.health, d.ns, d.ver, r.baseURL)
 		}
 		return fail(rejectUpstreamStatus(resp.StatusCode,
 			fmt.Sprintf("openapi: %s %s: %s: %s", d.method, full, resp.Status, strings.TrimSpace(string(body)))))

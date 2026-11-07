@@ -25,6 +25,9 @@ func (g *Gateway) newGraphQLIngress() *gat.Gateway {
 	g.graphqlDone = g.graphqlRequestDone
 	g.grpcDone = g.grpcUnaryDone
 	gg, _ := gat.New()
+	if g.tm != nil {
+		gg.ObserveOutcome(g.observeOutcome)
+	}
 	gg.UsePlanCache(g.planCache).
 		MaxRequestBytes(cfg.maxRequestBytes).
 		// Caps a batch's length; the per-document cap is the plan
@@ -68,6 +71,7 @@ func (g *Gateway) graphqlPreRequest(w http.ResponseWriter, r *http.Request) (con
 	ctx, accum := withDispatchAccumulator(ctx)
 	ctx = withInjectCache(ctx)
 	ctx = withHTTPRequest(ctx, r)
+	accum.rec = httpRecOf(w)
 	accum.start = time.Now()
 	return ctx, g.graphqlDone, true
 }
@@ -79,7 +83,7 @@ func (g *Gateway) graphqlRequestDone(ctx context.Context) {
 	accum := dispatchAccumulatorFromContext(ctx)
 	total := time.Since(accum.start)
 	dispatchSum := time.Duration(accum.Sum.Load())
-	g.cfg.metrics.RecordRequest("graphql", total, total-dispatchSum)
+	g.recordRequest(accum.rec, "graphql", total, total-dispatchSum)
 	g.logRequestLine("graphql", HTTPRequestFromContext(ctx).URL.Path, total, dispatchSum, int(accum.Count.Load()))
 	oteltrace.SpanFromContext(ctx).End()
 }
@@ -93,10 +97,12 @@ func (g *Gateway) graphqlWSUpgrade(w http.ResponseWriter, r *http.Request) (cont
 	release, reason, ok := g.wsLimit.acquire(r)
 	if !ok {
 		g.cfg.metrics.RecordWSRejected(reason)
+		g.tm.reject(ingGraphQLWS, reason)
 		http.Error(w, "ws limit exceeded: "+reason, http.StatusTooManyRequests)
 		return nil, nil, false
 	}
 	if g.draining.Load() {
+		g.tm.reject(ingGraphQLWS, "draining")
 		release()
 		http.Error(w, "gateway is draining", http.StatusServiceUnavailable)
 		return nil, nil, false

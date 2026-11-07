@@ -29,6 +29,9 @@ type dispatchAccumulator struct {
 	// the request log, and the backpressure slot to give back.
 	method  string
 	release func()
+	// rec is the request record (metrics_traffic.go); nil when the
+	// default Prometheus sink is not in use.
+	rec *reqRec
 }
 
 // withDispatchAccumulator installs a fresh accumulator on ctx and

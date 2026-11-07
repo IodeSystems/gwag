@@ -411,11 +411,12 @@ func (g *Gateway) IngressHandler() http.Handler {
 		}
 	}
 	g.mu.Unlock()
-	return http.HandlerFunc(g.serveIngress)
+	return g.instrument(ingHTTP, false, http.HandlerFunc(g.serveIngress))
 }
 
 func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	if g.draining.Load() {
+		g.tm.reject(ingHTTP, "draining")
 		writeIngressError(w, http.StatusServiceUnavailable, "draining")
 		return
 	}
@@ -433,6 +434,7 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 
 	args, err := g.buildIngressArgs(r, route, pathParams)
 	if err != nil {
+		g.tm.reject(ingHTTP, "malformed_body")
 		writeIngressError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -441,6 +443,9 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	if route.shape == ingressShapeSubscription || route.stream != nil {
 		// SSE subscription lifetime is open-ended; request_*_seconds is
 		// not meaningful here. Skip the accumulator + recording.
+		if rc := httpRecOf(w); rc != nil {
+			rc.stream = true
+		}
 		ctx := g.tracer.extractHTTP(r.Context(), r.Header)
 		ctx, span := g.tracer.startIngressSpan(ctx, "gateway.http.subscription",
 			ingressAttr("http"),
@@ -475,10 +480,11 @@ func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	ctx = withInjectCache(ctx)
 	ctx = withHTTPRequest(ctx, r)
 	start := time.Now()
+	rec := httpRecOf(w)
 	defer func() {
 		total := time.Since(start)
 		dispatchSum := time.Duration(accum.Sum.Load())
-		g.cfg.metrics.RecordRequest("http", total, total-dispatchSum)
+		g.recordRequest(rec, "http", total, total-dispatchSum)
 		g.logRequestLine("http", r.URL.Path, total, dispatchSum, int(accum.Count.Load()))
 	}()
 

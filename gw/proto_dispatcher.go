@@ -147,7 +147,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			releaseDynamicMessage(outputDesc, resp)
 			timedOut := grpcUpstreamTimedOut(ctx, callCtx, policy, err)
 			if timedOut || grpcCountsAsFailure(err) {
-				r.health.failure(policy)
+				policy.failed(&r.health, ns, ver, r.addr)
 			}
 			notSent := false
 			if probe != nil {
@@ -155,6 +155,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 				releaseGRPCPeerProbe(probe)
 			}
 			if timedOut {
+				policy.tm.timeout(ns, ver)
 				err = status.Errorf(codes.DeadlineExceeded, "gateway: %s/%s %s: upstream timeout after %s", ns, ver, method, policy.timeout)
 				break
 			}
@@ -165,6 +166,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			if next == nil {
 				break
 			}
+			policy.tm.retry(ns, ver, "unavailable")
 			r = next
 		}
 		elapsed := time.Since(start)

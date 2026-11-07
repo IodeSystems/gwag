@@ -391,7 +391,7 @@ func (g *Gateway) GRPCUnknownHandler() grpc.StreamHandler {
 			return status.Errorf(codes.Internal, "ingress: assemble: %v", err)
 		}
 	}
-	return g.gql.GRPCStreamHandler()
+	return g.instrumentGRPC(g.gql.GRPCStreamHandler())
 }
 
 // ConnectHandler serves the routes GRPCUnknownHandler serves over
@@ -407,7 +407,7 @@ func (g *Gateway) ConnectHandler() http.Handler {
 			http.Error(w, "ingress: assemble: "+err.Error(), http.StatusInternalServerError)
 		})
 	}
-	return g.gql.GRPCHandler()
+	return g.instrument(ingConnect, true, g.gql.GRPCHandler())
 }
 
 // ensureAssembled builds the first schema (and with it the gRPC
@@ -427,6 +427,9 @@ func (g *Gateway) ensureAssembled() error {
 // backpressure slot. grpcUnaryDone / grpcStreamDone finish the call.
 func (g *Gateway) grpcPreCall(ctx context.Context, call gat.GRPCCall) (context.Context, func(context.Context), error) {
 	if g.draining.Load() {
+		if rc := recFromCtx(ctx); rc != nil {
+			rc.tm.reject(rc.ingress, "draining")
+		}
 		return ctx, nil, status.Error(codes.Unavailable, "ingress: draining")
 	}
 	info, _ := call.Data.(*grpcRouteInfo)
@@ -438,6 +441,9 @@ func (g *Gateway) grpcPreCall(ctx context.Context, call gat.GRPCCall) (context.C
 		// Subscription lifetime is open-ended; skip request_*_seconds.
 		// The span puts the ingress timing in the trace; child spans
 		// on the dispatcher path land under it.
+		if rc := recFromCtx(ctx); rc != nil {
+			rc.stream = true
+		}
 		ctx, _ = g.tracer.startIngressSpan(ctx, "gateway.grpc.subscription",
 			ingressAttr("grpc"),
 			namespaceAttr(info.namespace),
@@ -463,6 +469,7 @@ func (g *Gateway) grpcPreCall(ctx context.Context, call gat.GRPCCall) (context.C
 	ctx = withInjectCache(ctx)
 	accum.start = time.Now()
 	accum.method = call.Procedure
+	accum.rec = recFromCtx(ctx)
 	release, err := acquireBackpressureSlot(ctx, info.bp)
 	if err != nil {
 		return ctx, g.grpcDone, err
@@ -480,7 +487,7 @@ func (g *Gateway) grpcUnaryDone(ctx context.Context) {
 	}
 	total := time.Since(accum.start)
 	dispatchSum := time.Duration(accum.Sum.Load())
-	g.cfg.metrics.RecordRequest("grpc", total, total-dispatchSum)
+	g.recordRequest(accum.rec, "grpc", total, total-dispatchSum)
 	g.logRequestLine("grpc", accum.method, total, dispatchSum, int(accum.Count.Load()))
 	oteltrace.SpanFromContext(ctx).End()
 }

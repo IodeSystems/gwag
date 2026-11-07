@@ -97,40 +97,129 @@ ejection. Tune with `gateway.WithReplicaEjection(failures, cooldown)`;
 
 ## Metrics
 
-Every dispatch is timed by default. `gw.MetricsHandler()` exposes:
+`gw.MetricsHandler()` serves every series below. Names are shown
+without the prefix: the default is `go_api_gateway_`, and
+`WithMetricPrefix` changes it. Every series needs the default
+Prometheus sink: `WithoutMetrics()` records and allocates none of them,
+and a sink passed to `WithMetrics(custom)` receives only what the
+`Metrics` interface carries (dispatch, dwell, backoff, depth, streams,
+auth, ws-rejected, sub-fanout, `RecordRequest`); the other series
+(marked "default sink only") are not recorded for it.
 
-```
-go_api_gateway_dispatch_duration_seconds{namespace,version,method,code}
-go_api_gateway_pool_queue_dwell_seconds{namespace,version,method,kind}
-go_api_gateway_pool_backoff_total{namespace,version,method,kind,reason}
-go_api_gateway_pool_queue_depth{namespace,version,kind}            (gauge)
-go_api_gateway_pool_streams_inflight{namespace,version}            (gauge)
-go_api_gateway_subscribe_auth_total{namespace,version,method,code}
-```
+### Inbound requests
 
-- `code` (dispatch) is `ok` on success, the gRPC status string on
-  failure, or a `Reject` code when middleware short-circuits.
-- `kind` is `unary` or `stream` — splits queries from subscriptions
-  on the same backpressure metrics.
+Ingresses: `graphql` (`Handler`, HTTP), `graphql_ws` (the same path,
+WebSocket upgrade), `http` (`IngressHandler`, REST/OpenAPI shapes),
+`grpc` (`GRPCUnknownHandler`), `connect` (`ConnectHandler`: Connect,
+gRPC-Web, gRPC over HTTP), `mcp` (`MCPHandler`).
 
-Service-lifecycle metrics (start gate, drain, dependencies). All are
-per-node views, like usage; gauges are computed at scrape time, so a
-series disappears with its instance or line. They are exported only
-with the default Prometheus sink (not `WithMetrics(custom)` or
-`WithoutMetrics()`).
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `request_duration_seconds` | histogram | `ingress`, `code`, `operation_type` | Wall-clock per request. `_count` is the request total. Not recorded for open-ended calls: subscriptions, SSE, MCP GET, WebSocket connections. |
+| `request_self_seconds` | histogram | `ingress` | Gateway self-time: total minus the sum of dispatch durations. Recorded for `graphql`, `http`, `grpc`, `connect`; `mcp` has no dispatch accounting. |
+| `requests_in_progress` | gauge | `ingress` | Requests being served now (`graphql_ws`: open connections). Default sink only. |
+| `request_size_bytes` | histogram | `ingress` | Request body bytes read (the declared `Content-Length` when larger, so a 413 shows the size that was refused). `grpc`: protobuf message bytes. Counted as bytes flow; nothing is buffered. Not recorded for `graphql_ws`. Default sink only. |
+| `response_size_bytes` | histogram | `ingress` | Response bytes written. `grpc`: protobuf message bytes. Not recorded for `graphql_ws`. Default sink only. |
+| `requests_rejected_total` | counter | `ingress`, `reason` | Requests refused before execution. Default sink only. See reasons below. |
+| `graphql_errors_total` | counter | `kind` | GraphQL operations whose response carried errors: `parse`, `validate`, `execution`. Request-limit refusals are counted under `requests_rejected_total`, not here. A batch counts per operation; a WebSocket subscription counts per event. Default sink only. |
+| `graphql_partial_responses_total` | counter | none | Responses that carried both `data` (not null) and `errors`. Default sink only. |
+| `ws_rejected_total` | counter | `reason` | WebSocket upgrades refused by `WithWSLimit`: `max_per_ip`, `rate_limit`. |
 
-```
-go_api_gateway_service_instances{namespace,version,state}                    (gauge) ready|waiting|degraded
-go_api_gateway_service_drain_instances{namespace,version,drain_state}        (gauge) draining|blocked|safe_to_stop
-go_api_gateway_start_gate_transitions_total{namespace,version,from,to}       none|waiting|ready|degraded|removed
-go_api_gateway_dependency_unmet{consumer_namespace,consumer_version,provider} (gauge) 1 = no accepted line has a ready instance
-go_api_gateway_line_sunsetable{namespace,version}                            (gauge) 1 = sunset-able
-go_api_gateway_drain_requests_total{outcome}                                 requested|already_requested|cancelled|unknown_instance|error
-```
+`code` label rule, one for every ingress: the HTTP status number as sent
+(`"200"`, `"400"`, `"413"`, `"500"`), except for a gRPC-protocol
+response, where it is the gRPC code name (`"OK"`, `"NotFound"`,
+`"Unavailable"`). The `grpc` ingress always uses gRPC code names;
+`connect` uses the status of the gRPC-protocol response when it carries
+one (`grpc-status`), else the HTTP status. A GraphQL response is `200`
+whatever the query did; read `graphql_errors_total` for its errors.
+Connect streaming errors travel in the stream and show as `200`. A
+client that disconnects early is not given a separate code.
 
-`line_sunsetable` uses the admin dependency graph's rule and its
-default 1h usage window. READY/DEGRADED transitions are sampled every
-2s and at scrape, so a flip shorter than that can go uncounted.
+`operation_type` is `query`, `mutation` or `subscription` for GraphQL
+requests that planned, and empty for everything else, for GraphQL
+requests refused or failed before planning, and for a batch it is the
+type of the first operation that planned.
+
+`requests_rejected_total` reasons:
+
+| `reason` | Ingress | Cause |
+|---|---|---|
+| `max_request_bytes` | `graphql` | Body over `WithMaxRequestBytes` (413). |
+| `malformed_body` | `graphql`, `http` | Unreadable JSON, bad `variables`/`extensions`, empty batch; REST: path, query or body did not decode (400). |
+| `missing_query` | `graphql` | No query and no document id (400). |
+| `max_operations` | `graphql` | Document or batch over `WithMaxOperations`. |
+| `max_depth` | `graphql` | Document over `WithMaxDepth`. |
+| `introspection_disabled` | `graphql` | `__schema` / `__type` under `WithoutIntrospection`. |
+| `trusted_required` | `graphql` | Query text under enforced `WithTrustedDocuments` (400). |
+| `trusted_unknown` | `graphql` | Document id not in the manifest (`PERSISTED_QUERY_NOT_FOUND`, 200). |
+| `persisted_unsupported` | `graphql` | Document id sent, trusted documents not configured (400). |
+| `mutation_over_get` | `graphql` | Mutation sent with GET (405). |
+| `max_per_ip`, `rate_limit` | `graphql_ws` | `WithWSLimit` (also in `ws_rejected_total`). |
+| `draining` | `http`, `grpc`, `connect`, `graphql_ws` | The gateway is draining. |
+
+Admin auth denials are already counted in `admin_auth_total`
+(`outcome=denied_*`); there is no second series.
+
+### Upstream dispatch
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `dispatch_duration_seconds` | histogram | `namespace`, `version`, `method`, `code`, `caller` | One upstream dispatch. `code`: `ok`, the gRPC status string, or a `Reject` code. `caller` comes from `WithCallerIDExtractor` / `WithCallerHeaders`, default `unknown`, capped by `WithCallerIDMetricsTopK` (overflow is `__other__`). |
+| `pool_queue_dwell_seconds` | histogram | `namespace`, `version`, `method`, `kind` | Time waiting for an in-flight slot. `kind`: `unary`, `stream`, `unary_instance`. |
+| `pool_backoff_total` | counter | `namespace`, `version`, `method`, `kind`, `reason` | Dispatches refused by backpressure (`reason=wait_timeout`). |
+| `pool_queue_depth` | gauge | `namespace`, `version`, `kind` | Dispatches waiting for a pool slot. |
+| `replica_queue_depth` | gauge | `namespace`, `version`, `kind`, `replica` | Dispatches waiting for a per-replica slot (`MaxConcurrencyPerInstance`). |
+| `pool_streams_inflight` | gauge | `namespace`, `version` | Active subscription streams in a pool. |
+| `streams_inflight_total` | gauge | none | Active subscription streams, gateway-wide. |
+| `graphql_sub_fanout_total` | counter | `namespace`, `event` | Downstream-GraphQL subscription fanout `open` / `close`. |
+| `graphql_sub_fanouts_active` | gauge | `namespace` | Active downstream-GraphQL fanouts. |
+| `upstream_retries_total` | counter | `namespace`, `version`, `reason` | A call re-sent to another replica because the first attempt provably never reached an upstream (see "Upstream timeouts, retries, ejection"). `reason`: `unavailable` (gRPC, no transport stream), `no_connection` (HTTP, no connection). Default sink only. |
+| `upstream_timeouts_total` | counter | `namespace`, `version` | Calls that ran past the upstream timeout. gRPC pools also show `DeadlineExceeded` in dispatch `code`, but OpenAPI and GraphQL sources report `Internal`, so this series is the one to alert on. Default sink only. |
+| `replica_ejections_total` | counter | `namespace`, `version`, `replica` | Replica ejections: the failure limit was reached, or a readmitted replica failed again. Default sink only. |
+| `replicas_ejected` | gauge | `namespace`, `version` | Replicas ejected now (scrape time). Default sink only. |
+
+### Registry and cluster
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `schema_rebuilds_total` | counter | `result` | Gateway-wide schema rebuilds, `ok` or `error`. Default sink only. |
+| `schema_rebuild_duration_seconds` | histogram | none | Duration of those rebuilds. Default sink only. |
+| `registrations_total` | counter | `kind`, `outcome` | Registrations seen by this node. `kind`: `proto`, `openapi`, `graphql`, `mcp`, `internalproto`. `outcome`: `created`, `joined` (another replica of an identical schema), `swapped` (`unstable` slot replaced), `rejected`. Includes the gateway's own pub/sub slot at boot. Default sink only. |
+| `registered_services` | gauge | `kind` | Registered services on this node, internal slots excluded (scrape time). Default sink only. |
+| `cluster_peers` | gauge | none | Live gateway peers including this node; 0 when not clustered (scrape time). Default sink only. |
+| `build_info` | gauge | `version`, `go_version` | Always 1. `version` is the module version from the build, `devel` when unknown. Default sink only. |
+
+The scrape-time gauges take the gateway's registry lock briefly; a
+scrape during a long schema rebuild waits for it.
+
+### Service lifecycle
+
+Start gate, drain, dependencies. All are per-node views, like usage;
+gauges are computed at scrape time, so a series disappears with its
+instance or line. Default sink only.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `service_instances` | gauge | `namespace`, `version`, `state` | Instances by start-gate state: `ready`, `waiting`, `degraded`. |
+| `service_drain_instances` | gauge | `namespace`, `version`, `drain_state` | Instances by drain state: `draining`, `blocked`, `safe_to_stop`. |
+| `start_gate_transitions_total` | counter | `namespace`, `version`, `from`, `to` | State changes (`none`, `waiting`, `ready`, `degraded`, `removed`). READY/DEGRADED flips are sampled every 2s and at scrape, so a shorter flip can go uncounted. |
+| `dependency_unmet` | gauge | `consumer_namespace`, `consumer_version`, `provider` | 1 when no accepted line of the provider has a ready instance. |
+| `line_sunsetable` | gauge | `namespace`, `version` | 1 when the line is sunset-able (admin dependency graph rule, default 1h usage window). |
+| `drain_requests_total` | counter | `outcome` | Drain requests: `requested`, `already_requested`, `cancelled`, `unknown_instance`, `error`. |
+
+### Auth, pub/sub and caches
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `admin_auth_total` | counter | `method`, `outcome` | Admin auth checks: `ok_delegate`, `ok_bearer`, `denied_delegate`, `denied_bearer`, `no_token_configured`. |
+| `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
+| `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
+| `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |
+| `plan_cache_hits_total` | counter | none | Plan-cache lookups that skipped parse, validate and plan. |
+| `plan_cache_misses_total` | counter | none | Lookups that paid for them; a rising rate means the working set exceeds `WithDocCacheSize`. |
+
+Request-size buckets run from 64 B to 256 MiB (x4). Latency histograms
+use the Prometheus default buckets.
 
 Mount alongside the GraphQL endpoint:
 

@@ -408,7 +408,7 @@ func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[st
 		}
 		timedOut := upstreamTimedOut(ctx, callCtx, policy)
 		if timedOut || (ctx.Err() == nil && httpCountsAsFailure(err)) {
-			r.health.failure(policy)
+			policy.failed(&r.health, s.namespace, s.version, r.endpoint)
 		}
 		notSent := false
 		if probe != nil {
@@ -416,6 +416,7 @@ func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[st
 			releaseHTTPConnProbe(probe)
 		}
 		if timedOut {
+			policy.tm.timeout(s.namespace, s.version)
 			return nil, Reject(CodeInternal, fmt.Sprintf("graphql: %s/%s: upstream timeout after %s", s.namespace, s.version, policy.timeout))
 		}
 		if !notSent || callCtx.Err() != nil {
@@ -425,6 +426,7 @@ func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[st
 		if next == nil {
 			return nil, err
 		}
+		policy.tm.retry(s.namespace, s.version, "no_connection")
 		r = next
 	}
 }

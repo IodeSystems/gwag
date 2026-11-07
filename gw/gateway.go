@@ -96,6 +96,7 @@ type Gateway struct {
 	cp         *controlPlane
 	gate       gateState // start gate (start_gate.go)
 	lifecycle  *lifecycleMetrics // nil unless the default Prometheus sink is in use
+	tm         *trafficMetrics   // nil unless the default Prometheus sink is in use (metrics_traffic.go)
 	peers      *peerTracker
 	broker     *subBroker
 
@@ -1407,6 +1408,8 @@ func New(opts ...Option) *Gateway {
 		}
 	}
 	if pm != nil {
+		g.tm = pm.traffic
+		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
 	}
 	g.gql = g.newGraphQLIngress()
@@ -2084,7 +2087,7 @@ func (g *Gateway) Handler() http.Handler {
 	}
 	g.mu.Unlock()
 
-	return g.gql.Handler()
+	return g.instrument(ingGraphQL, false, g.gql.Handler())
 }
 
 // SchemaHandler returns an http.Handler that exports the GraphQL

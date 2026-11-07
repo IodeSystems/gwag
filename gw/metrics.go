@@ -157,6 +157,7 @@ type prometheusMetrics struct {
 	callerHeaders   []string
 	callerExtractor CallerIDExtractor
 	callerLimiter   *callerLimiter
+	traffic         *trafficMetrics
 }
 
 func newPrometheusMetrics(p string) *prometheusMetrics {
@@ -213,9 +214,9 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 	}, []string{"namespace"})
 	reqDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    p + "_request_duration_seconds",
-		Help:    "Wall-clock duration of inbound requests, by ingress entry point (graphql, http, grpc).",
+		Help:    "Wall-clock duration of inbound requests, by ingress entry point (graphql, http, grpc, connect, mcp), response code and GraphQL operation type. The _count is the request total. code: HTTP status, or the gRPC code name for gRPC-protocol responses; operation_type: query, mutation, subscription for GraphQL, empty elsewhere or when the operation did not plan.",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"ingress"})
+	}, []string{"ingress", "code", "operation_type"})
 	reqSelf := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    p + "_request_self_seconds",
 		Help:    "Per-request gateway self-time: wall-clock total minus the per-request dispatch accumulator. Pair with request_duration_seconds for the upstream slice.",
@@ -234,6 +235,7 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		Help: "1 while this node's ps.pub/ps.sub run local-only because the cluster NATS connection is down; 0 otherwise (including single-node gateways).",
 	})
 	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected, busDegraded)
+	traffic := newTrafficMetrics(reg, p, reqDuration, reqSelf)
 	return &prometheusMetrics{
 		registry:     reg,
 		prefix:       p,
@@ -253,6 +255,7 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		pubNoBinding: pubNoBinding,
 		wsRejected:   wsRejected,
 		busDegraded:  busDegraded,
+		traffic:      traffic,
 	}
 }
 
@@ -306,7 +309,7 @@ func (m *prometheusMetrics) SetGraphQLSubFanoutsActive(namespace string, active 
 }
 
 func (m *prometheusMetrics) RecordRequest(ingress string, total, self time.Duration) {
-	m.reqDuration.WithLabelValues(ingress).Observe(total.Seconds())
+	m.reqDuration.WithLabelValues(ingress, "", "").Observe(total.Seconds())
 	if self < 0 {
 		// Clock skew or accumulator races on extremely short requests
 		// can momentarily push self negative; clamp so the histogram

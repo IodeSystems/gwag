@@ -35,9 +35,9 @@ func (g *Gateway) MCPHandler() http.Handler {
 		server.WithToolCapabilities(false),
 	)
 	g.registerMCPTools(srv)
-	return server.NewStreamableHTTPServer(srv,
+	return g.instrument(ingMCP, false, server.NewStreamableHTTPServer(srv,
 		server.WithStateLess(true),
-	)
+	))
 }
 
 // registerMCPTools attaches the four tool adapters to the MCP server.

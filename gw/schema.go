@@ -21,7 +21,8 @@ import (
 // produced by buildSchemaLocked share dispatcher state across all
 // callers since the dispatcher's runtime behavior is independent of
 // which subset is rendered.
-func (g *Gateway) assembleLocked() error {
+func (g *Gateway) assembleLocked() (err error) {
+	defer func(start time.Time) { g.tm.rebuild(start, err) }(time.Now())
 	g.dispatchers = ir.NewDispatchRegistry()
 	schema, annotations, err := g.buildSchemaLocked(schemaFilter{})
 	if err != nil {

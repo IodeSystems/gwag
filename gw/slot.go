@@ -146,6 +146,7 @@ type slot struct {
 // Caller holds g.mu.
 func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
 	if err := g.checkVersionTierAllowed(key.version); err != nil {
+		g.tm.registration(kind, "rejected")
 		return false, err
 	}
 	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings)
@@ -157,7 +158,23 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 // gateway code, not operator/user registrations, so the tier policy
 // (which exists to constrain *user* registrations) doesn't apply.
 // Caller holds g.mu.
-func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
+func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (bool, error) {
+	_, had := g.slots[key]
+	existed, err := g.registerSlotInnerLocked(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings)
+	switch {
+	case err != nil:
+		g.tm.registration(kind, "rejected")
+	case existed:
+		g.tm.registration(kind, "joined")
+	case had:
+		g.tm.registration(kind, "swapped")
+	default:
+		g.tm.registration(kind, "created")
+	}
+	return existed, err
+}
+
+func (g *Gateway) registerSlotInnerLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
 	if g.slots == nil {
 		g.slots = map[poolKey]*slot{}
 	}

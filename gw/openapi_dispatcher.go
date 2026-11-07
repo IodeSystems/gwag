@@ -138,7 +138,7 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 		}
 		timedOut := upstreamTimedOut(ctx, callCtx, policy)
 		if timedOut || (ctx.Err() == nil && httpCountsAsFailure(err)) {
-			r.health.failure(policy)
+			policy.failed(&r.health, d.ns, d.ver, r.baseURL)
 		}
 		notSent := false
 		if probe != nil {
@@ -146,6 +146,7 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 			releaseHTTPConnProbe(probe)
 		}
 		if timedOut {
+			policy.tm.timeout(d.ns, d.ver)
 			return nil, Reject(CodeInternal, fmt.Sprintf("openapi: %s/%s %s: upstream timeout after %s", d.ns, d.ver, d.label, policy.timeout))
 		}
 		if !notSent || callCtx.Err() != nil || isMultipartOp(d.op) || hasUploadArg(args) {
@@ -155,6 +156,7 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 		if next == nil {
 			return nil, err
 		}
+		policy.tm.retry(d.ns, d.ver, "no_connection")
 		r = next
 	}
 }
