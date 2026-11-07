@@ -162,6 +162,40 @@ client can curate the surface without separate REST calls.
 
 Subscriptions are not exposed as MCP tools in v1.
 
+## Rolling-release demo (`demo.sh`)
+
+Moves provider `library` from v1 to v2 and consumer `orders` from
+`[v1]` to `[v2]` without downtime, using start gating, drain and the
+dependency graph. Each service is a separate process
+(`cmd/demo-library`, `cmd/demo-orders`), so the drain and SIGTERM are
+real.
+
+```
+bin/build                 # once, from the repo root: real graph UI
+./demo.sh                 # interactive; Enter between steps
+./demo.sh --check         # unattended; asserts each step via the admin API
+DEMO_AUTO=1 ./demo.sh     # unattended with sleeps (for screen capture)
+```
+
+Open `http://<host>:8080/` (the UI home is the live graph). Ports:
+`DEMO_PORT` (8080), `DEMO_CP_PORT` (50090). Needs `go`, `curl`, `jq`.
+
+1. Gateway with `--environment demo --caller-id-public`; admin token printed.
+2. `orders` (depends `library: [v1]`) starts first. Graph: WAITING; its
+   log says "waiting for dependencies".
+3. `library-a` (v1 only) starts. `orders` turns READY by itself and
+   sends traffic with `X-Caller-Id: orders/v1`.
+4. `library-b` registers v1 and v2 in one Register (proto packages
+   `library.v1` and `library.v2`; gRPC ingress needs distinct packages
+   per line). `gwag drain library-a --wait` reaches `safe_to_stop`
+   because `library-b` covers v1; SIGTERM then exits `library-a`.
+5. `orders` restarts with `[v1, v2]` (calls v2 once present), then `[v2]`.
+6. `library/v1` becomes sunset-able once no call hit v1 within the 1m
+   window: about 60 s of waiting in this step. `gwag drain library-b`
+   is `blocked` (it holds the only v2 instance; `orders` needs v2);
+   `--cancel` withdraws it.
+7. Ctrl-C or any exit stops every process.
+
 ## Layout
 
 ```
@@ -170,9 +204,12 @@ examples/multi/
     gateway/main.go    GraphQL :8080 + control plane :50090
     greeter/main.go    Greeter gRPC :50051, self-registers as "greeter"
     library/main.go    Library gRPC :50052, self-registers as "library"
+    demo-library/      Provider process for demo.sh (lines via --lines)
+    demo-orders/       Consumer process for demo.sh (depends via --depends)
   protos/              Service definitions
   gen/                 protoc-generated bindings (committed for convenience)
   run.sh               Spawns all three; Ctrl-C cleans up
+  demo.sh              Rolling-release demo (see above)
 ```
 
 The protos and bindings are only needed by the *services* (which want
