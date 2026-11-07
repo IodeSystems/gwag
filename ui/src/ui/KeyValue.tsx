@@ -17,6 +17,9 @@ export interface KeyValueProps {
   labelWidth?: number;
 }
 
+// Height of a row holding a copy button, so plain rows match it.
+const ROW_HEIGHT = 28;
+
 /** Definition-list style label/value pairs. */
 export function KeyValue({ items, labelWidth = 160 }: KeyValueProps) {
   return (
@@ -36,7 +39,7 @@ export function KeyValue({ items, labelWidth = 160 }: KeyValueProps) {
             component="dt"
             variant="body2"
             color="text.secondary"
-            sx={{ pt: { xs: 1, sm: 0 } }}
+            sx={{ pt: { xs: 1, sm: 0 }, minHeight: ROW_HEIGHT, display: 'flex', alignItems: 'center' }}
           >
             {it.label}
           </Typography>
@@ -49,6 +52,7 @@ export function KeyValue({ items, labelWidth = 160 }: KeyValueProps) {
               overflowWrap: 'anywhere',
               display: 'flex',
               alignItems: 'center',
+              minHeight: ROW_HEIGHT,
               gap: 0.5,
               fontFamily: it.mono ? (t) => t.gwag.mono : undefined,
               fontSize: it.mono ? '0.75rem' : undefined,
