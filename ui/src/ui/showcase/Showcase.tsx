@@ -25,6 +25,7 @@ import {
   EmptyState,
   EnvBadge,
   FormDialog,
+  InlineForm,
   FormRow,
   FormSelect,
   FormSwitch,
@@ -180,6 +181,50 @@ function FormLayoutDemo() {
         )}
       </Stack>
     </Box>
+  );
+}
+
+function InlineFormDemo() {
+  const toast = useToast();
+  return (
+    <Panel
+      title="Inline form"
+      subtitle="Same fields and server error mapping as FormDialog. Leave Channel empty or uppercase to see errors."
+    >
+      <InlineForm
+        defaultValues={{ channel: '', ttl: 60, kind: 'proto', verbose: false }}
+        submitLabel="Sign"
+        submittingLabel="Signing…"
+        onSubmit={async (v) => {
+          await new Promise((r) => setTimeout(r, 500));
+          if (v.channel === '' || v.channel !== v.channel.toLowerCase()) {
+            throw new GraphQLRequestError([
+              {
+                message: 'validation failed',
+                extensions: {
+                  fields: [{ path: 'body.channel', message: 'must be non-empty and lowercase' }],
+                },
+              },
+            ]);
+          }
+          toast.success(`signed ${v.channel}`);
+        }}
+      >
+        <FormTextField name="channel" label="Channel" helperText="Resolved subject." />
+        <FormRow>
+          <FormTextField name="ttl" label="TTL (seconds)" type="number" />
+          <FormSelect
+            name="kind"
+            label="Kind"
+            options={[
+              { value: 'proto', label: 'gRPC (.proto)' },
+              { value: 'openapi', label: 'OpenAPI' },
+            ]}
+          />
+        </FormRow>
+        <FormSwitch name="verbose" label="Verbose" />
+      </InlineForm>
+    </Panel>
   );
 }
 
@@ -386,6 +431,10 @@ function Body() {
 
       <Section title="Form layout stability">
         <FormLayoutDemo />
+      </Section>
+
+      <Section title="InlineForm">
+        <InlineFormDemo />
       </Section>
 
       <Section title="Dialogs">

@@ -1,36 +1,22 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Button, Stack, TextField } from '@mui/material';
+import { Alert } from '@mui/material';
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
 import { client } from '@/api/client';
 import { SignSubscriptionTokenMutation } from '@/api/operations';
-import { KeyValue, Page, Panel, useToast } from '@/ui';
+import { FormTextField, InlineForm, KeyValue, Page, Panel } from '@/ui';
 
 export const Route = createFileRoute('/token-signer')({
   component: TokenSigner,
 });
 
 function TokenSigner() {
-  const toast = useToast();
-  const [channel, setChannel] = useState('');
-  const [ttl, setTtl] = useState('60');
-  const [kid, setKid] = useState('');
-
   const sign = useMutation({
-    mutationFn: () =>
+    mutationFn: (v: { channel: string; ttl: number | string; kid: string }) =>
       client.request(SignSubscriptionTokenMutation, {
-        channel: channel.trim(),
-        ttlSeconds: Number(ttl) || 0,
-        kid: kid.trim() || undefined,
+        channel: v.channel.trim(),
+        ttlSeconds: Number(v.ttl) || 0,
+        kid: v.kid.trim() || undefined,
       }),
-    onSuccess: (res) => {
-      const o = res.admin?.signSubscriptionToken;
-      // The op returns a code; anything other than OK carries a reason.
-      if (o && o.code !== 'OK') {
-        toast.warning(`${o.code}${o.reason ? `: ${o.reason}` : ''}`);
-      }
-    },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const out = sign.data?.admin?.signSubscriptionToken;
@@ -43,44 +29,46 @@ function TokenSigner() {
       maxWidth={640}
     >
       <Panel>
-        <Stack spacing={2}>
-          <TextField
+        {/* Request errors surface as the form-level alert (mutateAsync throws). */}
+        <InlineForm
+          defaultValues={{ channel: '', ttl: 60, kid: '' }}
+          submitLabel="Sign"
+          submittingLabel="Signing…"
+          canSubmit={(v) => v.channel.trim().length > 0}
+          onSubmit={async (v) => {
+            await sign.mutateAsync(v);
+          }}
+        >
+          <FormTextField
+            name="channel"
             label="Channel"
             placeholder="e.g. orders.* or room.42"
-            value={channel}
-            onChange={(e) => setChannel(e.target.value)}
-            disabled={sign.isPending}
-            fullWidth
             required
             helperText="The resolved subject the token authorizes."
           />
-          <TextField
+          <FormTextField
+            name="ttl"
             label="TTL (seconds)"
             type="number"
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
-            disabled={sign.isPending}
-            fullWidth
             helperText="Informational lifetime echoed to the client."
           />
-          <TextField
+          <FormTextField
+            name="kid"
             label="Key id (kid)"
             placeholder="optional — empty uses the default key"
-            value={kid}
-            onChange={(e) => setKid(e.target.value)}
-            disabled={sign.isPending}
-            fullWidth
             helperText="Names a rotated signing key; the gateway echoes the kid it signed under."
           />
-          <Button
-            variant="contained"
-            disabled={sign.isPending || channel.trim().length === 0}
-            onClick={() => sign.mutate()}
-          >
-            Sign
-          </Button>
-        </Stack>
+        </InlineForm>
       </Panel>
+
+      {denied && (
+        <Panel title="Denied">
+          <Alert severity="warning">
+            {out.code}
+            {out.reason ? `: ${out.reason}` : ''}
+          </Alert>
+        </Panel>
+      )}
 
       {out && !denied && (
         <Panel

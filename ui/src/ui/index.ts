@@ -12,11 +12,13 @@ export { ToastProvider, useToast, type ToastApi, type ToastSeverity } from './To
 export { ThemeToggle, EnvBadge, PresetPicker, PresetSwatch } from './Chrome';
 export {
   FormDialog,
+  InlineForm,
   FormRow,
   FormTextField,
   FormSelect,
   FormSwitch,
   type FormDialogProps,
+  type InlineFormProps,
   type FormTextFieldProps,
   type FormSelectProps,
   type FormSwitchProps,

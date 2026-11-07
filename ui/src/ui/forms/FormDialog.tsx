@@ -51,7 +51,7 @@ const Ctx = createContext<FormCtx | null>(null);
 
 function useFormCtx(): FormCtx {
   const v = useContext(Ctx);
-  if (!v) throw new Error('Form fields must be rendered inside <FormDialog>');
+  if (!v) throw new Error('Form fields must be rendered inside <FormDialog> or <InlineForm>');
   return v;
 }
 
@@ -298,15 +298,21 @@ export function FormDialog<TValues extends Record<string, unknown>>(
   );
 }
 
-function FormBody<TValues extends Record<string, unknown>>({
-  description,
-  submitLabel = 'Save',
+/**
+ * Shared form engine for FormDialog and InlineForm: TanStack form,
+ * server field-error mapping, registered-field tracking.
+ */
+function useFormEngine<TValues extends Record<string, unknown>>({
   defaultValues,
   onSubmit,
-  onClose,
   fieldPrefix,
-  children,
-}: FormDialogProps<TValues>) {
+  onSuccess,
+}: {
+  defaultValues: TValues;
+  onSubmit: (values: TValues) => Promise<void> | void;
+  fieldPrefix?: string;
+  onSuccess?: () => void;
+}) {
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const registered = useRef(new Map<string, number>());
@@ -318,7 +324,7 @@ function FormBody<TValues extends Record<string, unknown>>({
       setFormErrors([]);
       try {
         await onSubmit(value);
-        onClose();
+        onSuccess?.();
       } catch (e) {
         const mapped = mapFieldErrors(errorsOf(e), {
           prefix: fieldPrefix,
@@ -350,51 +356,143 @@ function FormBody<TValues extends Record<string, unknown>>({
     [],
   );
 
+  const ctxFor = (submitting: boolean): FormCtx => ({
+    form: form as unknown as LooseForm,
+    serverErrors,
+    clearServerError,
+    register,
+    submitting,
+  });
+
+  return { form, formErrors, ctxFor };
+}
+
+function FormErrorAlert({ errors }: { errors: string[] }) {
+  if (errors.length === 0) return null;
+  return (
+    <Alert severity="error">
+      {errors.map((m, i) => (
+        <div key={i}>{m}</div>
+      ))}
+    </Alert>
+  );
+}
+
+function FormBody<TValues extends Record<string, unknown>>({
+  description,
+  submitLabel = 'Save',
+  defaultValues,
+  onSubmit,
+  onClose,
+  fieldPrefix,
+  children,
+}: FormDialogProps<TValues>) {
+  const { form, formErrors, ctxFor } = useFormEngine({
+    defaultValues,
+    onSubmit,
+    fieldPrefix,
+    onSuccess: onClose,
+  });
+
   return (
     <form.Subscribe selector={(s) => s.isSubmitting}>
-      {(submitting) => {
-        const ctx: FormCtx = {
-          form: form as unknown as LooseForm,
-          serverErrors,
-          clearServerError,
-          register,
-          submitting,
-        };
-        return (
-          <Ctx.Provider value={ctx}>
-            <form
-              noValidate
-              onSubmit={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                void form.handleSubmit();
-              }}
-            >
-              <DialogContent>
-                <Stack spacing={1} sx={{ pt: 1 }}>
-                  {description && <DialogContentText>{description}</DialogContentText>}
-                  {formErrors.length > 0 && (
-                    <Alert severity="error">
-                      {formErrors.map((m, i) => (
-                        <div key={i}>{m}</div>
-                      ))}
-                    </Alert>
-                  )}
-                  {children}
-                </Stack>
-              </DialogContent>
-              <DialogActions sx={{ px: 3, pb: 2 }}>
-                <Button onClick={onClose} disabled={submitting} color="inherit">
-                  Cancel
+      {(submitting) => (
+        <Ctx.Provider value={ctxFor(submitting)}>
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void form.handleSubmit();
+            }}
+          >
+            <DialogContent>
+              <Stack spacing={1} sx={{ pt: 1 }}>
+                {description && <DialogContentText>{description}</DialogContentText>}
+                <FormErrorAlert errors={formErrors} />
+                {children}
+              </Stack>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button onClick={onClose} disabled={submitting} color="inherit">
+                Cancel
+              </Button>
+              <Button type="submit" variant="contained" disabled={submitting}>
+                {submitting ? 'Saving…' : submitLabel}
+              </Button>
+            </DialogActions>
+          </form>
+        </Ctx.Provider>
+      )}
+    </form.Subscribe>
+  );
+}
+
+export interface InlineFormProps<TValues extends Record<string, unknown>> {
+  defaultValues: TValues;
+  /**
+   * Perform the action. Throw to report failure: field errors from
+   * `extensions.fields` land on the matching fields, the rest show as a
+   * form-level alert (same mapping as FormDialog).
+   */
+  onSubmit: (values: TValues) => Promise<void> | void;
+  submitLabel?: string;
+  /** Submit button label while submitting. Default "Working…". */
+  submittingLabel?: string;
+  /** Gate the submit button on the current values. */
+  canSubmit?: (values: TValues) => boolean;
+  /** Root arg segment stripped from server paths. Default "body". */
+  fieldPrefix?: string;
+  /** Extra buttons beside the submit button. */
+  actions?: ReactNode;
+  children: ReactNode;
+}
+
+/**
+ * Form without a dialog: FormTextField / FormSelect / FormSwitch on a
+ * page or inside a Panel. The form stays mounted after success.
+ */
+export function InlineForm<TValues extends Record<string, unknown>>({
+  defaultValues,
+  onSubmit,
+  submitLabel = 'Submit',
+  submittingLabel = 'Working…',
+  canSubmit,
+  fieldPrefix,
+  actions,
+  children,
+}: InlineFormProps<TValues>) {
+  const { form, formErrors, ctxFor } = useFormEngine({ defaultValues, onSubmit, fieldPrefix });
+
+  return (
+    <form.Subscribe selector={(s) => ({ submitting: s.isSubmitting, values: s.values })}>
+      {({ submitting, values }) => (
+        <Ctx.Provider value={ctxFor(submitting)}>
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void form.handleSubmit();
+            }}
+          >
+            <Stack spacing={1}>
+              <FormErrorAlert errors={formErrors} />
+              {children}
+              <Stack direction="row" spacing={1} sx={{ pt: 1 }}>
+                <Button
+                  type="submit"
+                  variant="contained"
+                  disabled={submitting || (canSubmit ? !canSubmit(values) : false)}
+                >
+                  {submitting ? submittingLabel : submitLabel}
                 </Button>
-                <Button type="submit" variant="contained" disabled={submitting}>
-                  {submitting ? 'Saving…' : submitLabel}
-                </Button>
-              </DialogActions>
-            </form>
-          </Ctx.Provider>
-        );
-      }}
+                {actions}
+              </Stack>
+            </Stack>
+          </form>
+        </Ctx.Provider>
+      )}
     </form.Subscribe>
   );
 }
