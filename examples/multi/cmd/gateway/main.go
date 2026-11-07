@@ -87,6 +87,7 @@ func main() {
 	maxStreams := flag.Int("max-streams", gateway.DefaultBackpressure.MaxStreams, "Per-pool subscription stream cap; 0 disables")
 	maxStreamsTotal := flag.Int("max-streams-total", gateway.DefaultBackpressure.MaxStreamsTotal, "Gateway-wide subscription stream cap; 0 disables")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
+	upstreamTimeout := flag.Duration("upstream-timeout", 0, "Per-call timeout for unary upstream dispatch; 0 disables")
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
@@ -160,6 +161,10 @@ func main() {
 		MaxStreamsTotal: *maxStreamsTotal,
 		MaxWaitTime:     *maxWait,
 	}))
+
+	if *upstreamTimeout > 0 {
+		gwOpts = append(gwOpts, gateway.WithUpstreamTimeout(*upstreamTimeout))
+	}
 
 	switch {
 	case *insecureSubscribe:
