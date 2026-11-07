@@ -122,6 +122,43 @@ entry's delete marker, so routing has no gap.
 `/api/admin/peers` drops a dead peer when its peers entry expires
 (30 s TTL); the drain status's live-peer set follows the same delete.
 
+## Cluster KV replicas
+
+The cluster keeps its state in JetStream KV buckets (peers, registry,
+stable, deprecated, mcp config, drain, external dependents). They start
+at one replica. As peers join, each node raises every bucket to the
+count the replica policy gives for the live peers. Set the policy with
+`--cluster-replicas` (`gwag up`, example gateway) or
+`gateway.WithClusterReplicas`:
+
+| Policy | Replicas for N live peers | Use |
+|---|---|---|
+| `odd` (default) | largest odd number <= min(N, 3): 1, 1, 3, 3, ... | Never runs a 2-replica group. |
+| `auto` | min(N, 3): 1, 2, 3, 3, ... | The behaviour before `odd`. |
+| `1`..`5` | that number, capped at N | Fixed. |
+
+Why `odd`: a 2-replica group has no quorum when either member dies. A
+cluster forming through R2 and losing a node in that window stalled
+the registry and peers buckets: `/api/admin/peers` answered 500 until
+the node returned, and registrations that expired meanwhile were not
+replaced. Odd counts skip R2. An invalid value fails at boot.
+
+Consequences:
+
+- 2 nodes run at R1. The buckets live on one node. If it dies, writes
+  (registrations, heartbeats, peer refresh) stop until it returns, and
+  if its disk is lost the buckets' state is lost. Run 3 nodes for fault
+  tolerance, or pick `auto` and accept the R2 quorum risk.
+- 3 nodes run at R3 and survive one node loss. The move from R1 to R3
+  takes a few seconds to tens of seconds. A node killed during it can
+  still leave a bucket without a quorum. Wait for the buckets to settle
+  (`WaitStreamsReplicated` in the e2e harness) before planned kills.
+- The count never drops when a peer is lost, so a brief loss does not
+  flap. A peer only leaves the live set after its peers entry expired
+  (30 s). `ForgetPeer` is the only path that lowers the count; it
+  applies the same policy to the remaining peers. A policy change at
+  restart raises but does not lower existing buckets.
+
 ## Backpressure
 
 Each `(namespace, version)` pool has its own dispatch concurrency caps
