@@ -124,7 +124,15 @@ func main() {
 	if !*skipBackends {
 		fmt.Fprintln(os.Stderr, "==> starting backends")
 		registerBackends := gwagFirst != nil
-		if err := startBackends(*repoRoot, cfg.Backends, registerBackends); err != nil {
+		started, err := startBackends(*repoRoot, cfg.Backends, registerBackends)
+		// Stop what this run started, so the backends don't sit on
+		// the host through the next measurement.
+		defer func() {
+			for _, c := range started {
+				_ = syscall.Kill(-c.Process.Pid, syscall.SIGTERM)
+			}
+		}()
+		if err != nil {
 			die("backends: %v", err)
 		}
 		if registerBackends {
@@ -255,11 +263,12 @@ func ensureTrafficBinary(repoRoot string) (string, error) {
 }
 
 // startBackends launches each hello-* binary in the background and
-// leaves them running for the rest of the process. `register` toggles
+// returns the processes it started; the caller stops them. `register` toggles
 // the --register CLI flag — true when gwag is in the picked gateways
 // (backends register with the control plane), false otherwise (mesh
 // + apollo introspect the backends directly).
-func startBackends(repoRoot string, backends []backendCfg, register bool) error {
+func startBackends(repoRoot string, backends []backendCfg, register bool) ([]*exec.Cmd, error) {
+	var started []*exec.Cmd
 	for _, b := range backends {
 		bin := filepath.Join(repoRoot, "bench", ".run", "bin", b.Kind)
 		if _, err := os.Stat(bin); err != nil {
@@ -270,7 +279,7 @@ func startBackends(repoRoot string, backends []backendCfg, register bool) error 
 			build.Stdout = os.Stderr
 			build.Stderr = os.Stderr
 			if err := build.Run(); err != nil {
-				return fmt.Errorf("build %s: %w", b.Kind, err)
+				return started, fmt.Errorf("build %s: %w", b.Kind, err)
 			}
 		}
 		port := strings.TrimPrefix(b.Addr, ":")
@@ -289,11 +298,12 @@ func startBackends(repoRoot string, backends []backendCfg, register bool) error 
 		cmd.Stderr = nil
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("start %s: %w", b.Kind, err)
+			return started, fmt.Errorf("start %s: %w", b.Kind, err)
 		}
 		// Don't wait — backends are long-running for the whole
 		// duration of the compare run. Release the goroutine.
 		go cmd.Wait()
+		started = append(started, cmd)
 	}
 	// Smoke-wait: every backend's listening port has to be hot before
 	// gateways can introspect them.
@@ -307,10 +317,10 @@ func startBackends(repoRoot string, backends []backendCfg, register bool) error 
 			time.Sleep(200 * time.Millisecond)
 		}
 		if !listening(port) {
-			return fmt.Errorf("backend %s never listened on %s", b.Kind, b.Addr)
+			return started, fmt.Errorf("backend %s never listened on %s", b.Kind, b.Addr)
 		}
 	}
-	return nil
+	return started, nil
 }
 
 // backendArgs builds the kind-specific flag set. Mirrors the bench
