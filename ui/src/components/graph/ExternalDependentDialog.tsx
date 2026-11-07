@@ -4,6 +4,7 @@ import { FormDialog, FormRow, FormSelect, FormTextField, useToast } from '@/ui';
 import { client } from '@/api/client';
 import { PutExternalDependentMutation } from '@/api/operations';
 import type { ExternalDependent } from './model';
+import { defaultReviewDate, fromReviewAt, toReviewAt } from './reviewDate';
 
 // Add or edit a declared external dependent: a consumer gwag cannot
 // see (customer, partner, app) that pins lines. The gateway validates;
@@ -18,7 +19,7 @@ type Values = {
   owner: { team: string; contact: string };
   depends: Pin[];
   note: string;
-  expiresAt: string;
+  reviewAt: string;
 };
 
 const kinds = [
@@ -27,19 +28,6 @@ const kinds = [
   { value: 'app', label: 'App release' },
   { value: 'other', label: 'Other' },
 ];
-
-const midnight = 'T00:00:00Z';
-
-/** A date alone means midnight UTC; anything else goes to the server as typed. */
-function toExpiresAt(v: string): string | null {
-  const s = v.trim();
-  if (s === '') return null;
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s + midnight : s;
-}
-
-function fromExpiresAt(v: string): string {
-  return v.endsWith(midnight) ? v.slice(0, -midnight.length) : v;
-}
 
 function splitLines(v: string): string[] {
   return v
@@ -67,7 +55,7 @@ export function ExternalDependentDialog({ initial, onClose, onSaved }: ExternalD
     owner: { team: initial?.owner?.team ?? '', contact: initial?.owner?.contact ?? '' },
     depends: pins.length > 0 ? pins : [{ service: '', lines: '' }],
     note: initial?.note ?? '',
-    expiresAt: fromExpiresAt(initial?.expiresAt ?? ''),
+    reviewAt: initial?.reviewAt ? fromReviewAt(initial.reviewAt) : defaultReviewDate(),
   };
 
   return (
@@ -75,7 +63,7 @@ export function ExternalDependentDialog({ initial, onClose, onSaved }: ExternalD
       open
       maxWidth="md"
       title={initial ? `Edit ${initial.name || initial.id}` : 'Add external dependent'}
-      description="A consumer the gateway cannot see, such as an API customer, a partner integration or a mobile app release, that pins lines. It counts as a dependent in the sunset rule, dependency_unmet and drain coverage until it expires or is deleted. It does not affect the start gate."
+      description="A consumer the gateway cannot see, such as an API customer, a partner integration or a mobile app release, that pins lines. It counts as a dependent in the sunset rule, dependency_unmet and drain coverage until it is deleted. It does not affect the start gate."
       submitLabel={initial ? 'Save' : 'Add'}
       defaultValues={defaults}
       onClose={onClose}
@@ -92,7 +80,7 @@ export function ExternalDependentDialog({ initial, onClose, onSaved }: ExternalD
             owner: team || contact ? { team: team || null, contact: contact || null } : null,
             depends,
             note: v.note.trim() || null,
-            expiresAt: toExpiresAt(v.expiresAt),
+            reviewAt: toReviewAt(v.reviewAt),
           },
         });
         const warnings = res.admin?.putExternalDependent?.warnings ?? [];
@@ -134,10 +122,11 @@ export function ExternalDependentDialog({ initial, onClose, onSaved }: ExternalD
       </Stack>
       <FormRow>
         <FormTextField
-          name="expiresAt"
-          label="Expires"
+          name="reviewAt"
+          label="Review by"
           placeholder="2027-06-30"
-          helperText="YYYY-MM-DD (midnight UTC) or an RFC 3339 time. Empty = no expiry. Expired declarations stay listed but stop counting."
+          helperText="YYYY-MM-DD (midnight UTC) or an RFC 3339 time. Past it the declaration still counts; it shows as review due under the bell until someone reviews it."
+          required
           monospace
         />
       </FormRow>

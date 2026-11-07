@@ -27,6 +27,11 @@ type AdminMutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  reviewExternalDependent(
+    body: admin_ReviewExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -44,6 +49,7 @@ type AdminQueryNamespace {
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -85,6 +91,11 @@ type AdminStableMutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  reviewExternalDependent(
+    body: admin_ReviewExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -100,6 +111,7 @@ type AdminStableQueryNamespace {
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -139,6 +151,11 @@ type AdminV1MutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  reviewExternalDependent(
+    body: admin_ReviewExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -154,6 +171,7 @@ type AdminV1QueryNamespace {
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -304,7 +322,7 @@ type admin_DependencyGraphOutBody {
   callerSource: admin_DependencyGraphOutBodyCallerSource!
   desiredEdges: [admin_GraphDesiredEdge!]
   environment: String!
-  """Declared external dependents, expired ones included (expired ones add no edges)."""
+  """Declared external dependents. Review-due ones (reviewDue) still add edges."""
   externalDependents: [admin_ExternalDependentInfo!]
   nodes: [admin_GraphNode!]
   """Usage is per gateway node, in memory."""
@@ -386,10 +404,6 @@ type admin_DrainOutBody {
 
 type admin_ExternalDependentInfo {
   depends: [admin_ExternalPinInfo!]
-  """Past expiresAt: listed, but no longer counts as a dependent."""
-  expired: Boolean!
-  """RFC 3339; empty = no expiry."""
-  expiresAt: String!
   id: String!
   """customer, partner, app or other."""
   kind: String!
@@ -397,6 +411,14 @@ type admin_ExternalDependentInfo {
   name: String!
   note: String!
   owner: admin_ExternalOwnerInfo
+  """RFC 3339. Empty only on a declaration stored before reviewAt existed."""
+  reviewAt: String!
+  """reviewAt is past (or missing). The declaration still counts as a dependent; a person must review it."""
+  reviewDue: Boolean!
+  """RFC 3339 time of the last review op; empty = never reviewed."""
+  reviewedAt: String!
+  """Who the last review op says reviewed it (self-reported); empty = not given."""
+  reviewedBy: String!
   updatedUnixMs: Long!
 }
 
@@ -670,6 +692,23 @@ type admin_MethodStatsOut {
   throughput: Float!
 }
 
+type admin_NotificationItem {
+  detail: String!
+  """Admin UI route that shows the subject, e.g. /?select=ext:acme."""
+  href: String!
+  """Stable id of the item, unique in the list."""
+  id: String!
+  """declaration_review_due or declaration_hook_failed; more kinds may be added."""
+  kind: String!
+  """RFC 3339: when the item started needing attention."""
+  since: String!
+  title: String!
+}
+
+type admin_NotificationsOutBody {
+  items: [admin_NotificationItem!]
+}
+
 type admin_OwnerInfo {
   contact: String!
   team: String!
@@ -688,14 +727,14 @@ type admin_PeersOutBody {
 input admin_PutExternalDependentInBodyInput {
   """Pinned lines per service; at least one."""
   depends: [admin_ExternalPinInInput!]
-  """RFC 3339 date-time. Past it the declaration stops counting and is listed as expired."""
-  expiresAt: String
   """customer, partner, app or other."""
   kind: String!
   """Display name, e.g. "Acme Corp"."""
   name: String
   note: String
   owner: admin_ExternalOwnerInInput
+  """RFC 3339 date-time, required. Past it the declaration still counts; it is listed as review-due and raises a notification."""
+  reviewAt: String!
 }
 
 type admin_PutExternalDependentOutBody {
@@ -727,6 +766,13 @@ input admin_RetractStableInBodyInput {
 type admin_RetractStableOutBody {
   newVN: Int!
   priorVN: Int!
+}
+
+input admin_ReviewExternalDependentInBodyInput {
+  """Who reviewed it. Self-reported: recorded as reviewedBy, not checked."""
+  by: String
+  """Next review date, RFC 3339; must be in the future."""
+  reviewAt: String!
 }
 
 type admin_SchemaExpandEnumValue {

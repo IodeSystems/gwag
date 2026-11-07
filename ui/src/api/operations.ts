@@ -411,8 +411,10 @@ export const DependencyGraphQuery = graphql(`
             lines
           }
           note
-          expiresAt
-          expired
+          reviewAt
+          reviewDue
+          reviewedAt
+          reviewedBy
           updatedUnixMs
         }
       }
@@ -428,6 +430,37 @@ export const PutExternalDependentMutation = graphql(`
           id
         }
         warnings
+      }
+    }
+  }
+`);
+
+export const ReviewExternalDependentMutation = graphql(`
+  mutation ReviewExternalDependent($id: String!, $body: admin_ReviewExternalDependentInBodyInput!) {
+    admin {
+      reviewExternalDependent(id: $id, body: $body) {
+        externalDependent {
+          id
+          reviewAt
+        }
+        warnings
+      }
+    }
+  }
+`);
+
+export const NotificationsQuery = graphql(`
+  query Notifications {
+    admin {
+      listNotifications {
+        items {
+          kind
+          id
+          title
+          detail
+          since
+          href
+        }
       }
     }
   }

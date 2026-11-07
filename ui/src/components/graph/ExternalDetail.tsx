@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Button, Stack, Tooltip, Typography } from '@mui/material';
-import { ConfirmDialog, DetailPanel, KeyValue, Panel, StatusChip, useToast } from '@/ui';
+import { ConfirmDialog, DetailPanel, FormDialog, FormRow, FormTextField, KeyValue, Panel, StatusChip, useToast } from '@/ui';
 import { client } from '@/api/client';
-import { DeleteExternalDependentMutation } from '@/api/operations';
+import { DeleteExternalDependentMutation, ReviewExternalDependentMutation } from '@/api/operations';
 import type { ExternalDependent, Graph } from './model';
+import { defaultReviewDate, toReviewAt } from './reviewDate';
 
 export interface ExternalDetailProps {
   graph: Graph;
@@ -18,6 +19,7 @@ export interface ExternalDetailProps {
 export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged }: ExternalDetailProps) {
   const toast = useToast();
   const [confirm, setConfirm] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   if (!ext) return null;
 
   const edges = (graph.desiredEdges ?? []).filter(
@@ -39,7 +41,7 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
         width={560}
         title={ext.name || ext.id}
         subtitle={`${ext.kind} · external dependent · id ${ext.id}`}
-        meta={ext.expired ? <StatusChip size="small" status="degraded" label="expired" /> : undefined}
+        meta={ext.reviewDue ? <StatusChip size="small" status="waiting" label="review due" /> : undefined}
         actions={
           <>
             <Tooltip title={authTip}>
@@ -51,8 +53,15 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
             </Tooltip>
             <Tooltip title={authTip}>
               <span>
-                <Button variant="contained" disabled={!canEdit} onClick={() => onEdit(ext)}>
+                <Button disabled={!canEdit} onClick={() => onEdit(ext)}>
                   Edit
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={authTip}>
+              <span>
+                <Button variant="contained" disabled={!canEdit} onClick={() => setReviewing(true)}>
+                  Mark reviewed
                 </Button>
               </span>
             </Tooltip>
@@ -66,10 +75,14 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
               { label: 'Owner', value: ext.owner?.team || '—' },
               { label: 'Contact', value: ext.owner?.contact || '—' },
               {
-                label: 'Expires',
-                value: ext.expiresAt
-                  ? `${ext.expiresAt}${ext.expired ? ' (expired: no longer counts as a dependent)' : ''}`
-                  : 'never',
+                label: 'Review by',
+                value: ext.reviewAt
+                  ? `${ext.reviewAt}${ext.reviewDue ? ' (overdue: still counts as a dependent)' : ''}`
+                  : 'not set (review due)',
+              },
+              {
+                label: 'Last reviewed',
+                value: ext.reviewedAt ? `${ext.reviewedAt}${ext.reviewedBy ? ` by ${ext.reviewedBy}` : ''}` : 'never',
               },
               { label: 'Updated', value: new Date(Number(ext.updatedUnixMs)).toISOString() },
               { label: 'Note', value: ext.note || '—' },
@@ -100,11 +113,44 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
             </Stack>
           </Panel>
           <Typography variant="body2" color="text.secondary">
-            While it has not expired, a pinned line is not sunset-able unless another pinned line of the same service
-            has a ready instance, and the gateway blocks a drain that would leave no ready pinned line.
+            A pinned line is not sunset-able unless another pinned line of the same service has a ready instance, and
+            the gateway blocks a drain that would leave no ready pinned line. This holds past the review date too: the
+            gateway takes no action on it. To review, confirm the pins with the owner, then mark it reviewed with the
+            next review date.
           </Typography>
         </Stack>
       </DetailPanel>
+      <FormDialog<{ reviewAt: string; by: string }>
+        open={reviewing}
+        title={`Mark ${ext.name || ext.id} reviewed`}
+        description="Sets the next review date and records who reviewed it and when. The pins and other fields stay as they are."
+        submitLabel="Mark reviewed"
+        defaultValues={{ reviewAt: defaultReviewDate(), by: '' }}
+        onClose={() => setReviewing(false)}
+        onSubmit={async (v) => {
+          const res = await client.request(ReviewExternalDependentMutation, {
+            id: ext.id,
+            body: { reviewAt: toReviewAt(v.reviewAt), by: v.by.trim() || null },
+          });
+          const warnings = res.admin?.reviewExternalDependent?.warnings ?? [];
+          if (warnings.length > 0) toast.warning(`Reviewed ${ext.id}. ${warnings.join('; ')}`);
+          else toast.success(`Reviewed ${ext.id}`);
+          setReviewing(false);
+          onChanged();
+        }}
+      >
+        <FormRow>
+          <FormTextField
+            name="reviewAt"
+            label="Next review by"
+            helperText="YYYY-MM-DD (midnight UTC) or an RFC 3339 time. Must be in the future."
+            required
+            autoFocus
+            monospace
+          />
+          <FormTextField name="by" label="Reviewed by" placeholder="you@example.com" helperText="Recorded as given; not checked." />
+        </FormRow>
+      </FormDialog>
       <ConfirmDialog
         open={confirm}
         title={`Delete ${ext.name || ext.id}?`}

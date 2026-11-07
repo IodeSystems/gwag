@@ -157,22 +157,21 @@ function ExternalNode({ data, selected }: NodeProps<Node<ExternalData>>) {
         alignItems: 'center',
         gap: 1,
         cursor: 'pointer',
-        opacity: x.expired ? 0.7 : 1,
         borderRadius: `${t.gwag.radius.sm}px`,
-        border: `1px ${x.expired ? 'dashed' : 'solid'} ${selected ? t.palette.primary.main : t.gwag.tokens.borderStrong}`,
-        borderLeft: `4px solid ${x.expired ? t.gwag.tokens.borderStrong : t.palette.primary.main}`,
+        border: `1px solid ${selected ? t.palette.primary.main : t.gwag.tokens.borderStrong}`,
+        borderLeft: `4px solid ${x.reviewDue ? t.gwag.status.waiting.border : t.palette.primary.main}`,
         boxShadow: selected ? `0 0 0 1px ${t.palette.primary.main}` : t.gwag.tokens.shadow.sm,
         bgcolor: t.gwag.tokens.surfaceRaised,
       })}
     >
       <Handles />
-      <Icon fontSize="small" color={x.expired ? 'disabled' : 'primary'} />
+      <Icon fontSize="small" color="primary" />
       <Box sx={{ minWidth: 0, flexGrow: 1 }}>
         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.75 }}>
           <Typography variant="h6" noWrap sx={{ minWidth: 0 }}>
             {x.name || x.id}
           </Typography>
-          {x.expired && <StatusChip size="small" status="degraded" label="expired" />}
+          {x.reviewDue && <StatusChip size="small" status="waiting" label="review due" />}
         </Stack>
         <Typography variant="caption" color="text.secondary" noWrap component="div">
           {x.kind} · external

@@ -10,6 +10,7 @@ export { KeyValue, type KeyValueItem, type KeyValueProps } from './KeyValue';
 export { CodeBlock, CopyButton, type CodeBlockProps } from './CodeBlock';
 export { ToastProvider, useToast, type ToastApi, type ToastSeverity } from './Toast';
 export { ThemeToggle, EnvBadge, PresetPicker, PresetSwatch } from './Chrome';
+export { NotificationBell, type NotificationBellItem, type NotificationBellProps } from './NotificationBell';
 export {
   FormDialog,
   InlineForm,
