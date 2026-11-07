@@ -128,3 +128,24 @@ func BenchmarkIngressAlloc_GraphQLChain(b *testing.B) {
 	}
 	benchIngress(b, gw, `{ pets { user(id:"x") { id name } } }`, `"name":"thing"`)
 }
+
+// Proto upstream over loopback gRPC (the projection fixture). Plain is
+// a selection with no fragments or directives; Collected needs field
+// collection: a named fragment, @skip and a repeated field.
+func benchIngressProto(b *testing.B, query, want string) {
+	addr := startProjectionProtoUpstream(b)
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	if err := gw.AddProtoBytes("proj.proto", []byte(projectionProtoSource), To(addr), As("proj")); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, query, want)
+}
+
+func BenchmarkIngressAlloc_ProtoPlain(b *testing.B) {
+	benchIngressProto(b, `{ proj { thing(id:"x") { id name owner { name } tags { k } } } }`, `"tags":[{"k":"a"},{"k":"b"}]`)
+}
+
+func BenchmarkIngressAlloc_ProtoCollected(b *testing.B) {
+	benchIngressProto(b, `query { proj { thing(id:"x") { ...F name @skip(if: true) id owner { name } tags { k } } } } fragment F on Proj_V1_Thing { id }`, `"tags":[{"k":"a"},{"k":"b"}]`)
+}

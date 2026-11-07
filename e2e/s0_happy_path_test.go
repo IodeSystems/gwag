@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -264,6 +266,27 @@ func TestS0HappyPath(t *testing.T) {
 					t.Errorf("%s: selected %s, got fields %v: %s", c.desc, c.want, keys, r.Data)
 					break
 				}
+			}
+		}
+		// Field collection on the proto append path, compared as raw
+		// bytes: a decoded map hides a duplicate key. orders resolves
+		// to v2, whose messages are in package fixture.orders.v2.
+		for _, c := range []struct {
+			desc, query string
+			vars        map[string]any
+		}{
+			{"proto named fragment", `query { orders { echo(msg: "x") { ...F } } } fragment F on Fixture_Orders_V2_EchoResponse { msg }`, nil},
+			{"proto @skip", `{ orders { echo(msg: "x") { msg instance @skip(if: true) } } }`, nil},
+			{"proto @skip variable", `query($s: Boolean!) { orders { echo(msg: "x") { msg instance @skip(if: $s) } } }`, map[string]any{"s": true}},
+			{"proto duplicate field", `{ orders { echo(msg: "x") { msg msg } } }`, nil},
+		} {
+			r := gw.MustGraphQL(t, c.query, c.vars)
+			var got bytes.Buffer
+			if err := json.Compact(&got, r.Data); err != nil {
+				t.Fatalf("%s: %v: %s", c.desc, err, r.Data)
+			}
+			if want := `{"orders":{"echo":{"msg":"x"}}}`; got.String() != want {
+				t.Errorf("%s: got %s, want %s", c.desc, got.String(), want)
 			}
 		}
 	})

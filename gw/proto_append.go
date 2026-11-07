@@ -25,19 +25,29 @@ import (
 // drops to roughly the depth of the response (one slice grow per
 // JSON layer) instead of one map per nested message.
 //
-// Inline fragments are followed when their type condition matches
-// the local type name OR is empty; named fragment spreads pass
-// through as no-ops (rare in gateway-emitted queries — the gateway's
-// printer doesn't synthesize named fragments).
+// A nil selection emits every set field. Use appendProtoObject to
+// pass the request's fragments and variables.
 func appendProtoMessage(dst []byte, msg protoreflect.Message, selSet *ast.SelectionSet) []byte {
+	return appendProtoObject(dst, msg, selSet, nil, fieldCollector{})
+}
+
+// appendProtoObject emits msg projected onto the selection `sel`
+// merged with `more` (one selection set per occurrence of a response
+// key that is selected more than once; nil in the common case).
+//
+// A plain selection (fields only, no directives, no repeated response
+// key; see plainSelection) is emitted in order. Any other selection
+// goes through field collection (fc.collect): named and inline
+// fragments, @skip / @include, merged repeated keys. Proto schemas
+// have no unions or interfaces (a oneof renders as nullable fields),
+// so every fragment that graphql-go validated applies.
+func appendProtoObject(dst []byte, msg protoreflect.Message, sel *ast.SelectionSet, more []*ast.SelectionSet, fc fieldCollector) []byte {
 	dst = append(dst, '{')
-	first := true
-	if selSet != nil {
-		dst, first = appendProtoSelection(dst, msg, selSet, first)
-	} else {
+	if sel == nil && len(more) == 0 {
 		// No selection — defensive fallback. Emit every set field
 		// using the cached field info. Real GraphQL queries always
 		// carry a selection on object fields.
+		first := true
 		for _, info := range fieldInfosFor(msg.Descriptor()) {
 			if !msg.Has(info.FD) {
 				continue
@@ -48,101 +58,76 @@ func appendProtoMessage(dst []byte, msg protoreflect.Message, selSet *ast.Select
 			first = false
 			dst = appendJSONString(dst, info.JSONKey)
 			dst = append(dst, ':')
-			dst = appendProtoFieldValue(dst, info.FD, msg.Get(info.FD), nil)
+			dst = appendProtoFieldValue(dst, info.FD, msg.Get(info.FD), nil, nil, fc)
 		}
+		return append(dst, '}')
+	}
+	info := protoAppendInfoFor(msg.Descriptor())
+	first := true
+	if len(more) == 0 && plainSelection(sel) {
+		for _, s := range sel.Selections {
+			f := s.(*ast.Field)
+			dst, first = appendProtoField(dst, msg, info, first, selectionResponseKey(f), f.Name.Value, f.SelectionSet, nil, fc)
+		}
+		return append(dst, '}')
+	}
+	var buf [plainSelectionMax]collectedField
+	fields := fc.collect(buf[:0], sel, fragmentGate{}, nil)
+	for _, s := range more {
+		fields = fc.collect(fields, s, fragmentGate{}, nil)
+	}
+	for i := range fields {
+		c := &fields[i]
+		var sub *ast.SelectionSet
+		var subMore []*ast.SelectionSet
+		if len(c.sels) > 0 {
+			sub, subMore = c.sels[0], c.sels[1:]
+		}
+		dst, first = appendProtoField(dst, msg, info, first, c.key, c.name, sub, subMore, fc)
 	}
 	return append(dst, '}')
 }
 
-// appendProtoSelection processes selSet against msg, appending each
-// matched field's key/value pair. Returns the updated dst + a "first"
-// flag so callers can chain selection sets (e.g. an inline fragment's
-// selections appended to the parent's). `first=true` means "no leading
-// comma needed before the next field"; subsequent emissions flip it.
-func appendProtoSelection(dst []byte, msg protoreflect.Message, selSet *ast.SelectionSet, first bool) ([]byte, bool) {
-	if selSet == nil {
+// appendProtoField emits one `"key":value` pair for the field `name`
+// of msg, preceded by a comma unless first. It returns the updated
+// first flag; a field the message does not have emits nothing.
+func appendProtoField(dst []byte, msg protoreflect.Message, info *protoAppendInfo, first bool, key, name string, sel *ast.SelectionSet, more []*ast.SelectionSet, fc fieldCollector) ([]byte, bool) {
+	if name == "__typename" {
+		if !first {
+			dst = append(dst, ',')
+		}
+		dst = appendJSONString(dst, key)
+		dst = append(dst, ':')
+		return appendJSONString(dst, info.typeName), false
+	}
+	fd, ok := info.byJSONKey[name]
+	if !ok {
+		// Unknown field in selection — graphql-go validates
+		// against the local schema, which the renderer built
+		// from these very descriptors, so this should be
+		// unreachable. Be defensive.
 		return dst, first
 	}
-	infos := protoFieldByJSONKey(msg.Descriptor())
-	for _, sel := range selSet.Selections {
-		switch n := sel.(type) {
-		case *ast.Field:
-			fieldName := n.Name.Value
-			if fieldName == "__typename" {
-				// Local schema's type name is the renamed one (e.g.
-				// "auth_User"). The renderer fills __typename from
-				// the schema; we don't emit it here. graphql-go does
-				// __typename specially even on ResolveAppend fields —
-				// actually no, ResolveAppend bypasses the recursive
-				// per-field machinery. To be safe, emit the
-				// MessageDescriptor's name; downstream tests can
-				// pin a specific value if needed.
-				if !first {
-					dst = append(dst, ',')
-				}
-				first = false
-				respKey := fieldName
-				if n.Alias != nil && n.Alias.Value != "" {
-					respKey = n.Alias.Value
-				}
-				dst = appendJSONString(dst, respKey)
-				dst = append(dst, ':')
-				dst = appendJSONString(dst, string(msg.Descriptor().Name()))
-				continue
-			}
-			fd, ok := infos[fieldName]
-			if !ok {
-				// Unknown field in selection — graphql-go validates
-				// against the local schema, which the renderer built
-				// from these very descriptors, so this should be
-				// unreachable. Be defensive.
-				continue
-			}
-			if !first {
-				dst = append(dst, ',')
-			}
-			first = false
-			respKey := fieldName
-			if n.Alias != nil && n.Alias.Value != "" {
-				respKey = n.Alias.Value
-			}
-			dst = appendJSONString(dst, respKey)
-			dst = append(dst, ':')
-			if !msg.Has(fd) {
-				// A field with presence (message, proto2 scalar, proto3
-				// `optional`, oneof member) is null when unset, as
-				// protojson emits it and as the map path omits it.
-				if fd.HasPresence() {
-					dst = append(dst, "null"...)
-				} else {
-					dst = appendProtoDefault(dst, fd)
-				}
-				continue
-			}
-			dst = appendProtoFieldValue(dst, fd, msg.Get(fd), n.SelectionSet)
-		case *ast.InlineFragment:
-			// Inline fragment: if the type condition matches (or is
-			// empty), splice its sub-selections into the current
-			// object. Type conditions on proto-origin schemas use the
-			// gateway-prefixed names (e.g. "auth_User"). The base
-			// message has no way to test the prefix easily here;
-			// safest behavior is to splice unconditionally. graphql-go
-			// already validated that the fragment applies to the
-			// runtime type.
-			if n.SelectionSet != nil {
-				dst, first = appendProtoSelection(dst, msg, n.SelectionSet, first)
-			}
-		default:
-			// Named fragment spreads are unusual in
-			// gateway-synthesised queries; treat as no-op.
-		}
+	if !first {
+		dst = append(dst, ',')
 	}
-	return dst, first
+	dst = appendJSONString(dst, key)
+	dst = append(dst, ':')
+	if !msg.Has(fd) {
+		// A field with presence (message, proto2 scalar, proto3
+		// `optional`, oneof member) is null when unset, as
+		// protojson emits it and as the map path omits it.
+		if fd.HasPresence() {
+			return append(dst, "null"...), false
+		}
+		return appendProtoDefault(dst, fd), false
+	}
+	return appendProtoFieldValue(dst, fd, msg.Get(fd), sel, more, fc), false
 }
 
 // appendProtoFieldValue dispatches on list vs scalar; recurses into
 // nested messages with the sub-selection.
-func appendProtoFieldValue(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value, selSet *ast.SelectionSet) []byte {
+func appendProtoFieldValue(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value, sel *ast.SelectionSet, more []*ast.SelectionSet, fc fieldCollector) []byte {
 	if fd.IsMap() {
 		return appendProtoMap(dst, fd, v.Map())
 	}
@@ -153,11 +138,11 @@ func appendProtoFieldValue(dst []byte, fd protoreflect.FieldDescriptor, v protor
 			if i > 0 {
 				dst = append(dst, ',')
 			}
-			dst = appendProtoLeaf(dst, fd, l.Get(i), selSet)
+			dst = appendProtoLeaf(dst, fd, l.Get(i), sel, more, fc)
 		}
 		return append(dst, ']')
 	}
-	return appendProtoLeaf(dst, fd, v, selSet)
+	return appendProtoLeaf(dst, fd, v, sel, more, fc)
 }
 
 // appendProtoMap emits a map field as a JSON object (the IR types it
@@ -178,14 +163,14 @@ func appendProtoMap(dst []byte, fd protoreflect.FieldDescriptor, mp protoreflect
 		}
 		dst = appendJSONString(dst, k.String())
 		dst = append(dst, ':')
-		dst = appendProtoLeaf(dst, valFd, mp.Get(k), nil)
+		dst = appendProtoLeaf(dst, valFd, mp.Get(k), nil, nil, fieldCollector{})
 	}
 	return append(dst, '}')
 }
 
 // appendProtoLeaf emits a single (non-list) proto value as JSON.
 // Sub-selection only matters for MessageKind.
-func appendProtoLeaf(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value, selSet *ast.SelectionSet) []byte {
+func appendProtoLeaf(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value, sel *ast.SelectionSet, more []*ast.SelectionSet, fc fieldCollector) []byte {
 	switch fd.Kind() {
 	case protoreflect.BoolKind:
 		if v.Bool() {
@@ -249,8 +234,7 @@ func appendProtoLeaf(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect
 		}
 		return appendJSONString(dst, string(ev.Name()))
 	case protoreflect.MessageKind, protoreflect.GroupKind:
-		sub := v.Message()
-		return appendProtoMessage(dst, sub, selSet)
+		return appendProtoObject(dst, v.Message(), sel, more, fc)
 	}
 	return append(dst, "null"...)
 }
@@ -291,22 +275,33 @@ func appendProtoDefault(dst []byte, fd protoreflect.FieldDescriptor) []byte {
 	return append(dst, "null"...)
 }
 
-// protoFieldByJSONKey returns a per-descriptor map[jsonKey]fd.
-// Memoised like protocodec.FieldInfos to avoid the per-call walk through
-// the slice-of-fieldInfos that fieldInfosFor returns.
-var protoJSONKeyCache sync.Map // map[protoreflect.MessageDescriptor]map[string]protoreflect.FieldDescriptor
+// protoAppendInfo is the per-descriptor data the append walker reads:
+// fields by JSON key, and the local GraphQL type name that __typename
+// returns (the proto type builder names objects with exportedName of
+// the full name, e.g. "Auth_V1_User").
+type protoAppendInfo struct {
+	byJSONKey map[string]protoreflect.FieldDescriptor
+	typeName  string
+}
 
-func protoFieldByJSONKey(md protoreflect.MessageDescriptor) map[string]protoreflect.FieldDescriptor {
-	if v, ok := protoJSONKeyCache.Load(md); ok {
-		return v.(map[string]protoreflect.FieldDescriptor)
+// protoAppendInfoCache memoises protoAppendInfo per descriptor, like
+// protocodec.FieldInfos.
+var protoAppendInfoCache sync.Map // map[protoreflect.MessageDescriptor]*protoAppendInfo
+
+func protoAppendInfoFor(md protoreflect.MessageDescriptor) *protoAppendInfo {
+	if v, ok := protoAppendInfoCache.Load(md); ok {
+		return v.(*protoAppendInfo)
 	}
 	infos := fieldInfosFor(md)
-	out := make(map[string]protoreflect.FieldDescriptor, len(infos))
-	for _, info := range infos {
-		out[info.JSONKey] = info.FD
+	out := &protoAppendInfo{
+		byJSONKey: make(map[string]protoreflect.FieldDescriptor, len(infos)),
+		typeName:  exportedName(string(md.FullName())),
 	}
-	if v, loaded := protoJSONKeyCache.LoadOrStore(md, out); loaded {
-		return v.(map[string]protoreflect.FieldDescriptor)
+	for _, info := range infos {
+		out.byJSONKey[info.JSONKey] = info.FD
+	}
+	if v, loaded := protoAppendInfoCache.LoadOrStore(md, out); loaded {
+		return v.(*protoAppendInfo)
 	}
 	return out
 }

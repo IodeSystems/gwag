@@ -263,12 +263,21 @@ func (d *protoDispatcher) DispatchAppend(ctx context.Context, args map[string]an
 	respMsg := resp.(*dynamicpb.Message)
 	defer releaseDynamicMessage(respMsg.Descriptor(), respMsg)
 
-	info := graphQLForwardInfoFrom(ctx)
 	var sel *ast.SelectionSet
-	if info != nil && len(info.FieldASTs) > 0 {
+	var more []*ast.SelectionSet
+	var fc fieldCollector
+	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {
 		sel = info.FieldASTs[0].SelectionSet
+		// A field selected more than once ({ op { a } op { b } })
+		// arrives as several ASTs whose selections merge.
+		for _, f := range info.FieldASTs[1:] {
+			if f.SelectionSet != nil {
+				more = append(more, f.SelectionSet)
+			}
+		}
+		fc = fieldCollector{frags: info.Fragments, vars: info.VariableValues}
 	}
-	return appendProtoMessage(dst, respMsg, sel), nil
+	return appendProtoObject(dst, respMsg, sel, more, fc), nil
 }
 
 var _ ir.AppendDispatcher = (*protoDispatcher)(nil)

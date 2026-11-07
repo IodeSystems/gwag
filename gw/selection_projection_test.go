@@ -118,7 +118,7 @@ func projectionGraphQLUpstream(t *testing.T) (*httptest.Server, *atomic.Pointer[
 
 type projectionCase struct {
 	name     string
-	query    string // "%NS%" stands for the namespace
+	query    string // "%NS%_" stands for the type-name prefix, "%NS%" for the namespace
 	vars     map[string]any
 	want     string // data under %NS%.thing (or the whole data when wantRoot)
 	wantRoot bool
@@ -134,6 +134,7 @@ var projectionCases = []projectionCase{
 	{name: "named_fragment", query: `query { %NS% { thing(id:"1") { ...F } } } fragment F on %NS%_Thing { id owner { id } }`, want: `{"id":"1","owner":{"id":"o1"}}`},
 	{name: "nested_named_fragment", query: `query { %NS% { thing(id:"1") { owner { ...O } } } } fragment O on %NS%_Owner { name }`, want: `{"owner":{"name":"olga"}}`},
 	{name: "inline_fragment", query: `{ %NS% { thing(id:"1") { ... on %NS%_Thing { name } } } }`, want: `{"name":"thing"}`},
+	{name: "merged_top_fields", query: `{ %NS% { thing(id:"1") { id } thing(id:"1") { name } } }`, want: `{"id":"1","name":"thing"}`},
 	{name: "merged_fields", query: `{ %NS% { thing(id:"1") { owner { id } owner { name } id } } }`, want: `{"owner":{"id":"o1","name":"olga"},"id":"1"}`},
 	{name: "fragment_overlap", query: `query { %NS% { thing(id:"1") { id ...F } } } fragment F on %NS%_Thing { id name }`, want: `{"id":"1","name":"thing"}`},
 	{name: "skip_include", query: `{ %NS% { thing(id:"1") { id name @skip(if: true) owner @include(if: false) { id } } } }`, want: `{"id":"1"}`},
@@ -151,12 +152,13 @@ var projectionCases = []projectionCase{
 // ordered: compare key order too. The OpenAPI walker writes keys in
 // selection order. A GraphQL upstream's response is spliced as sent,
 // and the graphql-go test upstream encodes maps with sorted keys.
-func runProjectionCases(t *testing.T, gw *Gateway, ns string, ordered bool) {
+func runProjectionCases(t *testing.T, gw *Gateway, ns, typePrefix string, ordered bool, cases []projectionCase) {
 	t.Helper()
 	h := gw.Handler()
-	for _, c := range projectionCases {
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			query := strings.ReplaceAll(c.query, "%NS%", ns)
+			subst := strings.NewReplacer("%NS%_", typePrefix, "%NS%", ns)
+			query := subst.Replace(c.query)
 			body, _ := json.Marshal(map[string]any{"query": query, "variables": c.vars})
 			req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -180,7 +182,7 @@ func runProjectionCases(t *testing.T, gw *Gateway, ns string, ordered bool) {
 				_ = json.Unmarshal(env.Data[ns], &nsObj)
 				got = compactJSON(t, nsObj["thing"])
 			}
-			want := strings.ReplaceAll(c.want, "%NS%", ns)
+			want := subst.Replace(c.want)
 			if !ordered {
 				got, want = sortedJSON(t, got), string(sortedJSON(t, []byte(want)))
 			}
@@ -251,7 +253,7 @@ func TestSelectionProjection_OpenAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 	}) {
-		t.Run(name, func(t *testing.T) { runProjectionCases(t, gw, "proj", true) })
+		t.Run(name, func(t *testing.T) { runProjectionCases(t, gw, "proj", "proj_", true, projectionCases) })
 	}
 }
 
@@ -262,7 +264,7 @@ func TestSelectionProjection_GraphQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}) {
-		t.Run(name, func(t *testing.T) { runProjectionCases(t, gw, "proj", false) })
+		t.Run(name, func(t *testing.T) { runProjectionCases(t, gw, "proj", "proj_", false, projectionCases) })
 	}
 }
 
