@@ -112,7 +112,9 @@ var rolesMatrix = []roleCase{
 	{"mcpSchemaList", "GET", "/admin/mcp/schema/list", "", adminRoleDev},
 	{"mcpSchemaSearch", "POST", "/admin/mcp/schema/search", `{}`, adminRoleDev},
 	{"mcpSchemaExpand", "POST", "/admin/mcp/schema/expand", `{"name":"greeter.hello"}`, adminRoleDev},
-	{"putExternalDependent", "PUT", "/admin/external-dependents/zeta", `{"kind":"customer","depends":[{"service":"greeter","lines":["v1"]}]}`, adminRoleDev},
+	{"putExternalDependent", "PUT", "/admin/external-dependents/zeta", `{"kind":"customer","reviewAt":"2099-01-01T00:00:00Z","depends":[{"service":"greeter","lines":["v1"]}]}`, adminRoleDev},
+	{"reviewExternalDependent", "POST", "/admin/external-dependents/zeta/review", `{"reviewAt":"2099-06-01T00:00:00Z"}`, adminRoleDev},
+	{"listNotifications", "GET", "/admin/notifications", "", adminRoleDev},
 	{"deleteExternalDependent", "DELETE", "/admin/external-dependents/zeta", "", adminRoleDev},
 
 	{"forgetPeer", "POST", "/admin/peers/x/forget", "", adminRoleAdmin},
@@ -550,7 +552,7 @@ func TestAdminRoles_GraphQLPath(t *testing.T) {
 		}
 	}
 
-	const put = `mutation { admin { putExternalDependent(id: "beta", body: {kind: "partner", depends: [{service: "greeter", lines: ["v1"]}]}) { externalDependent { id } } } }`
+	const put = `mutation { admin { putExternalDependent(id: "beta", body: {kind: "partner", reviewAt: "2099-01-01T00:00:00Z", depends: [{service: "greeter", lines: ["v1"]}]}) { externalDependent { id } } } }`
 	if _, errs := gql(put, ""); len(errs) == 0 {
 		t.Error("anonymous putExternalDependent: no error")
 	}

@@ -77,11 +77,12 @@ var adminAnonymousOps = map[string]bool{
 }
 
 // adminDevWriteOps are the non-GET admin operations the dev role may
-// call: the external-dependent declarations, and the MCP schema reads
+// call: the external-dependent declarations (put, review, delete), and the MCP schema reads
 // that take a POST body.
 var adminDevWriteOps = map[string]bool{
 	"putExternalDependent":    true,
 	"deleteExternalDependent": true,
+	"reviewExternalDependent": true,
 	"mcpSchemaSearch":         true,
 	"mcpSchemaExpand":         true,
 }
