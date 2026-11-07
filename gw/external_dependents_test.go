@@ -273,7 +273,10 @@ func TestExternalDependents_ReviewAtRequired(t *testing.T) {
 	}
 }
 
-type notificationTestItem struct{ Kind, ID, Title, Detail, Since, Href string }
+type notificationTestItem struct {
+	Kind, ID, Title, Detail, Since, Href string
+	Dismissable                          bool
+}
 
 func notificationItems(t *testing.T, g *Gateway) []notificationTestItem {
 	t.Helper()

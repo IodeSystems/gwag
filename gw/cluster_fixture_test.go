@@ -138,6 +138,7 @@ func resetSharedCluster(t *testing.T) {
 			mcpConfigBucketName,
 			drainBucketName,
 			externalDependentsBucketName,
+			notificationsBucketName,
 		} {
 			kv, err := cl.JS.KeyValue(jsCtx, bucket)
 			if err != nil {

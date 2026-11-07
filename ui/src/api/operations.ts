@@ -474,7 +474,18 @@ export const NotificationsQuery = graphql(`
           detail
           since
           href
+          dismissable
         }
+      }
+    }
+  }
+`);
+
+export const DismissNotificationMutation = graphql(`
+  mutation DismissNotification($id: String!) {
+    admin {
+      dismissNotification(id: $id) {
+        dismissed
       }
     }
   }

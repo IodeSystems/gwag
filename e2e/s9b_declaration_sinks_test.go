@@ -48,6 +48,7 @@ func TestS9bDeclarationSinks(t *testing.T) {
 		Before *record `json:"before"`
 		After  *record `json:"after"`
 		At     string  `json:"at"`
+		By     string  `json:"by"`
 	}
 	review1 := time.Now().Add(90 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	review2 := time.Now().Add(200 * 24 * time.Hour).UTC().Format(time.RFC3339)
@@ -186,6 +187,11 @@ func TestS9bDeclarationSinks(t *testing.T) {
 				t.Fatalf("%s: hook body %s", s.desc, r.Body)
 			}
 			lastSeq = d.Seq
+			// The caller's identity (the harness admin uses the boot
+			// token), not anything the request said.
+			if d.By != "admin" {
+				t.Errorf("%s: by %q, want admin", s.desc, d.By)
+			}
 			switch ops[i] {
 			case "put":
 				if d.Before != nil || d.After == nil || d.After.Name != "Acme Corp" {
@@ -269,5 +275,79 @@ func TestS9bDeclarationSinks(t *testing.T) {
 				return nil
 			})
 		}
+	})
+
+	// Hook failures are cluster state: every node lists them.
+	hookFailures := func(t *testing.T, c *harness.Cluster, want int) []harness.Notification {
+		t.Helper()
+		var found []harness.Notification
+		for _, g := range c.Nodes {
+			harness.Eventually(t, 15*time.Second, g.Name+" lists "+fmt.Sprint(want)+" hook failures", func() error {
+				items, err := g.Admin().Notifications(harness.Ctx(t, 10*time.Second))
+				if err != nil {
+					return err
+				}
+				var failed []harness.Notification
+				for _, it := range items {
+					if it.Kind == "declaration_hook_failed" {
+						failed = append(failed, it)
+					}
+				}
+				if len(failed) != want {
+					return fmt.Errorf("%d hook failures, want %d: %+v", len(failed), want, failed)
+				}
+				found = failed
+				return nil
+			})
+		}
+		return found
+	}
+
+	t.Run("delta failure is dismissed from another node", func(t *testing.T) {
+		c, sink := start(t, "delta", "full")
+		sink.SetStatus(400) // not retried: the delivery fails at once
+		if _, err := c.Nodes[0].Admin().PutExternalDependent(harness.Ctx(t, 30*time.Second), acme); err != nil {
+			t.Fatal(err)
+		}
+		items := hookFailures(t, c, 1)
+		if !items[0].Dismissable {
+			t.Fatalf("not dismissable: %+v", items[0])
+		}
+		// A later success does not clear a delta-mode failure.
+		sink.SetStatus(0)
+		other := acme
+		other.ID = "beta"
+		if _, err := c.Nodes[1].Admin().PutExternalDependent(harness.Ctx(t, 30*time.Second), other); err != nil {
+			t.Fatal(err)
+		}
+		sink.WaitN(t, 2, 15*time.Second, time.Second)
+		hookFailures(t, c, 1)
+		if err := c.Nodes[2].Admin().DismissNotification(harness.Ctx(t, 10*time.Second), items[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		hookFailures(t, c, 0)
+	})
+
+	t.Run("full failure clears on the next delivery from another node", func(t *testing.T) {
+		c, sink := start(t, "full", "full")
+		sink.SetStatus(400)
+		if _, err := c.Nodes[0].Admin().PutExternalDependent(harness.Ctx(t, 30*time.Second), acme); err != nil {
+			t.Fatal(err)
+		}
+		hookFailures(t, c, 1)
+		sink.SetStatus(0)
+		harness.Eventually(t, 15*time.Second, "acme on n2", func() error {
+			l, err := c.Nodes[1].Admin().ExternalDependents(harness.Ctx(t, 10*time.Second))
+			if err != nil || len(l) != 1 {
+				return fmt.Errorf("%+v %v", l, err)
+			}
+			return nil
+		})
+		other := acme
+		other.ID = "beta"
+		if _, err := c.Nodes[1].Admin().PutExternalDependent(harness.Ctx(t, 30*time.Second), other); err != nil {
+			t.Fatal(err)
+		}
+		hookFailures(t, c, 0)
 	})
 }

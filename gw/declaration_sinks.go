@@ -135,8 +135,6 @@ const (
 	declarationsFullSchema  = "gwag.declarations.full/v1"
 	declarationsDeltaSchema = "gwag.declarations.delta/v1"
 
-	// hookFailureItems bounds the declaration_hook_failed items kept.
-	hookFailureItems = 20
 	// hookSnapshotWait bounds how long a full-mode hook delivery in a
 	// cluster waits for this node's watch to reach the change.
 	hookSnapshotWait = 10 * time.Second
@@ -388,9 +386,6 @@ type declarationSinks struct {
 	file *DeclarationsFileOptions
 
 	queue chan declarationChange
-
-	mu       sync.Mutex
-	failures []notificationItem
 }
 
 func newDeclarationSinks(g *Gateway, hook *DeclarationsHookOptions, file *DeclarationsFileOptions) *declarationSinks {
@@ -612,10 +607,9 @@ func (s *declarationSinks) deliverChange(ctx context.Context, c declarationChang
 		return
 	}
 	if s.hook.Mode == DeclarationsFull {
-		// The receiver has the whole set again.
-		s.mu.Lock()
-		s.failures = nil
-		s.mu.Unlock()
+		// The receiver has the whole set again: clear the failures
+		// this snapshot covers, from any node.
+		s.g.clearHookFailures(ctx, DeclarationsFull, snap.Seq)
 	}
 }
 
@@ -698,35 +692,32 @@ func (s *declarationSinks) failed(c declarationChange, attempts int, err error) 
 	s.g.lifecycle.recordHookFailure()
 	detail := fmt.Sprintf("%s %s (seq %d) was not delivered to %s after %d tries: %v.", c.op, c.id, c.seq, s.hook.URL, attempts, err)
 	if s.hook.Mode == DeclarationsFull {
-		detail += " The next delivery that succeeds sends the whole set and clears this."
+		detail += " The next delivery that succeeds, from any node, sends the whole set and clears this."
 	} else {
-		detail += " The receiver missed this change; resync it from GET /admin/external-dependents."
+		detail += " The receiver missed this change. Resync it from GET /admin/external-dependents, then dismiss this item."
 	}
 	href := "/?select=" + externalSelectID(c.id)
 	if c.after == nil {
 		href = "/"
 	}
-	item := notificationItem{
-		Kind:   notificationHookFailed,
-		ID:     fmt.Sprintf("hook-failed/%d/%s", c.seq, c.id),
-		Title:  "Declarations hook delivery failed",
-		Detail: detail,
-		Since:  nowFunc().UTC().Format(time.RFC3339),
-		Href:   href,
+	n := storedNotification{
+		notificationItem: notificationItem{
+			Kind:        notificationHookFailed,
+			ID:          fmt.Sprintf("hook-failed-%d-%s", c.seq, c.id),
+			Title:       "Declarations hook delivery failed",
+			Detail:      detail,
+			Since:       nowRFC3339(),
+			Href:        href,
+			Dismissable: true,
+		},
+		Seq:  c.seq,
+		Mode: string(s.hook.Mode),
 	}
-	s.mu.Lock()
-	s.failures = append(s.failures, item)
-	if len(s.failures) > hookFailureItems {
-		s.failures = s.failures[len(s.failures)-hookFailureItems:]
+	// Not the hook context: a stop in progress should still record it.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*kvCallTimeout)
+	defer cancel()
+	if perr := s.g.putNotification(ctx, n); perr != nil {
+		slog.Warn("gwag: declarations hook: could not store the failure notification", "id", n.ID, "err", perr)
+		s.g.notifs.set(n) // still show it on this node
 	}
-	s.mu.Unlock()
-}
-
-func (s *declarationSinks) failureItems() []notificationItem {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]notificationItem(nil), s.failures...)
 }

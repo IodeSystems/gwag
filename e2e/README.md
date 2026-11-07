@@ -103,7 +103,7 @@ Admin: Services(ctx) · WaitInstance(ns, ver, id, state, timeout)   // state "" 
        Graph(ctx, window) · DrainInstance(ctx, id, cancel) · WaitDrainState(id, state, timeout)
        Deprecate/Undeprecate(ctx, ns, ver[, reason]) · Registrations(ctx) · MCPInclude(ctx, glob)
        PutExternalDependent(ctx, x) warnings · DeleteExternalDependent(ctx, id) · ExternalDependents(ctx)
-       ReviewExternalDependent(ctx, id, reviewAt) · Notifications(ctx)
+       ReviewExternalDependent(ctx, id, reviewAt) · Notifications(ctx) · DismissNotification(ctx, id)
        Do(ctx, method, "/admin/...", body, out)                    // with the bearer
 
 NewHookSink(t) *HookSink        // real HTTP receiver for --declarations-hook

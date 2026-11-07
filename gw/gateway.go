@@ -211,6 +211,9 @@ type Gateway struct {
 	// (declaration_sinks.go). declSinks is nil when none is configured.
 	declView  declarationView
 	declSinks *declarationSinks
+	// notifs holds the stored notification items
+	// (notification_store.go).
+	notifs notificationStore
 
 	// warnedEventsAuth tracks (namespace, version) tuples we've already
 	// emitted a deprecation warning for, so heartbeat-driven re-registers

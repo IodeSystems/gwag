@@ -194,15 +194,24 @@ To review, confirm the pins with the owner and set the next date:
 ```bash
 curl -X POST https://gw.internal/api/admin/external-dependents/acme/review \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"reviewAt":"2028-06-30T00:00:00Z","by":"ops@example.com"}'
+  -d '{"reviewAt":"2028-06-30T00:00:00Z"}'
 ```
 
 The review op changes only `reviewAt`, `reviewedAt` (now) and
-`reviewedBy` (the `by` field, self-reported and not checked); a new
-`reviewAt` must be in the future. A PUT can also set a new date; it
-keeps `reviewedAt` / `reviewedBy`. A declaration stored without a
-review date is review-due. Delete it with
+`reviewedBy`; a new `reviewAt` must be in the future. A PUT can also
+set a new date; it keeps `reviewedAt` / `reviewedBy`. A declaration
+stored without a review date is review-due. Delete it with
 `DELETE /admin/external-dependents/acme`.
+
+**Who is recorded.** `reviewedBy` and `updatedBy` come from the
+credential, never from the request body. The value is the role the
+bearer resolved to, `admin` or `dev`, plus `:subject` when the
+`AdminAuthorizer` delegate names one in `AuthorizeResponse.subject`
+(for example `dev:alice@example.com`; a subject is trimmed, stripped of
+control characters and cut at 128 characters). A bearer matched against
+the boot or dev token has no subject, so it records the role alone.
+`updatedBy` is set by put and review; the delta sink payload carries
+the same identity as `by`.
 
 #### Notifications
 
@@ -213,13 +222,23 @@ the items that need a person, oldest first:
 {"items": [{"kind": "declaration_review_due", "id": "review-due/acme",
   "title": "Review external dependent Acme Corp",
   "detail": "Review date 2027-06-30T00:00:00Z has passed. It still pins library [v1]. ...",
-  "since": "2027-06-30T00:00:00Z", "href": "/?select=ext:acme"}]}
+  "since": "2027-06-30T00:00:00Z", "href": "/?select=ext:acme",
+  "dismissable": false}]}
 ```
 
 | `kind` | Item | Goes away |
 |---|---|---|
 | `declaration_review_due` | A declaration past `reviewAt`. Same on every node. | When it is reviewed or deleted. |
-| `declaration_hook_failed` | A declarations hook delivery that ran out of retries. Only on the node that tried it; in memory, at most 20. | Full mode: when a later delivery succeeds. Delta mode: when the node restarts. |
+| `declaration_hook_failed` | A declarations hook delivery that ran out of retries. Same on every node in a cluster (the `gwag-notifications` KV bucket); in memory standalone. At most 20; the oldest is deleted beyond that. `dismissable: true`. | Full mode: when a later delivery succeeds, from any node, that covers it (the receiver has the whole set again). Delta mode: only when a person dismisses it. |
+
+A delta-mode failure means the receiver missed a change. Resync it from
+`GET /admin/external-dependents`, then clear the item with
+`POST /admin/notifications/{id}/dismiss` (GraphQL
+`admin.dismissNotification`; dev or admin role; the bell has a Dismiss
+button). The item is deleted on every node, and nothing is dismissed
+by the clock: the bucket has no TTL. A computed item
+(`declaration_review_due`) cannot be dismissed (404). A full-mode item
+can be dismissed too.
 
 More kinds may be added; a client shows an unknown kind by its
 `title`, `detail` and `href`. `href` is an admin UI route.
@@ -237,6 +256,21 @@ review and delete. Each has a mode: `full` (the whole current set) or
 | `--declarations-hook-mode full\|delta` (default full) | `DeclarationsHookOptions.Mode` |
 | `--declarations-file PATH` | `WithDeclarationsFile(DeclarationsFileOptions{Path, ...})` |
 | `--declarations-file-mode full\|delta` (default full) | `DeclarationsFileOptions.Mode` |
+
+**Hook secret.** The secret is a raw string (its bytes are the HMAC
+key), and a weak one is refused at start: `gwag up` exits with an
+error, and `New` panics for `DeclarationsHookOptions.Secret`. It needs
+at least 32 bytes and an estimated 128 bits of entropy. The estimate
+collapses a repeated unit (`abcabc...` counts as `abc`), ignores bytes
+that continue a constant-step run (`aaaa`, `abcdef`, `97531`), then
+multiplies the Shannon entropy of the remaining bytes by their count.
+It is a floor against lazy secrets, not a proof of randomness: it
+cannot see a dictionary phrase. `openssl rand -base64 48` and
+`gwag secret gen` print a 64-character secret that scores about 250
+bits; a random 32-character hex string scores about 118 and is
+refused. The hex secrets (`--subscribe-secret`, `--signer-secret`)
+are not refused; the gateway logs a warning at start when one decodes
+to under 16 bytes.
 
 **Hook.** A POST of one JSON payload per change, `Content-Type:
 application/json`. The admin response does not wait for it: a worker
@@ -260,7 +294,8 @@ with exponential backoff (500ms, doubling, at most 8s between tries,
 6 tries in all; `DeclarationsHookOptions` changes these). Any other
 4xx is not retried. When a change is given up, the node logs it,
 increments `declarations_hook_failures_total` and lists a
-`declaration_hook_failed` notification. The queue (256 changes) is in
+`declaration_hook_failed` notification (see Notifications above for
+how it clears). The queue (256 changes) is in
 memory: a delivery still pending when the accepting node stops is
 lost, and a change that finds the queue full fails at once. In full
 mode the next successful delivery carries the whole set; in delta mode
@@ -306,7 +341,8 @@ Full, `schema: "gwag.declarations.full/v1"`:
       "reviewAt": "2027-06-30T00:00:00Z",
       "reviewedAt": "",
       "reviewedBy": "",
-      "updatedAt": "2026-11-07T12:00:00.000Z"
+      "updatedAt": "2026-11-07T12:00:00.000Z",
+      "updatedBy": "dev:alice@example.com"
     }
   ]
 }
@@ -327,9 +363,15 @@ Delta, `schema: "gwag.declarations.delta/v1"`:
   "id": "acme",
   "before": {"id": "acme", "reviewAt": "2027-06-30T00:00:00Z", "...": "..."},
   "after":  {"id": "acme", "reviewAt": "2028-06-30T00:00:00Z", "...": "..."},
-  "at": "2027-07-01T09:30:00.000Z"
+  "at": "2027-07-01T09:30:00.000Z",
+  "by": "dev:alice@example.com"
 }
 ```
+
+`by` is the authenticated identity that made the change (see "Who is
+recorded"). On a delete, the KV delete leaves no value, so only the
+node that accepted it knows `by`: the hook payload has it, a delta
+file line written by another node has `""`.
 
 `op` is `put`, `review` or `delete`. `before` is `null` when the put
 created the declaration; `after` is `null` on delete. Both have the

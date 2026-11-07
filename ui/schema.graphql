@@ -10,6 +10,10 @@ type AdminMutationNamespace {
     id: String!
   ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
+  dismissNotification(
+    """Item id from the list, e.g. hook-failed-12-acme."""
+    id: String!
+  ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
@@ -76,6 +80,10 @@ type AdminStableMutationNamespace {
     id: String!
   ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
+  dismissNotification(
+    """Item id from the list, e.g. hook-failed-12-acme."""
+    id: String!
+  ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
@@ -138,6 +146,10 @@ type AdminV1MutationNamespace {
     id: String!
   ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
+  dismissNotification(
+    """Item id from the list, e.g. hook-failed-12-acme."""
+    id: String!
+  ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
@@ -392,6 +404,10 @@ type admin_DeprecatedServiceRow {
 type admin_DeprecatedStatsOutBody {
   services: [admin_DeprecatedServiceRow!]
   window: String!
+}
+
+type admin_DismissNotificationOutBody {
+  dismissed: Boolean!
 }
 
 input admin_DrainInBodyInput {
@@ -705,6 +721,8 @@ type admin_MethodStatsOut {
 
 type admin_NotificationItem {
   detail: String!
+  """True when POST /admin/notifications/{id}/dismiss may clear the item."""
+  dismissable: Boolean!
   """Admin UI route that shows the subject, e.g. /?select=ext:acme."""
   href: String!
   """Stable id of the item, unique in the list."""

@@ -44,6 +44,14 @@ type Notification struct {
 	Detail string `json:"detail"`
 	Since  string `json:"since"`
 	Href   string `json:"href"`
+	// Dismissable marks stored items DismissNotification may clear.
+	Dismissable bool `json:"dismissable"`
+}
+
+// DismissNotification clears a stored notification (POST
+// .../admin/notifications/{id}/dismiss) on every node.
+func (a *Admin) DismissNotification(ctx context.Context, id string) error {
+	return a.Do(ctx, http.MethodPost, "/admin/notifications/"+url.PathEscape(id)+"/dismiss", nil, nil)
 }
 
 // Notifications lists the items that need a person's attention.
@@ -64,12 +72,22 @@ type HookRequest struct {
 }
 
 // HookSink is a real HTTP receiver for --declarations-hook: it
-// records every request and answers 204.
+// records every request and answers 204, or the status SetStatus set.
 type HookSink struct {
 	URL string
 
-	mu   sync.Mutex
-	reqs []HookRequest
+	mu     sync.Mutex
+	reqs   []HookRequest
+	status int
+}
+
+// SetStatus makes the sink answer code from now on (0 = 204). A 4xx
+// other than 408 and 429 fails a delivery at once: the gateway does
+// not retry it.
+func (h *HookSink) SetStatus(code int) {
+	h.mu.Lock()
+	h.status = code
+	h.mu.Unlock()
 }
 
 // NewHookSink listens on 127.0.0.1 and stops when the test ends.
@@ -84,8 +102,12 @@ func NewHookSink(t testing.TB) *HookSink {
 		b, _ := io.ReadAll(r.Body)
 		h.mu.Lock()
 		h.reqs = append(h.reqs, HookRequest{Header: r.Header.Clone(), Body: b})
+		code := h.status
 		h.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
+		if code == 0 {
+			code = http.StatusNoContent
+		}
+		w.WriteHeader(code)
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })

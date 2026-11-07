@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Badge, Box, Divider, IconButton, ListItemText, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
+import { Badge, Box, Button, Divider, IconButton, ListItemText, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 
 export interface NotificationBellItem {
@@ -8,11 +8,19 @@ export interface NotificationBellItem {
   detail: string;
   /** RFC 3339: when it started needing attention. */
   since: string;
+  /** A person may clear the item with onDismiss. */
+  dismissable?: boolean;
 }
 
 export interface NotificationBellProps {
   items: NotificationBellItem[];
   onSelect: (item: NotificationBellItem) => void;
+  /** Clears a dismissable item. Without it the dismiss action is hidden. */
+  onDismiss?: (item: NotificationBellItem) => void;
+  /** Disables the dismiss action when the role cannot use it. */
+  canDismiss?: boolean;
+  /** Tooltip for a disabled dismiss action. */
+  dismissTip?: string;
   /** Shown in the menu when the list is empty. */
   emptyText?: string;
 }
@@ -26,7 +34,14 @@ function sinceText(since: string): string {
  * App-bar bell with a count badge. Opens a menu of items that need a
  * person's attention; choosing one calls onSelect and closes the menu.
  */
-export function NotificationBell({ items, onSelect, emptyText = 'Nothing needs attention.' }: NotificationBellProps) {
+export function NotificationBell({
+  items,
+  onSelect,
+  onDismiss,
+  canDismiss = true,
+  dismissTip = '',
+  emptyText = 'Nothing needs attention.',
+}: NotificationBellProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const n = items.length;
   const tip = n === 0 ? 'Notifications' : `Notifications (${n} need attention)`;
@@ -81,6 +96,23 @@ export function NotificationBell({ items, onSelect, emptyText = 'Nothing needs a
                 </>
               }
             />
+            {it.dismissable && onDismiss && (
+              <Tooltip title={dismissTip}>
+                <span>
+                  <Button
+                    size="small"
+                    disabled={!canDismiss}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDismiss(it);
+                    }}
+                    sx={{ ml: 1, flexShrink: 0 }}
+                  >
+                    Dismiss
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </MenuItem>
         ))}
       </Menu>

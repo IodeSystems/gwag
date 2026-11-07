@@ -115,6 +115,7 @@ var rolesMatrix = []roleCase{
 	{"putExternalDependent", "PUT", "/admin/external-dependents/zeta", `{"kind":"customer","reviewAt":"2099-01-01T00:00:00Z","depends":[{"service":"greeter","lines":["v1"]}]}`, adminRoleDev},
 	{"reviewExternalDependent", "POST", "/admin/external-dependents/zeta/review", `{"reviewAt":"2099-06-01T00:00:00Z"}`, adminRoleDev},
 	{"listNotifications", "GET", "/admin/notifications", "", adminRoleDev},
+	{"dismissNotification", "POST", "/admin/notifications/x/dismiss", "", adminRoleDev},
 	{"deleteExternalDependent", "DELETE", "/admin/external-dependents/zeta", "", adminRoleDev},
 
 	{"forgetPeer", "POST", "/admin/peers/x/forget", "", adminRoleAdmin},

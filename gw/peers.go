@@ -62,6 +62,9 @@ type peerTracker struct {
 	mcpConfig  jetstream.KeyValue
 	drain      jetstream.KeyValue
 	externals  jetstream.KeyValue
+	// notifications holds the hook-failure notification items
+	// (notification_store.go).
+	notifications jetstream.KeyValue
 
 	nodeID string
 	self   []byte
@@ -76,11 +79,12 @@ type peerTracker struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	stableDone     chan struct{}
-	deprecatedDone chan struct{}
-	mcpConfigDone  chan struct{}
-	drainDone      chan struct{}
-	externalsDone  chan struct{}
+	stableDone        chan struct{}
+	deprecatedDone    chan struct{}
+	mcpConfigDone     chan struct{}
+	drainDone         chan struct{}
+	externalsDone     chan struct{}
+	notificationsDone chan struct{}
 
 	currentR atomic.Int32
 
@@ -182,6 +186,12 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, err
 	}
 
+	notifications, err := openNotificationsBucket(ctx, cl.JS)
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -194,27 +204,29 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 
 	tctx, cancel := context.WithCancel(ctx)
 	t := &peerTracker{
-		gw:             g,
-		js:             cl.JS,
-		peers:          peers,
-		reg:            reg,
-		stable:         stable,
-		deprecated:     deprecated,
-		mcpConfig:      mcpConfig,
-		drain:          drain,
-		externals:      externals,
-		nodeID:         cl.NodeID,
-		self:           selfBytes,
-		peerTTL:        peerTTL,
-		registryTTL:    registryTTL,
-		live:           map[string]struct{}{cl.NodeID: {}},
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		stableDone:     make(chan struct{}),
-		deprecatedDone: make(chan struct{}),
-		mcpConfigDone:  make(chan struct{}),
-		drainDone:      make(chan struct{}),
-		externalsDone:  make(chan struct{}),
+		gw:                g,
+		js:                cl.JS,
+		peers:             peers,
+		reg:               reg,
+		stable:            stable,
+		deprecated:        deprecated,
+		mcpConfig:         mcpConfig,
+		drain:             drain,
+		externals:         externals,
+		notifications:     notifications,
+		nodeID:            cl.NodeID,
+		self:              selfBytes,
+		peerTTL:           peerTTL,
+		registryTTL:       registryTTL,
+		live:              map[string]struct{}{cl.NodeID: {}},
+		cancel:            cancel,
+		done:              make(chan struct{}),
+		stableDone:        make(chan struct{}),
+		deprecatedDone:    make(chan struct{}),
+		mcpConfigDone:     make(chan struct{}),
+		drainDone:         make(chan struct{}),
+		externalsDone:     make(chan struct{}),
+		notificationsDone: make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -237,6 +249,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		close(t.mcpConfigDone)
 		close(t.drainDone)
 		close(t.externalsDone)
+		close(t.notificationsDone)
 		return nil, err
 	}
 
@@ -259,6 +272,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.mcpConfigWatchLoop(tctx)
 	go t.drainWatchLoop(tctx)
 	go t.externalsWatchLoop(tctx)
+	go t.notificationsWatchLoop(tctx)
 	return t, nil
 }
 
@@ -392,6 +406,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 		{mcpConfigBucketName, mcpConfigTTL, false},
 		{drainBucketName, 0, false},
 		{externalDependentsBucketName, 0, false},
+		{notificationsBucketName, 0, false},
 	} {
 		cfg := jetstream.KeyValueConfig{
 			Bucket:   b.name,
@@ -521,6 +536,9 @@ func (t *peerTracker) stop() {
 	}
 	if t.externalsDone != nil {
 		<-t.externalsDone
+	}
+	if t.notificationsDone != nil {
+		<-t.notificationsDone
 	}
 	t.rec.stop()
 }
