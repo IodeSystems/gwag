@@ -1,20 +1,83 @@
 # Admin auth + outbound HTTP
 
-## Admin auth (boot token)
+## Admin auth (admin token, dev token)
 
-The gateway protects its own admin surface (`/admin/*` writes,
-`admin_*` GraphQL mutations) with a bearer token. On boot, the
-gateway either reads an existing token from
-`<adminDataDir>/admin-token` or generates a fresh 32-byte one and
-persists it. The token is logged to stderr at startup:
+The gateway protects its own admin surface (`/admin/*` and the
+self-ingested `admin` GraphQL fields) with two bearer tokens. On boot,
+the gateway reads each from `<adminDataDir>/admin-token` and
+`<adminDataDir>/dev-token`, or generates a fresh 32-byte one and
+persists it. Both are logged to stderr at startup:
 
 ```
 admin token = ab9089b1...  (persisted to /var/lib/gateway/admin-token)
+dev token   = 5c01de77...  (persisted to /var/lib/gateway/dev-token)
 ```
 
-Wire it as standard `Authorization: Bearer <hex>`. Reads (GETs on
-`/api/admin/*`, `admin_listPeers` / `admin_listServices` queries)
-are public so the UI works unauthenticated; writes require the token.
+Wire either as standard `Authorization: Bearer <hex>`. The token
+decides the role:
+
+| Role | How | May |
+|---|---|---|
+| admin | admin token, or an `AdminAuthorizer` OK | every admin route |
+| dev | dev token, or an `AdminAuthorizer` OK with `ADMIN_ROLE_DEV` | every admin read (services with owner contacts, graph, usage, instances, peers, injectors, MCP config and schema, external dependents), and `PUT` / `DELETE /admin/external-dependents/{id}` |
+| anonymous | no bearer | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph`: public services only |
+
+Role by operation:
+
+| Operation | anonymous | dev | admin |
+|---|---|---|---|
+| `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph` | public only | yes | yes |
+| `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand` | 401 | yes | yes |
+| `putExternalDependent`, `deleteExternalDependent` | 401 | yes | yes |
+| `forgetPeer`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes |
+
+A wrong bearer is 401 on every route, reads included, so a client
+learns at once that its token is stale. `GET /admin/whoami` returns
+the role (`anonymous`, `dev`, `admin`); the UI uses it for the role
+chip and to disable the controls a role cannot use. An admin route
+that is not in the table needs dev for GET and admin otherwise.
+Routes you wrap in `AdminMiddleware` yourself keep the old rule:
+GET / HEAD / OPTIONS open, everything else admin.
+
+**What a reader without a token sees.** Only public services:
+
+- a service is public when its registration sets
+  `ServiceBinding.public` (`controlclient.Service.Public`), when it was
+  added at boot with the `gateway.AsPublic()` ServiceOption, or when
+  the gateway runs with `gateway.WithPublicServices("all")` /
+  `--public-services=all` (or names it: `--public-services=a,b`).
+  Public is per (namespace, line): each line's latest registration
+  decides. Gateway-internal `_*` namespaces are never listed.
+- a public service shows its name, lines, instance states, owner team
+  and traffic. Owner contact, instance addresses, drain reasons and
+  rejected-join counters are blank.
+- non-public services are not listed. A declared edge between a public
+  and a non-public service is dropped; a public line's sunset reason
+  says "a hidden service accepts …" instead of naming it. Traffic into
+  a public service from a caller that is not a public service is
+  reported under the caller `hidden` (one edge per line), so traffic
+  totals stay true.
+- external-dependent declarations are not shown at all: no list, no
+  nodes, no edges. Their reasons read "an external dependent accepts …".
+- `admin_events_watchServices` delivers events for public services
+  only, with `addr` blanked. The subscription reads the bearer from the
+  WebSocket handshake or from `authorization: "Bearer <hex>"` in the
+  `connection_init` payload.
+
+Admin visibility only: calls to services through GraphQL, REST, gRPC
+or Connect are not affected, and `/api/schema/*` plus GraphQL
+introspection still describe every service.
+
+**Dev token rotation.** `POST /admin/dev-token/rotate` (admin only,
+GraphQL `admin.rotateDevToken`) replaces the dev token on that node,
+persists it, and returns it; the old one stops working at once.
+`gateway.RotateDevToken()` does the same from Go. A token pinned with
+`gateway.WithDevToken(...)` cannot be rotated (409). Each node has its
+own tokens, like the admin token. To retire a dev token without the
+API, delete `<adminDataDir>/dev-token` and restart.
+
+`gwag login --token HEX` stores either token; the gateway decides the
+role.
 
 **Destructive reads.** A GET that has side effects or exposes
 sensitive data isn't really a safe read. Opt those paths into the
@@ -27,6 +90,7 @@ that field must present the bearer).
 ```go
 gw := gateway.New(
     gateway.WithAdminDataDir("/var/lib/gateway"),
+    gateway.WithPublicServices("all"), // optional: no-token readers see every service
 )
 adminMux, adminSpec, _ := gw.AdminHumaRouter()
 mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
@@ -41,18 +105,22 @@ gw.AddOpenAPIBytes(adminSpec,
 
 ## Pluggable AdminAuthorizer delegate
 
-For richer authz than a single static token, register an
+For richer authz than two static tokens, register an
 `AdminAuthorizer` service at `_admin_auth/v1` (proto in
 [`adminauth/v1`](../gw/proto/adminauth/v1)). The middleware consults
-it on every protected request:
+it on every request that needs more than anonymous, and on every
+request that presents a bearer (reads included):
 
 | Delegate response       | Middleware action                          |
 |-------------------------|--------------------------------------------|
-| `OK`                    | Accept                                     |
+| `OK`                    | Accept with `role`: `ADMIN_ROLE_DEV` = dev; `ADMIN_ROLE_ADMIN` or unset = admin |
 | `DENIED`                | 401, no fall-through                       |
-| `UNAVAILABLE`           | Fall through to boot token                 |
-| `NOT_CONFIGURED`        | Fall through to boot token                 |
-| Transport error / panic | Fall through to boot token                 |
+| `UNAVAILABLE`           | Fall through to the tokens                 |
+| `NOT_CONFIGURED`        | Fall through to the tokens                 |
+| Transport error / panic | Fall through to the tokens                 |
+
+A delegate written before roles sends no `role`, so its `OK` still
+means admin. A role below what the route needs is 403.
 
 The boot token is an unconditional fallback. A delegate that
 crashes, mis-deploys, or DOS's cannot lock operators out — only an

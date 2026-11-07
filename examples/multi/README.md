@@ -153,7 +153,8 @@ $ curl -sS -H "Authorization: Bearer $TOKEN" \
        -H 'Content-Type: application/json' \
        -d '{"auto_include":true}' \
        http://localhost:8080/api/admin/mcp/auto-include
-$ curl -sS http://localhost:8080/api/admin/mcp   # always public for inspection
+$ curl -sS -H "Authorization: Bearer $(cat /tmp/gwag-multi/dev-token)" \
+       http://localhost:8080/api/admin/mcp   # a read: the dev token is enough
 ```
 
 The same `admin_mcp_*` mutations are also surfaced as GraphQL fields
@@ -180,7 +181,9 @@ DEMO_AUTO=1 ./demo.sh     # unattended with sleeps (for screen capture)
 Open `http://<host>:8080/` (the UI home is the live graph). Ports:
 `DEMO_PORT` (8080), `DEMO_CP_PORT` (50090). Needs `go`, `curl`, `jq`.
 
-1. Gateway with `--environment demo --caller-id-public`; admin token printed.
+1. Gateway with `--environment demo --caller-id-public --public-services all`;
+   admin and dev tokens printed. Every demo service is public, so the graph
+   shows without signing in.
 2. `orders` (depends `library: [v1]`) starts first. Graph: WAITING; its
    log says "waiting for dependencies".
 3. `library-a` (v1 only) starts. `orders` turns READY by itself and
