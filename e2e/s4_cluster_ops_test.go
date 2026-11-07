@@ -210,7 +210,7 @@ func TestS4ClusterOps(t *testing.T) {
 
 		t.Run("rejoined node serves the same schema", func(t *testing.T) {
 			harness.Eventually(t, 60*time.Second, "n2 serves the pre-kill SDL and hashes", func() error {
-				sdl, err := n2.SchemaSDL(ctx)
+				sdl, err := n2.SchemaSDL(ctx, "")
 				if err != nil {
 					return err
 				}
@@ -356,7 +356,7 @@ func TestS4ClusterOps(t *testing.T) {
 			cluster.WaitPeers(3, 75*time.Second)
 			for _, g := range cluster.Nodes {
 				harness.Eventually(t, 60*time.Second, g.Name+" serves the same schema and both services", func() error {
-					if s, err := g.SchemaSDL(ctx); err != nil || s != sdl {
+					if s, err := g.SchemaSDL(ctx, ""); err != nil || s != sdl {
 						return fmt.Errorf("SDL differs (err %v)", err)
 					}
 					for _, f := range fixtures {
@@ -376,7 +376,7 @@ func TestS4ClusterOps(t *testing.T) {
 
 func mustSDL(t *testing.T, ctx context.Context, g *harness.Gateway) string {
 	t.Helper()
-	s, err := g.SchemaSDL(ctx)
+	s, err := g.SchemaSDL(ctx, "")
 	if err != nil {
 		t.Fatalf("%s SDL: %v", g.Name, err)
 	}

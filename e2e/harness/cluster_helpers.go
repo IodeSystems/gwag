@@ -245,18 +245,6 @@ func (g *Gateway) RawGet(ctx context.Context, path string) ([]byte, int, error) 
 	return b, resp.StatusCode, err
 }
 
-// SchemaSDL returns the node's GraphQL SDL (/api/schema/graphql).
-func (g *Gateway) SchemaSDL(ctx context.Context) (string, error) {
-	b, status, err := g.RawGet(ctx, "/api/schema/graphql")
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusOK {
-		return "", fmt.Errorf("/api/schema/graphql: HTTP %d", status)
-	}
-	return string(b), nil
-}
-
 // PeerCount is the number of peers the node lists in /api/admin/peers
 // (itself included).
 func (g *Gateway) PeerCount(ctx context.Context) (int, error) {
