@@ -169,8 +169,8 @@ Admin auth denials are already counted in `admin_auth_total`
 | `pool_backoff_total` | counter | `namespace`, `version`, `method`, `kind`, `reason` | Dispatches refused by backpressure (`reason=wait_timeout`). |
 | `pool_queue_depth` | gauge | `namespace`, `version`, `kind` | Dispatches waiting for a pool slot. |
 | `replica_queue_depth` | gauge | `namespace`, `version`, `kind`, `replica` | Dispatches waiting for a per-replica slot (`MaxConcurrencyPerInstance`). |
-| `pool_streams_inflight` | gauge | `namespace`, `version` | Active subscription streams in a pool. |
-| `streams_inflight_total` | gauge | none | Active subscription streams, gateway-wide. |
+| `pool_streams_inflight` | gauge | `namespace`, `version` | Active subscription streams in a pool. Open `ps_sub` pub/sub subscriptions count under `namespace="ps"`, `version="v1"` (the gateway's own slot; it has no upstream pool). |
+| `streams_inflight_total` | gauge | none | Active subscription streams, gateway-wide: proto and OpenAPI upstream streams plus open `ps_sub` subscriptions. Same value as `active_streams` in `/api/health`; Drain waits for it to reach 0. Downstream-GraphQL fanouts are counted by `graphql_sub_fanouts_active`, not here. |
 | `graphql_sub_fanout_total` | counter | `namespace`, `event` | Downstream-GraphQL subscription fanout `open` / `close`. |
 | `graphql_sub_fanouts_active` | gauge | `namespace` | Active downstream-GraphQL fanouts. |
 | `upstream_retries_total` | counter | `namespace`, `version`, `reason` | A call re-sent to another replica because the first attempt provably never reached an upstream (see "Upstream timeouts, retries, ejection"). `reason`: `unavailable` (gRPC, no transport stream), `no_connection` (HTTP, no connection). Default sink only. |
