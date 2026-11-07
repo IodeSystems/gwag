@@ -36,6 +36,7 @@ func (f *fakeAdminAuthConn) Invoke(_ context.Context, method string, args, reply
 	out.Code = resp.Code
 	out.Reason = resp.Reason
 	out.Role = resp.Role
+	out.Subject = resp.Subject
 	return nil
 }
 

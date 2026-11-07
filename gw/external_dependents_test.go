@@ -238,8 +238,8 @@ func TestExternalDependents_ReviewDue(t *testing.T) {
 	if code, _ := adminDo(t, g, http.MethodPost, "/admin/external-dependents/nobody/review", `{"reviewAt":"2027-11-01T00:00:00Z"}`); code != http.StatusNotFound {
 		t.Errorf("review unknown: %d", code)
 	}
-	code, body := adminDo(t, g, http.MethodPost, "/admin/external-dependents/acme/review", `{"reviewAt":"2028-11-01T00:00:00Z","by":"ops@example.com"}`)
-	if code != http.StatusOK || !strings.Contains(body, `"reviewDue":false`) || !strings.Contains(body, `"reviewedBy":"ops@example.com"`) ||
+	code, body := adminDo(t, g, http.MethodPost, "/admin/external-dependents/acme/review", `{"reviewAt":"2028-11-01T00:00:00Z"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"reviewDue":false`) || !strings.Contains(body, `"reviewedBy":"admin"`) ||
 		!strings.Contains(body, `"reviewedAt":"2026-11-08T12:00:00Z"`) || !strings.Contains(body, `"warnings":["reviewAt is more than a year out"]`) {
 		t.Fatalf("review: %d %s", code, body)
 	}
@@ -253,7 +253,7 @@ func TestExternalDependents_ReviewDue(t *testing.T) {
 	}
 	// A later PUT keeps the review record.
 	putExternal(t, g, "acme", acmeV1)
-	if x, _ := g.externals.get("acme"); x.ReviewedBy != "ops@example.com" || x.LastOp != changeOpPut {
+	if x, _ := g.externals.get("acme"); x.ReviewedBy != "admin" || x.LastOp != changeOpPut {
 		t.Errorf("PUT after review: %+v", x)
 	}
 

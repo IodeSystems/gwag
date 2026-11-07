@@ -43,6 +43,12 @@ message AuthorizeResponse {
   // before roles existed send) means ADMIN, so they keep working
   // unchanged. Ignored for any other code.
   AdminRole role = 3;
+  // Who the delegate authenticated (user id, email, service account).
+  // Optional; empty = unknown. With code OK the gateway records it
+  // next to the role as the identity behind external-dependent
+  // writes (reviewedBy, updatedBy). Never used for an access
+  // decision; ignored for any other code.
+  string subject = 4;
 }
 
 // AdminRole is what an accepted admin request may do.

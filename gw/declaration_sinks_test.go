@@ -70,12 +70,13 @@ type deltaBody struct {
 	Op     string
 	ID     string
 	Before *struct {
-		ID, Name, ReviewAt, ReviewedBy string
+		ID, Name, ReviewAt, ReviewedBy, UpdatedBy string
 	}
 	After *struct {
-		ID, Name, ReviewAt, ReviewedBy string
+		ID, Name, ReviewAt, ReviewedBy, UpdatedBy string
 	}
 	At string
+	By string
 }
 
 type fullBody struct {
@@ -100,7 +101,7 @@ func TestDeclarationsHook_DeltaSignedPutReviewDelete(t *testing.T) {
 	g := newExternalGateway(t, WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, strongTestSecret)))
 
 	putExternal(t, g, "acme", acmeV1)
-	if code, body := adminDo(t, g, http.MethodPost, "/admin/external-dependents/acme/review", `{"reviewAt":"2027-09-30T00:00:00Z","by":"ops"}`); code != http.StatusOK {
+	if code, body := adminDo(t, g, http.MethodPost, "/admin/external-dependents/acme/review", `{"reviewAt":"2027-09-30T00:00:00Z"}`); code != http.StatusOK {
 		t.Fatalf("review: %d %s", code, body)
 	}
 	if code, body := adminDo(t, g, http.MethodDelete, "/admin/external-dependents/acme", ""); code != http.StatusOK {
@@ -131,15 +132,15 @@ func TestDeclarationsHook_DeltaSignedPutReviewDelete(t *testing.T) {
 		}
 		switch d.Op {
 		case "put":
-			if d.Before != nil || d.After == nil || d.After.Name != "Acme Corp" || d.After.ReviewAt != "2027-06-30T00:00:00Z" {
+			if d.Before != nil || d.After == nil || d.After.Name != "Acme Corp" || d.After.ReviewAt != "2027-06-30T00:00:00Z" || d.After.UpdatedBy != "admin" || d.By != "admin" {
 				t.Errorf("put: %s", r.body)
 			}
 		case "review":
-			if d.Before == nil || d.Before.ReviewAt != "2027-06-30T00:00:00Z" || d.After == nil || d.After.ReviewAt != "2027-09-30T00:00:00Z" || d.After.ReviewedBy != "ops" {
+			if d.Before == nil || d.Before.ReviewAt != "2027-06-30T00:00:00Z" || d.After == nil || d.After.ReviewAt != "2027-09-30T00:00:00Z" || d.After.ReviewedBy != "admin" || d.By != "admin" {
 				t.Errorf("review: %s", r.body)
 			}
 		case "delete":
-			if d.Before == nil || d.Before.ID != "acme" || d.After != nil {
+			if d.Before == nil || d.Before.ID != "acme" || d.After != nil || d.By != "admin" {
 				t.Errorf("delete: %s", r.body)
 			}
 		}

@@ -23,15 +23,13 @@ import (
 
 // ReviewExternalDependent marks id reviewed (POST
 // /api/admin/external-dependents/{id}/review) and returns the stored
-// declaration.
-func (a *Admin) ReviewExternalDependent(ctx context.Context, id, reviewAt, by string) (*ExternalDependent, error) {
+// declaration. The reviewer is the authenticated caller; the body
+// names no one.
+func (a *Admin) ReviewExternalDependent(ctx context.Context, id, reviewAt string) (*ExternalDependent, error) {
 	var out struct {
 		ExternalDependent ExternalDependent `json:"externalDependent"`
 	}
 	body := map[string]any{"reviewAt": reviewAt}
-	if by != "" {
-		body["by"] = by
-	}
 	if err := a.Do(ctx, http.MethodPost, "/admin/external-dependents/"+url.PathEscape(id)+"/review", body, &out); err != nil {
 		return nil, err
 	}

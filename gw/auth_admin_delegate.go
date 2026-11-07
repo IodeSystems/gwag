@@ -41,18 +41,18 @@ const (
 // role is admin, so delegates written before roles keep their
 // meaning), plus an optional reason string for logs (never surfaced
 // to clients).
-func (g *Gateway) consultAdminDelegate(ctx context.Context, token, method, path, remoteAddr string) (adminDelegateOutcome, adminRole, string) {
+func (g *Gateway) consultAdminDelegate(ctx context.Context, token, method, path, remoteAddr string) (adminDelegateOutcome, adminRole, string, string) {
 	pool, ok := g.lookupPool(adminAuthorizerNamespace, "v1")
 	if !ok {
-		return adminDelegateFallthrough, adminRoleAnonymous, ""
+		return adminDelegateFallthrough, adminRoleAnonymous, "", ""
 	}
 	rep := pool.pickReplica()
 	if rep == nil {
-		return adminDelegateFallthrough, adminRoleAnonymous, "no live _admin_auth/v1 replicas"
+		return adminDelegateFallthrough, adminRoleAnonymous, "no live _admin_auth/v1 replicas", ""
 	}
 	conn, ok := rep.conn.(grpc.ClientConnInterface)
 	if !ok {
-		return adminDelegateFallthrough, adminRoleAnonymous, "delegate replica conn not usable"
+		return adminDelegateFallthrough, adminRoleAnonymous, "delegate replica conn not usable", ""
 	}
 	client := aav1.NewAdminAuthorizerClient(conn)
 	dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -64,7 +64,7 @@ func (g *Gateway) consultAdminDelegate(ctx context.Context, token, method, path,
 		RemoteAddr: remoteAddr,
 	})
 	if err != nil {
-		return adminDelegateFallthrough, adminRoleAnonymous, err.Error()
+		return adminDelegateFallthrough, adminRoleAnonymous, err.Error(), ""
 	}
 	switch resp.GetCode() {
 	case aav1.AdminAuthCode_ADMIN_AUTH_CODE_OK:
@@ -72,11 +72,11 @@ func (g *Gateway) consultAdminDelegate(ctx context.Context, token, method, path,
 		if resp.GetRole() == aav1.AdminRole_ADMIN_ROLE_DEV {
 			role = adminRoleDev
 		}
-		return adminDelegateAccept, role, resp.GetReason()
+		return adminDelegateAccept, role, resp.GetReason(), sanitizeSubject(resp.GetSubject())
 	case aav1.AdminAuthCode_ADMIN_AUTH_CODE_DENIED:
-		return adminDelegateReject, adminRoleAnonymous, resp.GetReason()
+		return adminDelegateReject, adminRoleAnonymous, resp.GetReason(), ""
 	default:
-		return adminDelegateFallthrough, adminRoleAnonymous, resp.GetReason()
+		return adminDelegateFallthrough, adminRoleAnonymous, resp.GetReason(), ""
 	}
 }
 

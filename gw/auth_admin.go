@@ -74,7 +74,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), adminRoleAnonymous)))
 			return
 		}
-		role, outcome, status := g.authenticateAdmin(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
+		role, subject, outcome, status := g.authenticateAdminSubject(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
 		if status == 0 && role < need {
 			outcome = "forbidden_role"
 			status = http.StatusForbidden
@@ -86,7 +86,8 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 		g.recordAdminAuth(r.Method, outcome, role)
 		switch status {
 		case 0:
-			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), role)))
+			ctx := withAdminSubject(withAdminRole(r.Context(), role), subject)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		case http.StatusUnauthorized:
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -105,14 +106,29 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 // than anonymous: the delegate is then consulted even without a
 // bearer (it decides about anonymous calls), as before roles existed.
 func (g *Gateway) authenticateAdmin(ctx context.Context, bearer, method, path, remoteAddr string, needAuth bool) (role adminRole, outcome string, status int) {
+	role, _, outcome, status = g.authenticateAdminSubject(ctx, bearer, method, path, remoteAddr, needAuth)
+	return role, outcome, status
+}
+
+// authenticateAdminSubject is authenticateAdmin that also returns the
+// subject the AdminAuthorizer delegate named for the caller ("" for a
+// token match or a delegate that names none).
+func (g *Gateway) authenticateAdminSubject(ctx context.Context, bearer, method, path, remoteAddr string, needAuth bool) (role adminRole, subject, outcome string, status int) {
 	if needAuth || bearer != "" {
-		switch outcome, delegateRole, _ := g.consultAdminDelegate(ctx, bearer, method, path, remoteAddr); outcome {
+		switch outcome, delegateRole, _, delegateSubject := g.consultAdminDelegate(ctx, bearer, method, path, remoteAddr); outcome {
 		case adminDelegateAccept:
-			return delegateRole, "ok_delegate", 0
+			return delegateRole, delegateSubject, "ok_delegate", 0
 		case adminDelegateReject:
-			return adminRoleAnonymous, "denied_delegate", http.StatusUnauthorized
+			return adminRoleAnonymous, "", "denied_delegate", http.StatusUnauthorized
 		}
 	}
+	role, outcome, status = g.authenticateAdminToken(bearer, needAuth)
+	return role, "", outcome, status
+}
+
+// authenticateAdminToken is the boot-token / dev-token step of
+// authenticateAdmin.
+func (g *Gateway) authenticateAdminToken(bearer string, needAuth bool) (role adminRole, outcome string, status int) {
 	tok := g.cfg.adminToken
 	if len(tok) == 0 {
 		if !needAuth && bearer == "" {

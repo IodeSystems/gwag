@@ -220,7 +220,13 @@ type AuthorizeResponse struct {
 	// Role granted with code OK. UNSPECIFIED (what delegates written
 	// before roles existed send) means ADMIN, so they keep working
 	// unchanged. Ignored for any other code.
-	Role          AdminRole `protobuf:"varint,3,opt,name=role,proto3,enum=gateway.adminauth.v1.AdminRole" json:"role,omitempty"`
+	Role AdminRole `protobuf:"varint,3,opt,name=role,proto3,enum=gateway.adminauth.v1.AdminRole" json:"role,omitempty"`
+	// Who the delegate authenticated (user id, email, service account).
+	// Optional; empty = unknown. With code OK the gateway records it
+	// next to the role as the identity behind external-dependent
+	// writes (reviewedBy, updatedBy). Never used for an access
+	// decision; ignored for any other code.
+	Subject       string `protobuf:"bytes,4,opt,name=subject,proto3" json:"subject,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -276,6 +282,13 @@ func (x *AuthorizeResponse) GetRole() AdminRole {
 	return AdminRole_ADMIN_ROLE_UNSPECIFIED
 }
 
+func (x *AuthorizeResponse) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
 var File_gw_proto_adminauth_v1_adminauth_proto protoreflect.FileDescriptor
 
 const file_gw_proto_adminauth_v1_adminauth_proto_rawDesc = "" +
@@ -286,11 +299,12 @@ const file_gw_proto_adminauth_v1_adminauth_proto_rawDesc = "" +
 	"\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x03 \x01(\tR\x04path\x12\x1f\n" +
 	"\vremote_addr\x18\x04 \x01(\tR\n" +
-	"remoteAddr\"\x99\x01\n" +
+	"remoteAddr\"\xb3\x01\n" +
 	"\x11AuthorizeResponse\x127\n" +
 	"\x04code\x18\x01 \x01(\x0e2#.gateway.adminauth.v1.AdminAuthCodeR\x04code\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x123\n" +
-	"\x04role\x18\x03 \x01(\x0e2\x1f.gateway.adminauth.v1.AdminRoleR\x04role*Q\n" +
+	"\x04role\x18\x03 \x01(\x0e2\x1f.gateway.adminauth.v1.AdminRoleR\x04role\x12\x18\n" +
+	"\asubject\x18\x04 \x01(\tR\asubject*Q\n" +
 	"\tAdminRole\x12\x1a\n" +
 	"\x16ADMIN_ROLE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10ADMIN_ROLE_ADMIN\x10\x01\x12\x12\n" +

@@ -219,11 +219,11 @@ func TestS9ExternalDependents(t *testing.T) {
 		}
 
 		next := time.Now().Add(180 * 24 * time.Hour).UTC().Format(time.RFC3339)
-		r, err := admin.ReviewExternalDependent(ctx, "acme", next, "books-oncall")
+		r, err := admin.ReviewExternalDependent(ctx, "acme", next)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.ReviewDue || r.ReviewAt != next || r.ReviewedBy != "books-oncall" || r.ReviewedAt == "" || fmt.Sprint(r.Depends) != "[{library [v2]}]" {
+		if r.ReviewDue || r.ReviewAt != next || r.ReviewedBy != "admin" || r.ReviewedAt == "" || fmt.Sprint(r.Depends) != "[{library [v2]}]" {
 			t.Fatalf("after review: %+v", r)
 		}
 		gw.WaitGauge(t, "declarations_review_due", nil, 0, wait)

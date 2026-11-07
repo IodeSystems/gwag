@@ -67,6 +67,7 @@ type externalDependent struct {
 	// reviewAt existed; such a declaration is review-due.
 	ReviewUnixMs int64 `json:"review_unix_ms,omitempty"`
 	// ReviewedUnixMs / ReviewedBy are set by the review op only.
+	// ReviewedBy is the authenticated identity, never client text.
 	ReviewedUnixMs int64  `json:"reviewed_unix_ms,omitempty"`
 	ReviewedBy     string `json:"reviewed_by,omitempty"`
 	// LastOp is the op that wrote this value: changeOpPut or
@@ -74,6 +75,10 @@ type externalDependent struct {
 	// watch (declaration_sinks.go).
 	LastOp        string `json:"last_op,omitempty"`
 	UpdatedUnixMs int64  `json:"updated_unix_ms"`
+	// UpdatedBy is the authenticated identity that wrote this value
+	// (adminIdentityFromContext): "admin", "dev" or "role:subject".
+	// Empty on a value stored before it existed.
+	UpdatedBy string `json:"updated_by,omitempty"`
 }
 
 // reviewDue reports whether e's review date is at or before now, or
@@ -271,7 +276,7 @@ func (g *Gateway) putExternalDependent(ctx context.Context, e externalDependent)
 	g.externals.set(e)
 	g.publishExternalChange(prev, e)
 	after := e
-	c := declarationChange{op: e.LastOp, id: e.ID, after: &after, seq: rev, at: time.UnixMilli(e.UpdatedUnixMs)}
+	c := declarationChange{op: e.LastOp, id: e.ID, after: &after, seq: rev, at: time.UnixMilli(e.UpdatedUnixMs), by: e.UpdatedBy}
 	if had {
 		c.before = &prev
 	}
@@ -279,9 +284,10 @@ func (g *Gateway) putExternalDependent(ctx context.Context, e externalDependent)
 	return nil
 }
 
-// deleteExternalDependent removes the declaration. ok=false when this
-// node knows no declaration with that id.
-func (g *Gateway) deleteExternalDependent(ctx context.Context, id string) (bool, error) {
+// deleteExternalDependent removes the declaration; by is the
+// authenticated identity doing it. ok=false when this node knows no
+// declaration with that id.
+func (g *Gateway) deleteExternalDependent(ctx context.Context, id, by string) (bool, error) {
 	prev, ok := g.externals.get(id)
 	if !ok {
 		return false, nil
@@ -301,7 +307,7 @@ func (g *Gateway) deleteExternalDependent(ctx context.Context, id string) (bool,
 	}
 	g.externals.remove(id)
 	g.publishExternalChange(prev, externalDependent{})
-	g.declarationChanged(declarationChange{op: changeOpDelete, id: id, before: &prev, seq: rev, at: nowFunc()}, kv != nil)
+	g.declarationChanged(declarationChange{op: changeOpDelete, id: id, before: &prev, seq: rev, at: nowFunc(), by: by}, kv != nil)
 	return true, nil
 }
 

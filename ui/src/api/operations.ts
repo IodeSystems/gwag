@@ -429,6 +429,7 @@ export const DependencyGraphQuery = graphql(`
           reviewedAt
           reviewedBy
           updatedUnixMs
+          updatedBy
         }
       }
     }

@@ -84,7 +84,10 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
                 label: 'Last reviewed',
                 value: ext.reviewedAt ? `${ext.reviewedAt}${ext.reviewedBy ? ` by ${ext.reviewedBy}` : ''}` : 'never',
               },
-              { label: 'Updated', value: new Date(Number(ext.updatedUnixMs)).toISOString() },
+              {
+                label: 'Updated',
+                value: `${new Date(Number(ext.updatedUnixMs)).toISOString()}${ext.updatedBy ? ` by ${ext.updatedBy}` : ''}`,
+              },
               { label: 'Note', value: ext.note || '—' },
             ]}
           />
@@ -120,17 +123,17 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
           </Typography>
         </Stack>
       </DetailPanel>
-      <FormDialog<{ reviewAt: string; by: string }>
+      <FormDialog<{ reviewAt: string }>
         open={reviewing}
         title={`Mark ${ext.name || ext.id} reviewed`}
-        description="Sets the next review date and records who reviewed it and when. The pins and other fields stay as they are."
+        description="Sets the next review date and records when, and who you signed in as. The pins and other fields stay as they are."
         submitLabel="Mark reviewed"
-        defaultValues={{ reviewAt: defaultReviewDate(), by: '' }}
+        defaultValues={{ reviewAt: defaultReviewDate() }}
         onClose={() => setReviewing(false)}
         onSubmit={async (v) => {
           const res = await client.request(ReviewExternalDependentMutation, {
             id: ext.id,
-            body: { reviewAt: toReviewAt(v.reviewAt), by: v.by.trim() || null },
+            body: { reviewAt: toReviewAt(v.reviewAt) },
           });
           const warnings = res.admin?.reviewExternalDependent?.warnings ?? [];
           if (warnings.length > 0) toast.warning(`Reviewed ${ext.id}. ${warnings.join('; ')}`);
@@ -148,7 +151,6 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
             autoFocus
             monospace
           />
-          <FormTextField name="by" label="Reviewed by" placeholder="you@example.com" helperText="Recorded as given; not checked." />
         </FormRow>
       </FormDialog>
       <ConfirmDialog

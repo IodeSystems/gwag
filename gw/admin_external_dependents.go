@@ -44,6 +44,7 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 			Note:          in.Body.Note,
 			LastOp:        changeOpPut,
 			UpdatedUnixMs: nowFunc().UnixMilli(),
+			UpdatedBy:     adminIdentityFromContext(ctx),
 		}
 		if in.Body.Owner != nil {
 			x.Owner = &manifestOwner{Team: in.Body.Owner.Team, Contact: in.Body.Owner.Contact}
@@ -81,7 +82,7 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		OperationID: "reviewExternalDependent",
 		Method:      http.MethodPost,
 		Path:        "/admin/external-dependents/{id}/review",
-		Summary:     "Mark an external dependent reviewed: set a new reviewAt (must be in the future) and record reviewedAt and reviewedBy. Every other field stays as it is.",
+		Summary:     "Mark an external dependent reviewed: set a new reviewAt (must be in the future) and record reviewedAt and reviewedBy (the authenticated caller: role, plus the subject the admin delegate names). Every other field stays as it is.",
 	}, func(ctx context.Context, in *reviewExternalDependentIn) (*putExternalDependentOut, error) {
 		x, ok := g.externals.get(in.ID)
 		if !ok {
@@ -97,9 +98,10 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		}
 		x.ReviewUnixMs = ms
 		x.ReviewedUnixMs = now.UnixMilli()
-		x.ReviewedBy = strings.TrimSpace(in.Body.By)
+		x.ReviewedBy = adminIdentityFromContext(ctx)
 		x.LastOp = changeOpReview
 		x.UpdatedUnixMs = now.UnixMilli()
+		x.UpdatedBy = x.ReviewedBy
 		if err := g.putExternalDependent(ctx, x); err != nil {
 			return nil, err
 		}
@@ -113,9 +115,9 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		OperationID: "deleteExternalDependent",
 		Method:      http.MethodDelete,
 		Path:        "/admin/external-dependents/{id}",
-		Summary:     "Delete an external dependent. Its pins stop counting at once.",
+		Summary:     "Delete an external dependent. Its pins stop counting at once. The hook and delta sinks record the caller's identity.",
 	}, func(ctx context.Context, in *externalDependentIDIn) (*deleteExternalDependentOut, error) {
-		ok, err := g.deleteExternalDependent(ctx, in.ID)
+		ok, err := g.deleteExternalDependent(ctx, in.ID, adminIdentityFromContext(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -184,8 +186,9 @@ type externalDependentInfo struct {
 	ReviewAt      string             `json:"reviewAt" doc:"RFC 3339. Empty only on a declaration stored before reviewAt existed."`
 	ReviewDue     bool               `json:"reviewDue" doc:"reviewAt is past (or missing). The declaration still counts as a dependent; a person must review it."`
 	ReviewedAt    string             `json:"reviewedAt" doc:"RFC 3339 time of the last review op; empty = never reviewed."`
-	ReviewedBy    string             `json:"reviewedBy" doc:"Who the last review op says reviewed it (self-reported); empty = not given."`
+	ReviewedBy    string             `json:"reviewedBy" doc:"Authenticated identity that made the last review op: the role (admin or dev), plus :subject when the admin delegate names one. Taken from the credential, not from the request; empty = never reviewed."`
 	UpdatedUnixMs int64              `json:"updatedUnixMs"`
+	UpdatedBy     string             `json:"updatedBy" doc:"Authenticated identity that last wrote it (put or review), same form as reviewedBy; empty on a declaration stored before this field existed."`
 }
 
 func adminExternalDependent(x externalDependent, now time.Time) externalDependentInfo {
@@ -197,6 +200,7 @@ func adminExternalDependent(x externalDependent, now time.Time) externalDependen
 		ReviewDue:     x.reviewDue(now),
 		ReviewedBy:    x.ReviewedBy,
 		UpdatedUnixMs: x.UpdatedUnixMs,
+		UpdatedBy:     x.UpdatedBy,
 		Depends:       []externalPinInfo{}, // never nil — JSON null breaks NonNull
 	}
 	if x.Owner != nil {
@@ -253,8 +257,7 @@ type putExternalDependentIn struct {
 type reviewExternalDependentIn struct {
 	ID   string `path:"id" doc:"Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."`
 	Body struct {
-		ReviewAt string `json:"reviewAt" doc:"Next review date, RFC 3339; must be in the future."`
-		By       string `json:"by,omitempty" doc:"Who reviewed it. Self-reported: recorded as reviewedBy, not checked."`
+		ReviewAt string `json:"reviewAt" doc:"Next review date, RFC 3339; must be in the future. The reviewer is the authenticated caller; the body names no one."`
 	}
 }
 

@@ -53,6 +53,47 @@ func adminRoleFromContext(ctx context.Context) (adminRole, bool) {
 	return r, ok
 }
 
+type adminSubjectCtxKey struct{}
+
+// maxSubjectLen bounds a delegate-supplied subject.
+const maxSubjectLen = 128
+
+// sanitizeSubject trims s, drops control characters and cuts it to
+// maxSubjectLen runes: the subject is stored and shown to people.
+func sanitizeSubject(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(s))
+	if r := []rune(s); len(r) > maxSubjectLen {
+		s = string(r[:maxSubjectLen])
+	}
+	return s
+}
+
+func withAdminSubject(ctx context.Context, subject string) context.Context {
+	return context.WithValue(ctx, adminSubjectCtxKey{}, subject)
+}
+
+// adminIdentityFromContext is who made the request, as recorded on
+// external-dependent writes: the authenticated role ("admin" or
+// "dev"), plus ":" and the subject when the AdminAuthorizer delegate
+// named one ("dev:alice@example.com"). A request that did not pass
+// AdminMiddleware is "unauthenticated". Taken from the credential,
+// never from the request body.
+func adminIdentityFromContext(ctx context.Context) string {
+	r, ok := adminRoleFromContext(ctx)
+	if !ok {
+		return "unauthenticated"
+	}
+	if sub, _ := ctx.Value(adminSubjectCtxKey{}).(string); sub != "" {
+		return r.String() + ":" + sub
+	}
+	return r.String()
+}
+
 // adminFullView reports whether the admin handlers answer ctx with
 // every service (dev and admin) or with public services only
 // (anonymous). A request that did not pass AdminMiddleware gets the
@@ -77,12 +118,14 @@ var adminAnonymousOps = map[string]bool{
 }
 
 // adminDevWriteOps are the non-GET admin operations the dev role may
-// call: the external-dependent declarations (put, review, delete), and the MCP schema reads
-// that take a POST body.
+// call: the external-dependent declarations (put, review, delete),
+// dismissing a notification, and the MCP schema reads that take a POST
+// body.
 var adminDevWriteOps = map[string]bool{
 	"putExternalDependent":    true,
 	"deleteExternalDependent": true,
 	"reviewExternalDependent": true,
+	"dismissNotification":     true,
 	"mcpSchemaSearch":         true,
 	"mcpSchemaExpand":         true,
 }

@@ -423,8 +423,10 @@ type admin_ExternalDependentInfo {
   reviewDue: Boolean!
   """RFC 3339 time of the last review op; empty = never reviewed."""
   reviewedAt: String!
-  """Who the last review op says reviewed it (self-reported); empty = not given."""
+  """Authenticated identity that made the last review op: the role (admin or dev), plus :subject when the admin delegate names one. Taken from the credential, not from the request; empty = never reviewed."""
   reviewedBy: String!
+  """Authenticated identity that last wrote it (put or review), same form as reviewedBy; empty on a declaration stored before this field existed."""
+  updatedBy: String!
   updatedUnixMs: Long!
 }
 
@@ -778,9 +780,7 @@ type admin_RetractStableOutBody {
 }
 
 input admin_ReviewExternalDependentInBodyInput {
-  """Who reviewed it. Self-reported: recorded as reviewedBy, not checked."""
-  by: String
-  """Next review date, RFC 3339; must be in the future."""
+  """Next review date, RFC 3339; must be in the future. The reviewer is the authenticated caller; the body names no one."""
   reviewAt: String!
 }
 

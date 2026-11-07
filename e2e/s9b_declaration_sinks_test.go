@@ -91,7 +91,7 @@ func TestS9bDeclarationSinks(t *testing.T) {
 				}
 				return nil
 			})
-			if _, err := c.Nodes[1].Admin().ReviewExternalDependent(ctx, "acme", review2, "books-oncall"); err != nil {
+			if _, err := c.Nodes[1].Admin().ReviewExternalDependent(ctx, "acme", review2); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -155,7 +155,7 @@ func TestS9bDeclarationSinks(t *testing.T) {
 				return nil
 			},
 			func(f full) error {
-				if len(f.Declarations) != 1 || f.Declarations[0].ReviewAt != review2 || f.Declarations[0].ReviewedBy != "books-oncall" {
+				if len(f.Declarations) != 1 || f.Declarations[0].ReviewAt != review2 || f.Declarations[0].ReviewedBy != "admin" {
 					return fmt.Errorf("after review: %+v", f)
 				}
 				return nil

@@ -150,6 +150,7 @@ type declarationChange struct {
 	after  *externalDependent // nil: deleted
 	seq    uint64             // 0: not known yet (fill from the view)
 	at     time.Time
+	by     string // authenticated identity that made the change; "" unknown
 }
 
 // declarationRecord is a declaration in a sink payload.
@@ -164,6 +165,7 @@ type declarationRecord struct {
 	ReviewedAt string             `json:"reviewedAt"`
 	ReviewedBy string             `json:"reviewedBy"`
 	UpdatedAt  string             `json:"updatedAt"`
+	UpdatedBy  string             `json:"updatedBy"`
 }
 
 type declarationsFullPayload struct {
@@ -181,6 +183,7 @@ type declarationsDeltaPayload struct {
 	Before *declarationRecord `json:"before"`
 	After  *declarationRecord `json:"after"`
 	At     string             `json:"at"`
+	By     string             `json:"by"`
 }
 
 func sinkTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z07:00") }
@@ -199,6 +202,7 @@ func toDeclarationRecord(x *externalDependent) *declarationRecord {
 		ReviewedAt: rfc3339Ms(x.ReviewedUnixMs),
 		ReviewedBy: x.ReviewedBy,
 		UpdatedAt:  sinkTime(time.UnixMilli(x.UpdatedUnixMs)),
+		UpdatedBy:  x.UpdatedBy,
 	}
 	if x.Owner != nil {
 		r.Owner = &externalOwnerInfo{Team: x.Owner.Team, Contact: x.Owner.Contact}
@@ -218,6 +222,7 @@ func deltaPayload(c declarationChange) declarationsDeltaPayload {
 		Before: toDeclarationRecord(c.before),
 		After:  toDeclarationRecord(c.after),
 		At:     sinkTime(c.at),
+		By:     c.by,
 	}
 }
 
@@ -317,6 +322,7 @@ func (g *Gateway) observeDeclaration(id string, after *externalDependent, rev ui
 			c.op = changeOpPut
 		}
 		c.at = time.UnixMilli(a.UpdatedUnixMs)
+		c.by = a.UpdatedBy
 		v.m[id] = viewEntry{x: a, rev: rev}
 	} else {
 		delete(v.m, id)
