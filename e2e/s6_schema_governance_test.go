@@ -276,7 +276,7 @@ func TestS6SchemaGovernance(t *testing.T) {
 			t.Errorf("orders v1 while deprecated: %q, %v", inst, err)
 		}
 		// Admin graph/GraphQL read the same state.
-		r := gw.MustGraphQL(t, `{ admin { listServices { services { namespace version manualDeprecationReason } } } }`, nil)
+		r := gw.MustGraphQL(t, `{ admin { listServices { services { namespace version manualDeprecationReason } } } }`, nil, harness.Bearer(gw.Token()))
 		if !strings.Contains(string(r.Data), reason) {
 			t.Errorf("admin.listServices does not show the reason: %s", r.Data)
 		}

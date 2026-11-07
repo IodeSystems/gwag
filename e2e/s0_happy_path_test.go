@@ -138,7 +138,7 @@ func TestS0HappyPath(t *testing.T) {
 		}
 
 		// The same list through the self-ingested admin GraphQL surface.
-		r := gw.MustGraphQL(t, `{ admin { listServices { environment services { namespace version replicaCount } } } }`, nil)
+		r := gw.MustGraphQL(t, `{ admin { listServices { environment services { namespace version replicaCount } } } }`, nil, harness.Bearer(gw.Token()))
 		var out struct {
 			Admin struct {
 				ListServices struct {
@@ -246,7 +246,7 @@ func TestS0HappyPath(t *testing.T) {
 			{"admin object", `{ admin { listServices { environment } } }`, "admin.listServices", "environment"},
 			{"admin list of objects", `{ admin { listServices { services { namespace } } } }`, "admin.listServices.services", "namespace"},
 		} {
-			r := gw.MustGraphQL(t, c.query, nil)
+			r := gw.MustGraphQL(t, c.query, nil, harness.Bearer(gw.Token()))
 			v := r.Path(c.path)
 			objs, isList := v.([]any)
 			if !isList {
