@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 
@@ -44,7 +45,7 @@ func serveCmd(args []string) int {
 	namespace := fs.String("namespace", "", "Override the GraphQL namespace; defaults to spec-derived")
 	version := fs.String("version", "", "Override the GraphQL version; defaults to spec-derived (\"v1\" for OpenAPI / GraphQL)")
 	enableMCP := fs.Bool("mcp", false, "Mount /mcp (admin-bearer gated). With --openapi / --proto, promotes the run from the lite gat path onto the full gateway so /mcp shares dispatch and metrics with every other ingress.")
-	shutdownDelay := fs.Duration("shutdown-delay", 0, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes; 0 = close at once")
+	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpInclude := &stringListValue{}
 	fs.Var(mcpInclude, "mcp-include", "MCP allowlist glob (repeatable). Implies --mcp.")

@@ -136,6 +136,10 @@ func (g *Gateway) args(peers []string) []string {
 	if g.opts.Environment != "" {
 		args = append(args, "--environment", g.opts.Environment)
 	}
+	// Default --shutdown-delay=0 so stopping a gateway does not wait the
+	// 5s production default. It goes before opts.Args: the flag package
+	// keeps the last occurrence, so a story's own --shutdown-delay wins.
+	args = append(args, "--shutdown-delay=0")
 	return append(args, g.opts.Args...)
 }
 

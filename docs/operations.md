@@ -53,7 +53,7 @@ SIGINT it runs, in order:
    and no `/health`). `/health` goes 503, WebSockets are cancelled
    and waited on. WebSockets are hijacked connections, so
    `http.Server.Shutdown` cannot see them; this step ends them.
-2. Sleep `--shutdown-delay` (default `0`). The node keeps serving
+2. Sleep `--shutdown-delay` (default `5s`). The node keeps serving
    while the LB sees the 503.
 3. `http.Server.Shutdown`: close the listener, wait for in-flight
    requests (GraphQL, REST, Connect, MCP, SSE). Bounded by
@@ -63,13 +63,14 @@ SIGINT it runs, in order:
 
 A second signal exits at once.
 
-`--shutdown-delay` must cover the LB's detection time: probe
-interval times unhealthy threshold. With the default `0` the listener
-closes right after the drain, and requests the LB sends before its
-next probe fail with connection refused. The default is `0` because
-an interactive Ctrl-C should not wait; set it in deployments (for
-example `--shutdown-delay 10s` with a 5 s probe, and a Kubernetes
-`terminationGracePeriodSeconds` above delay + timeout). In Kubernetes
+The default is `5s`. Set `--shutdown-delay=0` for an interactive run,
+or when no load balancer is in front of the node; an interactive Ctrl-C
+then does not wait. Behind a load balancer, set it to at least the
+LB's probe interval times its unhealthy threshold. With a shorter
+delay the listener closes before the LB has marked the node down, and
+requests the LB still sends fail with connection refused. Example:
+`--shutdown-delay 10s` with a 5 s probe. Set a Kubernetes
+`terminationGracePeriodSeconds` above delay + timeout. In Kubernetes
 a `preStop` sleep is an alternative.
 
 `--shutdown-timeout` bounds the stream drain and, separately, the
