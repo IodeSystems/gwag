@@ -12,8 +12,10 @@ import (
 // The upstream query text is cached per (field, operation) AST node.
 // Queries that differ in arguments, selection, variables or operation
 // must each forward their own text, with the plan cache on and off,
-// and a fragment shared by two operations must carry each operation's
-// variable definitions.
+// and a fragment shared by two operations must carry the variable
+// definitions it uses from each operation. $y is used only by the
+// @include the gateway evaluates, so it is not forwarded: an upstream
+// rejects a defined variable the query does not use.
 func TestGraphQLIngest_ForwardPrintCache(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -66,7 +68,7 @@ query B($x: ID!, $y: Boolean = true) { pets @include(if: $y) { ...F } }`
 				{map[string]any{"query": `{ pets { user(id: "2") { id name } } }`}, []string{"name"}, nil},
 				{map[string]any{"query": `query Q($v: ID!) { pets { user(id: $v) { id } } }`, "variables": map[string]any{"v": "3"}}, []string{"$v: ID!", "user(id: $v)"}, nil},
 				{map[string]any{"query": frag, "operationName": "A", "variables": map[string]any{"x": "4"}}, []string{"$x: ID!"}, []string{"$y"}},
-				{map[string]any{"query": frag, "operationName": "B", "variables": map[string]any{"x": "5"}}, []string{"$x: ID!", "$y: Boolean"}, nil},
+				{map[string]any{"query": frag, "operationName": "B", "variables": map[string]any{"x": "5"}}, []string{"$x: ID!"}, []string{"$y"}},
 			}
 			// Twice: the second pass is served from the cache.
 			for pass := 0; pass < 2; pass++ {

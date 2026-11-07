@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,44 @@ func TestS0HappyPath(t *testing.T) {
 		gw.WaitDeltas(t, pre, dispatchCount, []harness.Want{
 			{Labels: harness.Labels{"namespace": "orders", "version": "v1", "code": "ok"}, Delta: 1},
 		}, 10*time.Second)
+	})
+
+	// A response holds exactly the fields the query selected, for
+	// every upstream kind. admin.listServices is the self-ingested
+	// OpenAPI surface (huma adds $schema to its responses). Runs last:
+	// its calls would move the counts the subtests above check.
+	t.Run("selection", func(t *testing.T) {
+		for _, c := range []struct{ desc, query, path, want string }{
+			{"proto", `{ orders { echo(msg: "x") { msg } } }`, "orders.echo", "msg"},
+			{"openapi", `mutation { billing { echo(body: {msg: "x"}) { msg } } }`, "billing.echo", "msg"},
+			{"graphql", `{ catalog { echo(msg: "x") { msg } } }`, "catalog.echo", "msg"},
+			{"openapi alias and __typename", `mutation { billing { echo(body: {msg: "x"}) { m: msg __typename } } }`, "billing.echo", "__typename,m"},
+			{"graphql alias and __typename", `{ catalog { echo(msg: "x") { m: msg __typename } } }`, "catalog.echo", "__typename,m"},
+			{"admin object", `{ admin { listServices { environment } } }`, "admin.listServices", "environment"},
+			{"admin list of objects", `{ admin { listServices { services { namespace } } } }`, "admin.listServices.services", "namespace"},
+		} {
+			r := gw.MustGraphQL(t, c.query, nil)
+			v := r.Path(c.path)
+			objs, isList := v.([]any)
+			if !isList {
+				objs = []any{v}
+			}
+			if len(objs) == 0 {
+				t.Errorf("%s: no value at %s: %s", c.desc, c.path, r.Data)
+			}
+			for _, o := range objs {
+				obj, _ := o.(map[string]any)
+				var keys []string
+				for k := range obj {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				if strings.Join(keys, ",") != c.want {
+					t.Errorf("%s: selected %s, got fields %v: %s", c.desc, c.want, keys, r.Data)
+					break
+				}
+			}
+		}
 	})
 }
 

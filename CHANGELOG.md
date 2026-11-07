@@ -37,6 +37,7 @@ changes on MINOR, drops on MAJOR.
 ### Fixed
 - Dispatch metric `dispatch_duration_seconds{code}`: one spelling for every upstream kind, the gRPC code name (`Internal`, `Unauthenticated`, ...). OpenAPI and downstream-GraphQL dispatches, `Reject` errors and unclassified errors used `INTERNAL` / `UNAUTHENTICATED` / `internal` style values. Update dashboards and alerts that match the old upper-case or lower-case values.
 - Admin `deprecate` (`POST /admin/services/{namespace}/{version}/deprecate`): an empty `reason` is now a 422 with a `body.reason` field error (GraphQL `extensions.fields`); it was a 500.
+- GraphQL responses from OpenAPI and downstream-GraphQL services, including the self-ingested `admin` surface, now hold only the selected fields. With a `Runtime` transform registered (any `InjectPath` / `InjectType`), they returned the whole upstream object: every OpenAPI field (and huma's `$schema` on `admin`), and for GraphQL every scalar field plus `__typename`, with nested object fields null. Clients that read unselected fields get fewer fields. Also fixed on these paths: named fragments (were dropped on OpenAPI, unknown upstream on GraphQL), `@skip` / `@include` on OpenAPI, a field selected twice (OpenAPI emitted a duplicate key), aliased `__typename` on GraphQL (was the unprefixed upstream name), and variables defined for another root field (forwarded to a GraphQL upstream, which rejects unused variables). An OpenAPI body that is not valid JSON is now an error instead of bytes copied into the response.
 
 ## v2.11.0 — 2026-11-06
 

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/IodeSystems/graphql-go/v2/language/ast"
@@ -28,27 +29,56 @@ func newGraphQLMirror(src *graphQLSource) *graphQLMirror {
 }
 
 // rewriteFieldForRemote returns a clone of the AST field with its
-// Name set to remoteName and any inline-fragment type-conditions
-// in the selection tree un-prefixed (`<ns>_Cat` → `Cat`) so the
-// remote sees its own type names. Nested field names pass through
-// unchanged — the gateway only prefixes top-level names in the
-// local schema. Argument lists and aliases pass through unchanged.
-// Always uses ast.NewX constructors so the Kind fields the
-// printer's visitor relies on are populated.
-func (m *graphQLMirror) rewriteFieldForRemote(field *ast.Field, remoteName string) *ast.Field {
+// Name set to remoteName and the selection tree rewritten by
+// rewriteSelectionSet. Argument lists and aliases pass through
+// unchanged. `more` holds further ASTs for the same response key
+// ({ f { a } f { b } }); their selections merge into one. Always
+// uses ast.NewX constructors so the Kind fields the printer's
+// visitor relies on are populated.
+func (m *graphQLMirror) rewriteFieldForRemote(field *ast.Field, remoteName string, more []*ast.Field, frags map[string]ast.Definition) *ast.Field {
 	out := ast.NewField(&ast.Field{
 		Alias:      field.Alias,
 		Name:       ast.NewName(&ast.Name{Value: remoteName}),
 		Arguments:  field.Arguments,
 		Directives: field.Directives,
 	})
-	if field.SelectionSet != nil {
-		out.SelectionSet = m.rewriteSelectionSet(field.SelectionSet)
-	}
+	out.SelectionSet = m.rewriteSelectionSet(mergeSelectionSets(field, more), frags)
 	return out
 }
 
-func (m *graphQLMirror) rewriteSelectionSet(sel *ast.SelectionSet) *ast.SelectionSet {
+// mergeSelectionSets returns the selections of field and of every
+// field in more, concatenated. The upstream merges repeated
+// selections the way the gateway would (validation §5.3.2 proved
+// they can merge).
+func mergeSelectionSets(field *ast.Field, more []*ast.Field) *ast.SelectionSet {
+	if len(more) == 0 {
+		return field.SelectionSet
+	}
+	var sels []ast.Selection
+	for _, f := range append([]*ast.Field{field}, more...) {
+		if f.SelectionSet != nil {
+			sels = append(sels, f.SelectionSet.Selections...)
+		}
+	}
+	if sels == nil {
+		return nil
+	}
+	return ast.NewSelectionSet(&ast.SelectionSet{Selections: sels})
+}
+
+// rewriteSelectionSet clones sel for the remote:
+//   - inline-fragment type conditions lose the local prefix
+//     (`<ns>_Cat` → `Cat`) so the remote sees its own type names;
+//   - named fragment spreads become inline fragments, because the
+//     forwarded document holds only the operation, not the caller's
+//     fragment definitions;
+//   - an aliased __typename gets its alias marked with
+//     typenameAliasPrefix, so prefixResponseTypenames can find its
+//     value in the response.
+//
+// Nested field names pass through unchanged — the gateway only
+// prefixes top-level names in the local schema.
+func (m *graphQLMirror) rewriteSelectionSet(sel *ast.SelectionSet, frags map[string]ast.Definition) *ast.SelectionSet {
 	if sel == nil {
 		return nil
 	}
@@ -58,40 +88,60 @@ func (m *graphQLMirror) rewriteSelectionSet(sel *ast.SelectionSet) *ast.Selectio
 	for _, s := range sel.Selections {
 		switch n := s.(type) {
 		case *ast.Field:
+			alias := n.Alias
+			if alias != nil && alias.Value != "" && n.Name != nil && n.Name.Value == "__typename" {
+				alias = ast.NewName(&ast.Name{Value: typenameAliasPrefix + alias.Value})
+			}
 			cloned := ast.NewField(&ast.Field{
-				Alias:      n.Alias,
+				Alias:      alias,
 				Name:       n.Name,
 				Arguments:  n.Arguments,
 				Directives: n.Directives,
 			})
 			if n.SelectionSet != nil {
-				cloned.SelectionSet = m.rewriteSelectionSet(n.SelectionSet)
+				cloned.SelectionSet = m.rewriteSelectionSet(n.SelectionSet, frags)
 			}
 			out.Selections = append(out.Selections, cloned)
 		case *ast.InlineFragment:
-			frag := ast.NewInlineFragment(&ast.InlineFragment{
-				Directives: n.Directives,
-			})
-			if n.TypeCondition != nil && n.TypeCondition.Name != nil {
-				frag.TypeCondition = ast.NewNamed(&ast.Named{
-					Name: ast.NewName(&ast.Name{Value: m.unprefixTypeName(n.TypeCondition.Name.Value)}),
-				})
+			out.Selections = append(out.Selections, m.rewriteInlineFragment(n.TypeCondition, n.Directives, n.SelectionSet, frags))
+		case *ast.FragmentSpread:
+			var def *ast.FragmentDefinition
+			if n.Name != nil {
+				def, _ = frags[n.Name.Value].(*ast.FragmentDefinition)
 			}
-			if n.SelectionSet != nil {
-				frag.SelectionSet = m.rewriteSelectionSet(n.SelectionSet)
+			if def == nil {
+				// Unknown fragment: graphql-go's validation rejects
+				// these before dispatch. Forward unchanged.
+				out.Selections = append(out.Selections, s)
+				continue
 			}
-			out.Selections = append(out.Selections, frag)
+			out.Selections = append(out.Selections, m.rewriteInlineFragment(def.TypeCondition, n.Directives, def.SelectionSet, frags))
 		default:
-			// Fragment spreads pass through unchanged. v1 callers don't
-			// synthesise these locally — every selection the gateway
-			// sees comes from rp.Info.FieldASTs which only carries
-			// inline fragments. If a real client ever sends a named
-			// fragment we'd need its definition forwarded too.
 			out.Selections = append(out.Selections, s)
 		}
 	}
 	return out
 }
+
+func (m *graphQLMirror) rewriteInlineFragment(cond *ast.Named, dirs []*ast.Directive, sel *ast.SelectionSet, frags map[string]ast.Definition) *ast.InlineFragment {
+	frag := ast.NewInlineFragment(&ast.InlineFragment{
+		Directives: dirs,
+	})
+	if cond != nil && cond.Name != nil {
+		frag.TypeCondition = ast.NewNamed(&ast.Named{
+			Name: ast.NewName(&ast.Name{Value: m.unprefixTypeName(cond.Name.Value)}),
+		})
+	}
+	frag.SelectionSet = m.rewriteSelectionSet(sel, frags)
+	return frag
+}
+
+// typenameAliasPrefix marks an aliased __typename in a forwarded
+// query (`t: __typename` goes upstream as `__gwtn_t: __typename`).
+// prefixResponseTypenames strips the mark from the response key and
+// prefixes the value. A caller alias that itself starts with this
+// prefix would be misread; "__" aliases are legal but unusual.
+const typenameAliasPrefix = "__gwtn_"
 
 // unprefixTypeName strips the source's "<ns>_" or "<ns>_<vN>_" prefix
 // from a local type name. Returns the name unchanged when there's no
@@ -132,29 +182,42 @@ func jsonUnmarshalLoose(data []byte, v any) error {
 // fires — the upstream's bare type name would leak into the local
 // response unless we patch it here.
 //
+// An aliased __typename comes back under its marked alias
+// (typenameAliasPrefix, set by rewriteSelectionSet): the mark is
+// stripped from the key and the value prefixed the same way.
+//
 // The scanner tracks string-literal context so a string VALUE that
 // literally contains the substring `"__typename":"..."` doesn't get
 // rewritten (rare in practice — JSON would have escaped the inner
 // quotes, but defensive). Numbers, true/false/null on the value side
 // are not type names; the scanner requires a quoted value.
 func (m *graphQLMirror) prefixResponseTypenames(src []byte) []byte {
+	// Both key forms start with `"__`. Most responses select no
+	// __typename: return them without a copy.
+	if !bytes.Contains(src, []byte(`"__`)) {
+		return src
+	}
 	prefix := m.src.namespace + "_"
-	target := []byte(`"__typename"`)
 	out := make([]byte, 0, len(src)+8)
 	i := 0
 	for i < len(src) {
-		// Find next candidate key position. To be a key, the
-		// `"__typename"` literal must appear at a JSON-key slot,
-		// preceded by `{` or `,` (with optional whitespace) and
-		// followed by `:` (with optional whitespace).
-		j := indexAtKey(src[i:], target)
-		if j < 0 {
+		// Find next candidate key position: a `"__typename"` or marked
+		// alias key at a JSON-key slot, preceded by `{` or `,` (with
+		// optional whitespace) and followed by `:` (with optional
+		// whitespace).
+		start, end, alias := indexTypenameKey(src[i:])
+		if start < 0 {
 			out = append(out, src[i:]...)
 			break
 		}
-		// Append up to and including the key + colon + whitespace.
-		out = append(out, src[i:i+j+len(target)]...)
-		i += j + len(target)
+		if alias {
+			// Emit the key without the mark.
+			out = append(out, src[i:i+start+1]...)
+			out = append(out, src[i+start+1+len(typenameAliasPrefix):i+end]...)
+		} else {
+			out = append(out, src[i:i+end]...)
+		}
+		i += end
 		// Skip optional whitespace.
 		for i < len(src) && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
 			out = append(out, src[i])
@@ -197,14 +260,17 @@ func (m *graphQLMirror) prefixResponseTypenames(src []byte) []byte {
 	return out
 }
 
-// indexAtKey returns the index of the first occurrence of `key`
-// (a quoted JSON identifier, e.g. `"__typename"`) in src that sits
-// at a JSON-object key position — preceded by `{` or `,` with
-// optional whitespace, and not inside a string literal. Returns -1
-// when no such occurrence exists.
+// indexTypenameKey finds the first JSON-object key in src that is
+// `"__typename"` or a typenameAliasPrefix-marked alias — preceded by
+// `{` or `,` with optional whitespace, and not inside a string
+// literal. It returns the offsets of the key's opening quote and one
+// past its closing quote, and whether the key is a marked alias.
+// start is -1 when there is no such key.
 //
 // The scanner is byte-level; doesn't allocate.
-func indexAtKey(src, key []byte) int {
+func indexTypenameKey(src []byte) (start, end int, alias bool) {
+	const typename = `"__typename"`
+	const mark = `"` + typenameAliasPrefix
 	inString := false
 	for i := 0; i < len(src); i++ {
 		c := src[i]
@@ -218,33 +284,26 @@ func indexAtKey(src, key []byte) int {
 				inString = false
 			}
 		case c == '"':
-			// Check whether this `"` begins our target key. The key
-			// itself starts with `"`; if the surrounding context is a
-			// key slot, this is the match. The preceding non-whitespace
-			// byte should be `{` or `,`.
+			// A key slot: the preceding non-whitespace byte is `{`
+			// or `,`.
 			pos := i - 1
 			for pos >= 0 && (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r') {
 				pos--
 			}
 			if pos < 0 || src[pos] == '{' || src[pos] == ',' {
-				if i+len(key) <= len(src) && bytesEqual(src[i:i+len(key)], key) {
-					return i
+				rest := src[i:]
+				if bytes.HasPrefix(rest, []byte(typename)) {
+					return i, i + len(typename), false
+				}
+				if bytes.HasPrefix(rest, []byte(mark)) {
+					// GraphQL names hold no quote or escape.
+					if j := bytes.IndexByte(rest[len(mark):], '"'); j >= 0 {
+						return i, i + len(mark) + j + 1, true
+					}
 				}
 			}
 			inString = true
 		}
 	}
-	return -1
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return -1, -1, false
 }
