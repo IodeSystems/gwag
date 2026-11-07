@@ -49,7 +49,7 @@ func TestS10AdminRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if code, err := dev.Do(ctx, http.MethodPut, "/admin/external-dependents/acme", map[string]any{
-		"name": "Acme Corp", "kind": "customer",
+		"name": "Acme Corp", "kind": "customer", "reviewAt": time.Now().Add(90 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		"depends": []map[string]any{{"service": "storefront", "lines": []string{"v1"}}},
 	}, nil); err != nil || code != http.StatusOK {
 		t.Fatalf("dev PUT acme: %d %v", code, err)
