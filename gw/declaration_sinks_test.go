@@ -40,10 +40,11 @@ func newHookSink(t *testing.T, statuses func(n int) int) *hookSink {
 		h.mu.Lock()
 		h.reqs = append(h.reqs, hookRequest{header: r.Header.Clone(), body: b})
 		n := len(h.reqs)
+		statuses := h.statuses
 		h.mu.Unlock()
 		code := http.StatusOK
-		if h.statuses != nil {
-			code = h.statuses(n)
+		if statuses != nil {
+			code = statuses(n)
 		}
 		w.WriteHeader(code)
 	}))
@@ -215,7 +216,9 @@ func TestDeclarationsHook_GivesUp(t *testing.T) {
 	}
 
 	// A 4xx is not retried.
+	sink.mu.Lock()
 	sink.statuses = func(int) int { return http.StatusUnauthorized }
+	sink.mu.Unlock()
 	putExternal(t, g, "beta", acmeV1)
 	sink.waitN(t, 4)
 	wantMetric(t, g, 2, "declarations_hook_failures_total")
