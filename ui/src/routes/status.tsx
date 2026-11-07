@@ -20,7 +20,7 @@ import { useState } from 'react';
 import { client } from '@/api/client';
 import { DashboardQuery } from '@/api/operations';
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute('/status')({
   component: Dashboard,
 });
 

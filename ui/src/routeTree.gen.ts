@@ -17,6 +17,7 @@ import { Route as McpRouteImport } from './routes/mcp'
 import { Route as PeersRouteImport } from './routes/peers'
 import { Route as SchemaRouteImport } from './routes/schema'
 import { Route as ServicesRouteImport } from './routes/services'
+import { Route as StatusRouteImport } from './routes/status'
 import { Route as TokenSignerRouteImport } from './routes/token-signer'
 
 const IndexRoute = IndexRouteImport.update({
@@ -59,6 +60,11 @@ const ServicesRoute = ServicesRouteImport.update({
   path: '/services',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TokenSignerRoute = TokenSignerRouteImport.update({
   id: '/token-signer',
   path: '/token-signer',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
+  '/status': typeof StatusRoute
   '/token-signer': typeof TokenSignerRoute
 }
 export interface FileRoutesByTo {
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
+  '/status': typeof StatusRoute
   '/token-signer': typeof TokenSignerRoute
 }
 export interface FileRoutesById {
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
+  '/status': typeof StatusRoute
   '/token-signer': typeof TokenSignerRoute
 }
 export interface FileRouteTypes {
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/peers'
     | '/schema'
     | '/services'
+    | '/status'
     | '/token-signer'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/peers'
     | '/schema'
     | '/services'
+    | '/status'
     | '/token-signer'
   id:
     | '__root__'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/peers'
     | '/schema'
     | '/services'
+    | '/status'
     | '/token-signer'
   fileRoutesById: FileRoutesById
 }
@@ -144,6 +156,7 @@ export interface RootRouteChildren {
   PeersRoute: typeof PeersRoute
   SchemaRoute: typeof SchemaRoute
   ServicesRoute: typeof ServicesRoute
+  StatusRoute: typeof StatusRoute
   TokenSignerRoute: typeof TokenSignerRoute
 }
 
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/token-signer': {
       id: '/token-signer'
       path: '/token-signer'
@@ -224,6 +244,7 @@ const rootRouteChildren: RootRouteChildren = {
   PeersRoute: PeersRoute,
   SchemaRoute: SchemaRoute,
   ServicesRoute: ServicesRoute,
+  StatusRoute: StatusRoute,
   TokenSignerRoute: TokenSignerRoute,
 }
 export const routeTree = rootRouteImport
