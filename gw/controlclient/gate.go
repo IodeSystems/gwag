@@ -202,23 +202,63 @@ func nextBackoff(d time.Duration) time.Duration {
 }
 
 // registerRetry runs register until it succeeds, a non-retryable
-// error comes back, or ctx ends.
+// error comes back, or ctx ends. With several gateway addresses, an
+// unreachable one moves to the next; the backoff sleep comes after
+// every address failed once.
 func (r *Registration) registerRetry(ctx context.Context) error {
 	backoff := retryMin
-	for {
-		err := r.register(ctx)
+	n := len(r.gws)
+	for attempt := 1; ; attempt++ {
+		gw := r.gateway()
+		err := r.registerOnce(ctx)
 		if err == nil {
 			return nil
 		}
 		if !retryable(err) {
 			return err
 		}
-		r.logger("controlclient: gateway %s unreachable, retrying in %s: %v", r.opts.GatewayAddr, backoff, err)
+		if n > 1 {
+			r.next(gw)
+			if attempt%n != 0 {
+				r.logger("controlclient: gateway %s unreachable, trying %s: %v", gw.addr, r.gateway().addr, err)
+				continue
+			}
+		}
+		r.logger("controlclient: gateway %s unreachable, retrying in %s: %v", r.addrList(), backoff, err)
 		if cerr := sleepCtx(ctx, backoff); cerr != nil {
-			return fmt.Errorf("controlclient: gateway %s unreachable: %w (last error: %v)", r.opts.GatewayAddr, cerr, err)
+			return fmt.Errorf("controlclient: gateway %s unreachable: %w (last error: %v)", r.addrList(), cerr, err)
 		}
 		backoff = nextBackoff(backoff)
 	}
+}
+
+// registerOnce is one register attempt. With several gateway
+// addresses it is bounded by registerTimeout, so a gateway that does
+// not answer moves on to the next one.
+func (r *Registration) registerOnce(ctx context.Context) error {
+	if len(r.gws) > 1 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, registerTimeout)
+		defer cancel()
+	}
+	return r.register(ctx)
+}
+
+// next moves the registration's gateway to the address after gw.
+func (r *Registration) next(gw *gatewayConn) {
+	idx := (r.indexOf(gw) + 1) % len(r.gws)
+	r.mu.Lock()
+	r.cur = idx
+	r.mu.Unlock()
+}
+
+// addrList names the gateway addresses for log lines.
+func (r *Registration) addrList() string {
+	addrs := make([]string, len(r.gws))
+	for i, g := range r.gws {
+		addrs[i] = g.addr
+	}
+	return strings.Join(addrs, ",")
 }
 
 // waitReady polls Heartbeat until no binding is WAITING. Heartbeat
@@ -250,12 +290,22 @@ func (r *Registration) waitReady(ctx context.Context) error {
 		r.mu.Lock()
 		id := r.id
 		r.mu.Unlock()
-		resp, err := r.client.Heartbeat(ctx, &cpv1.HeartbeatRequest{RegistrationId: id})
+		gw := r.gateway()
+		resp, err := gw.client.Heartbeat(ctx, &cpv1.HeartbeatRequest{RegistrationId: id})
 		if err != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("controlclient: still waiting for dependencies (%s): %w", w, ctx.Err())
 			}
-			r.logger("controlclient: heartbeat while waiting: %v", err)
+			r.logger("controlclient: heartbeat to %s while waiting: %v", gw.addr, err)
+			if len(r.gws) > 1 {
+				// Register on the next gateway; the one that holds
+				// the registration is gone or partitioned.
+				r.next(gw)
+				if err := r.registerRetry(ctx); err != nil {
+					return err
+				}
+				continue
+			}
 			if cerr := sleepCtx(ctx, backoff); cerr != nil {
 				return fmt.Errorf("controlclient: still waiting for dependencies (%s): %w", w, cerr)
 			}
@@ -285,5 +335,5 @@ func (r *Registration) deregister() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = r.client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
+	_, _ = r.gateway().client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
 }
