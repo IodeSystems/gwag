@@ -25,6 +25,8 @@
 //	# Talk to a running gateway:
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
+//	gwag drain --list --gateway localhost:50090
+//	gwag drain --wait --gateway localhost:50090 INSTANCE
 //
 //	# Persist named gateway logins so subcommands don't need --gateway:
 //	gwag login --name local --gateway localhost:50090 --token DEADBEEF...
@@ -202,6 +204,8 @@ func main() {
 			os.Exit(schemaCmd(os.Args[2:]))
 		case "sign":
 			os.Exit(signCmd(os.Args[2:]))
+		case "drain":
+			os.Exit(drainCmd(os.Args[2:]))
 		}
 	}
 	runGateway()
