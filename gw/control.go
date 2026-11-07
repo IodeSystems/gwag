@@ -790,15 +790,9 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	t.mu.Lock()
 	_, wasLive := t.live[req.GetNodeId()]
 	delete(t.live, req.GetNodeId())
-	desired := len(t.live)
+	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
 
-	if desired > maxReplicas {
-		desired = maxReplicas
-	}
-	if desired < 1 {
-		desired = 1
-	}
 	curR := int(t.currentR.Load())
 	resp := &cpv1.ForgetPeerResponse{Removed: wasLive, NewReplicas: uint32(curR)}
 	if desired < curR {

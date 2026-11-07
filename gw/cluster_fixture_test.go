@@ -157,7 +157,10 @@ func resetSharedCluster(t *testing.T) {
 // are cleaned up via t.Cleanup.
 func newSharedClusterNode(t *testing.T, cl *Cluster) *clusterNode {
 	t.Helper()
-	gw := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure())
+	// "auto" keeps the 2-node shared cluster at R2, which the
+	// replication tests wait for; TestClusterReplicas_Odd covers the
+	// default policy.
+	gw := New(WithCluster(cl), WithClusterReplicas(ClusterReplicasAuto), WithoutMetrics(), WithoutBackpressure())
 	t.Cleanup(gw.Close)
 
 	cpAddr := freeAddr(t)

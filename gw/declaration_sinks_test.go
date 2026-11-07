@@ -329,7 +329,7 @@ func TestDeclarationsSinks_Cluster(t *testing.T) {
 	var nodes []*Gateway
 	add := func(cl *Cluster) {
 		i := len(nodes)
-		g := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")),
+		g := New(WithCluster(cl), WithClusterReplicas(ClusterReplicasAuto), WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")),
 			WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, "k")),
 			WithDeclarationsFile(DeclarationsFileOptions{Path: filepath.Join(dir, "n"+strconv.Itoa(i)+".json"), Mode: DeclarationsFull}),
 		)
