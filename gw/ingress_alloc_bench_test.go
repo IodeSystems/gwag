@@ -75,3 +75,20 @@ func BenchmarkIngressAlloc_GraphQL(b *testing.B) {
 	}
 	benchIngress(b, gw, `{ pets { user(id:"x") { id name } } }`, `"name":"thing"`)
 }
+
+// Nested-namespace GraphQL upstream: the request lands on
+// graphqlGroupDispatcher, which forwards the whole sub-selection.
+func BenchmarkIngressAlloc_GraphQLGroup(b *testing.B) {
+	client := &http.Client{Transport: cannedRT{func(req []byte) []byte {
+		if bytes.Contains(req, []byte("IntrospectionQuery")) {
+			return []byte(nestedGreeterIntrospection)
+		}
+		return []byte(`{"data":{"greeter":{"hello":{"greeting":"hi"},"echo":"ack"}}}`)
+	}}}
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	if err := gw.AddGraphQL("http://upstream.invalid/graphql", As("svc"), OpenAPIClient(client)); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, `{ svc { greeter { hello(name:"alice") { greeting } echo(msg:"hi") } } }`, `"greeting":"hi"`)
+}
