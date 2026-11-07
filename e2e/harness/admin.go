@@ -278,9 +278,11 @@ type ExternalDependent struct {
 	} `json:"owner,omitempty"`
 	Depends []ExternalPin `json:"depends"`
 	Note    string        `json:"note,omitempty"`
-	// ExpiresAt is RFC 3339; "" = no expiry.
-	ExpiresAt string `json:"expiresAt,omitempty"`
-	Expired   bool   `json:"expired,omitempty"`
+	// ReviewAt is RFC 3339, required on PUT.
+	ReviewAt   string `json:"reviewAt,omitempty"`
+	ReviewDue  bool   `json:"reviewDue,omitempty"`
+	ReviewedAt string `json:"reviewedAt,omitempty"`
+	ReviewedBy string `json:"reviewedBy,omitempty"`
 }
 
 // ExternalPin is one pinned service and its accepted lines.
@@ -302,8 +304,8 @@ func (a *Admin) PutExternalDependent(ctx context.Context, x ExternalDependent) (
 	if x.Note != "" {
 		body["note"] = x.Note
 	}
-	if x.ExpiresAt != "" {
-		body["expiresAt"] = x.ExpiresAt
+	if x.ReviewAt != "" {
+		body["reviewAt"] = x.ReviewAt
 	}
 	var out struct {
 		Warnings []string `json:"warnings"`
@@ -317,7 +319,7 @@ func (a *Admin) DeleteExternalDependent(ctx context.Context, id string) error {
 	return a.Do(ctx, http.MethodDelete, "/admin/external-dependents/"+url.PathEscape(id), nil, nil)
 }
 
-// ExternalDependents lists the declarations, expired ones included.
+// ExternalDependents lists the declarations.
 func (a *Admin) ExternalDependents(ctx context.Context) ([]ExternalDependent, error) {
 	var out struct {
 		ExternalDependents []ExternalDependent `json:"externalDependents"`
