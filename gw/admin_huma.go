@@ -93,6 +93,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
 				Depends:                 adminDepends(s.GetDepends()),
 				Owner:                   adminOwner(s.GetOwner()),
+				Instances:               adminInstances(s.GetInstances()),
 			}
 			if r := rej[poolKey{namespace: s.GetNamespace(), version: s.GetVersion()}]; r != nil {
 				info.RejectedJoins = &rejectedJoinInfo{
@@ -864,6 +865,67 @@ type serviceInfo struct {
 	// declared dependencies); Owner is omitted when not declared.
 	Depends []dependencyInfo `json:"depends"`
 	Owner   *ownerInfo       `json:"owner,omitempty"`
+	// Instances are the control-plane-registered instances of this
+	// (namespace, version) with their start-gate state, waiting ones
+	// included (replicaCount does not count those). Never nil.
+	// Boot-time registrations are not listed.
+	Instances []instanceInfo `json:"instances"`
+}
+
+// instanceInfo is one registered instance and its start-gate state:
+// ready (routable), waiting (a dependency has no ready instance on
+// any accepted line; not routable), degraded (was ready, a
+// dependency is gone since; keeps serving).
+type instanceInfo struct {
+	ReplicaID      string                 `json:"replicaId,omitempty"`
+	RegistrationID string                 `json:"registrationId"`
+	InstanceID     string                 `json:"instanceId,omitempty"`
+	Addr           string                 `json:"addr"`
+	State          string                 `json:"state" enum:"ready,waiting,degraded"`
+	Depends        []dependencyStatusInfo `json:"depends"`
+}
+
+// dependencyStatusInfo is one declared dependency with the accepted
+// lines that currently have a ready instance (presentLines; empty =
+// missing).
+type dependencyStatusInfo struct {
+	Service      string   `json:"service"`
+	Lines        []string `json:"lines"`
+	PresentLines []string `json:"presentLines"`
+}
+
+func adminInstances(in []*cpv1.InstanceStatus) []instanceInfo {
+	out := make([]instanceInfo, 0, len(in)) // never nil
+	for _, i := range in {
+		deps := make([]dependencyStatusInfo, 0, len(i.GetDepends()))
+		for _, d := range i.GetDepends() {
+			deps = append(deps, dependencyStatusInfo{
+				Service:      d.GetService(),
+				Lines:        append([]string{}, d.GetLines()...),
+				PresentLines: append([]string{}, d.GetPresentLines()...),
+			})
+		}
+		out = append(out, instanceInfo{
+			ReplicaID:      i.GetReplicaId(),
+			RegistrationID: i.GetRegistrationId(),
+			InstanceID:     i.GetInstanceId(),
+			Addr:           i.GetAddr(),
+			State:          adminInstanceState(i.GetState()),
+			Depends:        deps,
+		})
+	}
+	return out
+}
+
+func adminInstanceState(s cpv1.InstanceState) string {
+	switch s {
+	case cpv1.InstanceState_INSTANCE_STATE_WAITING:
+		return "waiting"
+	case cpv1.InstanceState_INSTANCE_STATE_DEGRADED:
+		return "degraded"
+	default:
+		return "ready"
+	}
 }
 
 type dependencyInfo struct {

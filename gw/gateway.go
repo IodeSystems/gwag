@@ -94,6 +94,7 @@ type Gateway struct {
 	mcpConfig *mcpConfigState
 	cfg        *config
 	cp         *controlPlane
+	gate       gateState // start gate (start_gate.go)
 	peers      *peerTracker
 	broker     *subBroker
 

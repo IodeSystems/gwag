@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // BuildTag forcing function (plan §4): a release-tagged binary must
@@ -39,11 +40,11 @@ func TestSelfRegister_BuildTag_RejectsUnstable(t *testing.T) {
 // Empty BuildTag means "trunk binary" — the lint is off and unstable
 // is fine. Ensures the gate is opt-in, not always-on.
 func TestSelfRegister_NoBuildTag_AllowsUnstable(t *testing.T) {
-	// Use an unreachable address so the gRPC dial fails fast; we just
-	// need to verify the BuildTag check passed (i.e. the dial got
-	// reached, not short-circuited by the lint). grpc.NewClient is
-	// lazy, so the failure surfaces when the Register RPC is attempted.
-	_, err := SelfRegister(context.Background(), Options{
+	// Use an unreachable address; we just need to verify the BuildTag
+	// check passed (i.e. the dial got reached, not short-circuited by
+	// the lint). SelfRegister retries an unreachable gateway until ctx
+	// ends, so the error surfaces when unreachableCtx expires.
+	_, err := SelfRegister(unreachableCtx(t), Options{
 		GatewayAddr: "127.0.0.1:1",
 		ServiceAddr: "ignored:0",
 		Services: []Service{{
@@ -66,7 +67,7 @@ func TestSelfRegister_NoBuildTag_AllowsUnstable(t *testing.T) {
 // BuildTag set but Version is a numbered cut — the lint should be
 // happy and only the dial-time error should surface.
 func TestSelfRegister_BuildTag_AllowsVN(t *testing.T) {
-	_, err := SelfRegister(context.Background(), Options{
+	_, err := SelfRegister(unreachableCtx(t), Options{
 		GatewayAddr: "127.0.0.1:1",
 		ServiceAddr: "ignored:0",
 		BuildTag:    "v1.2.3",
@@ -82,4 +83,12 @@ func TestSelfRegister_BuildTag_AllowsVN(t *testing.T) {
 	if strings.Contains(err.Error(), "BuildTag") {
 		t.Errorf("BuildTag lint fired for vN: %v", err)
 	}
+}
+
+// unreachableCtx bounds a SelfRegister against an unreachable
+// gateway, which otherwise retries forever (fail closed).
+func unreachableCtx(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
 }
