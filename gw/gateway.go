@@ -1466,6 +1466,11 @@ func New(opts ...Option) *Gateway {
 		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
 	}
+	warnShortHexSecret("signer-secret", cfg.signerSecret)
+	warnShortHexSecret("subscribe-secret", cfg.subAuth.Secret)
+	for kid, sec := range cfg.subAuth.Secrets {
+		warnShortHexSecret("subscribe-secret kid "+kid, sec)
+	}
 	g.declSinks = newDeclarationSinks(g, cfg.declHook, cfg.declFile)
 	g.declSinks.start(life, cfg.cluster == nil)
 	g.gql = g.newGraphQLIngress()

@@ -27,7 +27,7 @@ import (
 //     set; every node's file has one line per change, the same lines
 //     (by seq) on every node
 func TestS9bDeclarationSinks(t *testing.T) {
-	const secret = "e2e-hook-secret"
+	const secret = "kT7vQ2mXp9LdR4sWc8NfH1bZy6JgAe3UoVi5MqBxD0Pn"
 	type record struct {
 		ID         string `json:"id"`
 		Name       string `json:"name"`

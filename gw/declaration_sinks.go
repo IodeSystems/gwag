@@ -77,7 +77,10 @@ type DeclarationsHookOptions struct {
 	// Secret, when set, signs each POST: X-Gwag-Signature is
 	// "sha256=" + hex(HMAC-SHA256(Secret, timestamp + "." + body)),
 	// with timestamp the X-Gwag-Timestamp header (Unix seconds).
-	// Receivers reject an old timestamp to block replay.
+	// Receivers reject an old timestamp to block replay. Checked by
+	// CheckSecretStrength: New panics on a secret under 32 bytes or
+	// under an estimated 128 bits of entropy. Make one with
+	// GenerateSecret or `openssl rand -base64 48`.
 	Secret []byte
 	// Mode is full or delta. Default full.
 	Mode DeclarationsSinkMode
@@ -399,6 +402,11 @@ func newDeclarationSinks(g *Gateway, hook *DeclarationsHookOptions, file *Declar
 		}
 		if _, err := ParseDeclarationsSinkMode(string(h.Mode)); err != nil {
 			panic("gateway: WithDeclarationsHook: " + err.Error())
+		}
+		if len(h.Secret) > 0 {
+			if err := CheckSecretStrength(h.Secret); err != nil {
+				panic("gateway: WithDeclarationsHook: Secret: " + err.Error())
+			}
 		}
 		if h.Client == nil {
 			h.Client = &http.Client{Timeout: 10 * time.Second}

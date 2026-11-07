@@ -55,7 +55,7 @@ func upCmd(args []string) int {
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
 	publicServices := fs.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
 	declHook := fs.String("declarations-hook", "", "POST every external-dependent change to this URL. In a cluster the node that accepted the write sends it, once")
-	declHookSecret := fs.String("declarations-hook-secret", "", "HMAC-SHA256 key for --declarations-hook (the string's bytes): X-Gwag-Signature over X-Gwag-Timestamp + \".\" + body")
+	declHookSecret := fs.String("declarations-hook-secret", "", "HMAC-SHA256 key for --declarations-hook (the string's bytes; at least 32 bytes and 128 bits of estimated entropy, else refused; make one with `gwag secret gen`): X-Gwag-Signature over X-Gwag-Timestamp + \".\" + body")
 	declHookMode := fs.String("declarations-hook-mode", "full", "--declarations-hook body: full (the whole set) or delta (one change)")
 	declFile := fs.String("declarations-file", "", "Keep this file in step with the external dependents. Every node writes its own")
 	declFileMode := fs.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
@@ -262,6 +262,11 @@ func upCmd(args []string) int {
 func declarationsSinkOptions(hookURL, hookSecret, hookMode, filePath, fileMode string) ([]gateway.Option, error) {
 	var opts []gateway.Option
 	if hookURL != "" {
+		if hookSecret != "" {
+			if err := gateway.CheckSecretStrength([]byte(hookSecret)); err != nil {
+				return nil, fmt.Errorf("--declarations-hook-secret: %w", err)
+			}
+		}
 		m, err := gateway.ParseDeclarationsSinkMode(hookMode)
 		if err != nil {
 			return nil, fmt.Errorf("--declarations-hook-mode: %w", err)

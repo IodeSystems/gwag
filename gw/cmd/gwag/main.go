@@ -22,6 +22,9 @@
 //	# Static + runtime registration (no NATS):
 //	gwag --control-plane :50090 --addr :8080
 //
+//	# Print a strong random secret (for --declarations-hook-secret):
+//	gwag secret gen
+//
 //	# Talk to a running gateway:
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
@@ -206,6 +209,8 @@ func main() {
 			os.Exit(signCmd(os.Args[2:]))
 		case "drain":
 			os.Exit(drainCmd(os.Args[2:]))
+		case "secret":
+			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
 		}
 	}
 	runGateway()

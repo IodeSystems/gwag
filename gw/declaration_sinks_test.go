@@ -97,7 +97,7 @@ func fastHook(url string, mode DeclarationsSinkMode, secret string) Declarations
 
 func TestDeclarationsHook_DeltaSignedPutReviewDelete(t *testing.T) {
 	sink := newHookSink(t, nil)
-	g := newExternalGateway(t, WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, "s3cret")))
+	g := newExternalGateway(t, WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, strongTestSecret)))
 
 	putExternal(t, g, "acme", acmeV1)
 	if code, body := adminDo(t, g, http.MethodPost, "/admin/external-dependents/acme/review", `{"reviewAt":"2027-09-30T00:00:00Z","by":"ops"}`); code != http.StatusOK {
@@ -113,7 +113,7 @@ func TestDeclarationsHook_DeltaSignedPutReviewDelete(t *testing.T) {
 		if _, err := strconv.ParseInt(ts, 10, 64); err != nil {
 			t.Fatalf("req %d: timestamp %q", i, ts)
 		}
-		if got, want := r.header.Get("X-Gwag-Signature"), "sha256="+signDeclarationsHook([]byte("s3cret"), ts, r.body); got != want {
+		if got, want := r.header.Get("X-Gwag-Signature"), "sha256="+signDeclarationsHook([]byte(strongTestSecret), ts, r.body); got != want {
 			t.Errorf("req %d: signature %q, want %q", i, got, want)
 		}
 		if signDeclarationsHook([]byte("other"), ts, r.body) == strings.TrimPrefix(r.header.Get("X-Gwag-Signature"), "sha256=") {
@@ -172,7 +172,7 @@ func TestDeclarationsHook_RetriesThenSucceeds(t *testing.T) {
 		}
 		return http.StatusNoContent
 	})
-	g := New(WithoutBackpressure(), WithAdminToken([]byte("tok")), WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, "k")))
+	g := New(WithoutBackpressure(), WithAdminToken([]byte("tok")), WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, strongTestSecret)))
 	t.Cleanup(g.Close)
 	putExternal(t, g, "acme", acmeV1)
 	reqs := sink.waitN(t, 3)
@@ -191,7 +191,7 @@ func TestDeclarationsHook_RetriesThenSucceeds(t *testing.T) {
 
 func TestDeclarationsHook_GivesUp(t *testing.T) {
 	sink := newHookSink(t, func(int) int { return http.StatusInternalServerError })
-	g := New(WithoutBackpressure(), WithAdminToken([]byte("tok")), WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, "k")))
+	g := New(WithoutBackpressure(), WithAdminToken([]byte("tok")), WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, strongTestSecret)))
 	t.Cleanup(g.Close)
 
 	start := time.Now()
@@ -330,7 +330,7 @@ func TestDeclarationsSinks_Cluster(t *testing.T) {
 	add := func(cl *Cluster) {
 		i := len(nodes)
 		g := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("tok")),
-			WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, "k")),
+			WithDeclarationsHook(fastHook(sink.srv.URL, DeclarationsDelta, strongTestSecret)),
 			WithDeclarationsFile(DeclarationsFileOptions{Path: filepath.Join(dir, "n"+strconv.Itoa(i)+".json"), Mode: DeclarationsFull}),
 		)
 		t.Cleanup(g.Close)
