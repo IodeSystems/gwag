@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -612,7 +613,7 @@ func newGatewayCollector(g *Gateway, p string) *gatewayCollector {
 			"Replicas currently ejected from rotation, per service.",
 			[]string{"namespace", "version"}, nil),
 		peers: prometheus.NewDesc(p+"_cluster_peers",
-			"Live gateway peers in the cluster, this node included; 0 when not clustered.",
+			"Gateway nodes currently routed in the NATS cluster: distinct remote servers with a live route, plus this node; 0 when not clustered.",
 			nil, nil),
 	}
 }
@@ -664,13 +665,8 @@ func (c *gatewayCollector) Collect(ch chan<- prometheus.Metric) {
 			}
 		}
 	}
-	peers := 0
-	if t := g.peers; t != nil {
-		t.mu.Lock()
-		peers = len(t.live)
-		t.mu.Unlock()
-	}
 	g.mu.Unlock()
+	peers := g.livePeerCount()
 	for k, n := range kinds {
 		ch <- prometheus.MustNewConstMetric(c.services, prometheus.GaugeValue, float64(n), k.String())
 	}
@@ -678,4 +674,27 @@ func (c *gatewayCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.ejected, prometheus.GaugeValue, float64(n), k.ns, k.ver)
 	}
 	ch <- prometheus.MustNewConstMetric(c.peers, prometheus.GaugeValue, float64(peers))
+}
+
+// livePeerCount counts this node plus the distinct remote NATS servers
+// it holds a live route to; 0 when not clustered. Route state follows
+// the TCP/NATS-ping lifecycle, so a dead peer drops within seconds and
+// a restarted node (new server ID) replaces its predecessor. Distinct
+// RemoteID because route pooling opens several connections per peer.
+// The peers KV bucket is not used: its entries linger for peerTTL after
+// death and raise no delete event on expiry.
+func (g *Gateway) livePeerCount() int {
+	cl := g.cfg.cluster
+	if cl == nil || cl.Server == nil {
+		return 0
+	}
+	rz, err := cl.Server.Routez(&natsd.RoutezOptions{})
+	if err != nil || rz == nil {
+		return 1
+	}
+	remotes := make(map[string]struct{}, len(rz.Routes))
+	for _, r := range rz.Routes {
+		remotes[r.RemoteID] = struct{}{}
+	}
+	return len(remotes) + 1
 }

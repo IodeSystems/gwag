@@ -186,7 +186,7 @@ Admin auth denials are already counted in `admin_auth_total`
 | `schema_rebuild_duration_seconds` | histogram | none | Duration of those rebuilds. Default sink only. |
 | `registrations_total` | counter | `kind`, `outcome` | Registrations seen by this node. `kind`: `proto`, `openapi`, `graphql`, `mcp`, `internalproto`. `outcome`: `created`, `joined` (another replica of an identical schema), `swapped` (`unstable` slot replaced), `rejected`. Includes the gateway's own pub/sub slot at boot. Default sink only. |
 | `registered_services` | gauge | `kind` | Registered services on this node, internal slots excluded (scrape time). Default sink only. |
-| `cluster_peers` | gauge | none | Live gateway peers including this node; 0 when not clustered (scrape time). Default sink only. |
+| `cluster_peers` | gauge | none | This node plus the distinct remote cluster nodes it has a live NATS route to; 0 when not clustered (scrape time). A killed peer drops within seconds; a restarted node (new node id) replaces its old id. Read from NATS route state, not the peers KV bucket, so `/api/admin/peers` can still list a dead peer for up to its 30s TTL after the gauge drops. Default sink only. |
 | `build_info` | gauge | `version`, `go_version` | Always 1. `version` is the module version from the build, `devel` when unknown. Default sink only. |
 
 The scrape-time gauges take the gateway's registry lock briefly; a
