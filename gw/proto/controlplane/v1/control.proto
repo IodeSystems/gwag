@@ -204,6 +204,60 @@ message RegisterResponse {
 
   // The gateway's effective TTL, in case the request specified 0.
   uint32 ttl_seconds = 2;
+
+  // Start-gate state of each binding in the request, in request
+  // order. A WAITING binding is not routable; it becomes READY (and
+  // routable) on its own when its dependencies are present. Empty
+  // from gateways that predate the start gate: treat as all READY.
+  repeated BindingStatus bindings = 3;
+}
+
+// InstanceState is the start-gate state of one registered instance
+// of a binding.
+enum InstanceState {
+  INSTANCE_STATE_UNSPECIFIED = 0;
+  // Routable. Every declared dependency has at least one accepted
+  // line with a ready instance (or the binding declares none).
+  INSTANCE_STATE_READY = 1;
+  // Not routable yet: at least one dependency has no accepted line
+  // with a ready instance. The service should not start serving.
+  INSTANCE_STATE_WAITING = 2;
+  // Was READY and keeps serving, but a dependency has since lost
+  // every ready instance. Not a reason to stop: no cascade.
+  INSTANCE_STATE_DEGRADED = 3;
+}
+
+// DependencyStatus is one declared dependency and which of its
+// accepted lines currently have at least one ready instance. The
+// consumer picks the line to call from present_lines; the gateway
+// does not rewrite calls.
+message DependencyStatus {
+  string service = 1;
+  // Accepted lines, as declared.
+  repeated string lines = 2;
+  // Subset of lines with >= 1 ready instance. Empty = missing.
+  repeated string present_lines = 3;
+}
+
+// BindingStatus is the start-gate state of one binding of a
+// registration.
+message BindingStatus {
+  string namespace = 1;
+  string version = 2;
+  InstanceState state = 3;
+  repeated DependencyStatus depends = 4;
+}
+
+// InstanceStatus is the start-gate state of one registered instance
+// (one binding of one Register call) of a (namespace, version).
+message InstanceStatus {
+  // Registry replica id (cluster mode); empty standalone.
+  string replica_id = 1;
+  string registration_id = 2;
+  string instance_id = 3;
+  string addr = 4;
+  InstanceState state = 5;
+  repeated DependencyStatus depends = 6;
 }
 
 message HeartbeatRequest {
@@ -215,6 +269,11 @@ message HeartbeatResponse {
   // already evicted it (network partition, restart, etc.) and the
   // service should re-Register from scratch.
   bool ok = 1;
+
+  // Current start-gate state of each binding of the registration,
+  // in Register request order. Empty when ok is false, and from
+  // gateways that predate the start gate.
+  repeated BindingStatus bindings = 2;
 }
 
 message DeregisterRequest {
@@ -310,6 +369,13 @@ message ServiceInfo {
   // services registered without a manifest (boot-time AddProto etc.).
   repeated Dependency depends = 6;
   Owner owner = 7;
+  // Control-plane-registered instances of this (namespace, version)
+  // with their start-gate state, including WAITING ones that are not
+  // in the pool yet (replica_count does not count them). Boot-time
+  // registrations (AddProto etc.) are not listed; they count in
+  // replica_count and are always ready. A (namespace, version) with
+  // only WAITING instances is listed with replica_count 0.
+  repeated InstanceStatus instances = 8;
 }
 
 // SubscribeAuthCode is the result of an attempted subscribe. Both the
