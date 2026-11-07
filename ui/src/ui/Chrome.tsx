@@ -11,7 +11,7 @@ import {
 import PaletteIcon from '@mui/icons-material/Palette';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import { presetList, useThemeMode, type Mode, type Preset } from './theme';
+import { envAccent, presetList, presets, useThemeMode, type Mode, type Preset } from './theme';
 
 /** Dark/light switch. Persists via AppThemeProvider. */
 export function ThemeToggle() {
@@ -26,13 +26,20 @@ export function ThemeToggle() {
   );
 }
 
-/** Environment name pill, coloured by the environment accent. */
+/** Environment name pill, coloured by that environment's accent (the theme's
+ * own accent when `name` is the theme's environment). */
 export function EnvBadge({ name }: { name?: string }) {
   return (
     <Box
       component="span"
       title="Environment"
-      sx={(t) => ({
+      sx={(theme) => {
+        const accent =
+          name && name !== theme.gwag.environment
+            ? envAccent(name, presets[theme.gwag.preset].env[theme.palette.mode])
+            : theme.gwag.envAccent;
+        const t = { ...theme, gwag: { ...theme.gwag, envAccent: accent } };
+        return {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 0.75,
@@ -52,7 +59,8 @@ export function EnvBadge({ name }: { name?: string }) {
           borderRadius: '50%',
           bgcolor: t.gwag.envAccent,
         },
-      })}
+        };
+      }}
     >
       {name ?? 'env'}
     </Box>
