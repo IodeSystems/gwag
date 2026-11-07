@@ -259,7 +259,7 @@ func TestSchemaHandler_ServiceSelectorFiltersSDL(t *testing.T) {
 		t.Fatalf("authd: %v", err)
 	}
 
-	srv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	srv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(srv.Close)
 
 	get := func(t *testing.T, q string) (int, string) {
@@ -343,7 +343,7 @@ func TestSchemaRebuild_SubscriptionMultiVersion(t *testing.T) {
 	}
 	gw.mu.Unlock()
 
-	srv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	srv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(srv.Close)
 	resp, err := http.Get(srv.URL)
 	if err != nil {

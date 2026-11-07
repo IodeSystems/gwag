@@ -30,7 +30,7 @@ func TestSchemaSDL_PathBasedAddProtoSurfacesDescriptions(t *testing.T) {
 		t.Fatalf("AddProto: %v", err)
 	}
 
-	srv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	srv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL + "?service=greeter")

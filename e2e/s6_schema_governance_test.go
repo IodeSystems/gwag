@@ -231,14 +231,14 @@ func TestS6SchemaGovernance(t *testing.T) {
 
 		t.Run("schema diff shows it", func(t *testing.T) {
 			// The CI gate (`gwag schema diff --strict`) sees the removal as breaking.
-			out, code := schemaDiff(t, gw.DevToken(), oldFile, gw.SchemaURL("billing"))
+			out, code := schemaDiff(t, oldFile, gw.SchemaURL("billing"))
 			t.Logf("gwag schema diff --strict (unstable, before -> after):\n%s", out)
 			if code == 0 || !strings.Contains(out, "[BREAKING]") || !strings.Contains(out, "instance") {
 				t.Errorf("exit %d; want a failure naming the removed instance field", code)
 			}
 			// The locked line shows no difference to the file taken before
 			// the refused registration.
-			out, code = schemaDiff(t, gw.DevToken(), write("orders-before.graphql", ordersSDL), gw.SchemaURL("orders"))
+			out, code = schemaDiff(t, write("orders-before.graphql", ordersSDL), gw.SchemaURL("orders"))
 			if code != 0 || !strings.Contains(out, "(no differences)") {
 				t.Errorf("orders v1 diff: exit %d: %s", code, out)
 			}
@@ -326,10 +326,9 @@ func TestS6SchemaGovernance(t *testing.T) {
 
 // schemaDiff runs `gwag schema diff --strict` and returns its output
 // and exit code.
-// bearer is the dev or admin token for a gateway URL source.
-func schemaDiff(t *testing.T, bearer, from, to string) (string, int) {
+func schemaDiff(t *testing.T, from, to string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(harness.Binary(t, "gwag"), "schema", "diff", "--from", from, "--to", to, "--strict", "--bearer", bearer)
+	cmd := exec.Command(harness.Binary(t, "gwag"), "schema", "diff", "--from", from, "--to", to, "--strict")
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	switch {

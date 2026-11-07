@@ -69,12 +69,6 @@ type Gateway struct {
 	// schema, rebuilt in lockstep by assembleLocked so /schema/graphql
 	// can decorate the served SDL with directives.
 	schemaAnnotations atomic.Pointer[ir.AnnotationIndex]
-	// publicView is the schema anonymous callers are described
-	// (schema_view.go), built on first use per schema generation.
-	// publicGen counts changes of a line's public flag that do not
-	// rebuild the schema.
-	publicView atomic.Pointer[publicSchemaView]
-	publicGen  atomic.Uint64
 
 	// stableVN tracks the highest-ever-seen "vN" per namespace.
 	// Monotonic; only advances. Read at schema-build time so the
@@ -1147,12 +1141,6 @@ func WithMaxDepth(n int) Option {
 // its schema. The schema export handlers (SchemaHandler and siblings)
 // keep serving: mount them where only your tooling reaches them.
 //
-// Without this option, introspection answers callers with no role
-// token with the public services only (WithPublicServices), and the
-// dev and admin roles with every service. The token rides in
-// RoleTokenHeader or Authorization: Bearer; on a WebSocket, in the
-// connection_init payload under the same names.
-//
 // Stability: stable
 func WithoutIntrospection() Option {
 	return func(cfg *config) { cfg.noIntrospection = true }
@@ -2211,14 +2199,6 @@ func (g *Gateway) Handler() http.Handler {
 // the unfiltered one). Codegen pipelines that always want the whole
 // thing pay no extra cost.
 //
-// Role: a request with the dev or admin token (RoleTokenHeader, or
-// Authorization: Bearer) gets every service; one with no token gets
-// the public services only (WithPublicServices); a token that fails
-// is 401. The X-Gwag-Schema-View response header says which view
-// ("full" or "public") answered. This hides the schema, it is not
-// access control: see WithTrustedDocuments. The proto and OpenAPI
-// exports follow the same rule.
-//
 // Stability: stable
 func (g *Gateway) SchemaHandler() http.Handler {
 	g.mu.Lock()
@@ -2240,34 +2220,18 @@ func (g *Gateway) SchemaHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		full, ok := g.schemaExportFull(w, r)
-		if !ok {
-			return
-		}
 		var schema *graphql.Schema
 		var annotations *ir.AnnotationIndex
-		switch {
-		case len(selectors) == 0 && full:
+		if len(selectors) == 0 {
 			schema = g.schema.Load()
 			if schema == nil {
 				http.Error(w, "schema not assembled", http.StatusServiceUnavailable)
 				return
 			}
 			annotations = g.schemaAnnotations.Load()
-		case len(selectors) == 0:
-			v, err := g.publicSchema()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			schema, annotations = v.schema, v.annotations
-		default:
-			filter := schemaFilter{selectors: selectors}
+		} else {
 			g.mu.Lock()
-			if !full {
-				filter.lines, _ = g.publicLinesLocked()
-			}
-			built, builtAnn, err := g.buildSchemaLocked(filter)
+			built, builtAnn, err := g.buildSchemaLocked(schemaFilter{selectors: selectors})
 			g.mu.Unlock()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
