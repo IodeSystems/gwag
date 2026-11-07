@@ -5,6 +5,10 @@ schema {
 }
 
 type AdminMutationNamespace {
+  deleteExternalDependent(
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
@@ -17,6 +21,11 @@ type AdminMutationNamespace {
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
+  putExternalDependent(
+    body: admin_PutExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
@@ -32,6 +41,7 @@ type AdminQueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
+  listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
@@ -53,6 +63,10 @@ type AdminQueryNamespace {
 }
 
 type AdminStableMutationNamespace {
+  deleteExternalDependent(
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
@@ -65,6 +79,11 @@ type AdminStableMutationNamespace {
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
+  putExternalDependent(
+    body: admin_PutExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -78,6 +97,7 @@ type AdminStableQueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
+  listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
@@ -97,6 +117,10 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
+  deleteExternalDependent(
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_DeleteExternalDependentOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
@@ -109,6 +133,11 @@ type AdminV1MutationNamespace {
   mcpSchemaExpand(body: admin_McpSchemaExpandInBodyInput!): admin_McpSchemaExpandOutBody
   mcpSchemaSearch(body: admin_McpSchemaSearchInBodyInput!): admin_McpSchemaSearchOutBody
   mcpSetAutoInclude(body: admin_McpSetAutoIncludeInBodyInput!): admin_McpListOutBody
+  putExternalDependent(
+    body: admin_PutExternalDependentInBodyInput!
+    """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
+    id: String!
+  ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -122,6 +151,7 @@ type AdminV1QueryNamespace {
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
+  listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
@@ -264,12 +294,18 @@ type admin_ChannelsOutBody {
   channels: [admin_ChannelInfo!]
 }
 
+type admin_DeleteExternalDependentOutBody {
+  deleted: Boolean!
+}
+
 type admin_DependencyGraphOutBody {
   activeEdges: [admin_GraphActiveEdge!]
   """header: caller ids come from a request header and can be forged; extractor: a configured CallerIDExtractor; none: every caller is "unknown"."""
   callerSource: admin_DependencyGraphOutBodyCallerSource!
   desiredEdges: [admin_GraphDesiredEdge!]
   environment: String!
+  """Declared external dependents, expired ones included (expired ones add no edges)."""
+  externalDependents: [admin_ExternalDependentInfo!]
   nodes: [admin_GraphNode!]
   """Usage is per gateway node, in memory."""
   scope: admin_DependencyGraphOutBodyScope!
@@ -348,6 +384,52 @@ type admin_DrainOutBody {
   reason: String
 }
 
+type admin_ExternalDependentInfo {
+  depends: [admin_ExternalPinInfo!]
+  """Past expiresAt: listed, but no longer counts as a dependent."""
+  expired: Boolean!
+  """RFC 3339; empty = no expiry."""
+  expiresAt: String!
+  id: String!
+  """customer, partner, app or other."""
+  kind: String!
+  """Display name; empty = id."""
+  name: String!
+  note: String!
+  owner: admin_ExternalOwnerInfo
+  updatedUnixMs: Long!
+}
+
+type admin_ExternalDependentsOutBody {
+  externalDependents: [admin_ExternalDependentInfo!]
+}
+
+input admin_ExternalOwnerInInput {
+  contact: String
+  team: String
+}
+
+type admin_ExternalOwnerInfo {
+  """How to reach them (email, channel)."""
+  contact: String!
+  """Team on this side that owns the relationship."""
+  team: String!
+}
+
+input admin_ExternalPinInInput {
+  """Accepted lines: vN or unstable, the same rule as a binding's depends."""
+  lines: [String!]
+  """Provider namespace. Need not be registered yet."""
+  service: String!
+}
+
+type admin_ExternalPinInfo {
+  """Accepted lines: vN or unstable."""
+  lines: [String!]
+  """Provider namespace."""
+  service: String!
+}
+
 type admin_ForgetOutBody {
   newReplicas: Int!
   removed: Boolean!
@@ -368,6 +450,8 @@ type admin_GraphActiveEdge {
 }
 
 type admin_GraphDesiredEdge {
+  """service: a registered line; external: a declared external dependent (consumerNamespace is its id, consumerVersion is empty)."""
+  consumerKind: admin_GraphDesiredEdgeConsumerKind!
   consumerNamespace: String!
   consumerVersion: String!
   """Consumer instances that declare this dependency (0 = line manifest only)."""
@@ -379,6 +463,12 @@ type admin_GraphDesiredEdge {
   presentLines: [String!]
   """Provider namespace."""
   provider: String!
+}
+
+"""service: a registered line; external: a declared external dependent (consumerNamespace is its id, consumerVersion is empty)."""
+enum admin_GraphDesiredEdgeConsumerKind {
+  external
+  service
 }
 
 type admin_GraphInstance {
@@ -593,6 +683,25 @@ type admin_PeerInfo {
 
 type admin_PeersOutBody {
   peers: [admin_PeerInfo!]
+}
+
+input admin_PutExternalDependentInBodyInput {
+  """Pinned lines per service; at least one."""
+  depends: [admin_ExternalPinInInput!]
+  """RFC 3339 date-time. Past it the declaration stops counting and is listed as expired."""
+  expiresAt: String
+  """customer, partner, app or other."""
+  kind: String!
+  """Display name, e.g. "Acme Corp"."""
+  name: String
+  note: String
+  owner: admin_ExternalOwnerInInput
+}
+
+type admin_PutExternalDependentOutBody {
+  externalDependent: admin_ExternalDependentInfo!
+  """Pins on a service or line not registered now (accepted)."""
+  warnings: [String!]
 }
 
 type admin_RegisteredAtInfo {

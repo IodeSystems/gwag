@@ -374,6 +374,7 @@ export const DependencyGraphQuery = graphql(`
           }
         }
         desiredEdges {
+          consumerKind
           consumerNamespace
           consumerVersion
           provider
@@ -397,6 +398,46 @@ export const DependencyGraphQuery = graphql(`
             okCount
           }
         }
+        externalDependents {
+          id
+          name
+          kind
+          owner {
+            team
+            contact
+          }
+          depends {
+            service
+            lines
+          }
+          note
+          expiresAt
+          expired
+          updatedUnixMs
+        }
+      }
+    }
+  }
+`);
+
+export const PutExternalDependentMutation = graphql(`
+  mutation PutExternalDependent($id: String!, $body: admin_PutExternalDependentInBodyInput!) {
+    admin {
+      putExternalDependent(id: $id, body: $body) {
+        externalDependent {
+          id
+        }
+        warnings
+      }
+    }
+  }
+`);
+
+export const DeleteExternalDependentMutation = graphql(`
+  mutation DeleteExternalDependent($id: String!) {
+    admin {
+      deleteExternalDependent(id: $id) {
+        deleted
       }
     }
   }
