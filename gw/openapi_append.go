@@ -28,10 +28,9 @@ import (
 // degrades the walker to the pre-Phase-3a behavior (untyped
 // passthrough, __typename emits null).
 type openAPIWalker struct {
+	fieldCollector
 	svc    *ir.Service
 	prefix string // "<ns>_" or "<ns>_<vN>_" — matches renderer naming
-	frags  map[string]ast.Definition
-	vars   map[string]any
 }
 
 // appendValue walks JSON `raw` in lockstep with the selection,
@@ -127,10 +126,11 @@ func (w openAPIWalker) appendObject(dst []byte, raw json.RawMessage, sel *ast.Se
 		}
 		return append(dst, '}'), nil
 	}
+	gate := fragmentGate{prefix: w.prefix, t: t, union: union}
 	var fields []collectedField
-	fields = w.collect(fields, sel, t, union, nil)
+	fields = w.collect(fields, sel, gate, nil)
 	for _, s := range more {
-		fields = w.collect(fields, s, t, union, nil)
+		fields = w.collect(fields, s, gate, nil)
 	}
 	names, vals := namesBuf[:0], valsBuf[:0]
 	if len(fields) > plainSelectionMax {
@@ -162,39 +162,6 @@ func (w openAPIWalker) appendObject(dst []byte, raw json.RawMessage, sel *ast.Se
 	return append(dst, '}'), nil
 }
 
-// plainSelectionMax bounds plainSelection and the stack buffers
-// appendObject scans into.
-const plainSelectionMax = 32
-
-// plainSelection reports whether sel can be emitted in order without
-// field collection: only fields, no directives, no repeated response
-// key. Most selections are plain; the others go through collect.
-func plainSelection(sel *ast.SelectionSet) bool {
-	if sel == nil || len(sel.Selections) > plainSelectionMax {
-		return false
-	}
-	for i, s := range sel.Selections {
-		f, ok := s.(*ast.Field)
-		if !ok || len(f.Directives) > 0 {
-			return false
-		}
-		k := selectionResponseKey(f)
-		for _, prev := range sel.Selections[:i] {
-			if selectionResponseKey(prev.(*ast.Field)) == k {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func selectionResponseKey(f *ast.Field) string {
-	if f.Alias != nil && f.Alias.Value != "" {
-		return f.Alias.Value
-	}
-	return f.Name.Value
-}
-
 // appendField emits one `"key":value` pair for the field `name` of
 // object type `t`. rawChild is the member's upstream value, nil when
 // the upstream object has no such member.
@@ -220,137 +187,6 @@ func (w openAPIWalker) appendField(dst []byte, rawChild []byte, key, name string
 		}
 	}
 	return w.appendValue(dst, rawChild, sel, more, childRef)
-}
-
-// collectedField is one response key after field collection: the
-// field name and the sub-selection of every occurrence.
-type collectedField struct {
-	key  string
-	name string
-	sels []*ast.SelectionSet
-}
-
-// collect is the spec's CollectFields (§6.3.2) for the object type
-// `t`: it follows inline fragments and named fragment spreads whose
-// type condition applies, drops selections that @skip / @include
-// exclude, and merges repeated response keys in first-seen order.
-// `union` is set when `t` is a variant of that union; fragments are
-// then gated by type condition. Outside a union, graphql-go's
-// validation already proved every fragment applies to `t`.
-func (w openAPIWalker) collect(out []collectedField, sel *ast.SelectionSet, t, union *ir.Type, visited []string) []collectedField {
-	if sel == nil {
-		return out
-	}
-	for _, s := range sel.Selections {
-		switch n := s.(type) {
-		case *ast.Field:
-			if !w.included(n.Directives) {
-				continue
-			}
-			key := selectionResponseKey(n)
-			merged := false
-			for i := range out {
-				if out[i].key == key {
-					if n.SelectionSet != nil {
-						out[i].sels = append(out[i].sels, n.SelectionSet)
-					}
-					merged = true
-					break
-				}
-			}
-			if merged {
-				continue
-			}
-			c := collectedField{key: key, name: n.Name.Value}
-			if n.SelectionSet != nil {
-				c.sels = []*ast.SelectionSet{n.SelectionSet}
-			}
-			out = append(out, c)
-		case *ast.InlineFragment:
-			if !w.included(n.Directives) || !w.fragmentApplies(n.TypeCondition, t, union) {
-				continue
-			}
-			out = w.collect(out, n.SelectionSet, t, union, visited)
-		case *ast.FragmentSpread:
-			if n.Name == nil || !w.included(n.Directives) {
-				continue
-			}
-			name := n.Name.Value
-			seen := false
-			for _, v := range visited {
-				if v == name {
-					seen = true
-					break
-				}
-			}
-			if seen {
-				continue
-			}
-			visited = append(visited, name)
-			frag, ok := w.frags[name].(*ast.FragmentDefinition)
-			if !ok || !w.fragmentApplies(frag.TypeCondition, t, union) {
-				continue
-			}
-			out = w.collect(out, frag.SelectionSet, t, union, visited)
-		}
-	}
-	return out
-}
-
-// fragmentApplies reports whether a fragment with type condition
-// `cond` applies to object type `t`. Type conditions carry the local
-// prefixed name; the IR names do not.
-func (w openAPIWalker) fragmentApplies(cond *ast.Named, t, union *ir.Type) bool {
-	if cond == nil || cond.Name == nil || union == nil {
-		return true
-	}
-	if t == nil {
-		return false
-	}
-	bare := cond.Name.Value
-	if w.prefix != "" && len(bare) > len(w.prefix) && bare[:len(w.prefix)] == w.prefix {
-		bare = bare[len(w.prefix):]
-	}
-	return bare == t.Name || bare == union.Name
-}
-
-// included evaluates @skip and @include (§3.13.2, §3.13.3). @skip
-// wins when both are present.
-func (w openAPIWalker) included(dirs []*ast.Directive) bool {
-	for _, d := range dirs {
-		if d == nil || d.Name == nil {
-			continue
-		}
-		switch d.Name.Value {
-		case "skip":
-			if w.directiveIf(d) {
-				return false
-			}
-		case "include":
-			if !w.directiveIf(d) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (w openAPIWalker) directiveIf(d *ast.Directive) bool {
-	for _, a := range d.Arguments {
-		if a == nil || a.Name == nil || a.Name.Value != "if" {
-			continue
-		}
-		switch v := a.Value.(type) {
-		case *ast.BooleanValue:
-			return v.Value
-		case *ast.Variable:
-			if v.Name != nil {
-				b, _ := w.vars[v.Name.Value].(bool)
-				return b
-			}
-		}
-	}
-	return false
 }
 
 // resolveUnionVariant runs the discriminator+heuristic chain on the
