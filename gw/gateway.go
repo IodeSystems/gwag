@@ -1034,9 +1034,16 @@ func WithMCPAutoInclude() Option {
 // When unset, PprofMux returns nil so the operator's wiring code can
 // detect the disabled state without consulting a separate flag.
 //
+// It also registers /debug/pprof/* as a destructive read, so
+// AdminMiddleware needs the admin role for its GETs (they would
+// otherwise pass as public reads).
+//
 // Stability: stable
 func WithPprof() Option {
-	return func(cfg *config) { cfg.pprof = true }
+	return func(cfg *config) {
+		cfg.pprof = true
+		cfg.destructiveReads = append(cfg.destructiveReads, "/debug/pprof/*")
+	}
 }
 
 // WithRequestLog directs one JSON line per request to `w`, useful

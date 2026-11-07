@@ -55,6 +55,7 @@ changes on MINOR, drops on MAJOR.
 - GraphQL responses from proto services follow spec field collection: a named fragment spread was dropped (its fields were missing, `{}` when it was the whole selection), `@skip` / `@include` were ignored, a response key selected twice was emitted twice (duplicate JSON key, sub-selections not merged), the same field selected twice at the operation root kept only the first selection, and `__typename` returned the bare message name (`Thing`) instead of the schema type name (`Proj_V1_Thing`).
 
 ### Security
+- `/debug/pprof` (`WithPprof`, `--pprof`) under `AdminMiddleware` answered GETs with no token: GETs passed as public reads. `WithPprof` now registers `/debug/pprof/*` as a destructive read, so it needs the admin token (dev gets 403).
 - Anonymous admin reads no longer expose every service, owner contacts, instance addresses, external-dependent declarations, peers, injectors or the MCP config. Before, any client that could reach `/api/admin/*` or the `admin` GraphQL fields read all of it.
 - Admin token and dev token comparisons are constant time; both run on every check.
 

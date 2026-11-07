@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,5 +48,35 @@ func TestPprofMux_NamedProfileRoutes(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("/debug/pprof/heap status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestPprofMux_AdminMiddlewareNeedsAdmin: pprof under AdminMiddleware
+// (the documented wiring) needs the admin token. GETs pass
+// AdminMiddleware as public reads unless the path is a destructive
+// read, so WithPprof must register /debug/pprof/ as one.
+func TestPprofMux_AdminMiddlewareNeedsAdmin(t *testing.T) {
+	admin := []byte("0123456789abcdef0123456789abcdef")
+	dev := []byte("fedcba9876543210fedcba9876543210")
+	g := New(WithPprof(), WithoutMetrics(), WithAdminToken(admin), WithDevToken(dev))
+	defer g.Close()
+	h := g.AdminMiddleware(g.PprofMux())
+	for _, c := range []struct {
+		name, bearer string
+		want         int
+	}{
+		{"anonymous", "", http.StatusUnauthorized},
+		{"dev", hex.EncodeToString(dev), http.StatusForbidden},
+		{"admin", hex.EncodeToString(admin), http.StatusOK},
+	} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/debug/pprof/goroutine?debug=1", nil)
+		if c.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+c.bearer)
+		}
+		h.ServeHTTP(rr, req)
+		if rr.Code != c.want {
+			t.Errorf("%s: status %d, want %d", c.name, rr.Code, c.want)
+		}
 	}
 }
