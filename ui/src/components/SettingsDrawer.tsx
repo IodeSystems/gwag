@@ -7,7 +7,9 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { useQueryClient } from '@tanstack/react-query';
 import { PresetPicker } from '@/ui';
+import { useAdminRole } from '@/api/role';
 import {
   getAdminToken,
   setAdminToken,
@@ -32,12 +34,15 @@ interface SettingsDrawerProps {
 }
 
 /**
- * SettingsDrawer is the operator's entry point for pasting the admin
- * bearer token. The gateway logs `admin token = <hex>` at boot; copy
- * that string into the field. Stored in sessionStorage only.
+ * SettingsDrawer is the operator's entry point for pasting a bearer
+ * token: the admin token or the dev token. The gateway logs both at
+ * boot (`admin token = <hex>`, `dev token = <hex>`) and decides the
+ * role. Stored in sessionStorage only.
  */
 export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const current = useAdminToken();
+  const { role, invalid } = useAdminRole();
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState(current ?? '');
 
   // Keep the draft in sync when the drawer opens against a changed
@@ -49,12 +54,16 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
     if (open) setDraft(current ?? '');
   }
 
+  // Every admin read depends on the role, so refetch them all when
+  // the token changes.
   const save = () => {
     setAdminToken(draft.trim() || null);
+    void queryClient.invalidateQueries();
     onClose();
   };
   const clear = () => {
     setAdminToken(null);
+    void queryClient.invalidateQueries();
     setDraft('');
   };
 
@@ -71,12 +80,14 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
         <PresetPicker />
 
         <Typography variant="subtitle2" sx={{ mt: 2 }}>
-          Admin bearer token
+          Bearer token
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Required for write operations (forget peer, sign tokens, etc.).
-          The gateway logs <code>admin token = …</code> at boot — paste that
-          value here.
+          The dev token shows every service and lets you edit external
+          dependents. The admin token also allows every write (drain,
+          deprecate, forget peer, sign tokens). The gateway logs{' '}
+          <code>admin token = …</code> and <code>dev token = …</code> at
+          boot. Paste either one here.
         </Typography>
 
         <TextField
@@ -109,8 +120,16 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           tab discards it; refresh keeps it.
         </Typography>
 
-        <Typography variant="caption" color={current ? 'success.main' : 'warning.main'} sx={{ display: 'block', mt: 1 }}>
-          {current ? 'Token is set.' : 'No token set — write operations will return 401.'}
+        <Typography
+          variant="caption"
+          color={invalid ? 'error.main' : current ? 'success.main' : 'warning.main'}
+          sx={{ display: 'block', mt: 1 }}
+        >
+          {invalid
+            ? 'The gateway rejected this token (rotated, or from another gateway).'
+            : current
+              ? `Signed in as ${role === 'admin' ? 'Admin' : role === 'dev' ? 'Dev' : role}.`
+              : 'No token set: public services only, no writes.'}
         </Typography>
       </Box>
     </Drawer>

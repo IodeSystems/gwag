@@ -23,6 +23,7 @@ import {
   McpSetAutoIncludeMutation,
 } from '@/api/operations';
 import { DataTable, Page, Panel, StatusChip, useToast, type Column } from '@/ui';
+import { useRoleGate } from '@/api/role';
 
 export const Route = createFileRoute('/mcp')({
   component: McpConfig,
@@ -60,6 +61,7 @@ const columns: Column<Entry>[] = [
 ];
 
 function McpConfig() {
+  const { allowed: canEdit, tip: editTip } = useRoleGate('admin');
   const qc = useQueryClient();
   const toast = useToast();
   const [includeDraft, setIncludeDraft] = useState('');
@@ -139,11 +141,12 @@ function McpConfig() {
   const autoPanel = (
     <Panel>
       <FormControlLabel
+        title={editTip || undefined}
         control={
           <Switch
             checked={autoInclude}
             onChange={(e) => toggleAuto.mutate(e.target.checked)}
-            disabled={toggleAuto.isPending}
+            disabled={!canEdit || toggleAuto.isPending}
           />
         }
         label={
@@ -202,15 +205,19 @@ function McpConfig() {
             }}
             fullWidth
           />
-          <Button
-            variant="contained"
-            disabled={!includeDraft.trim() || includeAdd.isPending}
-            onClick={() => includeAdd.mutate(includeDraft.trim())}
-          >
-            Add
-          </Button>
+          <Tooltip title={editTip}>
+            <span>
+              <Button
+                variant="contained"
+                disabled={!canEdit || !includeDraft.trim() || includeAdd.isPending}
+                onClick={() => includeAdd.mutate(includeDraft.trim())}
+              >
+                Add
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
-        <GlobList items={include} onRemove={(p) => includeRemove.mutate(p)} empty="No include patterns." />
+        <GlobList items={include} canEdit={canEdit} onRemove={(p) => includeRemove.mutate(p)} empty="No include patterns." />
       </Panel>
 
       <Panel
@@ -239,15 +246,19 @@ function McpConfig() {
             }}
             fullWidth
           />
-          <Button
-            variant="contained"
-            disabled={!excludeDraft.trim() || excludeAdd.isPending}
-            onClick={() => excludeAdd.mutate(excludeDraft.trim())}
-          >
-            Add
-          </Button>
+          <Tooltip title={editTip}>
+            <span>
+              <Button
+                variant="contained"
+                disabled={!canEdit || !excludeDraft.trim() || excludeAdd.isPending}
+                onClick={() => excludeAdd.mutate(excludeDraft.trim())}
+              >
+                Add
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
-        <GlobList items={exclude} onRemove={(p) => excludeRemove.mutate(p)} empty="No exclude patterns." />
+        <GlobList items={exclude} canEdit={canEdit} onRemove={(p) => excludeRemove.mutate(p)} empty="No exclude patterns." />
       </Panel>
 
       <Panel
@@ -273,10 +284,12 @@ function McpConfig() {
 
 function GlobList({
   items,
+  canEdit,
   onRemove,
   empty,
 }: {
   items: string[];
+  canEdit: boolean;
   onRemove: (path: string) => void;
   empty: string;
 }) {
@@ -304,10 +317,12 @@ function GlobList({
           }}
         >
           <code style={{ flex: 1 }}>{p}</code>
-          <Tooltip title="Remove">
-            <IconButton size="small" onClick={() => onRemove(p)}>
-              <DeleteIcon fontSize="small" />
-            </IconButton>
+          <Tooltip title={canEdit ? 'Remove' : 'Needs the admin token'}>
+            <span>
+              <IconButton size="small" disabled={!canEdit} onClick={() => onRemove(p)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
         </Box>
       ))}
