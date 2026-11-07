@@ -169,6 +169,8 @@ type Graph struct {
 	Nodes        []GraphNode   `json:"nodes"`
 	DesiredEdges []DesiredEdge `json:"desiredEdges"`
 	ActiveEdges  []ActiveEdge  `json:"activeEdges"`
+
+	ExternalDependents []ExternalDependent `json:"externalDependents"`
 }
 
 // GraphNode is one (namespace, version) in the graph.
@@ -200,6 +202,7 @@ type GraphNode struct {
 
 // DesiredEdge is a declared dependency.
 type DesiredEdge struct {
+	ConsumerKind      string   `json:"consumerKind"` // service, external
 	ConsumerNamespace string   `json:"consumerNamespace"`
 	ConsumerVersion   string   `json:"consumerVersion"`
 	Provider          string   `json:"provider"`
@@ -259,6 +262,70 @@ func (g *Graph) Edge(caller, namespace, version string) *ActiveEdge {
 		}
 	}
 	return nil
+}
+
+// ---- external dependents -------------------------------------------
+
+// ExternalDependent is a declared consumer the gateway cannot see
+// (GET /api/admin/external-dependents, and the graph).
+type ExternalDependent struct {
+	ID    string `json:"id"`
+	Name  string `json:"name,omitempty"`
+	Kind  string `json:"kind"`
+	Owner *struct {
+		Team    string `json:"team,omitempty"`
+		Contact string `json:"contact,omitempty"`
+	} `json:"owner,omitempty"`
+	Depends []ExternalPin `json:"depends"`
+	Note    string        `json:"note,omitempty"`
+	// ExpiresAt is RFC 3339; "" = no expiry.
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	Expired   bool   `json:"expired,omitempty"`
+}
+
+// ExternalPin is one pinned service and its accepted lines.
+type ExternalPin struct {
+	Service string   `json:"service"`
+	Lines   []string `json:"lines"`
+}
+
+// PutExternalDependent creates or replaces x (PUT
+// /api/admin/external-dependents/{id}) and returns the warnings.
+func (a *Admin) PutExternalDependent(ctx context.Context, x ExternalDependent) ([]string, error) {
+	body := map[string]any{"kind": x.Kind, "depends": x.Depends}
+	if x.Name != "" {
+		body["name"] = x.Name
+	}
+	if x.Owner != nil {
+		body["owner"] = x.Owner
+	}
+	if x.Note != "" {
+		body["note"] = x.Note
+	}
+	if x.ExpiresAt != "" {
+		body["expiresAt"] = x.ExpiresAt
+	}
+	var out struct {
+		Warnings []string `json:"warnings"`
+	}
+	err := a.Do(ctx, http.MethodPut, "/admin/external-dependents/"+url.PathEscape(x.ID), body, &out)
+	return out.Warnings, err
+}
+
+// DeleteExternalDependent deletes the declaration with id.
+func (a *Admin) DeleteExternalDependent(ctx context.Context, id string) error {
+	return a.Do(ctx, http.MethodDelete, "/admin/external-dependents/"+url.PathEscape(id), nil, nil)
+}
+
+// ExternalDependents lists the declarations, expired ones included.
+func (a *Admin) ExternalDependents(ctx context.Context) ([]ExternalDependent, error) {
+	var out struct {
+		ExternalDependents []ExternalDependent `json:"externalDependents"`
+	}
+	if err := a.Do(ctx, http.MethodGet, "/admin/external-dependents", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.ExternalDependents, nil
 }
 
 // ---- control plane --------------------------------------------------
