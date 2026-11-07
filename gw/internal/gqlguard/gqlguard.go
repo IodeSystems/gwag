@@ -18,6 +18,28 @@ import (
 	"github.com/IodeSystems/graphql-go/v2/language/visitor"
 )
 
+// Reasons for LimitReason: which request limit refused a document.
+const (
+	ReasonMaxDepth        = "max_depth"
+	ReasonMaxOperations   = "max_operations"
+	ReasonNoIntrospection = "introspection_disabled"
+)
+
+// LimitReason names the limit a validation error message comes from
+// (the rules below), or "" for any other error. The rules' messages
+// are the only link between a cached plan error and its rule.
+func LimitReason(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "query depth "):
+		return ReasonMaxDepth
+	case strings.HasPrefix(msg, "request selects "):
+		return ReasonMaxOperations
+	case msg == "introspection is disabled":
+		return ReasonNoIntrospection
+	}
+	return ""
+}
+
 // MaxDepthRule refuses queries whose fields nest deeper than limit.
 // Every field level counts, the namespace field included:
 // `{ Demo { getProject { owner { name } } } }` is 4 deep.

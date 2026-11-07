@@ -170,22 +170,23 @@ func writeTooLarge(w http.ResponseWriter) {
 }
 
 // parseWith reads the request with a registered parser, answering the
-// client itself on failure (false).
-func parseWith(w http.ResponseWriter, r *http.Request, p contentParser) (Request, bool) {
+// client itself on failure: the returned reason (max_request_bytes or
+// malformed_body) is then non-empty.
+func parseWith(w http.ResponseWriter, r *http.Request, p contentParser) (Request, string) {
 	if !limitBody(w, r, p.maxBytes) {
-		return Request{}, false
+		return Request{}, "max_request_bytes"
 	}
 	req, err := p.parse(r)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeTooLarge(w)
-		} else {
-			writeError(w, err.Error(), http.StatusBadRequest)
+			return Request{}, "max_request_bytes"
 		}
-		return Request{}, false
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return Request{}, "malformed_body"
 	}
-	return req, true
+	return req, ""
 }
 
 // isGraphiQLRequest is a browser asking for the endpoint as a page.

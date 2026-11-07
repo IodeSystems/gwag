@@ -155,6 +155,7 @@ type Gateway struct {
 	parsers         map[string]contentParser
 	stringVariables bool
 	echoComplete    bool
+	outcomeObs      OutcomeObserver
 
 	// gRPC ingress (grpc_routes.go): the PreCall hook, and the host
 	// routes SetGRPCRoutes swaps in.
@@ -521,12 +522,14 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 			p, custom = g.parsers[mediaType(r.Header.Get("Content-Type"))]
 		}
 		if custom {
-			var ok bool
-			if req, ok = parseWith(w, r, p); !ok {
+			var reason string
+			if req, reason = parseWith(w, r, p); reason != "" {
+				g.reject(ctx, reason)
 				return
 			}
 		} else {
 			if !limitBody(w, r, g.maxBody) {
+				g.reject(ctx, "max_request_bytes")
 				return
 			}
 			// Peek at the first byte to tell a batch (array) from a single
@@ -553,10 +556,10 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 			if err != nil {
 				var tooLarge *http.MaxBytesError
 				if errors.As(err, &tooLarge) {
-					writeTooLarge(w)
+					g.tooLarge(ctx, w)
 					return
 				}
-				writeError(w, "invalid JSON", http.StatusBadRequest)
+				g.badRequest(ctx, w, "invalid JSON", "malformed_body")
 				return
 			}
 			if isBatch {
@@ -574,17 +577,18 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		// the CDN-cacheable form — depend on it.
 		var err error
 		if req.Variables, err = jsonParam(params, "variables"); err != nil {
-			writeError(w, "invalid variables JSON", http.StatusBadRequest)
+			g.badRequest(ctx, w, "invalid variables JSON", "malformed_body")
 			return
 		}
 		if req.Extensions, err = jsonParam(params, "extensions"); err != nil {
-			writeError(w, "invalid extensions JSON", http.StatusBadRequest)
+			g.badRequest(ctx, w, "invalid extensions JSON", "malformed_body")
 			return
 		}
 	}
 
 	p := g.planRequest(snap, &req)
 	if p.status != 0 {
+		g.observePlanned(ctx, p, nil)
 		writeCodedError(w, p.msg, p.code, p.status)
 		return
 	}
@@ -593,6 +597,7 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	// let any page trigger it with the visitor's cookies (a link or an
 	// <img src>; SameSite=Lax still sends cookies on top-level GETs).
 	if r.Method == http.MethodGet && p.pr.Plan != nil && p.pr.Plan.IsMutation() {
+		g.reject(ctx, "mutation_over_get")
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, "mutations are not allowed over GET; use POST", http.StatusMethodNotAllowed)
 		return
@@ -616,6 +621,7 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	// Nothing here streams — ExecutePlanAppend assembles the bytes in
 	// memory — so deferring the header costs nothing.
 	res := g.run(ctx, snap, p, req.OperationName, req.Variables)
+	g.observePlanned(ctx, p, res.payload)
 
 	// Execution is done, so the sink now holds whatever the resolvers
 	// produced. Emit before WriteHeader — after it the header map is
@@ -841,11 +847,11 @@ func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationNam
 // the others.
 func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, snap *snapshot, batch []Request) {
 	if len(batch) == 0 {
-		writeError(w, "empty batch", http.StatusBadRequest)
+		g.badRequest(ctx, w, "empty batch", "malformed_body")
 		return
 	}
 	if g.maxOps > 0 && len(batch) > g.maxOps {
-		writeError(w, fmt.Sprintf("batch exceeds %d operations", g.maxOps), http.StatusBadRequest)
+		g.badRequest(ctx, w, fmt.Sprintf("batch exceeds %d operations", g.maxOps), "max_operations")
 		return
 	}
 	// Plan every document before running any, so a batch over the
@@ -859,7 +865,7 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 		}
 	}
 	if g.maxOps > 0 && total > g.maxOps {
-		writeError(w, fmt.Sprintf("batch selects %d operations, over the limit of %d", total, g.maxOps), http.StatusBadRequest)
+		g.badRequest(ctx, w, fmt.Sprintf("batch selects %d operations, over the limit of %d", total, g.maxOps), "max_operations")
 		return
 	}
 	ctx, scope := newScope(ctx, r, true)
@@ -873,6 +879,7 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 		req := &batch[i]
 		p := plans[i]
 		if p.status != 0 {
+			g.observePlanned(ctx, p, nil)
 			out = appendCodedError(out, p.msg, p.code)
 			continue
 		}
@@ -890,6 +897,7 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 			vars = merged
 		}
 		res := g.run(ctx, snap, p, req.OperationName, vars)
+		g.observePlanned(ctx, p, res.payload)
 		out = append(out, res.payload...)
 		if paths := g.exports.exportsFor(p.query, req.OperationName); paths != nil {
 			collectExports(paths, res.payload, exported)

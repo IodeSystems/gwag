@@ -197,6 +197,7 @@ func (g *Gateway) runGraphQLSubscription(ctx context.Context, id string, p wsSub
 		if ctx.Err() != nil {
 			return
 		}
+		g.observeEvent(ctx, res.Data, res.Errors)
 		// error payload = Array<GraphQLError>; next payload =
 		// ExecutionResult.
 		if len(res.Errors) > 0 && res.Data == nil {
