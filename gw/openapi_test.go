@@ -826,7 +826,7 @@ func getSDL(t *testing.T, gw *Gateway) string {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/schema/graphql", nil)
 	rr := httptest.NewRecorder()
-	gw.SchemaHandler().ServeHTTP(rr, req)
+	schemaAsAdmin(gw, gw.SchemaHandler()).ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("schema fetch: status=%d body=%s", rr.Code, rr.Body.String())
 	}

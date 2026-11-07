@@ -295,7 +295,7 @@ func TestUpload_SchemaSurfacesUploadField(t *testing.T) {
 		t.Fatalf("AddOpenAPIBytes: %v", err)
 	}
 
-	srv := httptest.NewServer(gw.SchemaHandler())
+	srv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL)
 	if err != nil {

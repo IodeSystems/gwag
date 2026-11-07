@@ -85,14 +85,16 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 	// rebuild is now a single iteration over g.slots — no per-kind
 	// walk, no transform pass.
 	allSvcs := g.collectSlotIRLocked(filter)
-	g.registerProtoDispatchersLocked(filter)
-	if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
-		return nil, nil, err
+	if !filter.reuseDispatchers {
+		g.registerProtoDispatchersLocked(filter)
+		if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
+			return nil, nil, err
+		}
+		if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
+			return nil, nil, err
+		}
+		g.registerMCPDispatchersLocked(allSvcs)
 	}
-	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
-		return nil, nil, err
-	}
-	g.registerMCPDispatchersLocked(allSvcs)
 	long, jsonScalar := openAPISharedScalars()
 	var stableSnap map[string]int
 	if g.effectiveAllowedTiers().Stable {

@@ -25,6 +25,7 @@ start() {
     --http :18080 --control-plane :50090 \
     --nats-listen :14222 --nats-cluster :14248 \
     --nats-data "$REPO/bench/.run/nats/perf-gwag" \
+    --public-services all \
     > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
   echo "gwag started, pid=$(cat "$PID_FILE")"

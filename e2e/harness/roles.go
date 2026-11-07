@@ -4,11 +4,20 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"nhooyr.io/websocket"
+
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
 // Admin roles: anonymous (no bearer), dev (DevToken), admin (Token).
@@ -82,4 +91,81 @@ func (a *AdminAs) GraphQL(ctx context.Context, query string) (*GQLResponse, erro
 		opts = append(opts, Bearer(a.token))
 	}
 	return a.g.GraphQL(ctx, query, nil, opts...)
+}
+
+// Schema GETs a schema export (path relative to /api, e.g.
+// "/schema/graphql") presenting the token in X-Gwag-Token. It returns
+// the status, the X-Gwag-Schema-View header ("full" or "public") and
+// the body.
+func (a *AdminAs) Schema(ctx context.Context, path string) (code int, view, body string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.g.BaseURL()+"/api"+path, nil)
+	if err != nil {
+		return 0, "", "", err
+	}
+	if a.token != "" {
+		req.Header.Set("X-Gwag-Token", a.token)
+	}
+	resp, err := a.g.http.Do(req)
+	if err != nil {
+		return 0, "", "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, resp.Header.Get("X-Gwag-Schema-View"), string(b), err
+}
+
+// ListServices calls the control plane's ListServices over gRPC with
+// the token in `authorization: Bearer` metadata ("" = none), and
+// returns the x-gwag-schema-view response header.
+func (a *AdminAs) ListServices(ctx context.Context) (*cpv1.ListServicesResponse, string, error) {
+	if a.token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+a.token)
+	}
+	var header metadata.MD
+	resp, err := a.g.ControlPlane().ListServices(ctx, &cpv1.ListServicesRequest{}, grpc.Header(&header))
+	view := ""
+	if v := header.Get("x-gwag-schema-view"); len(v) > 0 {
+		view = v[0]
+	}
+	return resp, view, err
+}
+
+// WSFirstFrame opens a graphql-transport-ws socket, sends the token as
+// `x-gwag-token` in the connection_init payload, subscribes with doc
+// and operationName, and returns the first frame after subscribe as
+// raw JSON, or "" when none arrives within wait.
+func (a *AdminAs) WSFirstFrame(ctx context.Context, doc, operationName string, wait time.Duration) (string, error) {
+	conn, _, err := websocket.Dial(ctx, "ws://"+strings.TrimPrefix(a.g.BaseURL(), "http://")+"/api/graphql", &websocket.DialOptions{
+		Subprotocols: []string{"graphql-transport-ws"},
+	})
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	init := map[string]string{}
+	if a.token != "" {
+		init["x-gwag-token"] = a.token
+	}
+	write := func(f WSFrame) error {
+		b, _ := json.Marshal(f)
+		return conn.Write(ctx, websocket.MessageText, b)
+	}
+	payload, _ := json.Marshal(init)
+	if err := write(WSFrame{Type: "connection_init", Payload: payload}); err != nil {
+		return "", err
+	}
+	if _, _, err := conn.Read(ctx); err != nil { // connection_ack
+		return "", err
+	}
+	sub, _ := json.Marshal(map[string]any{"query": doc, "operationName": operationName})
+	if err := write(WSFrame{ID: "1", Type: "subscribe", Payload: sub}); err != nil {
+		return "", err
+	}
+	rctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	_, b, err := conn.Read(rctx)
+	if err != nil && rctx.Err() != nil && ctx.Err() == nil {
+		return "", nil
+	}
+	return string(b), err
 }

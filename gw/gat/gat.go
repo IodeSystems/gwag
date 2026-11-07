@@ -156,6 +156,8 @@ type Gateway struct {
 	stringVariables bool
 	echoComplete    bool
 	outcomeObs      OutcomeObserver
+	introView       IntrospectionViewFunc
+	introPlans      *graphql.PlanCache
 
 	// gRPC ingress (grpc_routes.go): the PreCall hook, and the host
 	// routes SetGRPCRoutes swaps in.
@@ -587,6 +589,12 @@ func (g *Gateway) serveRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 
 	p := g.planRequest(snap, &req)
+	if p.status == 0 {
+		if vs := g.introspectionSnap(ctx, snap, p.query); vs != snap {
+			snap = vs
+			p = g.planRequest(snap, &req)
+		}
+	}
 	if p.status != 0 {
 		g.observePlanned(ctx, p, nil)
 		writeCodedError(w, p.msg, p.code, p.status)
@@ -857,10 +865,26 @@ func (g *Gateway) serveBatch(ctx context.Context, w http.ResponseWriter, r *http
 	// Plan every document before running any, so a batch over the
 	// operation cap is refused whole.
 	plans := make([]plannedRequest, len(batch))
-	total := 0
 	for i := range batch {
 		plans[i] = g.planRequest(snap, &batch[i])
-		if p := plans[i]; g.maxOps > 0 && len(batch) > 1 && p.status == 0 && p.pr.Plan != nil {
+	}
+	// One introspecting document runs the whole batch on the
+	// IntrospectionView schema.
+	for i := range plans {
+		if plans[i].status != 0 {
+			continue
+		}
+		if vs := g.introspectionSnap(ctx, snap, plans[i].query); vs != snap {
+			snap = vs
+			for j := range batch {
+				plans[j] = g.planRequest(snap, &batch[j])
+			}
+			break
+		}
+	}
+	total := 0
+	for i, p := range plans {
+		if g.maxOps > 0 && len(batch) > 1 && p.status == 0 && p.pr.Plan != nil {
 			total += g.opCounts.count(snap.schema, p.query, batch[i].OperationName)
 		}
 	}

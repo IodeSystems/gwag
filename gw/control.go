@@ -18,6 +18,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
@@ -954,6 +956,14 @@ func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStab
 // ListServices returns one ServiceInfo per (namespace, version) pool
 // currently live on this gateway, with the canonical hash and replica
 // count. Cross-cluster parity check: dump from two gateways, diff.
+//
+// A call over the wire is answered by role (schema_view.go): the dev
+// or admin token in `authorization: Bearer <hex>` (or `x-gwag-token`)
+// metadata gets every service; no token gets the public services
+// only, scrubbed as the admin services list is for anonymous readers;
+// a token that fails is Unauthenticated. The `x-gwag-schema-view`
+// response header says which view answered. In-process calls get
+// every service.
 func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRequest) (*cpv1.ListServicesResponse, error) {
 	cp.gw.mu.Lock()
 	out := &cpv1.ListServicesResponse{
@@ -1033,6 +1043,20 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 		}
 		return a.GetVersion() < b.GetVersion()
 	})
+	if _, wire := peer.FromContext(ctx); !wire {
+		// In process: the admin handlers apply their own view.
+		return out, nil
+	}
+	role, err := cp.gw.controlPlaneRole(ctx)
+	if err != nil {
+		return nil, err
+	}
+	view := "full"
+	if role < adminRoleDev {
+		out = cp.gw.publicServicesResponse(ctx, out)
+		view = "public"
+	}
+	_ = grpc.SetHeader(ctx, metadata.Pairs(schemaViewMetadata, view))
 	return out, nil
 }
 

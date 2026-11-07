@@ -27,6 +27,9 @@ import (
 //     GraphQL. Calls to ledger through the gateway still work.
 //     2. dev token: everything is listed, contacts included; external
 //     dependents can be added; deprecate and drain are 403.
+//     2b. schema surfaces: /api/schema/*, GraphQL introspection (HTTP
+//     and WebSocket) and gRPC ListServices show storefront only without
+//     a token, everything with the dev token; a wrong token is refused.
 //     3. admin token: deprecate works; rotating the dev token retires the
 //     old one at once.
 func TestS10AdminRoles(t *testing.T) {
@@ -158,6 +161,82 @@ func TestS10AdminRoles(t *testing.T) {
 		}
 		if code, _ := dev.Do(ctx, http.MethodPost, "/admin/instances/"+ledger.Opts.Instance+"/drain", map[string]any{}, nil); code != http.StatusForbidden {
 			t.Errorf("drain as dev: %d, want 403", code)
+		}
+	})
+
+	t.Run("2b schema surfaces by role", func(t *testing.T) {
+		// Schema exports: public services only without a token.
+		for _, path := range []string{"/schema/graphql", "/schema/graphql?format=json", "/schema/openapi", "/schema/proto?format=sdl"} {
+			code, view, body, err := anon.Schema(ctx, path)
+			if err != nil || code != 200 || view != "public" {
+				t.Fatalf("anonymous %s: %d %q %v", path, code, view, err)
+			}
+			if !strings.Contains(path, "proto") && (strings.Contains(body, "ledger") || !strings.Contains(body, "storefront")) {
+				t.Errorf("anonymous %s lists ledger or misses storefront", path)
+			}
+			code, view, body, err = dev.Schema(ctx, path)
+			if err != nil || code != 200 || view != "full" {
+				t.Fatalf("dev %s: %d %q %v", path, code, view, err)
+			}
+			if !strings.Contains(path, "proto") && !strings.Contains(body, "ledger") {
+				t.Errorf("dev %s misses ledger", path)
+			}
+		}
+		if code, _, _, _ := admin.As("00ff").Schema(ctx, "/schema/graphql"); code != http.StatusUnauthorized {
+			t.Errorf("wrong token on /schema/graphql: %d, want 401", code)
+		}
+
+		// Introspection: the public view without a token, also when
+		// Authorization carries an end user's token.
+		const intro = `{ __schema { queryType { fields { name } } } }`
+		for name, as := range map[string]*harness.AdminAs{"anonymous": anon, "end-user bearer": admin.As("end-user-jwt")} {
+			r, err := as.GraphQL(ctx, intro)
+			if err != nil || r.Err() != nil || strings.Contains(string(r.Data), "ledger") || !strings.Contains(string(r.Data), "storefront") {
+				t.Errorf("%s introspection: %s %v %v", name, r.Data, err, r.Err())
+			}
+		}
+		if r, err := dev.GraphQL(ctx, intro); err != nil || !strings.Contains(string(r.Data), "ledger") {
+			t.Errorf("dev introspection (Authorization): %v %v", r, err)
+		}
+		if r, err := gw.GraphQL(ctx, intro, nil, harness.Header("X-Gwag-Token", gw.DevToken())); err != nil || !strings.Contains(string(r.Data), "ledger") {
+			t.Errorf("dev introspection (X-Gwag-Token): %v %v", r, err)
+		}
+
+		// WebSocket: a document that introspects is validated against
+		// the public view, which has no ps (not public), so no
+		// Subscription type.
+		const doc = `query Q { __schema { queryType { name } } } subscription S { ps_sub(channel: "x", hmac: "", ts: "0") { payload } }`
+		const notInView = "Schema is not configured for subscriptions"
+		if f, err := anon.WSFirstFrame(ctx, doc, "S", 10*time.Second); err != nil || !strings.Contains(f, notInView) {
+			t.Errorf("anonymous WS: %s %v, want %q", f, err, notInView)
+		}
+		if f, err := dev.WSFirstFrame(ctx, doc, "S", 2*time.Second); err != nil || strings.Contains(f, notInView) {
+			t.Errorf("dev WS: %s %v", f, err)
+		}
+
+		// Control plane ListServices over gRPC.
+		resp, view, err := anon.ListServices(ctx)
+		if err != nil || view != "public" || len(resp.GetServices()) != 1 || resp.GetServices()[0].GetNamespace() != "storefront" {
+			t.Fatalf("anonymous ListServices: %v %q %v", resp, view, err)
+		}
+		if s := resp.GetServices()[0]; s.GetOwner().GetContact() != "" || len(s.GetDepends()) != 0 {
+			t.Errorf("anonymous storefront owner=%v depends=%v", s.GetOwner(), s.GetDepends())
+		}
+		resp, view, err = dev.ListServices(ctx)
+		names := []string{}
+		for _, s := range resp.GetServices() {
+			names = append(names, s.GetNamespace())
+		}
+		if err != nil || view != "full" || !strings.Contains(strings.Join(names, ","), "ledger") {
+			t.Errorf("dev ListServices: %v %q %v", names, view, err)
+		}
+		if _, _, err := admin.As("00ff").ListServices(ctx); err == nil {
+			t.Error("wrong token on ListServices: no error")
+		}
+
+		// Data plane unchanged: ledger answers anonymous GraphQL.
+		if _, err := ledger.Echo(ctx, "v1", "still served"); err != nil {
+			t.Errorf("ledger call: %v", err)
 		}
 	})
 

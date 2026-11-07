@@ -11,7 +11,13 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/iodesystems/gwag/v2/gw/gat"
+
+	"github.com/IodeSystems/graphql-go/v2"
 )
+
+// introspectionPlanEntries caps the plan cache of the public
+// introspection view: introspection documents are few.
+const introspectionPlanEntries = 64
 
 // newGraphQLIngress builds the gat gateway that serves Handler. gat
 // owns the request path (parsing, batches, trusted documents, plan,
@@ -46,6 +52,13 @@ func (g *Gateway) newGraphQLIngress() *gat.Gateway {
 	if cfg.trusted != nil {
 		gg.TrustedDocuments(cfg.trusted.docs, cfg.trusted.enforce)
 	}
+	// Anonymous __schema / __type see the public services only
+	// (schema_view.go). The view's plans are kept apart: the plan
+	// cache holds one plan per document text.
+	gg.IntrospectionView(g.introspectionSchema, graphql.NewPlanCache(graphql.PlanCacheOptions{
+		MaxEntries: introspectionPlanEntries,
+		Rules:      cfg.validationRules(),
+	}))
 	if !cfg.disableGraphiQL {
 		gg.GraphiQL(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if gh := g.graphiqlHandler.Load(); gh != nil {

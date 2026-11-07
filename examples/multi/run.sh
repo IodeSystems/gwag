@@ -25,7 +25,10 @@ mkdir -p "$ADMIN_DATA_DIR"
 #
 # --admin-data-dir persists the admin token so cmd/mcp-demo (and any
 # other admin client) can read <dir>/admin-token directly.
-go run ./cmd/gateway --insecure-subscribe --admin-data-dir "$ADMIN_DATA_DIR" &
+#
+# --public-services all: the README and docs/walkthrough.md curl
+# /api/schema/* without a token, which shows public services only.
+go run ./cmd/gateway --insecure-subscribe --admin-data-dir "$ADMIN_DATA_DIR" --public-services all &
 pids+=($!)
 
 # Give the control plane a moment to come up before services try to register.
