@@ -364,19 +364,16 @@ func (t *peerTracker) watchLoop(ctx context.Context) {
 	}
 }
 
-// reconcileReplicas raises both managed buckets to min(peers, maxReplicas).
+// reconcileReplicas raises every managed bucket to the replica count
+// the cluster policy (WithClusterReplicas) gives for the live peers.
 // Strictly monotonic — never lowers; ForgetPeer is the only path that
-// shrinks. Idempotent if already at target.
+// shrinks (a peer is only dropped from the live set after its entry
+// expired, so a brief loss never shrinks). Idempotent if already at
+// target.
 func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	t.mu.Lock()
-	desired := len(t.live)
+	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
-	if desired > maxReplicas {
-		desired = maxReplicas
-	}
-	if desired < 1 {
-		desired = 1
-	}
 	cur := int(t.currentR.Load())
 	if desired <= cur {
 		return

@@ -396,6 +396,9 @@ type config struct {
 	// tests, which cannot wait 30s for an expiry.
 	clusterKVTTL time.Duration
 
+	// clusterReplicas is the KV bucket replica policy. "" → odd.
+	clusterReplicas ClusterReplicas
+
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
 	// (all three: unstable / stable / vN). See WithAllowTier.
@@ -1351,6 +1354,9 @@ func New(opts ...Option) *Gateway {
 	}
 	for _, o := range opts {
 		o(cfg)
+	}
+	if err := cfg.clusterReplicas.Validate(); err != nil {
+		panic("gateway: WithClusterReplicas: " + err.Error())
 	}
 	if cfg.metrics == nil {
 		cfg.metrics = newPrometheusMetrics(cfg.metricPrefix)
