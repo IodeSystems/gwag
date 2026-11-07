@@ -287,7 +287,8 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 - [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring + span reference
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — admin boot token + AdminAuthorizer delegate + outbound HTTP transport
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID extractor + quota
-- [`docs/cluster.md`](./docs/cluster.md) — embedded NATS + JetStream KV
+- [`docs/services.md`](./docs/services.md) — registering a service: `controlclient`, versions, start gate, drain; in-process `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`
+- [`docs/cluster.md`](./docs/cluster.md) — 3-node setup, load balancer probe, node loss, rolling upgrade, forgetting a peer
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
 - [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop
 - [`docs/mcp.md`](./docs/mcp.md) — exposing the gateway to LLM agents (tools, allowlist, mounting, cluster semantics)
