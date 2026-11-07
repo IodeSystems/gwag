@@ -1,294 +1,236 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   FormControl,
+  FormControlLabel,
   InputLabel,
   MenuItem,
-  Paper,
   Select,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
+  Stack,
+  Switch,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
-import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useTheme } from '@mui/material/styles';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Background,
+  Controls,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Node,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { client } from '@/api/client';
-import { DashboardQuery } from '@/api/operations';
+import { DependencyGraphQuery } from '@/api/operations';
+import { EmptyState, EnvBadge, PageHeader } from '@/ui';
+import { useEvents } from '@/providers/EventsProvider';
+import { useAdminToken } from '@/components/SettingsDrawer';
+import {
+  buildFlow,
+  withoutGatewayLines,
+  type EdgeView,
+  type Graph,
+  type LineData,
+} from '@/components/graph/model';
+import { nodeTypes } from '@/components/graph/nodes';
+import { NodeDetail } from '@/components/graph/NodeDetail';
 
 export const Route = createFileRoute('/')({
-  component: Dashboard,
+  component: GraphPage,
 });
 
-// The unauth landing acts as a public status page: one row per
-// (namespace, version) with calls + p50/p95/p99 + a horizontal
-// dot-strip across the chosen window. The data is from the public
-// /admin/services/history endpoint; each dot is one ring-bucket of
-// the underlying stats ring (1s / 1m / 10m for 1m / 1h / 24h).
-//
-// Plan §2 — admin reads are public, so this works without an admin
-// token; mutations stay gated.
+// Main screen: the live dependency graph. One node per (service,
+// line), grouped by service; desired edges (declared depends) solid,
+// active edges (observed traffic) dashed with call counts. Data is the
+// admin dependencyGraph op, refetched on every service change event
+// (debounced) and polled every 5s for traffic.
 
 type Window = '1m' | '1h' | '24h';
+const POLL_MS = 5_000;
+const EVENT_DEBOUNCE_MS = 300;
 
-const windowOptions: { value: Window; label: string; sliceLabel: string }[] = [
-  { value: '1m', label: 'Last minute', sliceLabel: '1s slices' },
-  { value: '1h', label: 'Last hour', sliceLabel: '1m slices' },
-  { value: '24h', label: 'Last 24 hours', sliceLabel: '10m slices' },
-];
-
-function Dashboard() {
+function GraphPage() {
   const [windowVal, setWindow] = useState<Window>('1h');
+  const [view, setView] = useState<EdgeView>('both');
+  const [selected, setSelected] = useState<string | null>(null);
+  const [showGateway, setShowGateway] = useState(false);
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  const queryKey = ['dependencyGraph', windowVal];
   const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboard', windowVal],
-    queryFn: () => client.request(DashboardQuery, { window: windowVal }),
-    refetchInterval: 5_000,
+    queryKey,
+    queryFn: () => client.request(DependencyGraphQuery, { window: windowVal }),
+    refetchInterval: POLL_MS,
   });
 
-  const services = data?.admin?.servicesHistory?.services ?? [];
-  const opt = windowOptions.find((o) => o.value === windowVal)!;
+  const { serviceChangeSeq } = useEvents();
+  useEffect(() => {
+    if (serviceChangeSeq === 0) return;
+    const t = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] });
+    }, EVENT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [serviceChangeSeq, queryClient]);
+
+  const raw = data?.admin?.dependencyGraph ?? null;
+  const graph = useMemo(() => (raw && !showGateway ? withoutGatewayLines(raw) : raw), [raw, showGateway]);
+  const line = graph?.nodes?.find((n) => n.id === selected) ?? null;
 
   return (
     <Box>
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 2,
-          mb: 2,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Typography variant="h5">Status</Typography>
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel id="window-label">Window</InputLabel>
-          <Select
-            labelId="window-label"
-            label="Window"
-            value={windowVal}
-            onChange={(e) => setWindow(e.target.value)}
-          >
-            {windowOptions.map((o) => (
-              <MenuItem key={o.value} value={o.value}>
-                {o.label} ({o.sliceLabel})
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <Box sx={{ flexGrow: 1 }} />
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 2,
-          }}
-        >
-          <LegendDot color="#cccccc" label="no traffic" />
-          <LegendDot color="#4caf50" label="ok" />
-          <LegendDot color="#ff9800" label="< 5% errors" />
-          <LegendDot color="#f44336" label="≥ 5% errors" />
-        </Box>
-      </Box>
-
-      {isLoading && <Typography>Loading…</Typography>}
-      {error && (
-        <Typography color="error">{error.message}</Typography>
-      )}
-
-      {!isLoading && !error && services.length === 0 && (
-        <Typography color="text.secondary">
-          No services registered. The status table populates as services
-          register against the gateway.
-        </Typography>
-      )}
-
-      {services.length > 0 && (
-        <TableContainer component={Paper}>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Service</TableCell>
-                <TableCell align="right">Calls</TableCell>
-                <TableCell align="right">Errors</TableCell>
-                <TableCell align="right">p50&nbsp;ms</TableCell>
-                <TableCell align="right">p95&nbsp;ms</TableCell>
-                <TableCell align="right">p99&nbsp;ms</TableCell>
-                <TableCell>{opt.label}</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {services.map((s, i) => {
-                if (!s) return null;
-                const buckets = s.buckets ?? [];
-                let count = 0;
-                let okCount = 0;
-                let p50 = 0;
-                let p95 = 0;
-                let p99 = 0;
-                for (const b of buckets) {
-                  if (!b) continue;
-                  count += Number(b.count);
-                  okCount += Number(b.okCount);
-                  if (Number(b.p50Millis) > p50) p50 = Number(b.p50Millis);
-                  if (Number(b.p95Millis) > p95) p95 = Number(b.p95Millis);
-                  if (Number(b.p99Millis) > p99) p99 = Number(b.p99Millis);
-                }
-                const errors = count - okCount;
-                return (
-                  <TableRow key={`${s.namespace}@${s.version}@${i}`}>
-                    <TableCell>
-                      <Typography component="span" sx={{ fontWeight: 500 }}>
-                        {s.namespace}
-                      </Typography>{' '}
-                      <Typography
-                        component="span"
-                        color="text.secondary"
-                        variant="body2"
-                      >
-                        {s.version}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">{formatCount(count)}</TableCell>
-                    <TableCell align="right">
-                      {errors > 0 ? (
-                        <Typography component="span" color="error">
-                          {formatCount(errors)}
-                        </Typography>
-                      ) : (
-                        '—'
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {count > 0 ? p50 : '—'}
-                    </TableCell>
-                    <TableCell align="right">
-                      {count > 0 ? p95 : '—'}
-                    </TableCell>
-                    <TableCell align="right">
-                      {count > 0 ? p99 : '—'}
-                    </TableCell>
-                    <TableCell sx={{ minWidth: 320 }}>
-                      <DotStrip buckets={buckets} />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-    </Box>
-  );
-}
-
-// DotStrip renders one dot per bucket, oldest-on-the-left. Color rule:
-// no traffic → grey; otherwise error_ratio thresholds (< 5% yellow,
-// ≥ 5% red) — the standard "status page" eyeball.
-function DotStrip({
-  buckets,
-}: {
-  buckets: ReadonlyArray<DashboardBucket | null>;
-}) {
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '2px',
-        flexWrap: 'nowrap',
-        overflow: 'hidden',
-      }}
-    >
-      {buckets.map((b, i) => {
-        if (!b) {
-          return <Dot key={i} color="#cccccc" title="no data" />;
+      <PageHeader
+        title="Dependency graph"
+        meta={graph && <EnvBadge name={graph.environment || undefined} />}
+        subtitle={
+          <>
+            Declared dependencies (solid) and observed calls (dashed). Traffic counts are from this gateway node
+            only.
+          </>
         }
-        const count = Number(b.count);
-        const okCount = Number(b.okCount);
-        const errors = count - okCount;
-        const errorRatio = count > 0 ? errors / count : 0;
-        const color = bucketColor(count, errorRatio);
-        const start = new Date(Number(b.startUnixSec) * 1000);
-        const tip =
-          count === 0
-            ? `${start.toLocaleTimeString()} — no traffic`
-            : `${start.toLocaleTimeString()} · ${count} calls · ${errors} errors${
-                errorRatio > 0
-                  ? ` (${(errorRatio * 100).toFixed(1)}%)`
-                  : ''
-              }`;
-        return <Dot key={i} color={color} title={tip} />;
-      })}
+        actions={
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+            <FormControlLabel
+              control={<Switch size="small" checked={showGateway} onChange={(e) => setShowGateway(e.target.checked)} />}
+              label="Gateway services"
+            />
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={view}
+              onChange={(_, v: EdgeView | null) => v && setView(v)}
+              aria-label="edges"
+            >
+              <ToggleButton value="desired">Desired</ToggleButton>
+              <ToggleButton value="active">Active</ToggleButton>
+              <ToggleButton value="both">Both</ToggleButton>
+            </ToggleButtonGroup>
+            <FormControl size="small" sx={{ minWidth: 140 }}>
+              <InputLabel id="graph-window">Window</InputLabel>
+              <Select
+                labelId="graph-window"
+                label="Window"
+                value={windowVal}
+                onChange={(e) => setWindow(e.target.value)}
+              >
+                <MenuItem value="1m">Last minute</MenuItem>
+                <MenuItem value="1h">Last hour</MenuItem>
+                <MenuItem value="24h">Last 24 hours</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+        }
+      />
+      {graph && graph.callerSource !== 'extractor' && view !== 'desired' && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {graph.callerSource === 'header'
+            ? 'Callers on active edges come from a request header. Any client can set it, so treat caller names as claims.'
+            : 'No caller-id source is configured, so every call is from "unknown". Configure WithCallerIDExtractor or WithCallerHeaders to see who calls what.'}
+        </Alert>
+      )}
+      {isLoading && <Typography>Loading…</Typography>}
+      {error && <Alert severity="error">{error.message}</Alert>}
+      {graph && (graph.nodes ?? []).length === 0 && (
+        <EmptyState
+          title="No services registered"
+          description="The graph fills in as services register against the gateway."
+        />
+      )}
+      {graph && (graph.nodes ?? []).length > 0 && (
+        <ReactFlowProvider>
+          <Flow graph={graph} view={view} selected={selected} onSelect={setSelected} />
+        </ReactFlowProvider>
+      )}
+      {graph && (
+        <NodeDetail
+          graph={graph}
+          line={line}
+          canDrain={token !== null}
+          onClose={() => setSelected(null)}
+          onChanged={() => void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] })}
+        />
+      )}
     </Box>
   );
 }
 
-type DashboardBucket = {
-  startUnixSec: unknown;
-  durationSec: unknown;
-  count: unknown;
-  okCount: unknown;
-  p50Millis: unknown;
-  p95Millis: unknown;
-  p99Millis: unknown;
-};
-
-function Dot({ color, title }: { color: string; title: string }) {
-  return (
-    <Tooltip title={title} placement="top" arrow disableInteractive>
-      <Box
-        sx={{
-          flex: '0 0 auto',
-          width: 10,
-          height: 16,
-          borderRadius: '2px',
-          backgroundColor: color,
-        }}
-      />
-    </Tooltip>
+function Flow({
+  graph,
+  view,
+  selected,
+  onSelect,
+}: {
+  graph: Graph;
+  view: EdgeView;
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const theme = useTheme();
+  const tokens = theme.gwag.tokens;
+  const colors = useMemo(
+    () => ({
+      met: theme.gwag.status.ready.fg,
+      unmet: theme.palette.error.main,
+      active: theme.palette.primary.main,
+      muted: tokens.borderStrong,
+      labelBg: tokens.surfaceRaised,
+      labelText: tokens.text,
+    }),
+    [theme, tokens],
   );
-}
+  const { nodes, edges } = useMemo(() => {
+    const flow = buildFlow(graph, view, colors);
+    const sel = selected ? `line:${selected}` : null;
+    return { nodes: flow.nodes.map((n) => (n.id === sel ? { ...n, selected: true } : n)), edges: flow.edges };
+  }, [graph, view, colors, selected]);
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+  // Refit when the set of nodes changes (a service joined or left),
+  // not on every poll.
+  const { fitView } = useReactFlow();
+  const shape = nodes.map((n) => n.id).join('|');
+  useEffect(() => {
+    const t = setTimeout(() => void fitView({ padding: 0.15, duration: 200 }), 0);
+    return () => clearTimeout(t);
+  }, [shape, fitView]);
+
   return (
     <Box
       sx={{
-        display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 0.5,
+        height: 'calc(100vh - 320px)',
+        minHeight: 480,
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: `${theme.gwag.radius.md}px`,
+        overflow: 'hidden',
+        bgcolor: tokens.bg,
+        '& .react-flow': { '--xy-background-color': tokens.bg },
       }}
     >
-      <Box
-        sx={{
-          width: 10,
-          height: 10,
-          borderRadius: '50%',
-          backgroundColor: color,
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        colorMode={theme.palette.mode}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable
+        fitView
+        minZoom={0.2}
+        onNodeClick={(_, n: Node) => {
+          if (n.type === 'line') {
+            const l = (n.data as LineData).line;
+            onSelect(l.id);
+          }
         }}
-      />
-      <Typography variant="caption" color="text.secondary">
-        {label}
-      </Typography>
+        onPaneClick={() => onSelect(null)}
+      >
+        <Background color={tokens.border} gap={24} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
     </Box>
   );
-}
-
-function bucketColor(count: number, errorRatio: number): string {
-  if (count === 0) return '#cccccc';
-  if (errorRatio === 0) return '#4caf50';
-  if (errorRatio < 0.05) return '#ff9800';
-  return '#f44336';
-}
-
-function formatCount(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
 }

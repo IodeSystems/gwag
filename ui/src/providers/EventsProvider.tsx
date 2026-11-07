@@ -69,6 +69,9 @@ interface EventsContextValue {
   client: Client;
   recent: EventEntry[];
   unread: number;
+  /** Increments on every admin_events_watchServices event; pages
+   *  refetch when it changes. */
+  serviceChangeSeq: number;
   markRead: () => void;
   clear: () => void;
 }
@@ -78,6 +81,7 @@ const EventsContext = createContext<EventsContextValue | null>(null);
 export function EventsProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<EventEntry[]>([]);
   const [unread, setUnread] = useState(0);
+  const [serviceChangeSeq, setServiceChangeSeq] = useState(0);
   const [toast, setToast] = useState<ToastEntry | null>(null);
   const toastQueue = useRef<ToastEntry[]>([]);
   const toastSeq = useRef(0);
@@ -123,6 +127,7 @@ export function EventsProvider({ children }: { children: ReactNode }) {
           const change = msg.data?.admin_events_watchServices;
           if (!change) return;
           push({ id: 'admin_events', receivedAt: Date.now(), payload: change });
+          setServiceChangeSeq((n) => n + 1);
           enqueueToast(toastForServiceChange(change));
         },
         error: (e) => {
@@ -147,6 +152,7 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       client: wsClient,
       recent,
       unread,
+      serviceChangeSeq,
       markRead: () => setUnread(0),
       clear: () => {
         setRecent([]);
@@ -154,7 +160,7 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       },
       _push: push,
     }),
-    [recent, unread, push],
+    [recent, unread, serviceChangeSeq, push],
   );
 
   return (

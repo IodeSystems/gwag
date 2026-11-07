@@ -17,6 +17,7 @@ import {
   Typography,
 } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import DeviceHubIcon from '@mui/icons-material/DeviceHub';
 import HubIcon from '@mui/icons-material/Hub';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HistoryToggleOffIcon from '@mui/icons-material/HistoryToggleOff';
@@ -35,7 +36,8 @@ import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 const drawerWidth = 220;
 
 const nav = [
-  { to: '/', label: 'Dashboard', icon: <DashboardIcon /> },
+  { to: '/', label: 'Graph', icon: <DeviceHubIcon /> },
+  { to: '/status', label: 'Status', icon: <DashboardIcon /> },
   { to: '/services', label: 'Services', icon: <AccountTreeIcon /> },
   { to: '/deprecated', label: 'Deprecated', icon: <HistoryToggleOffIcon /> },
   { to: '/injectors', label: 'Injectors', icon: <InputIcon /> },
@@ -83,6 +85,12 @@ function LayoutInner({ children }: { children: ReactNode }) {
             <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
               gwag
             </Typography>
+            <Button color="inherit" component={Link} to="/">
+              Graph
+            </Button>
+            <Button color="inherit" component={Link} to="/status">
+              Status
+            </Button>
             <EnvBadge name={environment} />
             <PresetPicker compact />
             <ThemeToggle />
@@ -99,9 +107,9 @@ function LayoutInner({ children }: { children: ReactNode }) {
         <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
           <Toolbar />
           <Alert severity="info" sx={{ mb: 2 }}>
-            Public status view. Sign in with the gateway's admin token
+            Read-only view. Sign in with the gateway's admin token
             (printed at startup, persisted under the gateway's data dir)
-            to unlock services / peers / schema panels and mutations.
+            to unlock services / peers / schema panels and mutations (drain).
           </Alert>
           {children}
         </Box>

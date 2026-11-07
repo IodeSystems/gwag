@@ -92,6 +92,7 @@ func main() {
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
 	signerSecret := flag.String("signer-secret", "", "Hex-encoded bearer for the gRPC SignSubscriptionToken RPC; admin token also works as fallback")
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
+	callerIDPublic := flag.Bool("caller-id-public", false, "Take the caller id from the X-Caller-Id header (gRPC: caller-id metadata). Forgeable; dev and demos only. Feeds usage edges and the dependency graph.")
 	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists its boot admin token (empty → in-memory only). Set this to a writable path so a worked example (e.g. cmd/mcp-demo) can read <dir>/admin-token without scraping logs. Implicitly set when --nats-data is.")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
@@ -185,6 +186,9 @@ func main() {
 	}
 	if *environment != "" {
 		gwOpts = append(gwOpts, gateway.WithEnvironment(*environment))
+	}
+	if *callerIDPublic {
+		gwOpts = append(gwOpts, gateway.WithCallerIDPublic())
 	}
 	// Seed the MCP allowlist so /mcp exposes greeter + library + admin
 	// out of the box. Operators retune at runtime via

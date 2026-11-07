@@ -327,3 +327,80 @@ export const AdminEventsSubscription = graphql(`
     }
   }
 `);
+
+export const DependencyGraphQuery = graphql(`
+  query DependencyGraph($window: String) {
+    admin {
+      dependencyGraph(window: $window) {
+        environment
+        window
+        scope
+        callerSource
+        nodes {
+          id
+          namespace
+          version
+          kind
+          owner {
+            team
+            contact
+          }
+          replicaCount
+          readyCount
+          waitingCount
+          degradedCount
+          drainingCount
+          trafficCount
+          lastSeenUnixMs
+          sunsetable
+          sunsetReason
+          instances {
+            registrationId
+            instanceId
+            addr
+            state
+            drainState
+            drainReasons
+          }
+        }
+        desiredEdges {
+          consumerNamespace
+          consumerVersion
+          provider
+          lines
+          presentLines
+          met
+          instanceCount
+        }
+        activeEdges {
+          caller
+          consumerNamespace
+          consumerVersion
+          namespace
+          version
+          count
+          okCount
+          lastSeenUnixMs
+          methods {
+            method
+            count
+            okCount
+          }
+        }
+      }
+    }
+  }
+`);
+
+export const DrainInstanceMutation = graphql(`
+  mutation DrainInstance($instance: String!, $cancel: Boolean) {
+    admin {
+      drainInstance(instance: $instance, body: { cancel: $cancel }) {
+        registrationId
+        state
+        reasons
+        inflight
+      }
+    }
+  }
+`);

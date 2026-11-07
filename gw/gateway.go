@@ -368,6 +368,11 @@ type config struct {
 	// WithCallerIDExtractor / WithCallerIDPublic.
 	callerIDExtractor CallerIDExtractor
 
+	// callerIDPublic is true when callerIDExtractor is the forgeable
+	// WithCallerIDPublic header reader. Reported by the admin
+	// dependencyGraph op as callerSource "header".
+	callerIDPublic bool
+
 	// callerIDMetricsTopK caps the distinct caller-id values that
 	// reach the Prometheus dispatch histogram and the stats registry;
 	// see WithCallerIDMetricsTopK. 0 = uncapped.

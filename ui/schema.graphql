@@ -7,6 +7,7 @@ schema {
 type AdminMutationNamespace {
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
+  drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -24,10 +25,15 @@ type AdminMutationNamespace {
 }
 
 type AdminQueryNamespace {
+  dependencyGraph(
+    """Usage window: 1m, 1h or 24h."""
+    window: String
+  ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
+  listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -36,12 +42,20 @@ type AdminQueryNamespace {
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
   stable: AdminStableQueryNamespace!
+  usageEdges(
+    """Only edges to this namespace."""
+    namespace: String
+    """Only edges to this version."""
+    version: String
+    window: String
+  ): admin_UsageEdgesOutBody
   v1: AdminV1QueryNamespace!
 }
 
 type AdminStableMutationNamespace {
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
+  drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -57,10 +71,15 @@ type AdminStableMutationNamespace {
 }
 
 type AdminStableQueryNamespace {
+  dependencyGraph(
+    """Usage window: 1m, 1h or 24h."""
+    window: String
+  ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
+  listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -68,11 +87,19 @@ type AdminStableQueryNamespace {
   serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
+  usageEdges(
+    """Only edges to this namespace."""
+    namespace: String
+    """Only edges to this version."""
+    version: String
+    window: String
+  ): admin_UsageEdgesOutBody
 }
 
 type AdminV1MutationNamespace {
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
+  drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -88,10 +115,15 @@ type AdminV1MutationNamespace {
 }
 
 type AdminV1QueryNamespace {
+  dependencyGraph(
+    """Usage window: 1m, 1h or 24h."""
+    window: String
+  ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listInjectors: admin_InjectorsOutBody
+  listInstances: admin_InstancesOutBody
   listPeers: admin_PeersOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
@@ -99,6 +131,13 @@ type AdminV1QueryNamespace {
   serviceStats(namespace: String!, version: String!, window: String): admin_ServiceStatsOutBody
   servicesHistory(window: String): admin_ServicesHistoryOutBody
   servicesStats(window: String): admin_ServicesStatsOutBody
+  usageEdges(
+    """Only edges to this namespace."""
+    namespace: String
+    """Only edges to this version."""
+    version: String
+    window: String
+  ): admin_UsageEdgesOutBody
 }
 
 type Gateway_Adminevents_V1_ServiceChange {
@@ -225,6 +264,41 @@ type admin_ChannelsOutBody {
   channels: [admin_ChannelInfo!]
 }
 
+type admin_DependencyGraphOutBody {
+  activeEdges: [admin_GraphActiveEdge!]
+  """header: caller ids come from a request header and can be forged; extractor: a configured CallerIDExtractor; none: every caller is "unknown"."""
+  callerSource: admin_DependencyGraphOutBodyCallerSource!
+  desiredEdges: [admin_GraphDesiredEdge!]
+  environment: String!
+  nodes: [admin_GraphNode!]
+  """Usage is per gateway node, in memory."""
+  scope: admin_DependencyGraphOutBodyScope!
+  window: String!
+}
+
+"""header: caller ids come from a request header and can be forged; extractor: a configured CallerIDExtractor; none: every caller is "unknown"."""
+enum admin_DependencyGraphOutBodyCallerSource {
+  extractor
+  header
+  none
+}
+
+"""Usage is per gateway node, in memory."""
+enum admin_DependencyGraphOutBodyScope {
+  node
+}
+
+type admin_DependencyInfo {
+  lines: [String!]
+  service: String!
+}
+
+type admin_DependencyStatusInfo {
+  lines: [String!]
+  presentLines: [String!]
+  service: String!
+}
+
 input admin_DeprecateInBodyInput {
   reason: String!
 }
@@ -263,6 +337,10 @@ input admin_DrainInBodyInput {
   timeoutSeconds: Long
 }
 
+input admin_DrainInstanceInBodyInput {
+  cancel: Boolean
+}
+
 type admin_DrainOutBody {
   activeStreams: Long!
   drained: Boolean!
@@ -272,6 +350,84 @@ type admin_DrainOutBody {
 type admin_ForgetOutBody {
   newReplicas: Int!
   removed: Boolean!
+}
+
+type admin_GraphActiveEdge {
+  caller: String!
+  """Registered namespace the caller maps to; empty = external caller."""
+  consumerNamespace: String!
+  """Set only when the caller id is "ns/line"."""
+  consumerVersion: String!
+  count: Long!
+  lastSeenUnixMs: Long!
+  methods: [admin_GraphMethodCount!]
+  namespace: String!
+  okCount: Long!
+  version: String!
+}
+
+type admin_GraphDesiredEdge {
+  consumerNamespace: String!
+  consumerVersion: String!
+  """Consumer instances that declare this dependency (0 = line manifest only)."""
+  instanceCount: Long!
+  """Accepted lines."""
+  lines: [String!]
+  met: Boolean!
+  """Accepted lines with a ready instance."""
+  presentLines: [String!]
+  """Provider namespace."""
+  provider: String!
+}
+
+type admin_GraphInstance {
+  addr: String!
+  drainReasons: [String!]
+  drainState: admin_GraphInstanceDrainState!
+  instanceId: String
+  registrationId: String!
+  state: admin_GraphInstanceState!
+}
+
+enum admin_GraphInstanceDrainState {
+  blocked
+  draining
+  safe_to_stop
+  serving
+}
+
+enum admin_GraphInstanceState {
+  degraded
+  ready
+  waiting
+}
+
+type admin_GraphMethodCount {
+  count: Long!
+  method: String!
+  okCount: Long!
+}
+
+type admin_GraphNode {
+  degradedCount: Long!
+  """Instances with a drain requested (draining, blocked or safe_to_stop)."""
+  drainingCount: Long!
+  """namespace/version"""
+  id: String!
+  instances: [admin_GraphInstance!]
+  """proto, openapi, graphql, internalproto, mcp; empty when no instance is in the pool yet."""
+  kind: String!
+  lastSeenUnixMs: Long!
+  namespace: String!
+  owner: admin_OwnerInfo
+  readyCount: Long!
+  replicaCount: Int!
+  sunsetReason: String!
+  sunsetable: Boolean!
+  """Calls in the window, this node."""
+  trafficCount: Long!
+  version: String!
+  waitingCount: Long!
 }
 
 type admin_HistoryBucketOut {
@@ -309,6 +465,42 @@ type admin_InjectorLandingInfo {
 
 type admin_InjectorsOutBody {
   injectors: [admin_InjectorInfo!]
+}
+
+type admin_InstanceDrainInfo {
+  addr: String!
+  inflight: Int!
+  instanceId: String!
+  lines: [String!]
+  reasons: [String!]
+  registrationId: String!
+  state: admin_InstanceDrainInfoState!
+}
+
+enum admin_InstanceDrainInfoState {
+  blocked
+  draining
+  safe_to_stop
+  serving
+}
+
+type admin_InstanceInfo {
+  addr: String!
+  depends: [admin_DependencyStatusInfo!]
+  instanceId: String
+  registrationId: String!
+  replicaId: String
+  state: admin_InstanceInfoState!
+}
+
+enum admin_InstanceInfoState {
+  degraded
+  ready
+  waiting
+}
+
+type admin_InstancesOutBody {
+  instances: [admin_InstanceDrainInfo!]
 }
 
 type admin_McpChannelEvent {
@@ -385,6 +577,11 @@ type admin_MethodStatsOut {
   p95Millis: Long!
   p99Millis: Long!
   throughput: Float!
+}
+
+type admin_OwnerInfo {
+  contact: String!
+  team: String!
 }
 
 type admin_PeerInfo {
@@ -495,9 +692,13 @@ type admin_ServiceHistoryRow {
 }
 
 type admin_ServiceInfo {
+  depends: [admin_DependencyInfo!]
+  drains: [admin_InstanceDrainInfo!]
   hashHex: String!
+  instances: [admin_InstanceInfo!]
   manualDeprecationReason: String
   namespace: String!
+  owner: admin_OwnerInfo
   rejectedJoins: admin_RejectedJoinInfo
   replicaCount: Int!
   version: String!
@@ -525,6 +726,7 @@ type admin_ServicesHistoryOutBody {
 }
 
 type admin_ServicesOutBody {
+  environment: String!
   services: [admin_ServiceInfo!]
   stableVN: [admin_StableVNEntry!]
 }
@@ -555,4 +757,28 @@ type admin_StableVNEntry {
 
 type admin_UndeprecateOutBody {
   priorReason: String!
+}
+
+type admin_UsageEdgeRow {
+  caller: String!
+  count: Long!
+  lastSeenUnixMs: Long!
+  method: String!
+  namespace: String!
+  okCount: Long!
+  version: String!
+}
+
+type admin_UsageEdgesOutBody {
+  edges: [admin_UsageEdgeRow!]
+  services: [admin_UsageServiceRow!]
+  window: String!
+}
+
+type admin_UsageServiceRow {
+  callerCount: Long!
+  lastSeenUnixMs: Long!
+  namespace: String!
+  totalCount: Long!
+  version: String!
 }
