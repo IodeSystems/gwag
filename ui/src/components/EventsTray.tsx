@@ -16,7 +16,7 @@ interface EventsTrayProps {
 /**
  * EventsTray is a slide-out drawer (right side) that renders the
  * EventsProvider's ring buffer as a reverse-chronological feed. The
- * Layout opens it from the AppBar bell icon.
+ * Layout opens it from the AppBar feed icon (the bell is the notifications menu).
  */
 export default function EventsTray({ open, onClose }: EventsTrayProps) {
   const { recent, clear } = useEvents();

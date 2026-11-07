@@ -24,7 +24,10 @@ import (
 //     1m graph and the held drain completes; the v1 instance exits
 //  4. a pin with no ready line raises dependency_unmet
 //     {consumer_kind="external"}
-//  5. the declaration is deleted: no edge, no series
+//  5. Acme's review date passes: it still holds library [v2] (drain
+//     blocked), shows as review-due in the list, the notifications
+//     and declarations_review_due, until the review op sets a new date
+//  6. the declaration is deleted: no edge, no series
 //
 // The start gate is not involved: nothing registers for Acme.
 func TestS9ExternalDependents(t *testing.T) {
@@ -48,6 +51,8 @@ func TestS9ExternalDependents(t *testing.T) {
 			Kind:    "customer",
 			Depends: []harness.ExternalPin{{Service: "library", Lines: lines}},
 			Note:    "contract 2026-14: library v1 until the v2 migration",
+			// Real now: the e2e gateway runs on the wall clock.
+			ReviewAt: time.Now().Add(90 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		}
 		x.Owner = &struct {
 			Team    string `json:"team,omitempty"`
@@ -86,7 +91,7 @@ func TestS9ExternalDependents(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(list) != 1 || list[0].ID != "acme" || list[0].Expired || fmt.Sprint(list[0].Depends) != "[{library [v1]}]" {
+		if len(list) != 1 || list[0].ID != "acme" || list[0].ReviewDue || fmt.Sprint(list[0].Depends) != "[{library [v1]}]" {
 			t.Fatalf("external dependents: %+v", list)
 		}
 		g := graph(t)
@@ -97,7 +102,7 @@ func TestS9ExternalDependents(t *testing.T) {
 
 		// Validation through the self-ingested GraphQL admin API: field
 		// errors carry paths the UI form maps onto inputs.
-		resp, err := gw.GraphQL(ctx, `mutation { admin { putExternalDependent(id: "acme", body: {kind: "customer", depends: [{service: "library", lines: ["stable"]}]}) { warnings } } }`, nil, harness.Bearer(gw.Token()))
+		resp, err := gw.GraphQL(ctx, `mutation { admin { putExternalDependent(id: "acme", body: {kind: "customer", depends: [{service: "library", lines: ["stable"]}], reviewAt: "2027-06-30T00:00:00Z"}) { warnings } } }`, nil, harness.Bearer(gw.Token()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,7 +183,56 @@ func TestS9ExternalDependents(t *testing.T) {
 		gw.WaitGauge(t, unmet, acmeUnmet, 0, wait)
 	})
 
-	t.Run("5 deleting the declaration", func(t *testing.T) {
+	t.Run("5 the review date passes: nothing changes but the flag", func(t *testing.T) {
+		x := acme("v2")
+		x.ReviewAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		warnings, err := admin.PutExternalDependent(ctx, x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(warnings, ";"), "review-due now") {
+			t.Errorf("warnings=%v, want a past-reviewAt warning", warnings)
+		}
+		list, err := admin.ExternalDependents(ctx)
+		if err != nil || len(list) != 1 || !list[0].ReviewDue {
+			t.Fatalf("list: %+v %v, want acme review-due", list, err)
+		}
+		gw.WaitGauge(t, "declarations_review_due", nil, 1, wait)
+		items, err := admin.Notifications(ctx)
+		if err != nil || len(items) != 1 || items[0].Kind != "declaration_review_due" || items[0].Href != "/?select=ext:acme" {
+			t.Fatalf("notifications: %+v %v", items, err)
+		}
+		// Still counts: the edge stays, and the last v2 instance stays
+		// covered.
+		if e := externalEdge(graph(t)); e == nil || !e.Met {
+			t.Fatalf("external edge with a review-due pin: %+v", e)
+		}
+		resp, err := admin.DrainInstance(ctx, "library-b", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if harness.DrainStateName(resp.GetState()) != "blocked" {
+			t.Fatalf("drain library-b with a review-due pin: %s", harness.DrainStateName(resp.GetState()))
+		}
+		if _, err := admin.DrainInstance(ctx, "library-b", true); err != nil {
+			t.Fatal(err)
+		}
+
+		next := time.Now().Add(180 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		r, err := admin.ReviewExternalDependent(ctx, "acme", next, "books-oncall")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.ReviewDue || r.ReviewAt != next || r.ReviewedBy != "books-oncall" || r.ReviewedAt == "" || fmt.Sprint(r.Depends) != "[{library [v2]}]" {
+			t.Fatalf("after review: %+v", r)
+		}
+		gw.WaitGauge(t, "declarations_review_due", nil, 0, wait)
+		if items, err := admin.Notifications(ctx); err != nil || len(items) != 0 {
+			t.Fatalf("notifications after review: %+v %v", items, err)
+		}
+	})
+
+	t.Run("6 deleting the declaration", func(t *testing.T) {
 		if err := admin.DeleteExternalDependent(ctx, "acme"); err != nil {
 			t.Fatal(err)
 		}

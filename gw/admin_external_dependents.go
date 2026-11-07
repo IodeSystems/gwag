@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -13,11 +14,13 @@ import (
 // Writes go through AdminMiddleware's bearer check like every
 // non-GET admin route; the list is a read, public like the graph.
 func registerExternalDependents(api huma.API, g *Gateway) {
+	registerNotifications(api, g)
+
 	huma.Register(api, huma.Operation{
 		OperationID: "listExternalDependents",
 		Method:      http.MethodGet,
 		Path:        "/admin/external-dependents",
-		Summary:     "List declared external dependents (consumers gwag cannot see that pin lines), expired ones included.",
+		Summary:     "List declared external dependents (consumers gwag cannot see that pin lines). reviewDue marks the ones past their review date.",
 	}, func(ctx context.Context, _ *struct{}) (*externalDependentsOut, error) {
 		out := &externalDependentsOut{}
 		out.Body.ExternalDependents = []externalDependentInfo{}
@@ -32,13 +35,14 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		OperationID: "putExternalDependent",
 		Method:      http.MethodPut,
 		Path:        "/admin/external-dependents/{id}",
-		Summary:     "Create or replace an external dependent: a consumer gwag cannot see (customer, partner, app) that pins lines. It counts as a dependent in the sunset rule, dependency_unmet and drain coverage until it expires or is deleted. Pins on a service or line that is not registered are accepted with a warning.",
+		Summary:     "Create or replace an external dependent: a consumer gwag cannot see (customer, partner, app) that pins lines. It counts as a dependent in the sunset rule, dependency_unmet and drain coverage until it is deleted. reviewAt is required; past it the declaration still counts and is listed as review-due. Pins on a service or line that is not registered, and a review date in the past or more than a year out, are accepted with a warning.",
 	}, func(ctx context.Context, in *putExternalDependentIn) (*putExternalDependentOut, error) {
 		x := externalDependent{
 			ID:            in.ID,
 			Name:          in.Body.Name,
 			Kind:          in.Body.Kind,
 			Note:          in.Body.Note,
+			LastOp:        changeOpPut,
 			UpdatedUnixMs: nowFunc().UnixMilli(),
 		}
 		if in.Body.Owner != nil {
@@ -48,20 +52,17 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 			x.Depends = append(x.Depends, manifestDependency{Service: d.Service, Lines: append([]string(nil), d.Lines...)})
 		}
 		errs := normalizeExternalDependent(&x)
-		if in.Body.ExpiresAt != "" {
-			t, err := time.Parse(time.RFC3339, in.Body.ExpiresAt)
-			if err != nil {
-				errs = append(errs, externalFieldError{"body.expiresAt", "expiresAt must be an RFC 3339 date-time"})
-			} else {
-				x.ExpiresUnixMs = t.UnixMilli()
-			}
+		if ms, err := parseReviewAt(in.Body.ReviewAt); err != nil {
+			errs = append(errs, externalFieldError{"body.reviewAt", err.Error()})
+		} else {
+			x.ReviewUnixMs = ms
 		}
 		if len(errs) > 0 {
-			details := make([]error, len(errs))
-			for i, e := range errs {
-				details[i] = &huma.ErrorDetail{Location: e.Location, Message: e.Message}
-			}
-			return nil, huma.Error422UnprocessableEntity("validation failed", details...)
+			return nil, externalValidationError(errs)
+		}
+		if prev, ok := g.externals.get(x.ID); ok {
+			// A PUT keeps the record of the last review.
+			x.ReviewedUnixMs, x.ReviewedBy = prev.ReviewedUnixMs, prev.ReviewedBy
 		}
 		if err := g.putExternalDependent(ctx, x); err != nil {
 			return nil, err
@@ -70,8 +71,41 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		warnings := g.externalWarningsLocked(x)
 		g.mu.Unlock()
 		out := &putExternalDependentOut{}
-		out.Body.ExternalDependent = adminExternalDependent(x, nowFunc())
-		out.Body.Warnings = append([]string{}, warnings...)
+		now := nowFunc()
+		out.Body.ExternalDependent = adminExternalDependent(x, now)
+		out.Body.Warnings = append(append([]string{}, warnings...), reviewAtWarnings(x.ReviewUnixMs, now)...)
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "reviewExternalDependent",
+		Method:      http.MethodPost,
+		Path:        "/admin/external-dependents/{id}/review",
+		Summary:     "Mark an external dependent reviewed: set a new reviewAt (must be in the future) and record reviewedAt and reviewedBy. Every other field stays as it is.",
+	}, func(ctx context.Context, in *reviewExternalDependentIn) (*putExternalDependentOut, error) {
+		x, ok := g.externals.get(in.ID)
+		if !ok {
+			return nil, huma.Error404NotFound(fmt.Sprintf("no external dependent %q", in.ID))
+		}
+		now := nowFunc()
+		ms, err := parseReviewAt(in.Body.ReviewAt)
+		if err == nil && ms <= now.UnixMilli() {
+			err = fmt.Errorf("reviewAt must be in the future")
+		}
+		if err != nil {
+			return nil, externalValidationError([]externalFieldError{{"body.reviewAt", err.Error()}})
+		}
+		x.ReviewUnixMs = ms
+		x.ReviewedUnixMs = now.UnixMilli()
+		x.ReviewedBy = strings.TrimSpace(in.Body.By)
+		x.LastOp = changeOpReview
+		x.UpdatedUnixMs = now.UnixMilli()
+		if err := g.putExternalDependent(ctx, x); err != nil {
+			return nil, err
+		}
+		out := &putExternalDependentOut{}
+		out.Body.ExternalDependent = adminExternalDependent(x, now)
+		out.Body.Warnings = append([]string{}, reviewAtWarnings(x.ReviewUnixMs, now)...)
 		return out, nil
 	})
 
@@ -94,6 +128,42 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 	})
 }
 
+// reviewAtFarOut is the review horizon past which a PUT or review
+// warns. Accepted: the warning is a prompt, not a rule.
+const reviewAtFarOut = 366 * 24 * time.Hour
+
+// parseReviewAt reads a required RFC 3339 reviewAt.
+func parseReviewAt(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("reviewAt is required (RFC 3339 date-time)")
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return 0, fmt.Errorf("reviewAt must be an RFC 3339 date-time")
+	}
+	return t.UnixMilli(), nil
+}
+
+func reviewAtWarnings(ms int64, now time.Time) []string {
+	at := time.UnixMilli(ms)
+	switch {
+	case !at.After(now):
+		return []string{"reviewAt is not in the future: the declaration is review-due now"}
+	case at.Sub(now) > reviewAtFarOut:
+		return []string{"reviewAt is more than a year out"}
+	}
+	return nil
+}
+
+func externalValidationError(errs []externalFieldError) error {
+	details := make([]error, len(errs))
+	for i, e := range errs {
+		details[i] = &huma.ErrorDetail{Location: e.Location, Message: e.Message}
+	}
+	return huma.Error422UnprocessableEntity("validation failed", details...)
+}
+
 type externalOwnerInfo struct {
 	Team    string `json:"team" doc:"Team on this side that owns the relationship."`
 	Contact string `json:"contact" doc:"How to reach them (email, channel)."`
@@ -111,8 +181,10 @@ type externalDependentInfo struct {
 	Owner         *externalOwnerInfo `json:"owner,omitempty"`
 	Depends       []externalPinInfo  `json:"depends"`
 	Note          string             `json:"note"`
-	ExpiresAt     string             `json:"expiresAt" doc:"RFC 3339; empty = no expiry."`
-	Expired       bool               `json:"expired" doc:"Past expiresAt: listed, but no longer counts as a dependent."`
+	ReviewAt      string             `json:"reviewAt" doc:"RFC 3339. Empty only on a declaration stored before reviewAt existed."`
+	ReviewDue     bool               `json:"reviewDue" doc:"reviewAt is past (or missing). The declaration still counts as a dependent; a person must review it."`
+	ReviewedAt    string             `json:"reviewedAt" doc:"RFC 3339 time of the last review op; empty = never reviewed."`
+	ReviewedBy    string             `json:"reviewedBy" doc:"Who the last review op says reviewed it (self-reported); empty = not given."`
 	UpdatedUnixMs int64              `json:"updatedUnixMs"`
 }
 
@@ -122,20 +194,28 @@ func adminExternalDependent(x externalDependent, now time.Time) externalDependen
 		Name:          x.Name,
 		Kind:          x.Kind,
 		Note:          x.Note,
-		Expired:       x.expired(now),
+		ReviewDue:     x.reviewDue(now),
+		ReviewedBy:    x.ReviewedBy,
 		UpdatedUnixMs: x.UpdatedUnixMs,
 		Depends:       []externalPinInfo{}, // never nil — JSON null breaks NonNull
 	}
 	if x.Owner != nil {
 		info.Owner = &externalOwnerInfo{Team: x.Owner.Team, Contact: x.Owner.Contact}
 	}
-	if x.ExpiresUnixMs > 0 {
-		info.ExpiresAt = time.UnixMilli(x.ExpiresUnixMs).UTC().Format(time.RFC3339)
-	}
+	info.ReviewAt = rfc3339Ms(x.ReviewUnixMs)
+	info.ReviewedAt = rfc3339Ms(x.ReviewedUnixMs)
 	for _, d := range x.Depends {
 		info.Depends = append(info.Depends, externalPinInfo{Service: d.Service, Lines: append([]string{}, d.Lines...)})
 	}
 	return info
+}
+
+// rfc3339Ms formats a Unix-ms time as RFC 3339 UTC; 0 → "".
+func rfc3339Ms(ms int64) string {
+	if ms == 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }
 
 type externalDependentsOut struct {
@@ -161,12 +241,20 @@ type externalPinIn struct {
 type putExternalDependentIn struct {
 	ID   string `path:"id" doc:"Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."`
 	Body struct {
-		Name      string           `json:"name,omitempty" doc:"Display name, e.g. \"Acme Corp\"."`
-		Kind      string           `json:"kind" doc:"customer, partner, app or other."`
-		Owner     *externalOwnerIn `json:"owner,omitempty"`
-		Depends   []externalPinIn  `json:"depends" doc:"Pinned lines per service; at least one."`
-		Note      string           `json:"note,omitempty"`
-		ExpiresAt string           `json:"expiresAt,omitempty" doc:"RFC 3339 date-time. Past it the declaration stops counting and is listed as expired."`
+		Name     string           `json:"name,omitempty" doc:"Display name, e.g. \"Acme Corp\"."`
+		Kind     string           `json:"kind" doc:"customer, partner, app or other."`
+		Owner    *externalOwnerIn `json:"owner,omitempty"`
+		Depends  []externalPinIn  `json:"depends" doc:"Pinned lines per service; at least one."`
+		Note     string           `json:"note,omitempty"`
+		ReviewAt string           `json:"reviewAt" doc:"RFC 3339 date-time, required. Past it the declaration still counts; it is listed as review-due and raises a notification."`
+	}
+}
+
+type reviewExternalDependentIn struct {
+	ID   string `path:"id" doc:"Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."`
+	Body struct {
+		ReviewAt string `json:"reviewAt" doc:"Next review date, RFC 3339; must be in the future."`
+		By       string `json:"by,omitempty" doc:"Who reviewed it. Self-reported: recorded as reviewedBy, not checked."`
 	}
 }
 

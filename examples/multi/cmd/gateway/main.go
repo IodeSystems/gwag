@@ -97,6 +97,11 @@ func main() {
 	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
 	publicServices := flag.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists its boot admin token (empty → in-memory only). Set this to a writable path so a worked example (e.g. cmd/mcp-demo) can read <dir>/admin-token without scraping logs. Implicitly set when --nats-data is.")
+	declHook := flag.String("declarations-hook", "", "POST every external-dependent change to this URL. In a cluster the node that accepted the write sends it, once")
+	declHookSecret := flag.String("declarations-hook-secret", "", "HMAC-SHA256 key for --declarations-hook (the string's bytes): X-Gwag-Signature over X-Gwag-Timestamp + \".\" + body")
+	declHookMode := flag.String("declarations-hook-mode", "full", "--declarations-hook body: full (the whole set) or delta (one change)")
+	declFile := flag.String("declarations-file", "", "Keep this file in step with the external dependents. Every node writes its own")
+	declFileMode := flag.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
 
@@ -198,6 +203,20 @@ func main() {
 	}
 	if *publicServices != "" {
 		gwOpts = append(gwOpts, gateway.WithPublicServices(strings.Split(*publicServices, ",")...))
+	}
+	if *declHook != "" {
+		m, err := gateway.ParseDeclarationsSinkMode(*declHookMode)
+		if err != nil {
+			log.Fatalf("--declarations-hook-mode: %v", err)
+		}
+		gwOpts = append(gwOpts, gateway.WithDeclarationsHook(gateway.DeclarationsHookOptions{URL: *declHook, Secret: []byte(*declHookSecret), Mode: m}))
+	}
+	if *declFile != "" {
+		m, err := gateway.ParseDeclarationsSinkMode(*declFileMode)
+		if err != nil {
+			log.Fatalf("--declarations-file-mode: %v", err)
+		}
+		gwOpts = append(gwOpts, gateway.WithDeclarationsFile(gateway.DeclarationsFileOptions{Path: *declFile, Mode: m}))
 	}
 	// Seed the MCP allowlist so /mcp exposes greeter + library + admin
 	// out of the box. Operators retune at runtime via

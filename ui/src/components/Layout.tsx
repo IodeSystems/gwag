@@ -27,10 +27,11 @@ import InputIcon from '@mui/icons-material/Input';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import SettingsIcon from '@mui/icons-material/Settings';
-import NotificationsIcon from '@mui/icons-material/Notifications';
+import DynamicFeedIcon from '@mui/icons-material/DynamicFeed';
 import { Link } from '@tanstack/react-router';
 import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
 import EventsTray from './EventsTray';
+import Notifications from './Notifications';
 import { EnvBadge, PresetPicker, ThemeToggle, useThemeMode } from '@/ui';
 import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 import { useAdminRole } from '@/api/role';
@@ -141,10 +142,11 @@ function LayoutInner({ children }: { children: ReactNode }) {
           />
           <PresetPicker compact />
           <ThemeToggle />
+          <Notifications />
           <Tooltip title={eventsTooltip}>
             <IconButton color="inherit" onClick={openEvents} aria-label="events">
               <Badge color="error" badgeContent={unread} max={99} overlap="circular">
-                <NotificationsIcon />
+                <DynamicFeedIcon />
               </Badge>
             </IconButton>
           </Tooltip>

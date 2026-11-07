@@ -47,8 +47,13 @@ import { nodeTypes } from '@/components/graph/nodes';
 import { NodeDetail } from '@/components/graph/NodeDetail';
 import { ExternalDetail } from '@/components/graph/ExternalDetail';
 import { ExternalDependentDialog } from '@/components/graph/ExternalDependentDialog';
+import { notificationsQueryKey } from '@/components/Notifications';
 
+// ?select=line:ns/ver or ?select=ext:id opens that node's detail panel
+// (notification items link here).
 export const Route = createFileRoute('/')({
+  validateSearch: (search: Record<string, unknown>): { select?: string } =>
+    typeof search.select === 'string' && search.select !== '' ? { select: search.select } : {},
   component: GraphPage,
 });
 
@@ -68,7 +73,16 @@ function GraphPage() {
   const [windowVal, setWindow] = useState<Window>('1h');
   const [view, setView] = useState<EdgeView>('both');
   // Flow node id of the selection: "line:ns/ver" or "ext:id".
-  const [selected, setSelected] = useState<string | null>(null);
+  const { select } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  // ?select wins while present; a local selection drops it, so
+  // following the same link again re-opens it.
+  const [localSelected, setLocalSelected] = useState<string | null>(null);
+  const selected = select ?? localSelected;
+  const setSelected = (id: string | null) => {
+    setLocalSelected(id);
+    if (select) void navigate({ search: {}, replace: true });
+  };
   // Add / edit dialog: undefined = closed, null = add.
   const [editing, setEditing] = useState<ExternalDependent | null | undefined>(undefined);
   const [showGateway, setShowGateway] = useState(false);
@@ -94,7 +108,10 @@ function GraphPage() {
   const graph = useMemo(() => (raw && !showGateway ? withoutGatewayLines(raw) : raw), [raw, showGateway]);
   const line = graph?.nodes?.find((n) => `line:${n.id}` === selected) ?? null;
   const ext = graph?.externalDependents?.find((x) => externalId(x.id) === selected) ?? null;
-  const refetch = () => void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] });
+  const refetch = () => {
+    void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] });
+    void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
+  };
 
   return (
     <Box>

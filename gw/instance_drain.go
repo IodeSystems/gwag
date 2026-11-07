@@ -24,8 +24,8 @@ import (
 //     dependent D whose depends accept L, D must keep at least one
 //     accepted line with a ready instance other than this one. If
 //     not, the drain is BLOCKED: routing continues, reasons name the
-//     dependents. Declared external dependents that have not expired
-//     (external_dependents.go) count as dependents here.
+//     dependents. Declared external dependents (external_dependents.go)
+//     count as dependents here, review-due ones included.
 //  2. otherwise stops picking the instance's replicas (every line,
 //     every kind) and waits for in-flight requests to it to reach 0.
 //  3. reports SAFE_TO_STOP.
@@ -305,7 +305,7 @@ func (g *Gateway) coverageReasons(target string) []string {
 	}
 	ready := d.ready
 	d.mu.Unlock()
-	for _, x := range g.externals.active(nowFunc()) {
+	for _, x := range g.externals.all() {
 		for _, dep := range x.Depends {
 			deps = append(deps, depLine{who: x.label(), dep: dep})
 		}
