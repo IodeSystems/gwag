@@ -53,6 +53,11 @@ func upCmd(args []string) int {
 	signerSecret := fs.String("signer-secret", "", "Hex-encoded bearer for SignSubscriptionToken (admin token also works)")
 	environment := fs.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
+	declHook := fs.String("declarations-hook", "", "POST every external-dependent change to this URL. In a cluster the node that accepted the write sends it, once")
+	declHookSecret := fs.String("declarations-hook-secret", "", "HMAC-SHA256 key for --declarations-hook (the string's bytes): X-Gwag-Signature over X-Gwag-Timestamp + \".\" + body")
+	declHookMode := fs.String("declarations-hook-mode", "full", "--declarations-hook body: full (the whole set) or delta (one change)")
+	declFile := fs.String("declarations-file", "", "Keep this file in step with the external dependents. Every node writes its own")
+	declFileMode := fs.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
 	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
@@ -128,6 +133,11 @@ func upCmd(args []string) int {
 	if *pprofEnable {
 		gwOpts = append(gwOpts, gateway.WithPprof())
 	}
+	sinkOpts, err := declarationsSinkOptions(*declHook, *declHookSecret, *declHookMode, *declFile, *declFileMode)
+	if err != nil {
+		log.Fatal(err)
+	}
+	gwOpts = append(gwOpts, sinkOpts...)
 	gw := gateway.New(gwOpts...)
 
 	cpLis, err := net.Listen("tcp", *cpAddr)
@@ -243,6 +253,27 @@ func upCmd(args []string) int {
 // into a host:port suitable for a credential entry. Bare ":PORT"
 // becomes "localhost:PORT" so the saved context dials through
 // localhost regardless of the bind address.
+// declarationsSinkOptions turns the --declarations-* flags into
+// gateway options.
+func declarationsSinkOptions(hookURL, hookSecret, hookMode, filePath, fileMode string) ([]gateway.Option, error) {
+	var opts []gateway.Option
+	if hookURL != "" {
+		m, err := gateway.ParseDeclarationsSinkMode(hookMode)
+		if err != nil {
+			return nil, fmt.Errorf("--declarations-hook-mode: %w", err)
+		}
+		opts = append(opts, gateway.WithDeclarationsHook(gateway.DeclarationsHookOptions{URL: hookURL, Secret: []byte(hookSecret), Mode: m}))
+	}
+	if filePath != "" {
+		m, err := gateway.ParseDeclarationsSinkMode(fileMode)
+		if err != nil {
+			return nil, fmt.Errorf("--declarations-file-mode: %w", err)
+		}
+		opts = append(opts, gateway.WithDeclarationsFile(gateway.DeclarationsFileOptions{Path: filePath, Mode: m}))
+	}
+	return opts, nil
+}
+
 func endpointHost(addr string) string {
 	if strings.HasPrefix(addr, ":") {
 		return "localhost" + addr
