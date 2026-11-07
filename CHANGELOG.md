@@ -9,6 +9,9 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- gat: a failed huma input check (constraint or Resolver) reaches GraphQL with `extensions.fields: [{path, message}]` next to `status` / `code`, one entry per huma `ErrorDetail`. `path` is in GraphQL argument terms: `body.name` (the body arg is `body`), a bare `limit` for a query / path / header / cookie param, list indexes as dot segments (`body.items.1.name`). Errors without details carry no `fields`.
+
 ## v2.11.0 — 2026-11-06
 
 GraphQL error extensions default to gat's `{status, code}` shape (see Migration), proto lists render non-null elements, Connect ingress in the `gwag` binary, gRPC for gat BYO OpenAPI ops, and a sweep of export, validation and ingress fixes.

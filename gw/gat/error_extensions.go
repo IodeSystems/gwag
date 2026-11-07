@@ -1,6 +1,9 @@
 package gat
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 // statusExtendedError wraps a handler error so the GraphQL surface exposes the
 // originating HTTP status (and a string code) in the GraphQL error's
@@ -17,6 +20,7 @@ import "net/http"
 type statusExtendedError struct {
 	err    error
 	status int
+	fields []fieldError
 }
 
 func (e *statusExtendedError) Error() string  { return e.err.Error() }
@@ -24,10 +28,20 @@ func (e *statusExtendedError) Unwrap() error  { return e.err }
 func (e *statusExtendedError) GetStatus() int { return e.status }
 
 func (e *statusExtendedError) Extensions() map[string]any {
-	return map[string]any{
+	x := map[string]any{
 		"status": e.status,
 		"code":   httpStatusToConnectCode(e.status).String(),
 	}
+	if len(e.fields) > 0 {
+		// extensions.fields: [{path, message}], path in GraphQL argument
+		// terms. Plain maps so any JSON encoder renders them.
+		fs := make([]any, len(e.fields))
+		for i, f := range e.fields {
+			fs[i] = map[string]any{"path": f.Path, "message": f.Message}
+		}
+		x["fields"] = fs
+	}
+	return x
 }
 
 // ctxEndedError is an upstream call the caller's own context ended. It
@@ -60,5 +74,10 @@ func withStatusExtensions(err error) error {
 	if se, ok := err.(statusError); ok {
 		status = se.GetStatus()
 	}
-	return &statusExtendedError{err: err, status: status}
+	var fields []fieldError
+	var fe interface{ fieldErrors() []fieldError }
+	if errors.As(err, &fe) {
+		fields = fe.fieldErrors()
+	}
+	return &statusExtendedError{err: err, status: status, fields: fields}
 }

@@ -65,10 +65,12 @@ func runHumaMiddlewares(ctx context.Context, chain huma.Middlewares, op *huma.Op
 type requestRejection struct {
 	status int
 	msg    string
+	fields []fieldError // per-field validation failures; nil when none
 }
 
-func (e *requestRejection) Error() string  { return e.msg }
-func (e *requestRejection) GetStatus() int { return e.status }
+func (e *requestRejection) Error() string             { return e.msg }
+func (e *requestRejection) GetStatus() int            { return e.status }
+func (e *requestRejection) fieldErrors() []fieldError { return e.fields }
 
 // inprocHumaContext is the huma.Context a middleware sees on an
 // in-process call. Request accessors read the inbound transport

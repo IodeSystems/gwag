@@ -234,7 +234,62 @@ func (c *inputCheck) run(hctx huma.Context, in any, args map[string]any) error {
 	for i, err := range res.Errors {
 		msgs[i] = err.Error()
 	}
-	return &requestRejection{status: status, msg: "validation failed: " + strings.Join(msgs, "; ")}
+	return &requestRejection{status: status, msg: "validation failed: " + strings.Join(msgs, "; "), fields: c.fieldErrors(res.Errors)}
+}
+
+// fieldError is one per-field validation failure as GraphQL clients see
+// it: extensions.fields[] = {path, message}.
+type fieldError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// fieldErrors lifts huma's per-field ErrorDetails out of errs. Errors
+// without a detail (a Resolver's plain 401) add nothing.
+func (c *inputCheck) fieldErrors(errs []error) []fieldError {
+	var out []fieldError
+	for _, err := range errs {
+		var dt huma.ErrorDetailer
+		if !errors.As(err, &dt) {
+			continue
+		}
+		d := dt.ErrorDetail()
+		if d == nil {
+			continue
+		}
+		out = append(out, fieldError{Path: c.argPath(d.Location), Message: d.Message})
+	}
+	return out
+}
+
+// argPath renders a huma location (`body.items[1].name`, `query.limit`)
+// in GraphQL argument terms: the body is the body arg, other parameters
+// are args named after the parameter (their location prefix drops), and
+// list indexes become dot segments: `body.items.1.name`.
+func (c *inputCheck) argPath(loc string) string {
+	head, rest, _ := strings.Cut(loc, ".")
+	switch head {
+	case "query", "path", "header", "cookie":
+		loc = rest
+	case "body":
+		if c.bodyArg != "" {
+			loc = strings.TrimSuffix(c.bodyArg+"."+rest, ".")
+		}
+	}
+	if !strings.Contains(loc, "[") {
+		return loc
+	}
+	var b strings.Builder
+	for i := 0; i < len(loc); i++ {
+		switch loc[i] {
+		case '[':
+			b.WriteByte('.')
+		case ']':
+		default:
+			b.WriteByte(loc[i])
+		}
+	}
+	return b.String()
 }
 
 // jsonValue is v as encoding/json would decode it from a request body.
