@@ -73,6 +73,7 @@ harness.Main(m *testing.M) int                       // from TestMain; owns the 
 harness.New(t) *Env
 env.Gateway(GatewayOpts{Name, NATS, Environment, NoCallerIDHeader, Args}) *Gateway
 env.Cluster(n, GatewayOpts) *Cluster                 // n1..nN, waits for n peers each
+env.ClusterWithNodeArgs(n, opts, func(name, dataDir) []string) *Cluster   // plus per-node flags
   c.Nodes []*Gateway; c.AddNode() *Gateway; c.Live(); c.WaitPeers(n, timeout)
 env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless NoWait
 env.Start(name, bin, args...) *Proc                  // any other process
@@ -99,7 +100,12 @@ Admin: Services(ctx) · WaitInstance(ns, ver, id, state, timeout)   // state "" 
        Graph(ctx, window) · DrainInstance(ctx, id, cancel) · WaitDrainState(id, state, timeout)
        Deprecate/Undeprecate(ctx, ns, ver[, reason]) · Registrations(ctx) · MCPInclude(ctx, glob)
        PutExternalDependent(ctx, x) warnings · DeleteExternalDependent(ctx, id) · ExternalDependents(ctx)
+       ReviewExternalDependent(ctx, id, reviewAt, by) · Notifications(ctx)
        Do(ctx, method, "/admin/...", body, out)                    // with the bearer
+
+NewHookSink(t) *HookSink        // real HTTP receiver for --declarations-hook
+  .URL · Requests() · WaitN(t, n, timeout, settle)   // exactly n, none more for settle
+VerifyHookSignature(req, secret) error
 
 Scrape: Counter(name, Labels) · Samples(name, Labels) · Has(name) · Describe(name, Labels)
 harness.Delta(before, after, name, Labels)             // name may omit go_api_gateway_
