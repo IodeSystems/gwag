@@ -122,12 +122,13 @@ func (d *canonicalChainedDispatcher) run(ctx context.Context, args map[string]an
 			}
 			modified[k] = v
 		}
-		// Strip GraphQLForwardInfo so a graphql-ingest dispatcher
-		// reads vars from `modified` rather than blind-forwarding
-		// the caller's AST (which carries the pre-mutation literal).
-		// No-op for openapi/proto inner dispatchers — they don't
-		// consult forward info.
-		resultErr = call(withoutGraphQLForwardInfo(ctx), modified)
+		// Mark the args as authoritative so a graphql-ingest
+		// dispatcher binds the top-level arguments from `modified`
+		// rather than forwarding the caller's argument ASTs (which
+		// carry the pre-mutation literals). The forward info stays:
+		// both OpenAPI and GraphQL dispatchers need the caller's
+		// selection to shape the response.
+		resultErr = call(withChainArgs(ctx), modified)
 		return postChain, resultErr
 	})
 

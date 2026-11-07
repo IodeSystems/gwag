@@ -36,20 +36,22 @@ func graphQLForwardInfoFrom(ctx context.Context) *graphql.ResolveInfo {
 	return ir.GraphQLResolveInfoFrom(ctx)
 }
 
-// withoutGraphQLForwardInfo overrides any existing forward-info on
-// `ctx` with an empty *graphql.ResolveInfo so dispatchUnary's gate
-// (`info != nil && len(info.FieldASTs) > 0`) falls through to the
-// canonicalQuery / canonical-args dispatch path. Used by the
-// cross-format runtime middleware wrapper: when a Runtime middleware
-// is registered, the chain modifies the canonical args map and the
-// inner dispatcher must read those modifications via vars rather
-// than blind-forwarding the caller's AST (which would carry the
-// pre-mutation literal). Side effect: per-request selection-set
-// granularity is lost — the synthesized query uses scalar leaves
-// only. Operators registering Runtime middleware accept this
-// trade-off in exchange for the runtime hook firing.
-func withoutGraphQLForwardInfo(ctx context.Context) context.Context {
-	return context.WithValue(ctx, graphQLForwardInfoKey{}, &graphql.ResolveInfo{})
+// chainArgsKey marks a dispatch that comes out of the cross-format
+// runtime chain (wrapCanonicalDispatcherWithChain). The chain may
+// have changed the operation's arguments, so the canonical args map,
+// not the caller's AST, holds their values. The caller's selection
+// still decides the response shape: an OpenAPI dispatcher projects
+// onto it, and a GraphQL dispatcher forwards it with the top-level
+// arguments bound to the post-chain values.
+type chainArgsKey struct{}
+
+func withChainArgs(ctx context.Context) context.Context {
+	return context.WithValue(ctx, chainArgsKey{}, true)
+}
+
+func chainArgsFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(chainArgsKey{}).(bool)
+	return v
 }
 
 // graphQLDispatcher implements ir.Dispatcher for one downstream
@@ -72,6 +74,7 @@ type graphQLDispatcher struct {
 	ns              string
 	ver             string
 	label           string // "<opLabel> <remoteFieldName>"
+	args            []*ir.Arg
 
 	canonicalQuery    string
 	canonicalArgNames []string
@@ -84,44 +87,223 @@ type graphQLDispatcher struct {
 // allocations on a forwarded request. The plan cache keeps parsed
 // documents, so the same query reaches here with the same AST nodes:
 // the printed text is cached by (field, operation) identity.
-func (d *graphQLDispatcher) forwardQuery(info *graphql.ResolveInfo) (string, error) {
-	key := forwardKey{field: info.FieldASTs[0], op: info.Operation}
-	if q, ok := d.printed.get(key); ok {
-		return q, nil
+//
+// chainArgs: bind the top-level arguments to variables filled from
+// the canonical args map (see chainArgsKey) instead of forwarding
+// the caller's argument ASTs.
+func (d *graphQLDispatcher) forwardQuery(info *graphql.ResolveInfo, chainArgs bool) (*forwardPrinted, error) {
+	key := forwardKey{field: info.FieldASTs[0], op: info.Operation, chainArgs: chainArgs}
+	if p, ok := d.printed.get(key); ok {
+		return p, nil
 	}
-	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
 	opType := ast.OperationTypeQuery
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		if op.Operation == ast.OperationTypeMutation {
-			opType = ast.OperationTypeMutation
-		}
-		varDefs = op.VariableDefinitions
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil && op.Operation == ast.OperationTypeMutation {
+		opType = ast.OperationTypeMutation
 	}
+	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName, info.FieldASTs[1:], info.Fragments)
+	var bind []*ir.Arg
+	if chainArgs {
+		bind = d.args
+	}
+	p, err := printForward(opType, rewritten, info.Operation, chainArgs, bind)
+	if err != nil {
+		return nil, err
+	}
+	d.printed.put(key, p)
+	return p, nil
+}
+
+// forwardVars returns the variables for a forwarded query: the
+// caller's on the plain path, and on the runtime-chain path the
+// caller variables the query still references plus the post-chain
+// argument values.
+func forwardVars(p *forwardPrinted, info *graphql.ResolveInfo, chainArgs bool, args map[string]any) map[string]any {
+	if !chainArgs {
+		return info.VariableValues
+	}
+	vars := make(map[string]any, len(p.callerVars)+len(p.argVars))
+	for _, n := range p.callerVars {
+		if v, ok := info.VariableValues[n]; ok {
+			vars[n] = v
+		}
+	}
+	for _, av := range p.argVars {
+		if v, ok := args[av.arg]; ok {
+			vars[av.varName] = v
+		}
+	}
+	return vars
+}
+
+// forwardPrinted is one printed upstream operation.
+type forwardPrinted struct {
+	query string
+	// callerVars are the caller's variables the query references.
+	callerVars []string
+	// argVars binds each top-level argument to the upstream variable
+	// that carries it. Set only when the arguments come from the
+	// canonical args map.
+	argVars []forwardArgVar
+}
+
+type forwardArgVar struct{ arg, varName string }
+
+// printForward prints `field` as the single root field of an upstream
+// operation of type opType. Variable definitions are the caller's
+// (from op) that field references: a variable the caller defined for
+// another root field, or for a directive the gateway evaluated, would
+// make the upstream reject the query (§5.8.4 "All Variables Used").
+//
+// chainArgs replaces field's arguments with one variable per entry in
+// bind, named after the argument unless that name collides with a
+// caller variable the selection still uses.
+func printForward(opType string, field *ast.Field, op ast.Node, chainArgs bool, bind []*ir.Arg) (*forwardPrinted, error) {
+	p := &forwardPrinted{}
+	var synth []*ast.VariableDefinition
+	if chainArgs {
+		field.Arguments = nil
+		p.callerVars = fieldVarRefs(nil, field)
+		field.Arguments = make([]*ast.Argument, 0, len(bind))
+		taken := append([]string(nil), p.callerVars...)
+		for _, a := range bind {
+			name := a.Name
+			for containsString(taken, name) {
+				name = "gw_" + name
+			}
+			taken = append(taken, name)
+			p.argVars = append(p.argVars, forwardArgVar{arg: a.Name, varName: name})
+			v := ast.NewVariable(&ast.Variable{Name: ast.NewName(&ast.Name{Value: name})})
+			field.Arguments = append(field.Arguments, ast.NewArgument(&ast.Argument{
+				Name:  ast.NewName(&ast.Name{Value: a.Name}),
+				Value: v,
+			}))
+			synth = append(synth, ast.NewVariableDefinition(&ast.VariableDefinition{
+				Variable: v,
+				Type:     irArgASTType(a),
+			}))
+		}
+	} else {
+		p.callerVars = fieldVarRefs(nil, field)
+	}
+	var varDefs []*ast.VariableDefinition
+	if o, ok := op.(*ast.OperationDefinition); ok && o != nil {
+		for _, vd := range o.VariableDefinitions {
+			if vd != nil && vd.Variable != nil && vd.Variable.Name != nil && containsString(p.callerVars, vd.Variable.Name.Value) {
+				varDefs = append(varDefs, vd)
+			}
+		}
+	}
+	varDefs = append(varDefs, synth...)
 	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
 		Operation:           opType,
 		VariableDefinitions: varDefs,
 		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{rewritten},
+			Selections: []ast.Selection{field},
 		}),
 	})
 	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
 	raw := printer.Print(doc)
 	q, ok := raw.(string)
 	if !ok {
-		return "", Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw))
+		return nil, Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw))
 	}
-	d.printed.put(key, q)
-	return q, nil
+	p.query = q
+	return p, nil
+}
+
+// fieldVarRefs appends the names of the variables f references in
+// its arguments, directives and selection, once each.
+func fieldVarRefs(dst []string, f *ast.Field) []string {
+	for _, a := range f.Arguments {
+		dst = valueVarRefs(dst, a.Value)
+	}
+	dst = directiveVarRefs(dst, f.Directives)
+	return selectionVarRefs(dst, f.SelectionSet)
+}
+
+func selectionVarRefs(dst []string, sel *ast.SelectionSet) []string {
+	if sel == nil {
+		return dst
+	}
+	for _, s := range sel.Selections {
+		switch n := s.(type) {
+		case *ast.Field:
+			dst = fieldVarRefs(dst, n)
+		case *ast.InlineFragment:
+			dst = directiveVarRefs(dst, n.Directives)
+			dst = selectionVarRefs(dst, n.SelectionSet)
+		case *ast.FragmentSpread:
+			dst = directiveVarRefs(dst, n.Directives)
+		}
+	}
+	return dst
+}
+
+func directiveVarRefs(dst []string, dirs []*ast.Directive) []string {
+	for _, d := range dirs {
+		if d == nil {
+			continue
+		}
+		for _, a := range d.Arguments {
+			dst = valueVarRefs(dst, a.Value)
+		}
+	}
+	return dst
+}
+
+func valueVarRefs(dst []string, v ast.Value) []string {
+	switch n := v.(type) {
+	case *ast.Variable:
+		if n.Name != nil && !containsString(dst, n.Name.Value) {
+			dst = append(dst, n.Name.Value)
+		}
+	case *ast.ListValue:
+		for _, e := range n.Values {
+			dst = valueVarRefs(dst, e)
+		}
+	case *ast.ObjectValue:
+		for _, f := range n.Fields {
+			dst = valueVarRefs(dst, f.Value)
+		}
+	}
+	return dst
+}
+
+// irArgASTType is graphQLArgTypeString as an AST type node.
+func irArgASTType(a *ir.Arg) ast.Type {
+	var t ast.Type = irTypeRefAST(a.Type)
+	if a.Repeated {
+		if a.ItemRequired {
+			t = ast.NewNonNull(&ast.NonNull{Type: t})
+		}
+		t = ast.NewList(&ast.List{Type: t})
+	}
+	if a.Required {
+		t = ast.NewNonNull(&ast.NonNull{Type: t})
+	}
+	return t
+}
+
+func irTypeRefAST(r ir.TypeRef) ast.Type {
+	if r.IsList() {
+		var elem ast.Type = irTypeRefAST(r.List.Elem)
+		if r.List.ItemRequired {
+			elem = ast.NewNonNull(&ast.NonNull{Type: elem})
+		}
+		return ast.NewList(&ast.List{Type: elem})
+	}
+	return ast.NewNamed(&ast.Named{Name: ast.NewName(&ast.Name{Value: graphQLTypeNameForRef(r)})})
 }
 
 // forwardKey identifies one field in one parsed operation. The
 // operation is part of the key because a fragment's field node is
 // shared by every operation that spreads it, with different variable
-// definitions.
+// definitions. chainArgs is part of it because that path prints
+// different arguments for the same node.
 type forwardKey struct {
-	field *ast.Field
-	op    ast.Node
+	field     *ast.Field
+	op        ast.Node
+	chainArgs bool
 }
 
 // forwardPrintCacheMax bounds the cache. Keys hold AST nodes alive
@@ -131,22 +313,22 @@ const forwardPrintCacheMax = 256
 
 type forwardPrintCache struct {
 	mu sync.RWMutex
-	m  map[forwardKey]string
+	m  map[forwardKey]*forwardPrinted
 }
 
-func (c *forwardPrintCache) get(k forwardKey) (string, bool) {
+func (c *forwardPrintCache) get(k forwardKey) (*forwardPrinted, bool) {
 	c.mu.RLock()
-	q, ok := c.m[k]
+	p, ok := c.m[k]
 	c.mu.RUnlock()
-	return q, ok
+	return p, ok
 }
 
-func (c *forwardPrintCache) put(k forwardKey, q string) {
+func (c *forwardPrintCache) put(k forwardKey, p *forwardPrinted) {
 	c.mu.Lock()
 	if c.m == nil || len(c.m) >= forwardPrintCacheMax {
-		c.m = make(map[forwardKey]string)
+		c.m = make(map[forwardKey]*forwardPrinted)
 	}
-	c.m[k] = q
+	c.m[k] = p
 	c.mu.Unlock()
 }
 
@@ -159,6 +341,7 @@ func newGraphQLDispatcher(m *graphQLMirror, op *ir.Operation, opLabel string, me
 		ns:              m.src.namespace,
 		ver:             m.src.version,
 		label:           opLabel + " " + op.Name,
+		args:            op.Args,
 	}
 	if !isGrouped && op.Kind != ir.OpSubscription {
 		d.canonicalQuery, d.canonicalArgNames = buildGraphQLCanonicalQuery(m, op, opLabel)
@@ -189,32 +372,9 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 		return err
 	}
 
-	info := graphQLForwardInfoFrom(ctx)
-	var printed string
-	var vars map[string]any
-	if info != nil && len(info.FieldASTs) > 0 {
-		got, err := d.forwardQuery(info)
-		if err != nil {
-			return nil, record(err)
-		}
-		printed = got
-		vars = info.VariableValues
-	} else if d.canonicalQuery != "" {
-		// HTTP/JSON or gRPC ingress: no AST, fall back to the
-		// construction-time synthesized query. Variables are read out
-		// of the canonical args map by IR Arg name (Op.Args index by
-		// name = upstream variable name).
-		printed = d.canonicalQuery
-		if len(d.canonicalArgNames) > 0 && len(args) > 0 {
-			vars = make(map[string]any, len(d.canonicalArgNames))
-			for _, name := range d.canonicalArgNames {
-				if v, ok := args[name]; ok {
-					vars[name] = v
-				}
-			}
-		}
-	} else {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName)))
+	printed, vars, err := d.upstreamRequest(ctx, args)
+	if err != nil {
+		return nil, record(err)
 	}
 
 	src := d.mirror.src
@@ -237,6 +397,36 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	}
 	record(nil)
 	return data[d.remoteFieldName], nil
+}
+
+// upstreamRequest returns the upstream query text and variables for
+// one dispatch. With the caller's AST in ctx it forwards the caller's
+// selection; without one (HTTP/JSON or gRPC ingress) it falls back to
+// the construction-time synthesized query, with variables read out
+// of the canonical args map by IR Arg name (Op.Args index by name =
+// upstream variable name).
+func (d *graphQLDispatcher) upstreamRequest(ctx context.Context, args map[string]any) (string, map[string]any, error) {
+	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {
+		chainArgs := chainArgsFrom(ctx)
+		p, err := d.forwardQuery(info, chainArgs)
+		if err != nil {
+			return "", nil, err
+		}
+		return p.query, forwardVars(p, info, chainArgs, args), nil
+	}
+	if d.canonicalQuery == "" {
+		return "", nil, Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName))
+	}
+	var vars map[string]any
+	if len(d.canonicalArgNames) > 0 && len(args) > 0 {
+		vars = make(map[string]any, len(d.canonicalArgNames))
+		for _, name := range d.canonicalArgNames {
+			if v, ok := args[name]; ok {
+				vars[name] = v
+			}
+		}
+	}
+	return d.canonicalQuery, vars, nil
 }
 
 // DispatchAppend is the byte-splice variant of dispatchUnary. Same
@@ -269,28 +459,9 @@ func (d *graphQLDispatcher) DispatchAppend(ctx context.Context, args map[string]
 		return err
 	}
 
-	info := graphQLForwardInfoFrom(ctx)
-	var printed string
-	var vars map[string]any
-	if info != nil && len(info.FieldASTs) > 0 {
-		got, err := d.forwardQuery(info)
-		if err != nil {
-			return dst, record(err)
-		}
-		printed = got
-		vars = info.VariableValues
-	} else if d.canonicalQuery != "" {
-		printed = d.canonicalQuery
-		if len(d.canonicalArgNames) > 0 && len(args) > 0 {
-			vars = make(map[string]any, len(d.canonicalArgNames))
-			for _, name := range d.canonicalArgNames {
-				if v, ok := args[name]; ok {
-					vars[name] = v
-				}
-			}
-		}
-	} else {
-		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: no AST for %s", d.remoteFieldName)))
+	printed, vars, err := d.upstreamRequest(ctx, args)
+	if err != nil {
+		return dst, record(err)
 	}
 
 	src := d.mirror.src
@@ -360,46 +531,25 @@ type graphqlGroupDispatcher struct {
 func (d *graphqlGroupDispatcher) forwardQuery(info *graphql.ResolveInfo) (string, error) {
 	localField := info.FieldASTs[0]
 	key := forwardKey{field: localField, op: info.Operation}
-	if q, ok := d.printed.get(key); ok {
-		return q, nil
+	if p, ok := d.printed.get(key); ok {
+		return p.query, nil
 	}
 	// Build the upstream field: same name as the local group field
 	// (graphql-origin: local and remote share the namespace path
 	// structure post-introspection), with the local sub-selection
 	// rewritten via the mirror so inline-fragment type conditions get
 	// unprefixed.
-	groupField := ast.NewField(&ast.Field{
-		Alias:      localField.Alias,
-		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
-		Arguments:  localField.Arguments,
-		Directives: localField.Directives,
-	})
-	if localField.SelectionSet != nil {
-		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
-	}
+	groupField := d.mirror.rewriteFieldForRemote(localField, d.group.Name, info.FieldASTs[1:], info.Fragments)
 	opType := ast.OperationTypeQuery
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		if op.Operation == ast.OperationTypeMutation {
-			opType = ast.OperationTypeMutation
-		}
-		varDefs = op.VariableDefinitions
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil && op.Operation == ast.OperationTypeMutation {
+		opType = ast.OperationTypeMutation
 	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           opType,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{groupField},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	q, ok := raw.(string)
-	if !ok {
-		return "", Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw))
+	p, err := printForward(opType, groupField, info.Operation, false, nil)
+	if err != nil {
+		return "", err
 	}
-	d.printed.put(key, q)
-	return q, nil
+	d.printed.put(key, p)
+	return p.query, nil
 }
 
 func newGraphqlGroupDispatcher(m *graphQLMirror, group *ir.OperationGroup, metrics Metrics) *graphqlGroupDispatcher {
@@ -736,29 +886,16 @@ func isLeafIntrospectionType(r *introspectionTypeRef) bool {
 // belongs to exactly one dispatcher, so it shares the unary cache.
 func (d *graphQLDispatcher) forwardSubscriptionQuery(info *graphql.ResolveInfo) (string, error) {
 	key := forwardKey{field: info.FieldASTs[0], op: info.Operation}
-	if q, ok := d.printed.get(key); ok {
-		return q, nil
+	if p, ok := d.printed.get(key); ok {
+		return p.query, nil
 	}
-	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		varDefs = op.VariableDefinitions
+	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName, info.FieldASTs[1:], info.Fragments)
+	p, err := printForward(ast.OperationTypeSubscription, rewritten, info.Operation, false, nil)
+	if err != nil {
+		return "", err
 	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           ast.OperationTypeSubscription,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{rewritten},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	q, ok := raw.(string)
-	if !ok {
-		return "", fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
-	}
-	d.printed.put(key, q)
-	return q, nil
+	d.printed.put(key, p)
+	return p.query, nil
 }
 
 // dispatchSubscribe opens a multiplexed subscription against the

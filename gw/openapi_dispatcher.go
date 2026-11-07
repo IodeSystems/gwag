@@ -197,6 +197,11 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	if len(respBytes) == 0 {
 		return append(dst, "null"...), nil
 	}
+	// The walker splices upstream bytes into the response and scans
+	// objects without decoding them, so the body must be valid JSON.
+	if !json.Valid(respBytes) {
+		return dst, Reject(CodeInternal, fmt.Sprintf("openapi: %s/%s %s: upstream response is not valid JSON", d.ns, d.ver, d.label))
+	}
 
 	if d.validation == ir.ValidationWarn {
 		// Warn mode only logs; decoding costs a pass, so strict and
@@ -207,17 +212,26 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 		}
 	}
 
-	info := graphQLForwardInfoFrom(ctx)
-	var sel *ast.SelectionSet
-	if info != nil && len(info.FieldASTs) > 0 {
-		sel = info.FieldASTs[0].SelectionSet
-	}
 	walker := openAPIWalker{svc: d.svc, prefix: d.typePrefix}
+	var sel *ast.SelectionSet
+	var more []*ast.SelectionSet
+	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {
+		sel = info.FieldASTs[0].SelectionSet
+		// A field selected more than once ({ thing { a } thing { b } })
+		// arrives as several ASTs whose selections merge.
+		for _, f := range info.FieldASTs[1:] {
+			if f.SelectionSet != nil {
+				more = append(more, f.SelectionSet)
+			}
+		}
+		walker.frags = info.Fragments
+		walker.vars = info.VariableValues
+	}
 	var outRef *ir.TypeRef
 	if d.irOp != nil {
 		outRef = d.irOp.Output
 	}
-	return walker.appendValue(dst, json.RawMessage(respBytes), sel, outRef)
+	return walker.appendValue(dst, json.RawMessage(respBytes), sel, more, outRef)
 }
 
 var _ ir.AppendDispatcher = (*openAPIDispatcher)(nil)
