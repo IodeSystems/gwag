@@ -57,6 +57,9 @@ func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 	// Boot cluster tracking (peers KV + monotonic R) async on first
 	// ControlPlane access. It retries until JetStream meta is ready.
 	if g.cfg.cluster != nil {
+		// Armed before the goroutine starts, so /health cannot report
+		// ready in the gap before the reconciler exists.
+		g.armRegistrySync()
 		go g.bootClusterTracking()
 	}
 	return cp
