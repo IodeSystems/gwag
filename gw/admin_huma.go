@@ -43,6 +43,8 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return nil, nil, fmt.Errorf("AdminHumaRouter: ControlPlane impl is not *controlPlane")
 	}
 
+	registerUsageEdges(api, g, cp)
+
 	huma.Register(api, huma.Operation{
 		OperationID: "listPeers",
 		Method:      http.MethodGet,

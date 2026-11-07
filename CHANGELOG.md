@@ -11,6 +11,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Added
 - gat: a failed huma input check (constraint or Resolver) reaches GraphQL with `extensions.fields: [{path, message}]` next to `status` / `code`, one entry per huma `ErrorDetail`. `path` is in GraphQL argument terms: `body.name` (the body arg is `body`), a bare `limit` for a query / path / header / cookie param, list indexes as dot segments (`body.items.1.name`). Errors without details carry no `fields`.
+- Admin op `usageEdges` (`GET /admin/services/usage?window=1m|1h|24h&namespace=&version=`): active dependencies by method for every service. One edge per (caller, namespace, version, method) with count, okCount and lastSeenUnixMs, plus a per-(namespace, version) rollup that lists registered services with no traffic. Per-node, in-memory; caller identity comes from `WithCallerIDExtractor` / `WithCallerHeaders`.
 
 ## v2.11.0 — 2026-11-06
 
