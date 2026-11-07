@@ -36,6 +36,16 @@ export const DashboardQuery = graphql(`
   }
 `);
 
+export const EnvironmentQuery = graphql(`
+  query Environment {
+    admin {
+      listServices {
+        environment
+      }
+    }
+  }
+`);
+
 export const ServicesQuery = graphql(`
   query Services {
     admin {

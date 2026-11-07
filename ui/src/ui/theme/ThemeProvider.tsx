@@ -64,14 +64,18 @@ const Ctx = createContext<ModeCtx | null>(null);
 
 export interface AppThemeProviderProps {
   children: ReactNode;
-  /** Environment name ("dev", "staging", "prod", ...). Drives the header accent. */
+  /** Environment name ("dev", "staging", "prod", ...). Drives the header accent.
+   * Empty or omitted: none known; `useThemeMode().environment` is "" and the
+   * theme uses the default accent. */
   environment?: string;
 }
 
 export function AppThemeProvider({
   children,
-  environment = DEFAULT_ENVIRONMENT,
+  environment = '',
 }: AppThemeProviderProps) {
+  // Empty means the server named none: no badge, default styling.
+  const themeEnv = environment || DEFAULT_ENVIRONMENT;
   const [mode, setModeState] = useState<Mode>(readMode);
   const setMode = useCallback((m: Mode) => {
     setModeState(m);
@@ -83,7 +87,7 @@ export function AppThemeProvider({
     writePreset(p);
   }, []);
   const toggle = useCallback(() => setMode(mode === 'dark' ? 'light' : 'dark'), [mode, setMode]);
-  const theme = useMemo(() => createAppTheme(mode, environment, preset), [mode, environment, preset]);
+  const theme = useMemo(() => createAppTheme(mode, themeEnv, preset), [mode, themeEnv, preset]);
   const value = useMemo(
     () => ({ preset, setPreset, mode, setMode, toggle, environment }),
     [preset, setPreset, mode, setMode, toggle, environment],

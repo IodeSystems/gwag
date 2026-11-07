@@ -91,7 +91,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
             <Button color="inherit" component={Link} to="/status">
               Status
             </Button>
-            <EnvBadge name={environment} />
+            {environment && <EnvBadge name={environment} />}
             <PresetPicker compact />
             <ThemeToggle />
             <Button
@@ -125,7 +125,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             gwag
           </Typography>
-          <EnvBadge name={environment} />
+          {environment && <EnvBadge name={environment} />}
           <PresetPicker compact />
           <ThemeToggle />
           <Tooltip title={eventsTooltip}>

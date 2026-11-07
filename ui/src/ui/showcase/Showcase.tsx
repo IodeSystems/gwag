@@ -44,6 +44,7 @@ import {
   type Mode,
   type PresetId,
   type StatusKey,
+  DEFAULT_ENVIRONMENT,
 } from '@/ui';
 import { PresetGallery } from './Gallery';
 import { GraphQLRequestError } from '@/api/client';
@@ -279,7 +280,7 @@ function Body() {
       breadcrumbs={['Admin', 'Kit']}
       title="Services"
       subtitle="Page header with breadcrumbs, meta, subtitle and actions."
-      meta={<EnvBadge name={environment} />}
+      meta={environment ? <EnvBadge name={environment} /> : undefined}
       actions={
         <>
           <Button variant="outlined" startIcon={<RefreshIcon />}>
@@ -530,7 +531,7 @@ export function Showcase({
   const [localView, setLocalView] = useState<View>(view);
   const cur = onViewChange ? view : localView;
   const setView = onViewChange ?? setLocalView;
-  const [env, setEnv] = useState(appEnv);
+  const [env, setEnv] = useState(appEnv || DEFAULT_ENVIRONMENT);
 
   return (
     <Box>
@@ -567,7 +568,7 @@ export function Showcase({
           onChange={(e) => setEnv(e.target.value)}
           sx={{ minWidth: 150 }}
         >
-          {['dev', 'staging', 'prod', 'qa', 'eu-west-1'].map((e) => (
+          {[...new Set([env, 'dev', 'staging', 'prod', 'qa', 'eu-west-1'])].map((e) => (
             <MenuItem key={e} value={e}>
               {e}
             </MenuItem>

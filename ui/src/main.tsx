@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useEffect, type ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
 import { AppThemeProvider, ToastProvider } from '@/ui';
+import { client } from '@/api/client';
+import { EnvironmentQuery } from '@/api/operations';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,16 +21,30 @@ declare module '@tanstack/react-router' {
   }
 }
 
-// The environment name comes from the server in a later slice;
-// AppThemeProvider defaults to "dev" until then.
+// The environment name comes from the server (admin reads need no token).
+// Empty until loaded, or when the server names none: no badge then.
+function Themed({ children }: { children: ReactNode }) {
+  const { data } = useQuery({
+    queryKey: ['environment'],
+    queryFn: () => client.request(EnvironmentQuery),
+    staleTime: Infinity,
+    retry: 2,
+  });
+  const environment = data?.admin?.listServices?.environment ?? '';
+  useEffect(() => {
+    document.title = environment ? `gwag · ${environment}` : 'gwag';
+  }, [environment]);
+  return <AppThemeProvider environment={environment}>{children}</AppThemeProvider>;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AppThemeProvider>
+      <Themed>
         <ToastProvider>
           <RouterProvider router={router} />
         </ToastProvider>
-      </AppThemeProvider>
+      </Themed>
     </QueryClientProvider>
   </React.StrictMode>
 );
