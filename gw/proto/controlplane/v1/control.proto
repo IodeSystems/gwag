@@ -69,6 +69,16 @@ service ControlPlane {
   // deprecation (older vN cuts) is unaffected — only the manual
   // override is removed.
   rpc Undeprecate(UndeprecateRequest) returns (UndeprecateResponse);
+
+  // DrainInstance asks the gateway to stop routing new requests to one
+  // registration (every line it serves) so it can stop. Idempotent:
+  // call again to poll; the response carries the current state. The
+  // gateway holds the drain (BLOCKED) while stopping the instance
+  // would leave a dependent with no accepted line that has another
+  // ready instance; routing continues while BLOCKED. In a cluster the
+  // request reaches every node, and SAFE_TO_STOP means every live
+  // node has stopped routing and has no request in flight to it.
+  rpc DrainInstance(DrainInstanceRequest) returns (DrainInstanceResponse);
 }
 
 message RegisterRequest {
@@ -487,4 +497,42 @@ message SignSubscriptionTokenResponse {
   // back as the `kid` arg on the subscribe field for the gateway to
   // resolve the matching secret.
   string kid = 5;
+}
+
+message DrainInstanceRequest {
+  // The registration to drain: its registration_id, or its
+  // instance_id when exactly one live registration carries it.
+  string instance = 1;
+
+  // Cancel withdraws an earlier drain request: routing resumes and
+  // the state returns to SERVING.
+  bool cancel = 2;
+}
+
+enum DrainState {
+  DRAIN_STATE_UNSPECIFIED = 0;
+  // No drain requested; the instance receives traffic.
+  DRAIN_STATE_SERVING = 1;
+  // Routing to the instance has stopped; requests are still in
+  // flight to it (on this node or a peer).
+  DRAIN_STATE_DRAINING = 2;
+  // Drain requested, but stopping the instance would leave a
+  // dependent without a covering line. Routing continues; reasons
+  // names the dependents and lines.
+  DRAIN_STATE_BLOCKED = 3;
+  // Routing stopped and nothing in flight: the instance can stop.
+  DRAIN_STATE_SAFE_TO_STOP = 4;
+}
+
+message DrainInstanceResponse {
+  string registration_id = 1;
+  string instance_id = 2;
+  DrainState state = 3;
+  // Set when state is BLOCKED: one line per uncovered dependent.
+  repeated string reasons = 4;
+  // Requests in flight to the instance, summed over the nodes that
+  // have reported.
+  uint32 inflight = 5;
+  // The "namespace/version" lines the instance serves.
+  repeated string lines = 6;
 }

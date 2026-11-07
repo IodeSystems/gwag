@@ -30,6 +30,7 @@ const (
 	ControlPlane_RetractStable_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/RetractStable"
 	ControlPlane_Deprecate_FullMethodName             = "/gateway.controlplane.v1.ControlPlane/Deprecate"
 	ControlPlane_Undeprecate_FullMethodName           = "/gateway.controlplane.v1.ControlPlane/Undeprecate"
+	ControlPlane_DrainInstance_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/DrainInstance"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -94,6 +95,15 @@ type ControlPlaneClient interface {
 	// deprecation (older vN cuts) is unaffected — only the manual
 	// override is removed.
 	Undeprecate(ctx context.Context, in *UndeprecateRequest, opts ...grpc.CallOption) (*UndeprecateResponse, error)
+	// DrainInstance asks the gateway to stop routing new requests to one
+	// registration (every line it serves) so it can stop. Idempotent:
+	// call again to poll; the response carries the current state. The
+	// gateway holds the drain (BLOCKED) while stopping the instance
+	// would leave a dependent with no accepted line that has another
+	// ready instance; routing continues while BLOCKED. In a cluster the
+	// request reaches every node, and SAFE_TO_STOP means every live
+	// node has stopped routing and has no request in flight to it.
+	DrainInstance(ctx context.Context, in *DrainInstanceRequest, opts ...grpc.CallOption) (*DrainInstanceResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -214,6 +224,16 @@ func (c *controlPlaneClient) Undeprecate(ctx context.Context, in *UndeprecateReq
 	return out, nil
 }
 
+func (c *controlPlaneClient) DrainInstance(ctx context.Context, in *DrainInstanceRequest, opts ...grpc.CallOption) (*DrainInstanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DrainInstanceResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_DrainInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -276,6 +296,15 @@ type ControlPlaneServer interface {
 	// deprecation (older vN cuts) is unaffected — only the manual
 	// override is removed.
 	Undeprecate(context.Context, *UndeprecateRequest) (*UndeprecateResponse, error)
+	// DrainInstance asks the gateway to stop routing new requests to one
+	// registration (every line it serves) so it can stop. Idempotent:
+	// call again to poll; the response carries the current state. The
+	// gateway holds the drain (BLOCKED) while stopping the instance
+	// would leave a dependent with no accepted line that has another
+	// ready instance; routing continues while BLOCKED. In a cluster the
+	// request reaches every node, and SAFE_TO_STOP means every live
+	// node has stopped routing and has no request in flight to it.
+	DrainInstance(context.Context, *DrainInstanceRequest) (*DrainInstanceResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -318,6 +347,9 @@ func (UnimplementedControlPlaneServer) Deprecate(context.Context, *DeprecateRequ
 }
 func (UnimplementedControlPlaneServer) Undeprecate(context.Context, *UndeprecateRequest) (*UndeprecateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Undeprecate not implemented")
+}
+func (UnimplementedControlPlaneServer) DrainInstance(context.Context, *DrainInstanceRequest) (*DrainInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DrainInstance not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -538,6 +570,24 @@ func _ControlPlane_Undeprecate_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_DrainInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainInstanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).DrainInstance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_DrainInstance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).DrainInstance(ctx, req.(*DrainInstanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -588,6 +638,10 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Undeprecate",
 			Handler:    _ControlPlane_Undeprecate_Handler,
+		},
+		{
+			MethodName: "DrainInstance",
+			Handler:    _ControlPlane_DrainInstance_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

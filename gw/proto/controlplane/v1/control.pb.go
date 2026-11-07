@@ -157,6 +157,68 @@ func (SubscribeAuthCode) EnumDescriptor() ([]byte, []int) {
 	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{1}
 }
 
+type DrainState int32
+
+const (
+	DrainState_DRAIN_STATE_UNSPECIFIED DrainState = 0
+	// No drain requested; the instance receives traffic.
+	DrainState_DRAIN_STATE_SERVING DrainState = 1
+	// Routing to the instance has stopped; requests are still in
+	// flight to it (on this node or a peer).
+	DrainState_DRAIN_STATE_DRAINING DrainState = 2
+	// Drain requested, but stopping the instance would leave a
+	// dependent without a covering line. Routing continues; reasons
+	// names the dependents and lines.
+	DrainState_DRAIN_STATE_BLOCKED DrainState = 3
+	// Routing stopped and nothing in flight: the instance can stop.
+	DrainState_DRAIN_STATE_SAFE_TO_STOP DrainState = 4
+)
+
+// Enum value maps for DrainState.
+var (
+	DrainState_name = map[int32]string{
+		0: "DRAIN_STATE_UNSPECIFIED",
+		1: "DRAIN_STATE_SERVING",
+		2: "DRAIN_STATE_DRAINING",
+		3: "DRAIN_STATE_BLOCKED",
+		4: "DRAIN_STATE_SAFE_TO_STOP",
+	}
+	DrainState_value = map[string]int32{
+		"DRAIN_STATE_UNSPECIFIED":  0,
+		"DRAIN_STATE_SERVING":      1,
+		"DRAIN_STATE_DRAINING":     2,
+		"DRAIN_STATE_BLOCKED":      3,
+		"DRAIN_STATE_SAFE_TO_STOP": 4,
+	}
+)
+
+func (x DrainState) Enum() *DrainState {
+	p := new(DrainState)
+	*p = x
+	return p
+}
+
+func (x DrainState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DrainState) Descriptor() protoreflect.EnumDescriptor {
+	return file_gw_proto_controlplane_v1_control_proto_enumTypes[2].Descriptor()
+}
+
+func (DrainState) Type() protoreflect.EnumType {
+	return &file_gw_proto_controlplane_v1_control_proto_enumTypes[2]
+}
+
+func (x DrainState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DrainState.Descriptor instead.
+func (DrainState) EnumDescriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
 type RegisterRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// gRPC destination where the registered services live; passed
@@ -2110,6 +2172,150 @@ func (x *SignSubscriptionTokenResponse) GetKid() string {
 	return ""
 }
 
+type DrainInstanceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The registration to drain: its registration_id, or its
+	// instance_id when exactly one live registration carries it.
+	Instance string `protobuf:"bytes,1,opt,name=instance,proto3" json:"instance,omitempty"`
+	// Cancel withdraws an earlier drain request: routing resumes and
+	// the state returns to SERVING.
+	Cancel        bool `protobuf:"varint,2,opt,name=cancel,proto3" json:"cancel,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainInstanceRequest) Reset() {
+	*x = DrainInstanceRequest{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainInstanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainInstanceRequest) ProtoMessage() {}
+
+func (x *DrainInstanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainInstanceRequest.ProtoReflect.Descriptor instead.
+func (*DrainInstanceRequest) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *DrainInstanceRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *DrainInstanceRequest) GetCancel() bool {
+	if x != nil {
+		return x.Cancel
+	}
+	return false
+}
+
+type DrainInstanceResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RegistrationId string                 `protobuf:"bytes,1,opt,name=registration_id,json=registrationId,proto3" json:"registration_id,omitempty"`
+	InstanceId     string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	State          DrainState             `protobuf:"varint,3,opt,name=state,proto3,enum=gateway.controlplane.v1.DrainState" json:"state,omitempty"`
+	// Set when state is BLOCKED: one line per uncovered dependent.
+	Reasons []string `protobuf:"bytes,4,rep,name=reasons,proto3" json:"reasons,omitempty"`
+	// Requests in flight to the instance, summed over the nodes that
+	// have reported.
+	Inflight uint32 `protobuf:"varint,5,opt,name=inflight,proto3" json:"inflight,omitempty"`
+	// The "namespace/version" lines the instance serves.
+	Lines         []string `protobuf:"bytes,6,rep,name=lines,proto3" json:"lines,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainInstanceResponse) Reset() {
+	*x = DrainInstanceResponse{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainInstanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainInstanceResponse) ProtoMessage() {}
+
+func (x *DrainInstanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainInstanceResponse.ProtoReflect.Descriptor instead.
+func (*DrainInstanceResponse) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *DrainInstanceResponse) GetRegistrationId() string {
+	if x != nil {
+		return x.RegistrationId
+	}
+	return ""
+}
+
+func (x *DrainInstanceResponse) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *DrainInstanceResponse) GetState() DrainState {
+	if x != nil {
+		return x.State
+	}
+	return DrainState_DRAIN_STATE_UNSPECIFIED
+}
+
+func (x *DrainInstanceResponse) GetReasons() []string {
+	if x != nil {
+		return x.Reasons
+	}
+	return nil
+}
+
+func (x *DrainInstanceResponse) GetInflight() uint32 {
+	if x != nil {
+		return x.Inflight
+	}
+	return 0
+}
+
+func (x *DrainInstanceResponse) GetLines() []string {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
 var File_gw_proto_controlplane_v1_control_proto protoreflect.FileDescriptor
 
 const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
@@ -2247,7 +2453,18 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x04hmac\x18\x02 \x01(\tR\x04hmac\x12%\n" +
 	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x10\n" +
-	"\x03kid\x18\x05 \x01(\tR\x03kid*\x82\x01\n" +
+	"\x03kid\x18\x05 \x01(\tR\x03kid\"J\n" +
+	"\x14DrainInstanceRequest\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\tR\binstance\x12\x16\n" +
+	"\x06cancel\x18\x02 \x01(\bR\x06cancel\"\xe8\x01\n" +
+	"\x15DrainInstanceResponse\x12'\n" +
+	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\x12\x1f\n" +
+	"\vinstance_id\x18\x02 \x01(\tR\n" +
+	"instanceId\x129\n" +
+	"\x05state\x18\x03 \x01(\x0e2#.gateway.controlplane.v1.DrainStateR\x05state\x12\x18\n" +
+	"\areasons\x18\x04 \x03(\tR\areasons\x12\x1a\n" +
+	"\binflight\x18\x05 \x01(\rR\binflight\x12\x14\n" +
+	"\x05lines\x18\x06 \x03(\tR\x05lines*\x82\x01\n" +
 	"\rInstanceState\x12\x1e\n" +
 	"\x1aINSTANCE_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14INSTANCE_STATE_READY\x10\x01\x12\x1a\n" +
@@ -2263,7 +2480,15 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x1fSUBSCRIBE_AUTH_CODE_UNKNOWN_KID\x10\x06\x12\x1e\n" +
 	"\x1aSUBSCRIBE_AUTH_CODE_DENIED\x10\a\x12#\n" +
 	"\x1fSUBSCRIBE_AUTH_CODE_UNAVAILABLE\x10\b\x12&\n" +
-	"\"SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED\x10\t2\xb5\t\n" +
+	"\"SUBSCRIBE_AUTH_CODE_NOT_CONFIGURED\x10\t*\x93\x01\n" +
+	"\n" +
+	"DrainState\x12\x1b\n" +
+	"\x17DRAIN_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13DRAIN_STATE_SERVING\x10\x01\x12\x18\n" +
+	"\x14DRAIN_STATE_DRAINING\x10\x02\x12\x17\n" +
+	"\x13DRAIN_STATE_BLOCKED\x10\x03\x12\x1c\n" +
+	"\x18DRAIN_STATE_SAFE_TO_STOP\x10\x042\xa5\n" +
+	"\n" +
 	"\fControlPlane\x12_\n" +
 	"\bRegister\x12(.gateway.controlplane.v1.RegisterRequest\x1a).gateway.controlplane.v1.RegisterResponse\x12b\n" +
 	"\tHeartbeat\x12).gateway.controlplane.v1.HeartbeatRequest\x1a*.gateway.controlplane.v1.HeartbeatResponse\x12e\n" +
@@ -2277,7 +2502,8 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x15SignSubscriptionToken\x125.gateway.controlplane.v1.SignSubscriptionTokenRequest\x1a6.gateway.controlplane.v1.SignSubscriptionTokenResponse\x12n\n" +
 	"\rRetractStable\x12-.gateway.controlplane.v1.RetractStableRequest\x1a..gateway.controlplane.v1.RetractStableResponse\x12b\n" +
 	"\tDeprecate\x12).gateway.controlplane.v1.DeprecateRequest\x1a*.gateway.controlplane.v1.DeprecateResponse\x12h\n" +
-	"\vUndeprecate\x12+.gateway.controlplane.v1.UndeprecateRequest\x1a,.gateway.controlplane.v1.UndeprecateResponseBHZFgithub.com/iodesystems/gwag/v2/gw/proto/controlplane/v1;controlplanev1b\x06proto3"
+	"\vUndeprecate\x12+.gateway.controlplane.v1.UndeprecateRequest\x1a,.gateway.controlplane.v1.UndeprecateResponse\x12n\n" +
+	"\rDrainInstance\x12-.gateway.controlplane.v1.DrainInstanceRequest\x1a..gateway.controlplane.v1.DrainInstanceResponseBHZFgithub.com/iodesystems/gwag/v2/gw/proto/controlplane/v1;controlplanev1b\x06proto3"
 
 var (
 	file_gw_proto_controlplane_v1_control_proto_rawDescOnce sync.Once
@@ -2291,91 +2517,97 @@ func file_gw_proto_controlplane_v1_control_proto_rawDescGZIP() []byte {
 	return file_gw_proto_controlplane_v1_control_proto_rawDescData
 }
 
-var file_gw_proto_controlplane_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_gw_proto_controlplane_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_gw_proto_controlplane_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_gw_proto_controlplane_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_gw_proto_controlplane_v1_control_proto_goTypes = []any{
 	(InstanceState)(0),                    // 0: gateway.controlplane.v1.InstanceState
 	(SubscribeAuthCode)(0),                // 1: gateway.controlplane.v1.SubscribeAuthCode
-	(*RegisterRequest)(nil),               // 2: gateway.controlplane.v1.RegisterRequest
-	(*ServiceBinding)(nil),                // 3: gateway.controlplane.v1.ServiceBinding
-	(*Dependency)(nil),                    // 4: gateway.controlplane.v1.Dependency
-	(*Owner)(nil),                         // 5: gateway.controlplane.v1.Owner
-	(*RegisterResponse)(nil),              // 6: gateway.controlplane.v1.RegisterResponse
-	(*DependencyStatus)(nil),              // 7: gateway.controlplane.v1.DependencyStatus
-	(*BindingStatus)(nil),                 // 8: gateway.controlplane.v1.BindingStatus
-	(*InstanceStatus)(nil),                // 9: gateway.controlplane.v1.InstanceStatus
-	(*HeartbeatRequest)(nil),              // 10: gateway.controlplane.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),             // 11: gateway.controlplane.v1.HeartbeatResponse
-	(*DeregisterRequest)(nil),             // 12: gateway.controlplane.v1.DeregisterRequest
-	(*DeregisterResponse)(nil),            // 13: gateway.controlplane.v1.DeregisterResponse
-	(*ListRegistrationsRequest)(nil),      // 14: gateway.controlplane.v1.ListRegistrationsRequest
-	(*ListRegistrationsResponse)(nil),     // 15: gateway.controlplane.v1.ListRegistrationsResponse
-	(*Registration)(nil),                  // 16: gateway.controlplane.v1.Registration
-	(*ListPeersRequest)(nil),              // 17: gateway.controlplane.v1.ListPeersRequest
-	(*ListPeersResponse)(nil),             // 18: gateway.controlplane.v1.ListPeersResponse
-	(*Peer)(nil),                          // 19: gateway.controlplane.v1.Peer
-	(*ForgetPeerRequest)(nil),             // 20: gateway.controlplane.v1.ForgetPeerRequest
-	(*ForgetPeerResponse)(nil),            // 21: gateway.controlplane.v1.ForgetPeerResponse
-	(*ListServicesRequest)(nil),           // 22: gateway.controlplane.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),          // 23: gateway.controlplane.v1.ListServicesResponse
-	(*ServiceInfo)(nil),                   // 24: gateway.controlplane.v1.ServiceInfo
-	(*SignSubscriptionTokenRequest)(nil),  // 25: gateway.controlplane.v1.SignSubscriptionTokenRequest
-	(*RetractStableRequest)(nil),          // 26: gateway.controlplane.v1.RetractStableRequest
-	(*RetractStableResponse)(nil),         // 27: gateway.controlplane.v1.RetractStableResponse
-	(*DeprecateRequest)(nil),              // 28: gateway.controlplane.v1.DeprecateRequest
-	(*DeprecateResponse)(nil),             // 29: gateway.controlplane.v1.DeprecateResponse
-	(*UndeprecateRequest)(nil),            // 30: gateway.controlplane.v1.UndeprecateRequest
-	(*UndeprecateResponse)(nil),           // 31: gateway.controlplane.v1.UndeprecateResponse
-	(*SignSubscriptionTokenResponse)(nil), // 32: gateway.controlplane.v1.SignSubscriptionTokenResponse
-	nil,                                   // 33: gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
-	nil,                                   // 34: gateway.controlplane.v1.ListServicesResponse.StableVnEntry
+	(DrainState)(0),                       // 2: gateway.controlplane.v1.DrainState
+	(*RegisterRequest)(nil),               // 3: gateway.controlplane.v1.RegisterRequest
+	(*ServiceBinding)(nil),                // 4: gateway.controlplane.v1.ServiceBinding
+	(*Dependency)(nil),                    // 5: gateway.controlplane.v1.Dependency
+	(*Owner)(nil),                         // 6: gateway.controlplane.v1.Owner
+	(*RegisterResponse)(nil),              // 7: gateway.controlplane.v1.RegisterResponse
+	(*DependencyStatus)(nil),              // 8: gateway.controlplane.v1.DependencyStatus
+	(*BindingStatus)(nil),                 // 9: gateway.controlplane.v1.BindingStatus
+	(*InstanceStatus)(nil),                // 10: gateway.controlplane.v1.InstanceStatus
+	(*HeartbeatRequest)(nil),              // 11: gateway.controlplane.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),             // 12: gateway.controlplane.v1.HeartbeatResponse
+	(*DeregisterRequest)(nil),             // 13: gateway.controlplane.v1.DeregisterRequest
+	(*DeregisterResponse)(nil),            // 14: gateway.controlplane.v1.DeregisterResponse
+	(*ListRegistrationsRequest)(nil),      // 15: gateway.controlplane.v1.ListRegistrationsRequest
+	(*ListRegistrationsResponse)(nil),     // 16: gateway.controlplane.v1.ListRegistrationsResponse
+	(*Registration)(nil),                  // 17: gateway.controlplane.v1.Registration
+	(*ListPeersRequest)(nil),              // 18: gateway.controlplane.v1.ListPeersRequest
+	(*ListPeersResponse)(nil),             // 19: gateway.controlplane.v1.ListPeersResponse
+	(*Peer)(nil),                          // 20: gateway.controlplane.v1.Peer
+	(*ForgetPeerRequest)(nil),             // 21: gateway.controlplane.v1.ForgetPeerRequest
+	(*ForgetPeerResponse)(nil),            // 22: gateway.controlplane.v1.ForgetPeerResponse
+	(*ListServicesRequest)(nil),           // 23: gateway.controlplane.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),          // 24: gateway.controlplane.v1.ListServicesResponse
+	(*ServiceInfo)(nil),                   // 25: gateway.controlplane.v1.ServiceInfo
+	(*SignSubscriptionTokenRequest)(nil),  // 26: gateway.controlplane.v1.SignSubscriptionTokenRequest
+	(*RetractStableRequest)(nil),          // 27: gateway.controlplane.v1.RetractStableRequest
+	(*RetractStableResponse)(nil),         // 28: gateway.controlplane.v1.RetractStableResponse
+	(*DeprecateRequest)(nil),              // 29: gateway.controlplane.v1.DeprecateRequest
+	(*DeprecateResponse)(nil),             // 30: gateway.controlplane.v1.DeprecateResponse
+	(*UndeprecateRequest)(nil),            // 31: gateway.controlplane.v1.UndeprecateRequest
+	(*UndeprecateResponse)(nil),           // 32: gateway.controlplane.v1.UndeprecateResponse
+	(*SignSubscriptionTokenResponse)(nil), // 33: gateway.controlplane.v1.SignSubscriptionTokenResponse
+	(*DrainInstanceRequest)(nil),          // 34: gateway.controlplane.v1.DrainInstanceRequest
+	(*DrainInstanceResponse)(nil),         // 35: gateway.controlplane.v1.DrainInstanceResponse
+	nil,                                   // 36: gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
+	nil,                                   // 37: gateway.controlplane.v1.ListServicesResponse.StableVnEntry
 }
 var file_gw_proto_controlplane_v1_control_proto_depIdxs = []int32{
-	3,  // 0: gateway.controlplane.v1.RegisterRequest.services:type_name -> gateway.controlplane.v1.ServiceBinding
-	33, // 1: gateway.controlplane.v1.ServiceBinding.proto_imports:type_name -> gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
-	4,  // 2: gateway.controlplane.v1.ServiceBinding.depends:type_name -> gateway.controlplane.v1.Dependency
-	5,  // 3: gateway.controlplane.v1.ServiceBinding.owner:type_name -> gateway.controlplane.v1.Owner
-	8,  // 4: gateway.controlplane.v1.RegisterResponse.bindings:type_name -> gateway.controlplane.v1.BindingStatus
+	4,  // 0: gateway.controlplane.v1.RegisterRequest.services:type_name -> gateway.controlplane.v1.ServiceBinding
+	36, // 1: gateway.controlplane.v1.ServiceBinding.proto_imports:type_name -> gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
+	5,  // 2: gateway.controlplane.v1.ServiceBinding.depends:type_name -> gateway.controlplane.v1.Dependency
+	6,  // 3: gateway.controlplane.v1.ServiceBinding.owner:type_name -> gateway.controlplane.v1.Owner
+	9,  // 4: gateway.controlplane.v1.RegisterResponse.bindings:type_name -> gateway.controlplane.v1.BindingStatus
 	0,  // 5: gateway.controlplane.v1.BindingStatus.state:type_name -> gateway.controlplane.v1.InstanceState
-	7,  // 6: gateway.controlplane.v1.BindingStatus.depends:type_name -> gateway.controlplane.v1.DependencyStatus
+	8,  // 6: gateway.controlplane.v1.BindingStatus.depends:type_name -> gateway.controlplane.v1.DependencyStatus
 	0,  // 7: gateway.controlplane.v1.InstanceStatus.state:type_name -> gateway.controlplane.v1.InstanceState
-	7,  // 8: gateway.controlplane.v1.InstanceStatus.depends:type_name -> gateway.controlplane.v1.DependencyStatus
-	8,  // 9: gateway.controlplane.v1.HeartbeatResponse.bindings:type_name -> gateway.controlplane.v1.BindingStatus
-	16, // 10: gateway.controlplane.v1.ListRegistrationsResponse.registrations:type_name -> gateway.controlplane.v1.Registration
-	19, // 11: gateway.controlplane.v1.ListPeersResponse.peers:type_name -> gateway.controlplane.v1.Peer
-	24, // 12: gateway.controlplane.v1.ListServicesResponse.services:type_name -> gateway.controlplane.v1.ServiceInfo
-	34, // 13: gateway.controlplane.v1.ListServicesResponse.stable_vn:type_name -> gateway.controlplane.v1.ListServicesResponse.StableVnEntry
-	4,  // 14: gateway.controlplane.v1.ServiceInfo.depends:type_name -> gateway.controlplane.v1.Dependency
-	5,  // 15: gateway.controlplane.v1.ServiceInfo.owner:type_name -> gateway.controlplane.v1.Owner
-	9,  // 16: gateway.controlplane.v1.ServiceInfo.instances:type_name -> gateway.controlplane.v1.InstanceStatus
+	8,  // 8: gateway.controlplane.v1.InstanceStatus.depends:type_name -> gateway.controlplane.v1.DependencyStatus
+	9,  // 9: gateway.controlplane.v1.HeartbeatResponse.bindings:type_name -> gateway.controlplane.v1.BindingStatus
+	17, // 10: gateway.controlplane.v1.ListRegistrationsResponse.registrations:type_name -> gateway.controlplane.v1.Registration
+	20, // 11: gateway.controlplane.v1.ListPeersResponse.peers:type_name -> gateway.controlplane.v1.Peer
+	25, // 12: gateway.controlplane.v1.ListServicesResponse.services:type_name -> gateway.controlplane.v1.ServiceInfo
+	37, // 13: gateway.controlplane.v1.ListServicesResponse.stable_vn:type_name -> gateway.controlplane.v1.ListServicesResponse.StableVnEntry
+	5,  // 14: gateway.controlplane.v1.ServiceInfo.depends:type_name -> gateway.controlplane.v1.Dependency
+	6,  // 15: gateway.controlplane.v1.ServiceInfo.owner:type_name -> gateway.controlplane.v1.Owner
+	10, // 16: gateway.controlplane.v1.ServiceInfo.instances:type_name -> gateway.controlplane.v1.InstanceStatus
 	1,  // 17: gateway.controlplane.v1.SignSubscriptionTokenResponse.code:type_name -> gateway.controlplane.v1.SubscribeAuthCode
-	2,  // 18: gateway.controlplane.v1.ControlPlane.Register:input_type -> gateway.controlplane.v1.RegisterRequest
-	10, // 19: gateway.controlplane.v1.ControlPlane.Heartbeat:input_type -> gateway.controlplane.v1.HeartbeatRequest
-	12, // 20: gateway.controlplane.v1.ControlPlane.Deregister:input_type -> gateway.controlplane.v1.DeregisterRequest
-	14, // 21: gateway.controlplane.v1.ControlPlane.ListRegistrations:input_type -> gateway.controlplane.v1.ListRegistrationsRequest
-	17, // 22: gateway.controlplane.v1.ControlPlane.ListPeers:input_type -> gateway.controlplane.v1.ListPeersRequest
-	20, // 23: gateway.controlplane.v1.ControlPlane.ForgetPeer:input_type -> gateway.controlplane.v1.ForgetPeerRequest
-	22, // 24: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
-	25, // 25: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:input_type -> gateway.controlplane.v1.SignSubscriptionTokenRequest
-	26, // 26: gateway.controlplane.v1.ControlPlane.RetractStable:input_type -> gateway.controlplane.v1.RetractStableRequest
-	28, // 27: gateway.controlplane.v1.ControlPlane.Deprecate:input_type -> gateway.controlplane.v1.DeprecateRequest
-	30, // 28: gateway.controlplane.v1.ControlPlane.Undeprecate:input_type -> gateway.controlplane.v1.UndeprecateRequest
-	6,  // 29: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
-	11, // 30: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
-	13, // 31: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
-	15, // 32: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
-	18, // 33: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
-	21, // 34: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
-	23, // 35: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
-	32, // 36: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:output_type -> gateway.controlplane.v1.SignSubscriptionTokenResponse
-	27, // 37: gateway.controlplane.v1.ControlPlane.RetractStable:output_type -> gateway.controlplane.v1.RetractStableResponse
-	29, // 38: gateway.controlplane.v1.ControlPlane.Deprecate:output_type -> gateway.controlplane.v1.DeprecateResponse
-	31, // 39: gateway.controlplane.v1.ControlPlane.Undeprecate:output_type -> gateway.controlplane.v1.UndeprecateResponse
-	29, // [29:40] is the sub-list for method output_type
-	18, // [18:29] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	2,  // 18: gateway.controlplane.v1.DrainInstanceResponse.state:type_name -> gateway.controlplane.v1.DrainState
+	3,  // 19: gateway.controlplane.v1.ControlPlane.Register:input_type -> gateway.controlplane.v1.RegisterRequest
+	11, // 20: gateway.controlplane.v1.ControlPlane.Heartbeat:input_type -> gateway.controlplane.v1.HeartbeatRequest
+	13, // 21: gateway.controlplane.v1.ControlPlane.Deregister:input_type -> gateway.controlplane.v1.DeregisterRequest
+	15, // 22: gateway.controlplane.v1.ControlPlane.ListRegistrations:input_type -> gateway.controlplane.v1.ListRegistrationsRequest
+	18, // 23: gateway.controlplane.v1.ControlPlane.ListPeers:input_type -> gateway.controlplane.v1.ListPeersRequest
+	21, // 24: gateway.controlplane.v1.ControlPlane.ForgetPeer:input_type -> gateway.controlplane.v1.ForgetPeerRequest
+	23, // 25: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
+	26, // 26: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:input_type -> gateway.controlplane.v1.SignSubscriptionTokenRequest
+	27, // 27: gateway.controlplane.v1.ControlPlane.RetractStable:input_type -> gateway.controlplane.v1.RetractStableRequest
+	29, // 28: gateway.controlplane.v1.ControlPlane.Deprecate:input_type -> gateway.controlplane.v1.DeprecateRequest
+	31, // 29: gateway.controlplane.v1.ControlPlane.Undeprecate:input_type -> gateway.controlplane.v1.UndeprecateRequest
+	34, // 30: gateway.controlplane.v1.ControlPlane.DrainInstance:input_type -> gateway.controlplane.v1.DrainInstanceRequest
+	7,  // 31: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
+	12, // 32: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
+	14, // 33: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
+	16, // 34: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
+	19, // 35: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
+	22, // 36: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
+	24, // 37: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
+	33, // 38: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:output_type -> gateway.controlplane.v1.SignSubscriptionTokenResponse
+	28, // 39: gateway.controlplane.v1.ControlPlane.RetractStable:output_type -> gateway.controlplane.v1.RetractStableResponse
+	30, // 40: gateway.controlplane.v1.ControlPlane.Deprecate:output_type -> gateway.controlplane.v1.DeprecateResponse
+	32, // 41: gateway.controlplane.v1.ControlPlane.Undeprecate:output_type -> gateway.controlplane.v1.UndeprecateResponse
+	35, // 42: gateway.controlplane.v1.ControlPlane.DrainInstance:output_type -> gateway.controlplane.v1.DrainInstanceResponse
+	31, // [31:43] is the sub-list for method output_type
+	19, // [19:31] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_gw_proto_controlplane_v1_control_proto_init() }
@@ -2388,8 +2620,8 @@ func file_gw_proto_controlplane_v1_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gw_proto_controlplane_v1_control_proto_rawDesc), len(file_gw_proto_controlplane_v1_control_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   33,
+			NumEnums:      3,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -133,38 +133,71 @@ func (g *Gateway) removeGateInstancesByRegLocked(regID string) {
 }
 
 // readyInstancesLocked returns how many ready instances serve
-// (ns, line): the replicas in its slot. In-process slots
-// (internal proto, MCP) count as one. This is the "present" test of
-// the start gate; drain (D3) must keep it accurate for instances it
-// takes out of rotation. Caller holds g.mu.
+// (ns, line): the replicas in its slot that are not draining
+// (instance_drain.go). In-process slots (internal proto, MCP) count
+// as one. This is the "present" test of the start gate, and drain
+// coverage counts the same set (readyOwnersLocked), so the two never
+// disagree. Caller holds g.mu.
 func (g *Gateway) readyInstancesLocked(ns, line string) int {
+	owners, ownerless := g.readyOwnersLocked(ns, line)
+	return len(owners) + ownerless
+}
+
+// readyOwnersLocked lists the registration IDs of the non-draining
+// replicas in the (ns, line) slot, plus a count of ready replicas
+// without a registration (boot-time AddProto / AddOpenAPI /
+// AddGraphQL, in-process slots). WAITING bindings never join a slot,
+// so they are not listed. Caller holds g.mu.
+func (g *Gateway) readyOwnersLocked(ns, line string) (owners []string, ownerless int) {
 	s := g.slots[poolKey{namespace: ns, version: line}]
 	if s == nil {
-		return 0
+		return nil, 0
+	}
+	add := func(owner string, h *replicaHealth) {
+		if h.draining.Load() {
+			return
+		}
+		if owner == "" {
+			ownerless++
+			return
+		}
+		owners = append(owners, owner)
 	}
 	switch s.kind {
 	case slotKindProto:
 		if s.proto != nil {
-			return s.proto.replicaCount()
+			if rs := s.proto.replicas.Load(); rs != nil {
+				for _, r := range *rs {
+					add(r.owner, &r.health)
+				}
+			}
 		}
 	case slotKindOpenAPI:
 		if s.openapi != nil {
-			return s.openapi.replicaCount()
+			if rs := s.openapi.replicas.Load(); rs != nil {
+				for _, r := range *rs {
+					add(r.owner, &r.health)
+				}
+			}
 		}
 	case slotKindGraphQL:
 		if s.graphql != nil {
-			return s.graphql.replicaCount()
+			if rs := s.graphql.replicas.Load(); rs != nil {
+				for _, r := range *rs {
+					add(r.owner, &r.health)
+				}
+			}
 		}
 	case slotKindInternalProto:
 		if s.internalProto != nil {
-			return 1
+			ownerless = 1
 		}
 	case slotKindMCP:
 		if s.mcp != nil {
-			return 1
+			ownerless = 1
 		}
 	}
-	return 0
+	return owners, ownerless
 }
 
 // depsMetLocked reports whether every dependency has at least one

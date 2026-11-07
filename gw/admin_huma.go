@@ -44,6 +44,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	}
 
 	registerUsageEdges(api, g, cp)
+	registerInstanceDrain(api, g)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "listPeers",
@@ -93,6 +94,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
 				Depends:                 adminDepends(s.GetDepends()),
 				Owner:                   adminOwner(s.GetOwner()),
+				Drains:                  adminLineDrains(g, s.GetNamespace(), s.GetVersion()),
 				Instances:               adminInstances(s.GetInstances()),
 			}
 			if r := rej[poolKey{namespace: s.GetNamespace(), version: s.GetVersion()}]; r != nil {
@@ -865,6 +867,9 @@ type serviceInfo struct {
 	// declared dependencies); Owner is omitted when not declared.
 	Depends []dependencyInfo `json:"depends"`
 	Owner   *ownerInfo       `json:"owner,omitempty"`
+	// Drains lists the instances on this line with a drain requested
+	// (instance_drain.go). Empty = none; the UI shows a chip per entry.
+	Drains []instanceDrainInfo `json:"drains"`
 	// Instances are the control-plane-registered instances of this
 	// (namespace, version) with their start-gate state, waiting ones
 	// included (replicaCount does not count those). Never nil.

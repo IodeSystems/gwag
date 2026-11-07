@@ -145,7 +145,10 @@ func (p *pool) pickReplicaExcept(tried []*replica) *replica {
 		return nil
 	}
 	if len(*rs) == 1 && len(tried) == 0 {
-		return (*rs)[0]
+		if r := (*rs)[0]; !r.health.draining.Load() {
+			return r
+		}
+		return nil
 	}
 	r, _ := pickHealthy(*rs, 0, tried)
 	return r
