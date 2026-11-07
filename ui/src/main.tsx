@@ -1,13 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
-
-const theme = createTheme({
-  palette: { mode: 'light' },
-});
+import { AppThemeProvider, ToastProvider } from '@/ui';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,13 +19,16 @@ declare module '@tanstack/react-router' {
   }
 }
 
+// The environment name comes from the server in a later slice;
+// AppThemeProvider defaults to "dev" until then.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        <RouterProvider router={router} />
-      </ThemeProvider>
+      <AppThemeProvider>
+        <ToastProvider>
+          <RouterProvider router={router} />
+        </ToastProvider>
+      </AppThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>
 );

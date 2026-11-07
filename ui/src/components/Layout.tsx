@@ -29,6 +29,7 @@ import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
 import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
 import EventsTray from './EventsTray';
+import { EnvBadge, ThemeToggle, useThemeMode } from '@/ui';
 import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 
 const drawerWidth = 220;
@@ -53,6 +54,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 }
 
 function LayoutInner({ children }: { children: ReactNode }) {
+  const { environment } = useThemeMode();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const token = useAdminToken();
@@ -81,6 +83,8 @@ function LayoutInner({ children }: { children: ReactNode }) {
             <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
               gwag
             </Typography>
+            <EnvBadge name={environment} />
+            <ThemeToggle />
             <Button
               color="inherit"
               startIcon={<SettingsIcon />}
@@ -112,6 +116,8 @@ function LayoutInner({ children }: { children: ReactNode }) {
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             gwag
           </Typography>
+          <EnvBadge name={environment} />
+          <ThemeToggle />
           <Tooltip title={eventsTooltip}>
             <IconButton color="inherit" onClick={openEvents} aria-label="events">
               <Badge color="error" badgeContent={unread} max={99} overlap="circular">

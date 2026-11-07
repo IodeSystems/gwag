@@ -14,13 +14,26 @@
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { print } from 'graphql';
 import { getAdminToken } from './auth';
+import type { GraphQLErrorLike } from '@/ui/forms/fieldErrors';
 
 const endpoint = '/api/graphql';
 
 type GraphQLResponse<T> = {
   data?: T | null;
-  errors?: { message: string }[];
+  errors?: GraphQLErrorLike[];
 };
+
+// Thrown for GraphQL-level errors. `message` is unchanged (messages
+// joined with "; "); `errors` keeps the raw list so forms can read
+// `extensions.fields` (see ui/forms/fieldErrors.ts).
+export class GraphQLRequestError extends Error {
+  readonly errors: GraphQLErrorLike[];
+  constructor(errors: GraphQLErrorLike[]) {
+    super(errors.map((e) => e.message).join('; '));
+    this.name = 'GraphQLRequestError';
+    this.errors = errors;
+  }
+}
 
 // Operations with no variables take no second argument.
 type VariablesArg<V> = V extends Record<string, never> ? [variables?: V] : [variables: V];
@@ -48,7 +61,7 @@ async function request<TResult, TVariables>(
     throw new Error(`GraphQL request failed: HTTP ${res.status}`);
   }
   if (body.errors?.length) {
-    throw new Error(body.errors.map((e) => e.message).join('; '));
+    throw new GraphQLRequestError(body.errors);
   }
   if (!res.ok || body.data == null) {
     throw new Error(`GraphQL request failed: HTTP ${res.status}`);

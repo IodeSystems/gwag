@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as KitRouteImport } from './routes/[_]kit'
 import { Route as DeprecatedRouteImport } from './routes/deprecated'
 import { Route as InjectorsRouteImport } from './routes/injectors'
 import { Route as McpRouteImport } from './routes/mcp'
@@ -21,6 +22,11 @@ import { Route as TokenSignerRouteImport } from './routes/token-signer'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KitRoute = KitRouteImport.update({
+  id: '/_kit',
+  path: '/_kit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeprecatedRoute = DeprecatedRouteImport.update({
@@ -61,6 +67,7 @@ const TokenSignerRoute = TokenSignerRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
   '/mcp': typeof McpRoute
@@ -71,6 +78,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
   '/mcp': typeof McpRoute
@@ -82,6 +90,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
   '/mcp': typeof McpRoute
@@ -94,6 +103,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/_kit'
     | '/deprecated'
     | '/injectors'
     | '/mcp'
@@ -104,6 +114,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/_kit'
     | '/deprecated'
     | '/injectors'
     | '/mcp'
@@ -114,6 +125,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/_kit'
     | '/deprecated'
     | '/injectors'
     | '/mcp'
@@ -125,6 +137,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  KitRoute: typeof KitRoute
   DeprecatedRoute: typeof DeprecatedRoute
   InjectorsRoute: typeof InjectorsRoute
   McpRoute: typeof McpRoute
@@ -141,6 +154,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_kit': {
+      id: '/_kit'
+      path: '/_kit'
+      fullPath: '/_kit'
+      preLoaderRoute: typeof KitRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/deprecated': {
@@ -197,6 +217,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  KitRoute: KitRoute,
   DeprecatedRoute: DeprecatedRoute,
   InjectorsRoute: InjectorsRoute,
   McpRoute: McpRoute,
