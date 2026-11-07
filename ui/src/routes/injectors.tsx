@@ -1,21 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
-import {
-  Box,
-  Chip,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material';
+import { Box, Chip, Tooltip, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { client } from '@/api/client';
 import { InjectorsQuery } from '@/api/operations';
+import { DataTable, EmptyState, Page, Panel, StatusChip, type Column } from '@/ui';
 import type { ResultOf } from '@graphql-typed-document-node/core';
 
 export const Route = createFileRoute('/injectors')({
@@ -82,103 +70,98 @@ function Injectors() {
 
   if (injectors.length === 0) {
     return (
-      <Stack spacing={2}>
-        <Typography variant="h5">Injectors</Typography>
-        <Paper sx={{ p: 3 }}>
-          <Typography color="text.secondary">
-            No <code>InjectType</code>, <code>InjectPath</code>, or{' '}
-            <code>InjectHeader</code> registrations on this gateway.
-          </Typography>
-        </Paper>
-      </Stack>
+      <Page title="Injectors">
+        <Panel>
+          <EmptyState
+            title="No injectors"
+            description={
+              <>
+                No <code>InjectType</code>, <code>InjectPath</code>, or <code>InjectHeader</code>{' '}
+                registrations on this gateway.
+              </>
+            }
+          />
+        </Panel>
+      </Page>
     );
   }
 
   return (
-    <Stack spacing={2}>
-      <Typography variant="h5">Injectors</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Every InjectType / InjectPath / InjectHeader registration on this
-        gateway, with the args / fields / headers it currently lands on.
-        Path-keyed entries with no resolved landing are <em>dormant</em> —
-        they activate on a future schema rebuild that brings the path
-        into existence.
-      </Typography>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Kind</TableCell>
-              <TableCell>Key</TableCell>
-              <TableCell>Mode</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell>Landings</TableCell>
-              <TableCell>Registered</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {injectors.map((inj, i) => {
-              const reg = inj.registeredAt;
-              // `landings` is nullable in the schema; a null array renders the
-              // same "—" placeholder as an empty one.
-              const landings = (inj.landings ?? []).filter(
-                (l): l is Landing => l !== null,
-              );
-              const regTitle = reg.function ? reg.function : '';
-              const regLabel =
-                reg.file && reg.line !== null && reg.line !== undefined
-                  ? `${trimRepoPath(reg.file)}:${reg.line}`
-                  : '—';
-              return (
-                <TableRow key={i}>
-                  <TableCell>
-                    <Chip label={inj.kind} size="small" />
-                  </TableCell>
-                  <TableCell>
-                    <code style={{ fontSize: '0.85rem' }}>{injectorKey(inj)}</code>
-                  </TableCell>
-                  <TableCell>{modeLabel(inj)}</TableCell>
-                  <TableCell>
-                    <Chip
-                      label={inj.state}
-                      size="small"
-                      color={inj.state === 'active' ? 'success' : 'warning'}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {landings.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        —
-                      </Typography>
-                    ) : (
-                      <Box
-                        sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}
-                      >
-                        {landings.map((l, j) => (
-                          <Chip
-                            key={j}
-                            label={landingLabel(l)}
-                            size="small"
-                            variant="outlined"
-                          />
-                        ))}
-                      </Box>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Tooltip title={regTitle}>
-                      <code style={{ fontSize: '0.75rem' }}>{regLabel}</code>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Stack>
+    <Page
+      title="Injectors"
+      subtitle={
+        <>
+          Every InjectType / InjectPath / InjectHeader registration on this gateway, with the args /
+          fields / headers it currently lands on. Path-keyed entries with no resolved landing are{' '}
+          <em>dormant</em> — they activate on a future schema rebuild that brings the path into
+          existence.
+        </>
+      }
+    >
+      <Panel flush>
+        <DataTable columns={columns} rows={injectors} getRowId={(inj) => String(injectors.indexOf(inj))} />
+      </Panel>
+    </Page>
   );
 }
+
+const columns: Column<Injector>[] = [
+  { id: 'kind', header: 'Kind', cell: (inj) => <Chip label={inj.kind} size="small" /> },
+  { id: 'key', header: 'Key', mono: true, cell: (inj) => injectorKey(inj) },
+  { id: 'mode', header: 'Mode', cell: (inj) => modeLabel(inj) },
+  {
+    id: 'state',
+    header: 'State',
+    cell: (inj) => (
+      <StatusChip
+        status={inj.state === 'active' ? 'ready' : 'waiting'}
+        label={inj.state}
+        size="small"
+      />
+    ),
+  },
+  {
+    id: 'landings',
+    header: 'Landings',
+    cell: (inj) => {
+      // `landings` is nullable in the schema; a null array renders the
+      // same "—" placeholder as an empty one.
+      const landings = (inj.landings ?? []).filter((l): l is Landing => l !== null);
+      if (landings.length === 0) {
+        return (
+          <Typography variant="body2" color="text.secondary">
+            —
+          </Typography>
+        );
+      }
+      return (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+          {landings.map((l, j) => (
+            <Chip key={j} label={landingLabel(l)} size="small" variant="outlined" />
+          ))}
+        </Box>
+      );
+    },
+  },
+  {
+    id: 'registered',
+    header: 'Registered',
+    cell: (inj) => {
+      const reg = inj.registeredAt;
+      const regLabel =
+        reg.file && reg.line !== null && reg.line !== undefined
+          ? `${trimRepoPath(reg.file)}:${reg.line}`
+          : '—';
+      return (
+        <Tooltip title={reg.function ? reg.function : ''}>
+          <Box component="span" sx={{ fontFamily: (t) => t.gwag.mono, fontSize: '0.75rem' }}>
+            {regLabel}
+          </Box>
+        </Tooltip>
+      );
+    },
+  },
+];
 
 // trimRepoPath shortens an absolute file path to its last 3 segments
 // so the table cell stays readable; full path lives in the tooltip.
