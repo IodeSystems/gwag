@@ -19,8 +19,10 @@ const (
 	stableBucketName     = "gwag-stable"
 	deprecatedBucketName = "gwag-deprecated"
 
-	peerTTL     = 30 * time.Second
-	peerRefresh = 10 * time.Second
+	peerTTL = 30 * time.Second
+	// peerTTLPerRefresh: a node refreshes its peer entry every
+	// peerTTL/3 (10s by default).
+	peerTTLPerRefresh = 3
 
 	registryTTL = 30 * time.Second
 
@@ -64,6 +66,10 @@ type peerTracker struct {
 	nodeID string
 	self   []byte
 
+	// peerTTL / registryTTL are the bucket TTLs (clusterTTLs).
+	peerTTL     time.Duration
+	registryTTL time.Duration
+
 	mu   sync.Mutex
 	live map[string]struct{} // active peer NodeIDs (incl. self)
 
@@ -98,38 +104,19 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 
 	// Both buckets are created at R=1 if they don't exist; live R is
 	// raised monotonically by reconcileReplicas as peers join.
-	peers, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:   peersBucketName,
-		Replicas: 1,
-		TTL:      peerTTL,
-	})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+	// Peers and registry entries expire when their writer stops
+	// refreshing them. Both buckets leave a delete marker on expiry
+	// so every watcher sees the key go (openExpiringBucket).
+	peerTTL, registryTTL := g.clusterTTLs()
+	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL)
+	if err != nil {
 		g.mu.Unlock()
-		return nil, fmt.Errorf("peers bucket: %w", err)
+		return nil, err
 	}
-	if peers == nil {
-		peers, err = cl.JS.KeyValue(ctx, peersBucketName)
-		if err != nil {
-			g.mu.Unlock()
-			return nil, fmt.Errorf("peers bucket open: %w", err)
-		}
-	}
-
-	reg, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:   registryBucketName,
-		Replicas: 1,
-		TTL:      registryTTL,
-	})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL)
+	if err != nil {
 		g.mu.Unlock()
-		return nil, fmt.Errorf("registry bucket: %w", err)
-	}
-	if reg == nil {
-		reg, err = cl.JS.KeyValue(ctx, registryBucketName)
-		if err != nil {
-			g.mu.Unlock()
-			return nil, fmt.Errorf("registry bucket open: %w", err)
-		}
+		return nil, err
 	}
 
 	stable, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
@@ -218,6 +205,8 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		externals:      externals,
 		nodeID:         cl.NodeID,
 		self:           selfBytes,
+		peerTTL:        peerTTL,
+		registryTTL:    registryTTL,
 		live:           map[string]struct{}{cl.NodeID: {}},
 		cancel:         cancel,
 		done:           make(chan struct{}),
@@ -257,7 +246,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return fail(fmt.Errorf("put self: %w", err))
 	}
 
-	rec, err := g.startReconciler(tctx, reg)
+	rec, err := g.startReconciler(tctx, reg, registryTTL)
 	if err != nil {
 		return fail(fmt.Errorf("start reconciler: %w", err))
 	}
@@ -274,8 +263,9 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 }
 
 func (t *peerTracker) refreshLoop(ctx context.Context) {
-	tk := time.NewTicker(peerRefresh)
+	tk := time.NewTicker(t.peerTTL / peerTTLPerRefresh)
 	defer tk.Stop()
+	missing := map[string]time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -284,13 +274,48 @@ func (t *peerTracker) refreshLoop(ctx context.Context) {
 			c, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_, _ = t.peers.Put(c, t.nodeID, t.self)
 			cancel()
+			missing = t.sweepPeers(ctx, missing)
 		}
 	}
 }
 
+// sweepPeers is the backstop for a peer delete the watch can no
+// longer deliver, by the rule of reconciler.sweepLoop: a live peer
+// whose key has been missing for at least peerTTL leaves the live
+// set. missing maps a peer to the first sweep that missed it; the
+// result is the map for the next sweep.
+func (t *peerTracker) sweepPeers(ctx context.Context, missing map[string]time.Time) map[string]time.Time {
+	now := time.Now()
+	next := map[string]time.Time{}
+	for _, id := range t.LivePeers() {
+		if id == t.nodeID {
+			continue
+		}
+		c, cancel := kvCtx(ctx)
+		gone, err := kvKeyGone(c, t.gw.cfg.cluster.Conn, peersBucketName, id)
+		cancel()
+		if err != nil || !gone {
+			continue
+		}
+		first, ok := missing[id]
+		if !ok {
+			first = now
+		}
+		if now.Sub(first) < t.peerTTL {
+			next[id] = first
+			continue
+		}
+		t.mu.Lock()
+		delete(t.live, id)
+		t.mu.Unlock()
+	}
+	return next
+}
+
 // watchLoop tracks the live peer set and triggers a replica reconcile
 // on every change. KV TTL handles departure: a peer that stops
-// refreshing has its key auto-expired, which fires a Delete event.
+// refreshing has its key expired, and the delete marker the bucket
+// leaves (openExpiringBucket) arrives here as a Purge.
 func (t *peerTracker) watchLoop(ctx context.Context) {
 	defer close(t.done)
 	for {
@@ -356,27 +381,91 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	defer cancel()
 	var firstErr error
 	for _, b := range []struct {
-		name string
-		ttl  time.Duration
+		name   string
+		ttl    time.Duration
+		marker bool
 	}{
-		{peersBucketName, peerTTL},
-		{registryBucketName, registryTTL},
-		{stableBucketName, stableTTL},
-		{deprecatedBucketName, deprecatedTTL},
-		{mcpConfigBucketName, mcpConfigTTL},
-		{drainBucketName, 0},
-		{externalDependentsBucketName, 0},
+		{peersBucketName, t.peerTTL, true},
+		{registryBucketName, t.registryTTL, true},
+		{stableBucketName, stableTTL, false},
+		{deprecatedBucketName, deprecatedTTL, false},
+		{mcpConfigBucketName, mcpConfigTTL, false},
+		{drainBucketName, 0, false},
+		{externalDependentsBucketName, 0, false},
 	} {
-		_, err := t.js.UpdateKeyValue(c, jetstream.KeyValueConfig{
+		cfg := jetstream.KeyValueConfig{
 			Bucket:   b.name,
 			Replicas: r,
 			TTL:      b.ttl,
-		})
+		}
+		if b.marker {
+			// Omitting it would ask the server to turn markers off,
+			// which it refuses ("message TTL status can not be
+			// disabled").
+			cfg.LimitMarkerTTL = b.ttl
+		}
+		_, err := t.js.UpdateKeyValue(c, cfg)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %w", b.name, err)
 		}
 	}
 	return firstErr
+}
+
+// clusterTTLs returns the peers and registry bucket TTLs.
+func (g *Gateway) clusterTTLs() (peer, registry time.Duration) {
+	if d := g.cfg.clusterKVTTL; d > 0 {
+		return d, d
+	}
+	return peerTTL, registryTTL
+}
+
+// openExpiringBucket opens (creating it at R=1 if needed) a KV bucket
+// whose entries expire ttl after their last Put, with subject delete
+// markers on. JetStream removes an expired message without a delete
+// event; the marker it writes instead is what tells every watcher
+// (reconciler, peer tracker) that the key is gone. Without it a node
+// that was watching keeps the key forever, while a node that replays
+// the bucket after the expiry never sees it.
+//
+// A bucket created by an older gateway has no markers. Its stream
+// config is updated in place with markers on and nothing else
+// changed (replicas, limits); the server allows turning markers on,
+// never off.
+func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string, ttl time.Duration) (jetstream.KeyValue, error) {
+	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:   name,
+		Replicas: 1,
+		TTL:      ttl,
+		// A marker expires with the bucket TTL (MaxAge) whatever
+		// its own TTL; ask for the same.
+		LimitMarkerTTL: ttl,
+	})
+	if err == nil {
+		return kv, nil
+	}
+	if !errors.Is(err, jetstream.ErrBucketExists) {
+		return nil, fmt.Errorf("%s bucket: %w", name, err)
+	}
+	stream, err := js.Stream(ctx, "KV_"+name)
+	if err != nil {
+		return nil, fmt.Errorf("%s bucket open: %w", name, err)
+	}
+	if cfg := stream.CachedInfo().Config; cfg.SubjectDeleteMarkerTTL <= 0 {
+		cfg.AllowMsgTTL = true
+		cfg.SubjectDeleteMarkerTTL = cfg.MaxAge
+		if cfg.SubjectDeleteMarkerTTL < time.Second {
+			cfg.SubjectDeleteMarkerTTL = ttl
+		}
+		if _, err := js.UpdateStream(ctx, cfg); err != nil {
+			return nil, fmt.Errorf("%s bucket: turn on delete markers: %w", name, err)
+		}
+	}
+	kv, err = js.KeyValue(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("%s bucket open: %w", name, err)
+	}
+	return kv, nil
 }
 
 // registryKV returns the registry bucket if cluster tracking is up, or

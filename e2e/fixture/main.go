@@ -131,6 +131,8 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	kind := flag.String("kind", "proto", "Upstream kind: proto, openapi or graphql")
 	gatewayAddr := flag.String("gateway", "localhost:50090", "Gateway control-plane address")
+	var gatewayAlts listFlag
+	flag.Var(&gatewayAlts, "gateway-alt", "Another control-plane address of the same cluster (repeatable); the fixture moves its registration there when --gateway stops answering (controlclient GatewayAddrs)")
 	namespace := flag.String("namespace", "fixture", "Namespace to register under")
 	versions := flag.String("versions", "v1", "Comma-separated version lines to serve, e.g. v1,v2 or unstable")
 	var depends listFlag
@@ -216,6 +218,7 @@ func main() {
 
 	opts := controlclient.Options{
 		GatewayAddr:    *gatewayAddr,
+		GatewayAddrs:   gatewayAlts,
 		ServiceAddr:    serviceAddr,
 		InstanceID:     *instance,
 		Services:       svcs,

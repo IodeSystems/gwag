@@ -41,6 +41,10 @@ func TestClusterPeersMetricTracksLiveNodes(t *testing.T) {
 		})
 	}
 	want("n1 counts 3 peers", n1, 3)
+	// A kill while the peers stream still moves to 3 replicas can
+	// leave it without a quorum until n2 is back: /api/admin/peers
+	// then answers 500 (seen here and in TestS4ClusterOps).
+	cluster.WaitStreamsReplicated(t, 3, 75*time.Second)
 
 	n2.Proc.Kill()
 	// The gauge follows NATS routes, so it drops long before the peers

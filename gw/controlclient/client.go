@@ -17,8 +17,11 @@
 //
 // Holds an open *grpc.ClientConn to the gateway for the lifetime of
 // the registration. Re-Register is automatic on heartbeat-not-ok
-// (gateway evicted us, e.g. after a restart) — the goroutine fires a
-// fresh Register and resumes.
+// (gateway evicted us, e.g. after a restart, or a cluster node that
+// never had the registration) — the goroutine fires a fresh Register
+// and resumes. With several gateway addresses (Options.GatewayAddrs)
+// a heartbeat that cannot reach its gateway moves the registration to
+// the next address.
 package controlclient
 
 import (
@@ -169,14 +172,28 @@ func (s Service) manifestProto() ([]*cpv1.Dependency, *cpv1.Owner) {
 	return deps, owner
 }
 
-// Options configures a SelfRegister call. GatewayAddr, ServiceAddr,
-// and at least one Service entry are required.
+// Options configures a SelfRegister call. A gateway address
+// (GatewayAddr or GatewayAddrs), ServiceAddr, and at least one Service
+// entry are required.
 //
 // Stability: stable
 type Options struct {
 	// GatewayAddr is the gRPC host:port where the gateway's control
-	// plane is listening (the WithControlPlane addr).
+	// plane is listening (the WithControlPlane addr): one cluster
+	// node, or a load balancer in front of the cluster's control
+	// planes.
 	GatewayAddr string
+
+	// GatewayAddrs are more control-plane addresses of the same
+	// cluster, tried after GatewayAddr (which may be empty) in order.
+	// The registration lives on one gateway at a time. When a
+	// heartbeat cannot reach it (an error, or no answer within
+	// min(HeartbeatInterval, 5s)), the Registration registers again
+	// on the next address that accepts. The new registration has a
+	// new ID; the old one expires with the gateway that held it.
+	// SelfRegister also moves to the next address while one is
+	// unreachable.
+	GatewayAddrs []string
 
 	// ServiceAddr is the host:port where this service's gRPC server
 	// is reachable. Passed to the gateway verbatim.
@@ -251,10 +268,11 @@ type Options struct {
 //
 // Stability: stable
 type Registration struct {
-	conn   *grpc.ClientConn
-	client cpv1.ControlPlaneClient
+	// gws holds one conn per gateway address, in Options order.
+	gws []*gatewayConn
 
 	mu     sync.Mutex
+	cur    int // index into gws of the gateway that holds id
 	id     string
 	ttl    time.Duration
 	stop   chan struct{}
@@ -293,8 +311,9 @@ type Registration struct {
 //
 // Stability: stable
 func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
-	if opts.GatewayAddr == "" {
-		return nil, errors.New("controlclient: GatewayAddr required")
+	addrs := gatewayAddrs(opts)
+	if len(addrs) == 0 {
+		return nil, errors.New("controlclient: GatewayAddr or GatewayAddrs required")
 	}
 	if opts.ServiceAddr == "" {
 		return nil, errors.New("controlclient: ServiceAddr required")
@@ -317,27 +336,28 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 	if len(dialOpts) == 0 {
 		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
-	conn, err := grpc.NewClient(opts.GatewayAddr, dialOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("dial gateway %s: %w", opts.GatewayAddr, err)
-	}
-
 	r := &Registration{
-		conn:   conn,
-		client: cpv1.NewControlPlaneClient(conn),
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 		logger: opts.Logger,
 		opts:   opts,
 	}
+	for _, addr := range addrs {
+		conn, err := grpc.NewClient(addr, dialOpts...)
+		if err != nil {
+			_ = r.closeConns()
+			return nil, fmt.Errorf("dial gateway %s: %w", addr, err)
+		}
+		r.gws = append(r.gws, &gatewayConn{addr: addr, conn: conn, client: cpv1.NewControlPlaneClient(conn)})
+	}
 
 	if err := r.registerRetry(ctx); err != nil {
-		_ = conn.Close()
+		_ = r.closeConns()
 		return nil, err
 	}
 	if err := r.waitReady(ctx); err != nil {
 		r.deregister()
-		_ = conn.Close()
+		_ = r.closeConns()
 		return nil, err
 	}
 
@@ -410,7 +430,7 @@ func (r *Registration) Drain(ctx context.Context) error {
 		r.mu.Lock()
 		id := r.id
 		r.mu.Unlock()
-		resp, err := r.client.DrainInstance(ctx, &cpv1.DrainInstanceRequest{Instance: id})
+		resp, err := r.gateway().client.DrainInstance(ctx, &cpv1.DrainInstanceRequest{Instance: id})
 		switch {
 		case err != nil && ctx.Err() == nil:
 			r.logger("controlclient: drain: %v", err)
@@ -515,7 +535,7 @@ func (r *Registration) register(ctx context.Context) error {
 		})
 	}
 
-	resp, err := r.client.Register(ctx, req)
+	resp, err := r.gateway().client.Register(ctx, req)
 	if err != nil {
 		return fmt.Errorf("Register: %w", err)
 	}
@@ -531,32 +551,152 @@ func (r *Registration) heartbeatLoop(interval time.Duration) {
 	defer close(r.done)
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	timeout := interval
+	if timeout > heartbeatTimeoutMax {
+		timeout = heartbeatTimeoutMax
+	}
 	for {
 		select {
 		case <-r.stop:
 			return
 		case <-t.C:
-			r.mu.Lock()
-			id := r.id
-			r.mu.Unlock()
-			if id == "" {
-				continue
-			}
-			resp, err := r.client.Heartbeat(context.Background(), &cpv1.HeartbeatRequest{RegistrationId: id})
-			if err != nil {
-				r.logger("controlclient: heartbeat error: %v", err)
-				continue
-			}
-			if !resp.GetOk() {
-				r.logger("controlclient: gateway evicted us, re-registering")
-				if err := r.register(context.Background()); err != nil {
-					r.logger("controlclient: re-register failed: %v", err)
-				}
-				continue
-			}
-			r.setBindings(resp.GetBindings())
+			r.beat(timeout)
 		}
 	}
+}
+
+// heartbeatTimeoutMax bounds one Heartbeat call, so a gateway that
+// hangs (partition, frozen process) counts as unreachable.
+const heartbeatTimeoutMax = 5 * time.Second
+
+// registerTimeout bounds one Register call made from the heartbeat
+// loop. Register is slower than Heartbeat: the gateway compiles the
+// proto, or introspects a GraphQL endpoint.
+const registerTimeout = 10 * time.Second
+
+// beat sends one heartbeat. Not ok (the gateway does not know the
+// registration) → register again on the same gateway. Unreachable →
+// move to the next gateway address, if there is one.
+func (r *Registration) beat(timeout time.Duration) {
+	r.mu.Lock()
+	id := r.id
+	r.mu.Unlock()
+	if id == "" {
+		return
+	}
+	gw := r.gateway()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	resp, err := gw.client.Heartbeat(ctx, &cpv1.HeartbeatRequest{RegistrationId: id})
+	cancel()
+	if err != nil {
+		r.logger("controlclient: heartbeat to %s: %v", gw.addr, err)
+		r.failover(gw)
+		return
+	}
+	if !resp.GetOk() {
+		r.logger("controlclient: gateway %s does not know registration %s, re-registering", gw.addr, id)
+		ctx, cancel := context.WithTimeout(context.Background(), registerTimeout)
+		err := r.register(ctx)
+		cancel()
+		if err != nil {
+			r.logger("controlclient: re-register on %s failed: %v", gw.addr, err)
+			r.failover(gw)
+		}
+		return
+	}
+	r.setBindings(resp.GetBindings())
+}
+
+// failover registers on the gateway addresses after failed, in order,
+// until one accepts. No-op with a single address: the next heartbeat
+// tries the same gateway again. When every other address fails too,
+// the next heartbeat goes to the last one tried.
+func (r *Registration) failover(failed *gatewayConn) {
+	n := len(r.gws)
+	if n < 2 {
+		return
+	}
+	start := r.indexOf(failed)
+	for i := 1; i < n; i++ {
+		idx := (start + i) % n
+		r.mu.Lock()
+		r.cur = idx
+		r.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), registerTimeout)
+		err := r.register(ctx)
+		cancel()
+		if err == nil {
+			r.logger("controlclient: registered on gateway %s instead of %s (registration %s)", r.gws[idx].addr, failed.addr, r.ID())
+			return
+		}
+		r.logger("controlclient: register on %s failed: %v", r.gws[idx].addr, err)
+	}
+}
+
+func (r *Registration) indexOf(gw *gatewayConn) int {
+	for i, g := range r.gws {
+		if g == gw {
+			return i
+		}
+	}
+	return 0
+}
+
+// gatewayConn is one control-plane address and its client.
+type gatewayConn struct {
+	addr   string
+	conn   *grpc.ClientConn
+	client cpv1.ControlPlaneClient
+}
+
+// gateway returns the gateway that holds the registration.
+func (r *Registration) gateway() *gatewayConn {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gws[r.cur]
+}
+
+// GatewayAddr returns the control-plane address that holds the
+// registration now: one of Options.GatewayAddr / GatewayAddrs.
+//
+// Stability: stable
+func (r *Registration) GatewayAddr() string {
+	return r.gateway().addr
+}
+
+// ID returns the registration ID. It changes when the registration is
+// made again (gateway restart, failover to another address).
+//
+// Stability: stable
+func (r *Registration) ID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.id
+}
+
+// gatewayAddrs is GatewayAddr then GatewayAddrs, without empty and
+// repeated entries.
+func gatewayAddrs(opts Options) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range append([]string{opts.GatewayAddr}, opts.GatewayAddrs...) {
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+func (r *Registration) closeConns() error {
+	var first error
+	for _, g := range r.gws {
+		if err := g.conn.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // Close stops the heartbeat and gracefully deregisters. Safe to call
@@ -577,9 +717,9 @@ func (r *Registration) Close(ctx context.Context) error {
 		id := r.id
 		r.mu.Unlock()
 		if id != "" {
-			_, _ = r.client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
+			_, _ = r.gateway().client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
 		}
-		r.closeErr = r.conn.Close()
+		r.closeErr = r.closeConns()
 	})
 	return r.closeErr
 }

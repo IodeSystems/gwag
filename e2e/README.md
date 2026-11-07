@@ -74,7 +74,10 @@ harness.New(t) *Env
 env.Gateway(GatewayOpts{Name, NATS, Environment, NoCallerIDHeader, Args}) *Gateway
 env.Cluster(n, GatewayOpts) *Cluster                 // n1..nN, waits for n peers each
   c.Nodes []*Gateway; c.AddNode() *Gateway; c.Live(); c.WaitPeers(n, timeout)
+  c.WaitStreamsReplicated(t, n, timeout[, buckets...])  // KV streams at n replicas, leader, current
+  c.LB(t, LBOpts) · lb.WaitProbeFails(t, g, timeout)    // probe fails, pulled or not
 env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless NoWait
+  FixtureOpts.FailoverGateways []*Gateway            // --gateway-alt per node
 env.Start(name, bin, args...) *Proc                  // any other process
 harness.Binary(t, "gateway"|"fixture"|"gwag") string
 
@@ -116,6 +119,7 @@ FreePort(t) · Ctx(t, d) · EchoMethod(ns, line) · ProtoPackage(ns, line)
 | --- | --- |
 | `--kind proto\|openapi\|graphql` | upstream kind (default proto) |
 | `--gateway HOST:PORT` | control plane to register with |
+| `--gateway-alt HOST:PORT` | another control plane of the cluster, repeatable; the registration moves there when `--gateway` stops answering (controlclient `GatewayAddrs`) |
 | `--namespace NS` | namespace |
 | `--versions v1,v2` | lines served, one registration (default v1) |
 | `--depends SVC:LINE[,LINE]` | dependency, repeatable |

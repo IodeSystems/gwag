@@ -201,6 +201,20 @@ func (lb *LB) WaitOutOfRotation(t testing.TB, g *Gateway, timeout time.Duration)
 	})
 }
 
+// WaitProbeFails waits until g fails its health probe, pulled or not.
+// Use it before Restore on a stopped node: WaitOutOfRotation passes at
+// once on a pulled node, while the last probe may still say healthy.
+func (lb *LB) WaitProbeFails(t testing.TB, g *Gateway, timeout time.Duration) {
+	t.Helper()
+	n := lb.node(g)
+	Eventually(t, timeout, g.Name+" fails its health probe", func() error {
+		if n.probeOK.Load() {
+			return errors.New("probe still passes")
+		}
+		return nil
+	})
+}
+
 // NodeStats is one node's call counts.
 type NodeStats struct{ Sent, OK, Failed int64 }
 

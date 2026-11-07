@@ -88,6 +88,40 @@ The example wires `--shutdown-timeout` to 30 s by default, so a
 `kubectl delete` or `docker stop` triggers the right behaviour
 automatically.
 
+## Registrations when a cluster node dies
+
+A control-plane registration lives on the node that accepted it. That
+node re-puts its registry KV entries on each heartbeat; the entries
+expire 30 s after the last one. The registry and peers buckets have
+JetStream subject delete markers on (`LimitMarkerTTL`), so an expiry
+reaches every node's watch as a delete: every node drops the
+instance, its start-gate state and its drain cover, and a node that
+replays the registry later agrees with the nodes that were watching.
+A node also looks up each registry key it holds every 15 s, and drops
+a key missing for 30 s, for the case where its watch was stalled past
+the marker's own 30 s life (a partition, a watch consumer on the dead
+node). Buckets made by an older gateway get markers turned on in
+place at boot.
+
+Give each service every control-plane address of the cluster
+(`controlclient.Options.GatewayAddrs`), or one LB address in front of
+them. When a heartbeat cannot reach its gateway, the client registers
+again on the next address, with a new registration ID; the old
+entries expire. No node stops routing the service, as long as the
+client moves within the 30 s TTL: the default heartbeat (10 s,
+bounded to 5 s per call) does. A service with one address and a dead
+gateway is dropped by every node 30 s after the last refresh, and
+registers again when its heartbeat reaches the restarted gateway.
+
+After a node dies, a node whose registry watch ran on it sees new
+registry writes 10-20 s late (measured in the gw tests: the watch
+consumer is recreated). It keeps routing the old entries meanwhile,
+and the watch delivers the client's new registration before the old
+entry's delete marker, so routing has no gap.
+
+`/api/admin/peers` drops a dead peer when its peers entry expires
+(30 s TTL); the drain status's live-peer set follows the same delete.
+
 ## Backpressure
 
 Each `(namespace, version)` pool has its own dispatch concurrency caps

@@ -47,6 +47,10 @@ type FixtureOpts struct {
 	Proto map[string]string
 	// Args are extra fixture flags.
 	Args []string
+	// FailoverGateways are more control planes the fixture moves its
+	// registration to when its gateway stops answering
+	// (--gateway-alt, repeated; controlclient GatewayAddrs).
+	FailoverGateways []*Gateway
 
 	// NoWait returns as soon as the process starts, without waiting
 	// for "FIXTURE ready" (which a fixture with unmet Depends never
@@ -138,6 +142,9 @@ func (e *Env) Fixture(gw *Gateway, opts FixtureOpts) *Fixture {
 	}
 	for line, path := range opts.Proto {
 		args = append(args, "--proto", line+"="+path)
+	}
+	for _, alt := range opts.FailoverGateways {
+		args = append(args, "--gateway-alt", alt.CPAddr())
 	}
 	args = append(args, opts.Args...)
 	f.Proc = e.Start(opts.Instance, Binary(e.t, "fixture"), args...)
