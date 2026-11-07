@@ -101,25 +101,30 @@ client team already uses:
 # GraphQL SDL → graphql-codegen (TS / React / Apollo Client / urql / …)
 curl 'localhost:8080/api/schema/graphql?service=greeter' > greeter.graphql
 
-# proto FileDescriptorSet → buf / ts-proto / grpc-python / grpc-go / grpc-java / …
+# proto FileDescriptorSet (binary) → protoc / ts-proto / grpc-python / grpc-go / grpc-java / …
 curl 'localhost:8080/api/schema/proto?service=greeter' > greeter.fds
-buf generate greeter.fds
+protoc --descriptor_set_in=greeter.fds --go_out=gen --go-grpc_out=gen greeter.proto
 
-# OpenAPI 3.x JSON → openapi-generator (40+ language targets).
+# OpenAPI 3.x → openapi-typescript, openapi-generator (40+ language targets).
 # Synthesized for proto-origin services: the gateway round-trips the
 # IR through all three formats, so OpenAPI consumers get a valid spec
-# even when the upstream speaks gRPC.
-curl 'localhost:8080/api/schema/openapi?service=greeter' > greeter.json
-openapi-generator-cli generate -i greeter.json -g typescript-axios -o ./gen
+# even when the upstream speaks gRPC. The response is
+# {"<ns>": {"<version>": <spec>}}; unwrap one spec before generating.
+curl 'localhost:8080/api/schema/openapi?service=greeter' |
+  node -e 'const w=JSON.parse(require("fs").readFileSync(0,"utf8"));
+           process.stdout.write(JSON.stringify(Object.values(w)[0].v1))' > greeter.json
+pnpm exec openapi-typescript greeter.json -o greeter.ts
 ```
 
 One registration; three client ecosystems; no duplicated schema.
 Edit or add a service — the gateway updates over the control plane
-without a restart. The next `pnpm run gen` / `buf generate` picks it
+without a restart. The next `pnpm run gen` / `protoc` run picks it
 up.
 
 Worked walk-through (three services, three client languages,
 edit-redeploy-codegen cycle): [`docs/walkthrough.md`](./docs/walkthrough.md).
+Runnable Go and TypeScript clients: [`examples/clients/`](./examples/clients),
+[`docs/clients.md`](./docs/clients.md).
 
 ## Library equivalent
 
@@ -201,7 +206,7 @@ gat.RegisterGRPC(mux, g, "/api/grpc") // connect-go handlers
 ```
 
 UI consumers use **graphql-codegen** off `/api/schema/graphql`;
-service-to-service clients use **buf / ts-proto** off
+service-to-service clients use **protoc / buf / ts-proto** off
 `/api/schema/proto`; legacy REST integrations stay on huma's own
 `/openapi.json`. No second schema, no second server, no extra
 ports.
@@ -284,6 +289,7 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID extractor + quota
 - [`docs/cluster.md`](./docs/cluster.md) — embedded NATS + JetStream KV
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
+- [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop
 - [`docs/mcp.md`](./docs/mcp.md) — exposing the gateway to LLM agents (tools, allowlist, mounting, cluster semantics)
 
 **Performance**:

@@ -1,7 +1,7 @@
 # Walkthrough: one registry, three client ecosystems
 
-Clone the repo, run the example, and generate typed clients in TS,
-Go, and Python off the same live registry. Then edit a service,
+Clone the repo, run the example, and generate typed clients in
+TypeScript (GraphQL and OpenAPI) and Go off the same live registry. Then edit a service,
 re-codegen, and watch the change propagate without restarting the
 gateway.
 
@@ -13,8 +13,8 @@ Time: 10-15 minutes if you have the codegen tools already installed.
 - `curl` (to hit the schema endpoints)
 - For codegen — install only the ecosystems you care about:
   - **TS / GraphQL**: `pnpm` (or `npm`) + `graphql-codegen` (pulled in via the example's package.json)
-  - **Go / proto**: `buf` ([install](https://buf.build/docs/installation))
-  - **Python / OpenAPI**: `openapi-generator-cli` ([install](https://openapi-generator.tech/docs/installation))
+  - **Go / proto**: `protoc` with `protoc-gen-go` and `protoc-gen-go-grpc`
+  - **TS / OpenAPI**: `pnpm` + `openapi-typescript` and `openapi-fetch`
 
 You don't need all three. Pick the ones your team uses. Each is
 independent — adding a new ecosystem is curl + one tool.
@@ -50,7 +50,7 @@ Open `http://localhost:8080/` in a browser for the admin UI's
 schema explorer. (The boot token is logged at gateway startup and
 written to `/tmp/gwag-multi/admin-token`; paste it when prompted.)
 
-## Step 2: Codegen three typed-client packages
+## Step 2: Codegen three typed clients
 
 ### GraphQL → TypeScript (graphql-codegen)
 
@@ -81,76 +81,63 @@ pnpm exec graphql-codegen --config codegen.yml
 Now your TS service code uses `HelloQuery` / `HelloQueryVariables`
 from the generated file — type-safe, refactor-safe, IDE-aware.
 
-### Proto → Go (buf)
+### Proto → Go (protoc)
 
-The Go service-to-service path. One FileDescriptorSet → idiomatic
-gRPC stubs, no JSON in the middle.
+The Go service-to-service path. The export is a binary
+FileDescriptorSet; `protoc` reads it directly.
 
 ```bash
-mkdir -p /tmp/walkthrough/go && cd /tmp/walkthrough/go
-curl 'http://localhost:8080/api/schema/proto?service=greeter' > greeter.fds
+mkdir -p /tmp/walkthrough/go/gen && cd /tmp/walkthrough/go
+curl -fsS 'http://localhost:8080/api/schema/proto?service=greeter' -o greeter.fds
 
-cat > buf.gen.yaml <<'EOF'
-version: v1
-plugins:
-  - plugin: buf.build/protocolbuffers/go
-    out: gen
-    opt: paths=source_relative
-  - plugin: buf.build/grpc/go
-    out: gen
-    opt: paths=source_relative
-EOF
-
-buf generate greeter.fds
-# → gen/greeter/v1/greeter.pb.go + greeter_grpc.pb.go
+protoc --descriptor_set_in=greeter.fds \
+  --go_out=gen --go-grpc_out=gen \
+  --go_opt=paths=source_relative --go-grpc_opt=paths=source_relative \
+  greeter.proto
+# → gen/greeter.pb.go + gen/greeter_grpc.pb.go
 ```
 
-Wire it into a client:
+Call it through the gateway's gRPC ingress, which in `examples/multi`
+shares the control-plane port (`:50090`, see `cmd/gateway/main.go`):
 
 ```go
-import (
-    greeterv1 "yourmodule/gen/greeter/v1"
-    "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials/insecure"
-)
-
-// Note: gRPC ingress runs on the control-plane port (:50090), not :8080.
-// In examples/multi the same gRPC server hosts ControlPlane + the
-// gateway's GRPCUnknownHandler — see cmd/gateway/main.go.
 conn, _ := grpc.NewClient("localhost:50090", grpc.WithTransportCredentials(insecure.NewCredentials()))
 client := greeterv1.NewGreeterServiceClient(conn)
 resp, _ := client.Hello(ctx, &greeterv1.HelloRequest{Name: "world"})
 // resp.Greeting == "Hello, world!"
 ```
 
-The gateway's `gw.GRPCUnknownHandler()` translates the call through
-the IR layer to whichever upstream serves the namespace — your
-client doesn't care that the gateway is in the middle.
+The gateway translates the call through the IR layer to whichever
+upstream serves the namespace. A runnable version with Connect, using
+the repo's own module paths, is `examples/clients/go-proto/`.
 
-### OpenAPI → Python (openapi-generator)
+### OpenAPI → TypeScript (openapi-typescript)
 
-The data team's path, or "any language openapi-generator supports"
-(40+ targets — Java, C#, Ruby, Rust, Kotlin…).
+Typed REST calls from Node or the browser. The export wraps each spec
+as `{"<ns>": {"<version>": <spec>}}`, so unwrap it first.
 
 ```bash
-mkdir -p /tmp/walkthrough/py && cd /tmp/walkthrough/py
-curl 'http://localhost:8080/api/schema/openapi?service=greeter' > greeter.json
-
-openapi-generator-cli generate \
-  -i greeter.json -g python -o ./client \
-  --additional-properties=packageName=greeter_client
-# → ./client/greeter_client/ — a pip-installable Python package
+mkdir -p /tmp/walkthrough/oa && cd /tmp/walkthrough/oa
+pnpm init && pnpm add openapi-fetch && pnpm add -D openapi-typescript
+curl -fsS 'http://localhost:8080/api/schema/openapi?service=greeter' |
+  node -e 'const w=JSON.parse(require("fs").readFileSync(0,"utf8"));
+           process.stdout.write(JSON.stringify(Object.values(w)[0].v1))' > greeter.json
+pnpm exec openapi-typescript greeter.json -o greeter.ts
 ```
 
-Use it per the generated `client/README.md` — `openapi-generator`
-produces a `Configuration` + `ApiClient` + one `*Api` class per
-tag, with methods named after each `operationId`. The synthesized
-spec's `servers` entry points at the gateway's HTTP ingress
-(`http://localhost:8080/api/ingress/...`).
+```ts
+import createClient from "openapi-fetch";
+import type { paths } from "./greeter.ts";
 
-The gateway synthesizes OpenAPI for proto-origin services — same
-IR, different renderer. The Python team gets a pip-installable REST
-client regardless of the upstream wire format.
+const client = createClient<paths>({ baseUrl: "http://localhost:8080/api/ingress" });
+const { data } = await client.POST("/greeter.v1.GreeterService/Hello", { body: { name: "world" } });
+```
+
+The gateway synthesizes OpenAPI for proto-origin services, so a REST
+client works whatever the upstream speaks. The spec has no `servers`
+entry; the base URL is the gateway's REST ingress. Both examples, with
+pinned tool versions and a check script, are in `examples/clients/`;
+see [`clients.md`](./clients.md).
 
 ## Step 3: Edit a service, re-codegen
 
@@ -172,7 +159,7 @@ The greeter service re-registers over the control plane. The
 gateway's schema rebuilds. **No gateway restart needed.**
 
 Re-run any of the codegen steps from Step 2 — the new field is
-there. Your TS / Go / Python clients regenerate in seconds.
+there. Your TS / Go clients regenerate in seconds.
 
 For the Go side specifically, you can verify without re-codegenning
 first:
