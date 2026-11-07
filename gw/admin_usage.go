@@ -90,23 +90,38 @@ func registerUsageEdges(api huma.API, g *Gateway, cp *controlPlane) {
 		if err != nil {
 			return nil, err
 		}
+		view := g.adminViewFor(ctx, reg)
 		for _, s := range reg.GetServices() {
-			if match(s.GetNamespace(), s.GetVersion()) {
+			if match(s.GetNamespace(), s.GetVersion()) && view.line(s.GetNamespace(), s.GetVersion()) {
 				ensure(s.GetNamespace(), s.GetVersion())
 			}
 		}
+		// Keyed so callers an anonymous view folds into hiddenCaller
+		// sum into one edge; in the full view every key is distinct.
+		type edgeKey struct{ caller, ns, ver, method string }
+		edges := map[edgeKey]int{}
 		for _, r := range g.snapshot(window, nowFunc()) {
-			if !match(r.Namespace, r.Version) {
+			if !match(r.Namespace, r.Version) || !view.line(r.Namespace, r.Version) {
 				continue
 			}
-			out.Body.Edges = append(out.Body.Edges, usageEdgeRow{
-				Caller: r.Caller, Namespace: r.Namespace, Version: r.Version,
-				Method: r.Method, Count: r.Count, OkCount: r.OkCount,
-				LastSeenUnixMs: r.LastSeenUnixMs,
-			})
+			caller := view.caller(r.Caller)
+			k := edgeKey{caller, r.Namespace, r.Version, r.Method}
+			if i, ok := edges[k]; ok {
+				e := &out.Body.Edges[i]
+				e.Count += r.Count
+				e.OkCount += r.OkCount
+				e.LastSeenUnixMs = max(e.LastSeenUnixMs, r.LastSeenUnixMs)
+			} else {
+				edges[k] = len(out.Body.Edges)
+				out.Body.Edges = append(out.Body.Edges, usageEdgeRow{
+					Caller: caller, Namespace: r.Namespace, Version: r.Version,
+					Method: r.Method, Count: r.Count, OkCount: r.OkCount,
+					LastSeenUnixMs: r.LastSeenUnixMs,
+				})
+			}
 			a := ensure(r.Namespace, r.Version)
 			a.row.TotalCount += r.Count
-			a.callers[r.Caller] = struct{}{}
+			a.callers[caller] = struct{}{}
 			if r.LastSeenUnixMs > a.row.LastSeenUnixMs {
 				a.row.LastSeenUnixMs = r.LastSeenUnixMs
 			}

@@ -362,9 +362,12 @@ func TestSubscriptionE2E_AdminEventsWatchServices(t *testing.T) {
 
 	// Trigger a register on the watched namespace → publishes a
 	// ServiceChange to events.admin_events.WatchServices.watched.
+	// Public, so this tokenless subscriber receives it (see
+	// TestAdminEvents_Roles for the filtering).
 	if err := f.gw.AddProtoBytes("greeter.proto", testProtoBytes(t, "greeter.proto"),
 		To(nopGRPCConn{}),
 		As("watched"),
+		AsPublic(),
 	); err != nil {
 		t.Fatalf("AddProtoDescriptor watched: %v", err)
 	}

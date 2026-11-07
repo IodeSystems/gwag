@@ -132,14 +132,19 @@ echo "   built into $RUN"
 
 say "1. Gateway up"
 mkdir -p "$RUN/admin"
+# --public-services all: the graph and status pages show every demo
+# service without signing in. Owner contacts and external dependents
+# still need the dev or admin token.
 start gateway "$RUN/gateway" --http ":$PORT" --control-plane ":$CP" \
-  --environment demo --caller-id-public --admin-data-dir "$RUN/admin"
+  --environment demo --caller-id-public --admin-data-dir "$RUN/admin" \
+  --public-services all
 for _ in $(seq 1 60); do
   curl -fsS "$BASE/api/admin/graph" >/dev/null 2>&1 && break
   sleep 0.5
 done
 TOKEN="$(cat "$RUN/admin/admin-token" 2>/dev/null || true)"
 echo "   admin token: ${TOKEN:-<not found>}"
+echo "   dev token:   $(cat "$RUN/admin/dev-token" 2>/dev/null || echo '<not found>')"
 echo "   gateway: $BASE   control plane: localhost:$CP"
 look "open http://$HOST:$PORT/ : the graph is empty. Environment label: demo."
 assert "graph endpoint answers"                      graph

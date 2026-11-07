@@ -130,6 +130,12 @@ type Service struct {
 	// Owner names the team that owns this binding. Part of the
 	// service manifest. Optional.
 	Owner *Owner
+
+	// Public shows this binding to admin readers that present no
+	// token: the dependency graph, status page and services list.
+	// Admin visibility only; calls through the gateway are not
+	// affected. Part of the service manifest. Default false.
+	Public bool
 }
 
 // Dependency names one provider service (its gateway namespace) and
@@ -488,6 +494,7 @@ func (r *Registration) register(ctx context.Context) error {
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 				Depends:                   depends,
 				Owner:                     owner,
+				Public:                    s.Public,
 			})
 			continue
 		}
@@ -500,6 +507,7 @@ func (r *Registration) register(ctx context.Context) error {
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 				Depends:                   depends,
 				Owner:                     owner,
+				Public:                    s.Public,
 			})
 			continue
 		}
@@ -512,6 +520,7 @@ func (r *Registration) register(ctx context.Context) error {
 			MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
 			Depends:                   depends,
 			Owner:                     owner,
+			Public:                    s.Public,
 		})
 	}
 

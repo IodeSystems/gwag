@@ -106,6 +106,9 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if sc.internal {
 		g.internal[ns] = true
 	}
+	if sc.public {
+		g.publicNS[ns] = true
+	}
 	hash := sha256.Sum256(specBytes)
 	httpClient := sc.httpClient
 	if httpClient == nil {

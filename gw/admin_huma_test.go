@@ -13,9 +13,22 @@ import (
 
 // newAdminRouter wires the huma admin mux behind AdminMiddleware so
 // each test can hit /admin/* endpoints directly without booting an
-// example binary. Token defaults to "tok"; reads stay public, writes
-// require Bearer.
+// example binary. A GET without an Authorization header is sent with
+// the dev token, so tests read the full (unfiltered) view; anything
+// else goes as the test built it. newAnonAdminRouter sends requests
+// unchanged (anonymous GETs see public services only).
 func newAdminRouter(t *testing.T, gw *Gateway) http.Handler {
+	t.Helper()
+	h := newAnonAdminRouter(t, gw)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+gw.DevTokenHex())
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func newAnonAdminRouter(t *testing.T, gw *Gateway) http.Handler {
 	t.Helper()
 	mux, _, err := gw.AdminHumaRouter()
 	if err != nil {

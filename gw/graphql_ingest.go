@@ -78,6 +78,9 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 	if sc.internal {
 		g.internal[ns] = true
 	}
+	if sc.public {
+		g.publicNS[ns] = true
+	}
 	key := poolKey{namespace: ns, version: ver}
 	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil)
 	if err != nil {

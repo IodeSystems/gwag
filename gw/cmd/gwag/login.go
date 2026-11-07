@@ -226,7 +226,7 @@ func loginCmd(args []string) int {
 	name := fs.String("name", "default", "Login name (used to switch contexts)")
 	gw := fs.String("gateway", "", "Control-plane gRPC address (e.g. localhost:50090)")
 	endpoint := fs.String("endpoint", "", "HTTP base URL (e.g. http://localhost:8080); empty = derive from --gateway host")
-	token := fs.String("token", "", "Admin bearer token (hex); empty = leave unset")
+	token := fs.String("token", "", "Admin or dev bearer token (hex); empty = leave unset. The gateway decides the role from the token.")
 	primary := fs.Bool("primary", false, "Mark this login primary (default: true if it's the first login)")
 	global := fs.Bool("global", false, "Write to the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	fs.Usage = func() {
