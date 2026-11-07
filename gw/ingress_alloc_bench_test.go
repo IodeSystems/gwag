@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -91,4 +92,39 @@ func BenchmarkIngressAlloc_GraphQLGroup(b *testing.B) {
 		b.Fatal(err)
 	}
 	benchIngress(b, gw, `{ svc { greeter { hello(name:"alice") { greeting } echo(msg:"hi") } } }`, `"greeting":"hi"`)
+}
+
+// The same requests with a Runtime middleware registered. Any Runtime
+// transform wraps OpenAPI and GraphQL dispatchers in the canonical
+// chain (wrapCanonicalDispatcherWithChain), which is a separate
+// dispatch path from the ones above.
+func withHeaderInjector(gw *Gateway) {
+	gw.Use(InjectPath("other.op.arg", func(context.Context, any) (any, error) { return nil, nil }))
+}
+
+func BenchmarkIngressAlloc_OpenAPIChain(b *testing.B) {
+	client := &http.Client{Transport: cannedRT{func([]byte) []byte { return []byte(`{"id":"x","name":"thing"}`) }}}
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	withHeaderInjector(gw)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To("http://upstream.invalid"), As("test"), OpenAPIClient(client)); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, `{ test { getThing(id:"x") { id name } } }`, `"name":"thing"`)
+}
+
+func BenchmarkIngressAlloc_GraphQLChain(b *testing.B) {
+	client := &http.Client{Transport: cannedRT{func(req []byte) []byte {
+		if bytes.Contains(req, []byte("IntrospectionQuery")) {
+			return []byte(petsIntrospection)
+		}
+		return []byte(`{"data":{"user":{"id":"x","name":"thing"}}}`)
+	}}}
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	withHeaderInjector(gw)
+	if err := gw.AddGraphQL("http://upstream.invalid/graphql", As("pets"), OpenAPIClient(client)); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, `{ pets { user(id:"x") { id name } } }`, `"name":"thing"`)
 }
