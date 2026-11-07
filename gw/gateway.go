@@ -55,6 +55,14 @@ type Gateway struct {
 	slots map[poolKey]*slot
 
 	internal   map[string]bool // namespaces hidden from the public schema
+	// publicNS holds namespaces registered at boot with AsPublic():
+	// visible to admin readers without a token. Guarded by mu.
+	publicNS map[string]bool
+	// devToken is the current dev bearer (rotatable; see
+	// RotateDevToken). adminRoutes maps admin routes to the role they
+	// need (admin_roles.go).
+	devToken    atomic.Pointer[[]byte]
+	adminRoutes atomic.Pointer[adminRouteTable]
 	transforms []Transform
 	schema     atomic.Pointer[graphql.Schema]
 	// schemaAnnotations holds the SDL annotation index for the cached
@@ -290,6 +298,13 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
+	// devToken is the WithDevToken value; nil = generate (and persist
+	// under adminDataDir) at New.
+	devToken []byte
+	// publicAll / publicNamespaces are WithPublicServices: which
+	// services admin readers without a token may see.
+	publicAll        bool
+	publicNamespaces map[string]bool
 	// destructiveReads are request paths whose GET/HEAD has side effects
 	// (or exposes sensitive data); AdminMiddleware gates them with admin
 	// auth instead of letting them through as public reads. A trailing
@@ -1327,6 +1342,14 @@ func New(opts ...Option) *Gateway {
 		}
 		cfg.adminToken = tok
 	}
+	devTok := cfg.devToken
+	if len(devTok) == 0 {
+		tok, err := loadOrGenerateToken(cfg.adminDataDir, devTokenFilename)
+		if err != nil {
+			panic(fmt.Sprintf("gateway: dev token: %v", err))
+		}
+		devTok = tok
+	}
 	if cfg.uploadStore == nil && cfg.uploadDataDir != "" {
 		s, err := NewFilesystemUploadStore(cfg.uploadDataDir, 24*time.Hour)
 		if err != nil {
@@ -1358,6 +1381,7 @@ func New(opts ...Option) *Gateway {
 		cfg:         cfg,
 		slots:       map[poolKey]*slot{},
 		internal:    map[string]bool{},
+		publicNS:    map[string]bool{},
 		wsConns:     map[uintptr]context.CancelFunc{},
 		wsLimit:     newWSLimiter(cfg.wsLimit),
 		life:        life,
@@ -1367,6 +1391,7 @@ func New(opts ...Option) *Gateway {
 		stableChanged: make(chan struct{}, 16),
 		tracer:      newTracer(cfg.tracerProvider),
 	}
+	g.devToken.Store(&devTok)
 	// WithCallerIDDelegated needs the live *Gateway to look up the
 	// _caller_auth/v1 pool at call time, so the extractor wrapper is
 	// built here (after g exists) and wins over any extractor set
@@ -1499,6 +1524,7 @@ type serviceConfig struct {
 	version        string // canonical "vN"; empty → defaults to v1
 	conn           grpc.ClientConnInterface
 	internal       bool
+	public         bool
 	forwardHeaders []string
 	httpClient     *http.Client
 
@@ -1609,6 +1635,17 @@ func To(dest any) ServiceOption {
 // Stability: stable
 func AsInternal() ServiceOption {
 	return func(c *serviceConfig) { c.internal = true }
+}
+
+// AsPublic shows the registered namespace to admin readers that
+// present no token: the dependency graph, status page and services
+// list. Admin visibility only; calls through the gateway are not
+// affected. The control-plane equivalent is ServiceBinding.public;
+// WithPublicServices does the same gateway-wide.
+//
+// Stability: stable
+func AsPublic() ServiceOption {
+	return func(c *serviceConfig) { c.public = true }
 }
 
 // ForwardHeaders sets the per-source allowlist of HTTP headers
@@ -1815,6 +1852,9 @@ func (g *Gateway) addProtoFromDescriptor(fd protoreflect.FileDescriptor, sc *ser
 	if sc.internal {
 		g.internal[ns] = true
 	}
+	if sc.public {
+		g.publicNS[ns] = true
+	}
 	return g.joinPoolLocked(poolEntry{
 		namespace:                 ns,
 		version:                   ver,
@@ -1868,6 +1908,9 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	defer g.mu.Unlock()
 	if sc.internal {
 		g.internal[ns] = true
+	}
+	if sc.public {
+		g.publicNS[ns] = true
 	}
 	return g.joinPoolLocked(poolEntry{
 		namespace:                 ns,

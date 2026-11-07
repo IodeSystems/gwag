@@ -996,6 +996,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			Depends:                 s.manifest.protoDepends(),
 			Owner:                   s.manifest.protoOwner(),
 			Instances:               cp.instanceStatusesLocked(insts[k]),
+			Public:                  cp.gw.isPublicLocked(k.namespace, s.manifest.Public),
 		})
 		delete(insts, k)
 	}
@@ -1012,6 +1013,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			Depends:   l[0].manifest.protoDepends(),
 			Owner:     l[0].manifest.protoOwner(),
 			Instances: cp.instanceStatusesLocked(l),
+			Public:    cp.gw.isPublicLocked(k.namespace, l[0].manifest.Public),
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {

@@ -412,6 +412,7 @@ func TestManifest_ClusterReplication(t *testing.T) {
 	v2 := greeterBinding(t, "v2")
 	v2.Depends = []*cpv1.Dependency{{Service: "library", Lines: []string{"v1", "v2"}}}
 	v2.Owner = &cpv1.Owner{Team: "catalog", Contact: "#catalog"}
+	v2.Public = true
 	req := &cpv1.RegisterRequest{
 		Addr:     addr,
 		Services: []*cpv1.ServiceBinding{greeterBinding(t, "v1"), v2, libraryBinding(t, "v1")},
@@ -445,8 +446,11 @@ func TestManifest_ClusterReplication(t *testing.T) {
 		if info.GetOwner().GetTeam() != "catalog" {
 			t.Errorf("owner=%v", info.GetOwner())
 		}
+		if !info.GetPublic() {
+			t.Error("greeter/v2 public=false, want true (replicated with the manifest)")
+		}
 		_, v1info := listServiceInfo(t, n.gw, "greeter", "v1")
-		if v1info == nil || len(v1info.GetDepends()) != 0 || v1info.GetOwner() != nil {
+		if v1info == nil || len(v1info.GetDepends()) != 0 || v1info.GetOwner() != nil || v1info.GetPublic() {
 			t.Errorf("v1 info=%v, want present without manifest", v1info)
 		}
 	}

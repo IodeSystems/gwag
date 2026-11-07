@@ -53,6 +53,7 @@ func upCmd(args []string) int {
 	signerSecret := fs.String("signer-secret", "", "Hex-encoded bearer for SignSubscriptionToken (admin token also works)")
 	environment := fs.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
+	publicServices := fs.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
 	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
@@ -114,6 +115,7 @@ func upCmd(args []string) int {
 		gateway.WithCluster(cluster),
 		gateway.WithAdminDataDir(dir),
 		gateway.WithEnvironment(*environment),
+		gateway.WithPublicServices(strings.Split(*publicServices, ",")...),
 	}
 	if *insecureSubscribe {
 		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())
@@ -190,8 +192,10 @@ func upCmd(args []string) int {
 	token := gw.AdminTokenHex()
 	if path := gw.AdminTokenPath(); path != "" {
 		log.Printf("admin token = %s  (persisted to %s)", token, path)
+		log.Printf("dev token   = %s  (persisted to %s)", gw.DevTokenHex(), gw.DevTokenPath())
 	} else {
 		log.Printf("admin token = %s  (in-memory)", token)
+		log.Printf("dev token   = %s  (in-memory)", gw.DevTokenHex())
 	}
 
 	// Auto-login: write the credential entry and promote it to

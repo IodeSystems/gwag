@@ -111,7 +111,7 @@ func (m *lifecycleMetrics) Collect(ch chan<- prometheus.Metric) {
 	if err != nil {
 		return
 	}
-	out, err := g.buildDependencyGraph(reg, "1h", sunsetMetricWindow)
+	out, err := g.buildDependencyGraph(reg, "1h", sunsetMetricWindow, adminView{full: true})
 	if err != nil {
 		return
 	}

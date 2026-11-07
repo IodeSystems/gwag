@@ -35,6 +35,7 @@ func (f *fakeAdminAuthConn) Invoke(_ context.Context, method string, args, reply
 	out := reply.(*aav1.AuthorizeResponse)
 	out.Code = resp.Code
 	out.Reason = resp.Reason
+	out.Role = resp.Role
 	return nil
 }
 

@@ -21,6 +21,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// AdminRole is what an accepted admin request may do.
+type AdminRole int32
+
+const (
+	// Treated as ADMIN.
+	AdminRole_ADMIN_ROLE_UNSPECIFIED AdminRole = 0
+	// Every admin route, reads and writes.
+	AdminRole_ADMIN_ROLE_ADMIN AdminRole = 1
+	// Every admin read, plus writes to external-dependent declarations.
+	AdminRole_ADMIN_ROLE_DEV AdminRole = 2
+)
+
+// Enum value maps for AdminRole.
+var (
+	AdminRole_name = map[int32]string{
+		0: "ADMIN_ROLE_UNSPECIFIED",
+		1: "ADMIN_ROLE_ADMIN",
+		2: "ADMIN_ROLE_DEV",
+	}
+	AdminRole_value = map[string]int32{
+		"ADMIN_ROLE_UNSPECIFIED": 0,
+		"ADMIN_ROLE_ADMIN":       1,
+		"ADMIN_ROLE_DEV":         2,
+	}
+)
+
+func (x AdminRole) Enum() *AdminRole {
+	p := new(AdminRole)
+	*p = x
+	return p
+}
+
+func (x AdminRole) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AdminRole) Descriptor() protoreflect.EnumDescriptor {
+	return file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[0].Descriptor()
+}
+
+func (AdminRole) Type() protoreflect.EnumType {
+	return &file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[0]
+}
+
+func (x AdminRole) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AdminRole.Descriptor instead.
+func (AdminRole) EnumDescriptor() ([]byte, []int) {
+	return file_gw_proto_adminauth_v1_adminauth_proto_rawDescGZIP(), []int{0}
+}
+
 type AdminAuthCode int32
 
 const (
@@ -68,11 +121,11 @@ func (x AdminAuthCode) String() string {
 }
 
 func (AdminAuthCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[0].Descriptor()
+	return file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[1].Descriptor()
 }
 
 func (AdminAuthCode) Type() protoreflect.EnumType {
-	return &file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[0]
+	return &file_gw_proto_adminauth_v1_adminauth_proto_enumTypes[1]
 }
 
 func (x AdminAuthCode) Number() protoreflect.EnumNumber {
@@ -81,7 +134,7 @@ func (x AdminAuthCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AdminAuthCode.Descriptor instead.
 func (AdminAuthCode) EnumDescriptor() ([]byte, []int) {
-	return file_gw_proto_adminauth_v1_adminauth_proto_rawDescGZIP(), []int{0}
+	return file_gw_proto_adminauth_v1_adminauth_proto_rawDescGZIP(), []int{1}
 }
 
 type AuthorizeRequest struct {
@@ -163,7 +216,11 @@ type AuthorizeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Code  AdminAuthCode          `protobuf:"varint,1,opt,name=code,proto3,enum=gateway.adminauth.v1.AdminAuthCode" json:"code,omitempty"`
 	// Optional, for operator logs. Never leaked to clients.
-	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Role granted with code OK. UNSPECIFIED (what delegates written
+	// before roles existed send) means ADMIN, so they keep working
+	// unchanged. Ignored for any other code.
+	Role          AdminRole `protobuf:"varint,3,opt,name=role,proto3,enum=gateway.adminauth.v1.AdminRole" json:"role,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -212,6 +269,13 @@ func (x *AuthorizeResponse) GetReason() string {
 	return ""
 }
 
+func (x *AuthorizeResponse) GetRole() AdminRole {
+	if x != nil {
+		return x.Role
+	}
+	return AdminRole_ADMIN_ROLE_UNSPECIFIED
+}
+
 var File_gw_proto_adminauth_v1_adminauth_proto protoreflect.FileDescriptor
 
 const file_gw_proto_adminauth_v1_adminauth_proto_rawDesc = "" +
@@ -222,10 +286,15 @@ const file_gw_proto_adminauth_v1_adminauth_proto_rawDesc = "" +
 	"\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x03 \x01(\tR\x04path\x12\x1f\n" +
 	"\vremote_addr\x18\x04 \x01(\tR\n" +
-	"remoteAddr\"d\n" +
+	"remoteAddr\"\x99\x01\n" +
 	"\x11AuthorizeResponse\x127\n" +
 	"\x04code\x18\x01 \x01(\x0e2#.gateway.adminauth.v1.AdminAuthCodeR\x04code\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason*\xa9\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x123\n" +
+	"\x04role\x18\x03 \x01(\x0e2\x1f.gateway.adminauth.v1.AdminRoleR\x04role*Q\n" +
+	"\tAdminRole\x12\x1a\n" +
+	"\x16ADMIN_ROLE_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10ADMIN_ROLE_ADMIN\x10\x01\x12\x12\n" +
+	"\x0eADMIN_ROLE_DEV\x10\x02*\xa9\x01\n" +
 	"\rAdminAuthCode\x12\x1f\n" +
 	"\x1bADMIN_AUTH_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ADMIN_AUTH_CODE_OK\x10\x01\x12\x1a\n" +
@@ -247,22 +316,24 @@ func file_gw_proto_adminauth_v1_adminauth_proto_rawDescGZIP() []byte {
 	return file_gw_proto_adminauth_v1_adminauth_proto_rawDescData
 }
 
-var file_gw_proto_adminauth_v1_adminauth_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_gw_proto_adminauth_v1_adminauth_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_gw_proto_adminauth_v1_adminauth_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_gw_proto_adminauth_v1_adminauth_proto_goTypes = []any{
-	(AdminAuthCode)(0),        // 0: gateway.adminauth.v1.AdminAuthCode
-	(*AuthorizeRequest)(nil),  // 1: gateway.adminauth.v1.AuthorizeRequest
-	(*AuthorizeResponse)(nil), // 2: gateway.adminauth.v1.AuthorizeResponse
+	(AdminRole)(0),            // 0: gateway.adminauth.v1.AdminRole
+	(AdminAuthCode)(0),        // 1: gateway.adminauth.v1.AdminAuthCode
+	(*AuthorizeRequest)(nil),  // 2: gateway.adminauth.v1.AuthorizeRequest
+	(*AuthorizeResponse)(nil), // 3: gateway.adminauth.v1.AuthorizeResponse
 }
 var file_gw_proto_adminauth_v1_adminauth_proto_depIdxs = []int32{
-	0, // 0: gateway.adminauth.v1.AuthorizeResponse.code:type_name -> gateway.adminauth.v1.AdminAuthCode
-	1, // 1: gateway.adminauth.v1.AdminAuthorizer.Authorize:input_type -> gateway.adminauth.v1.AuthorizeRequest
-	2, // 2: gateway.adminauth.v1.AdminAuthorizer.Authorize:output_type -> gateway.adminauth.v1.AuthorizeResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: gateway.adminauth.v1.AuthorizeResponse.code:type_name -> gateway.adminauth.v1.AdminAuthCode
+	0, // 1: gateway.adminauth.v1.AuthorizeResponse.role:type_name -> gateway.adminauth.v1.AdminRole
+	2, // 2: gateway.adminauth.v1.AdminAuthorizer.Authorize:input_type -> gateway.adminauth.v1.AuthorizeRequest
+	3, // 3: gateway.adminauth.v1.AdminAuthorizer.Authorize:output_type -> gateway.adminauth.v1.AuthorizeResponse
+	3, // [3:4] is the sub-list for method output_type
+	2, // [2:3] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_gw_proto_adminauth_v1_adminauth_proto_init() }
@@ -275,7 +346,7 @@ func file_gw_proto_adminauth_v1_adminauth_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gw_proto_adminauth_v1_adminauth_proto_rawDesc), len(file_gw_proto_adminauth_v1_adminauth_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,

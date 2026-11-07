@@ -70,6 +70,7 @@ type graphNode struct {
 	Namespace      string          `json:"namespace"`
 	Version        string          `json:"version"`
 	Kind           string          `json:"kind" doc:"proto, openapi, graphql, internalproto, mcp; empty when no instance is in the pool yet."`
+	Public         bool            `json:"public" doc:"Shown to admin readers without a token."`
 	Owner          *ownerInfo      `json:"owner,omitempty"`
 	ReplicaCount   uint32          `json:"replicaCount"`
 	ReadyCount     int             `json:"readyCount"`
@@ -101,7 +102,7 @@ type graphMethodCount struct {
 }
 
 type graphActiveEdge struct {
-	Caller            string             `json:"caller"`
+	Caller            string             `json:"caller" doc:"Caller id. Without a token, a caller that is not a public service reads \"hidden\"."`
 	ConsumerNamespace string             `json:"consumerNamespace" doc:"Registered namespace the caller maps to; empty = external caller."`
 	ConsumerVersion   string             `json:"consumerVersion" doc:"Set only when the caller id is \"ns/line\"."`
 	Namespace         string             `json:"namespace"`
@@ -141,7 +142,13 @@ func registerDependencyGraph(api huma.API, g *Gateway, cp *controlPlane) {
 		if err != nil {
 			return nil, err
 		}
-		return g.buildDependencyGraph(reg, in.Window, window)
+		view := g.adminViewFor(ctx, reg)
+		out, err := g.buildDependencyGraph(reg, in.Window, window, view)
+		if err != nil {
+			return nil, err
+		}
+		view.graph(out)
+		return out, nil
 	})
 }
 
@@ -157,7 +164,10 @@ func (g *Gateway) callerSource() string {
 	return "none"
 }
 
-func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowName string, window time.Duration) (*dependencyGraphOut, error) {
+// buildDependencyGraph builds the whole graph; view only changes how
+// sunset reasons name consumers it hides (adminView.graph removes the
+// rest afterwards), so the sunset rule counts every dependent.
+func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowName string, window time.Duration, view adminView) (*dependencyGraphOut, error) {
 	out := &dependencyGraphOut{}
 	out.Body.Environment = reg.GetEnvironment()
 	out.Body.Window = windowName
@@ -217,6 +227,7 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			ID:           k.namespace + "/" + k.version,
 			Namespace:    k.namespace,
 			Version:      k.version,
+			Public:       s.GetPublic(),
 			Owner:        adminOwner(s.GetOwner()),
 			ReplicaCount: s.GetReplicaCount(),
 			Instances:    []graphInstance{},
@@ -354,8 +365,13 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			}
 			if !covered {
 				who := e.ConsumerNamespace + "/" + e.ConsumerVersion
-				if ek.external {
+				switch {
+				case ek.external && !view.full:
+					who = "an external dependent"
+				case ek.external:
 					who = extLabel[e.ConsumerNamespace]
+				case !view.line(e.ConsumerNamespace, e.ConsumerVersion):
+					who = "a hidden service"
 				}
 				reasons = append(reasons, fmt.Sprintf("%s accepts %s [%s]: no other ready line", who, e.Provider, strings.Join(e.Lines, ", ")))
 			}
@@ -435,4 +451,87 @@ func mapCaller(caller string, nodes map[poolKey]*graphNode, namespaces map[strin
 		return caller, ""
 	}
 	return "", ""
+}
+
+// graph removes what an anonymous view may not show from a built
+// graph (see adminView): non-public nodes; declared edges with a
+// hidden end (dropped, not anonymised: the provider's sunset reason
+// still says "a hidden service accepts ..."); external dependents and
+// their edges; owner contact, instance addresses and drain reasons.
+// Traffic from callers that are not public services is kept and
+// folded into one hiddenCaller edge per (namespace, version), so
+// node traffic stays true.
+func (v adminView) graph(out *dependencyGraphOut) {
+	if v.full {
+		return
+	}
+	nodes := out.Body.Nodes[:0]
+	for _, n := range out.Body.Nodes {
+		if !v.line(n.Namespace, n.Version) {
+			continue
+		}
+		n.Owner = v.owner(n.Owner)
+		for i := range n.Instances {
+			n.Instances[i].Addr = ""
+			n.Instances[i].DrainReasons = []string{}
+		}
+		nodes = append(nodes, n)
+	}
+	out.Body.Nodes = nodes
+
+	desired := out.Body.DesiredEdges[:0]
+	for _, e := range out.Body.DesiredEdges {
+		if e.ConsumerKind != "service" || !v.line(e.ConsumerNamespace, e.ConsumerVersion) || !v.namespace(e.Provider) {
+			continue
+		}
+		desired = append(desired, e)
+	}
+	out.Body.DesiredEdges = desired
+
+	type key struct{ caller, ns, ver string }
+	idx := map[key]int{}
+	active := []graphActiveEdge{}
+	for _, e := range out.Body.ActiveEdges {
+		if !v.line(e.Namespace, e.Version) {
+			continue
+		}
+		if c := v.caller(e.Caller); c != e.Caller {
+			e.Caller, e.ConsumerNamespace, e.ConsumerVersion = c, "", ""
+		}
+		k := key{e.Caller, e.Namespace, e.Version}
+		i, ok := idx[k]
+		if !ok {
+			idx[k] = len(active)
+			active = append(active, e)
+			continue
+		}
+		a := &active[i]
+		a.Count += e.Count
+		a.OkCount += e.OkCount
+		a.LastSeenUnixMs = max(a.LastSeenUnixMs, e.LastSeenUnixMs)
+		a.Methods = mergeGraphMethods(append(a.Methods, e.Methods...))
+	}
+	out.Body.ActiveEdges = active
+	out.Body.ExternalDependents = []externalDependentInfo{}
+}
+
+func mergeGraphMethods(in []graphMethodCount) []graphMethodCount {
+	idx := map[string]int{}
+	out := []graphMethodCount{}
+	for _, m := range in {
+		if i, ok := idx[m.Method]; ok {
+			out[i].Count += m.Count
+			out[i].OkCount += m.OkCount
+			continue
+		}
+		idx[m.Method] = len(out)
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out
 }

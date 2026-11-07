@@ -7,13 +7,15 @@ import (
 )
 
 // serviceManifest is the declared metadata a registration carries for
-// one (namespace, version): the services it calls (Depends) and the
-// team that owns it (Owner). It rides the registry KV value so every
+// one (namespace, version): the services it calls (Depends), the team
+// that owns it (Owner) and whether admin readers without a token may
+// see it (Public). It rides the registry KV value so every
 // cluster node stores the same copy on its slot. The zero value means
 // "no manifest" (old clients, boot-time AddProto).
 type serviceManifest struct {
 	Depends []manifestDependency `json:"depends,omitempty"`
 	Owner   *manifestOwner       `json:"owner,omitempty"`
+	Public  bool                 `json:"public,omitempty"`
 }
 
 type manifestDependency struct {
@@ -65,6 +67,7 @@ func manifestFromBinding(b *cpv1.ServiceBinding) (serviceManifest, error) {
 	if o := b.GetOwner(); o != nil && (o.GetTeam() != "" || o.GetContact() != "") {
 		m.Owner = &manifestOwner{Team: o.GetTeam(), Contact: o.GetContact()}
 	}
+	m.Public = b.GetPublic()
 	return m, nil
 }
 

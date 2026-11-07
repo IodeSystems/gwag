@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { client } from '@/api/client';
 import { PeersQuery, ForgetPeerMutation } from '@/api/operations';
 import { DataTable, EmptyState, Page, Panel, useToast, type Column } from '@/ui';
+import { RoleGate } from '@/components/RoleGate';
 
 export const Route = createFileRoute('/peers')({
   component: Peers,
@@ -52,14 +53,18 @@ function Peers() {
       header: 'Action',
       align: 'right',
       cell: (p) => (
-        <Button
-          size="small"
-          color="warning"
-          disabled={forget.isPending}
-          onClick={() => p.nodeId && forget.mutate(p.nodeId)}
-        >
-          Forget
-        </Button>
+        <RoleGate need="admin">
+          {(allowed) => (
+            <Button
+              size="small"
+              color="warning"
+              disabled={!allowed || forget.isPending}
+              onClick={() => p.nodeId && forget.mutate(p.nodeId)}
+            >
+              Forget
+            </Button>
+          )}
+        </RoleGate>
       ),
     },
   ];

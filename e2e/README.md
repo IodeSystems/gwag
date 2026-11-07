@@ -124,6 +124,7 @@ FreePort(t) · Ctx(t, d) · EchoMethod(ns, line) · ProtoPackage(ns, line)
 | `--versions v1,v2` | lines served, one registration (default v1) |
 | `--depends SVC:LINE[,LINE]` | dependency, repeatable |
 | `--owner TEAM` | manifest owner |
+| `--public` | manifest `public=true` (admin readers without a token see it) |
 | `--instance ID` | instance id |
 | `--addr` / `--control` | service and control listen addresses |
 | `--proto LINE=PATH` | register this .proto for LINE (proto kind) |

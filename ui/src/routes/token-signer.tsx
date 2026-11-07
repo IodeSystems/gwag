@@ -4,12 +4,14 @@ import { useMutation } from '@tanstack/react-query';
 import { client } from '@/api/client';
 import { SignSubscriptionTokenMutation } from '@/api/operations';
 import { FormTextField, InlineForm, KeyValue, Page, Panel } from '@/ui';
+import { useRoleGate } from '@/api/role';
 
 export const Route = createFileRoute('/token-signer')({
   component: TokenSigner,
 });
 
 function TokenSigner() {
+  const { allowed, tip } = useRoleGate('admin');
   const sign = useMutation({
     mutationFn: (v: { channel: string; ttl: number | string; kid: string }) =>
       client.request(SignSubscriptionTokenMutation, {
@@ -29,12 +31,17 @@ function TokenSigner() {
       maxWidth={640}
     >
       <Panel>
+        {!allowed && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            {tip}: signing is an admin operation.
+          </Alert>
+        )}
         {/* Request errors surface as the form-level alert (mutateAsync throws). */}
         <InlineForm
           defaultValues={{ channel: '', ttl: 60, kid: '' }}
           submitLabel="Sign"
           submittingLabel="Signing…"
-          canSubmit={(v) => v.channel.trim().length > 0}
+          canSubmit={(v) => allowed && v.channel.trim().length > 0}
           onSubmit={async (v) => {
             await sign.mutateAsync(v);
           }}

@@ -128,6 +128,9 @@ func (g *Gateway) AddMCP(transport MCPTransport, target string, opts ...ServiceO
 	if sc.internal {
 		g.internal[ns] = true
 	}
+	if sc.public {
+		g.publicNS[ns] = true
+	}
 	key := poolKey{namespace: ns, version: ver}
 	existed, err := g.registerSlotLocked(slotKindMCP, key, hash, 0, 0, nil)
 	if err != nil {

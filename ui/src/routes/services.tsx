@@ -35,6 +35,7 @@ import {
   useToast,
   type Column,
 } from '@/ui';
+import { RoleGate } from '@/components/RoleGate';
 
 export const Route = createFileRoute('/services')({
   component: Services,
@@ -307,37 +308,49 @@ function Services() {
           onKeyDown={(e) => e.stopPropagation()}
         >
           {r.isManualDeprecated ? (
-            <Button
-              size="small"
-              disabled={undeprecate.isPending}
-              onClick={() =>
-                undeprecate.mutate({
-                  namespace: r.namespace,
-                  version: r.version,
-                })
-              }
-            >
-              Undeprecate
-            </Button>
+            <RoleGate need="admin">
+              {(allowed) => (
+                <Button
+                  size="small"
+                  disabled={!allowed || undeprecate.isPending}
+                  onClick={() =>
+                    undeprecate.mutate({
+                      namespace: r.namespace,
+                      version: r.version,
+                    })
+                  }
+                >
+                  Undeprecate
+                </Button>
+              )}
+            </RoleGate>
           ) : (
-            <Button
-              size="small"
-              color="error"
-              onClick={() =>
-                setDeprecateTarget({
-                  namespace: r.namespace,
-                  version: r.version,
-                  currentReason: r.manualReason,
-                })
-              }
-            >
-              Deprecate
-            </Button>
+            <RoleGate need="admin">
+              {(allowed) => (
+                <Button
+                  size="small"
+                  color="error"
+                  disabled={!allowed}
+                  onClick={() =>
+                    setDeprecateTarget({
+                      namespace: r.namespace,
+                      version: r.version,
+                      currentReason: r.manualReason,
+                    })
+                  }
+                >
+                  Deprecate
+                </Button>
+              )}
+            </RoleGate>
           )}
           {r.isStableTarget && r.stableTargetVN !== undefined && (
+            <RoleGate need="admin">
+              {(allowed) => (
             <Button
               size="small"
               color="warning"
+              disabled={!allowed}
               onClick={() => {
                 const current = r.stableTargetVN as number;
                 const candidates = (vNsByNamespace.get(r.namespace) ?? [])
@@ -352,6 +365,8 @@ function Services() {
             >
               Retract Stable
             </Button>
+              )}
+            </RoleGate>
           )}
         </Box>
       ),

@@ -194,6 +194,17 @@ type statsRecordingMetrics struct {
 	callerLimiter   *callerLimiter
 }
 
+// RecordAdminAuthRole forwards the role-labelled admin auth outcome to
+// the wrapped sink when it takes one (adminAuthRoleRecorder), else
+// drops the role.
+func (m *statsRecordingMetrics) RecordAdminAuthRole(method, outcome, role string) {
+	if rr, ok := m.Metrics.(adminAuthRoleRecorder); ok {
+		rr.RecordAdminAuthRole(method, outcome, role)
+		return
+	}
+	m.Metrics.RecordAdminAuth(method, outcome)
+}
+
 // callerFromContext returns the first non-empty inbound header value
 // matching `headers`, or "unknown" when none match (or no HTTP request
 // is on the context, e.g. in-process registrations / cluster

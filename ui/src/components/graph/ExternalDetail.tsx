@@ -29,7 +29,7 @@ export function ExternalDetail({ graph, ext, canEdit, onEdit, onClose, onChanged
     onClose();
     onChanged();
   };
-  const authTip = canEdit ? '' : 'Sign in with the admin token to edit';
+  const authTip = canEdit ? '' : 'Sign in with the dev or admin token to edit';
 
   return (
     <>

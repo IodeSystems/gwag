@@ -36,57 +36,108 @@ func (g *Gateway) AdminToken() []byte { return g.cfg.adminToken }
 func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.adminToken) }
 
 // AdminMiddleware wraps next in admin-auth verification intended for
-// /admin/* HTTP routes. Reads (GET/HEAD/OPTIONS) pass through
-// unauthenticated; non-read methods are gated by:
+// /admin/* HTTP routes. It resolves the caller's role — anonymous
+// (no bearer), dev (the dev token) or admin (the boot token) — and
+// lets the request through when the role is enough for the route:
+//
+//   - Routes AdminHumaRouter registered carry their own requirement
+//     (admin_roles.go): a few reads are open to anonymous callers and
+//     answer with public services only; the other reads need dev; the
+//     external-dependent writes need dev; every other write needs
+//     admin.
+//   - Any other route: GET/HEAD/OPTIONS are open; other methods need
+//     admin. Paths registered via WithDestructiveReads need admin for
+//     every method.
+//
+// A presented bearer is checked even on an open read (a wrong one is
+// 401), so a client learns at once that its token is stale. The
+// bearer is checked by:
 //
 //  1. Registered AdminAuthorizer delegate at "_admin_auth/v1", if any.
-//     OK accepts; DENIED rejects without falling through. Any other
-//     code (UNAVAILABLE, NOT_CONFIGURED, UNSPECIFIED, transport err)
-//     falls through to step 2.
-//  2. Boot-token Bearer check (the unconditional fallback).
+//     Consulted for every request that needs more than anonymous and
+//     for every request that presents a bearer. OK accepts with the
+//     role the delegate names (unset = admin); DENIED rejects without
+//     falling through. Any other code (UNAVAILABLE, NOT_CONFIGURED,
+//     UNSPECIFIED, transport err) falls through to step 2.
+//  2. Boot-token, then dev-token Bearer check (constant time; the
+//     unconditional fallback).
 //
-// GraphQL reads of admin_* fields (which dispatch GET to /admin/*)
-// stay public for the UI; mutations require auth end-to-end. Paths
-// registered via WithDestructiveReads are the exception — their GET is
-// gated like a mutation.
-//
-// Authenticated requests carry isAdminAuth(ctx) == true on the way
-// through.
+// A role below the route's requirement gets 401 when it is anonymous
+// and 403 otherwise. The role rides on the request context.
 //
 // Stability: stable
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
-	tok := g.cfg.adminToken
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isAdminPublicMethod(r.Method) && !g.isDestructiveRead(r.URL.Path) {
-			next.ServeHTTP(w, r)
+		need := g.adminRouteNeed(r)
+		bearer := bearerFromRequest(r)
+		if need == adminRoleAnonymous && bearer == "" {
+			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), adminRoleAnonymous)))
 			return
 		}
-		switch outcome, _ := g.consultAdminDelegate(r.Context(), r); outcome {
-		case adminDelegateAccept:
-			g.cfg.metrics.RecordAdminAuth(r.Method, "ok_delegate")
-			next.ServeHTTP(w, r.WithContext(withAdminAuth(r.Context())))
-			return
-		case adminDelegateReject:
-			g.cfg.metrics.RecordAdminAuth(r.Method, "denied_delegate")
+		role, outcome, status := g.authenticateAdmin(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
+		if status == 0 && role < need {
+			outcome = "forbidden_role"
+			status = http.StatusForbidden
+			if role == adminRoleAnonymous {
+				outcome = "denied_bearer"
+				status = http.StatusUnauthorized
+			}
+		}
+		g.recordAdminAuth(r.Method, outcome, role)
+		switch status {
+		case 0:
+			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), role)))
+		case http.StatusUnauthorized:
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		case http.StatusForbidden:
+			http.Error(w, "forbidden: this route needs the "+need.String()+" role", http.StatusForbidden)
+		default:
+			http.Error(w, "admin token not configured", status)
 		}
-		// Fall through to boot-token check.
-		if len(tok) == 0 {
-			g.cfg.metrics.RecordAdminAuth(r.Method, "no_token_configured")
-			http.Error(w, "admin token not configured", http.StatusInternalServerError)
-			return
-		}
-		if !checkBearerEqual(r, tok) {
-			g.cfg.metrics.RecordAdminAuth(r.Method, "denied_bearer")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		g.cfg.metrics.RecordAdminAuth(r.Method, "ok_bearer")
-		next.ServeHTTP(w, r.WithContext(withAdminAuth(r.Context())))
 	})
+}
+
+// authenticateAdmin resolves a bearer to a role. status is 0 when the
+// caller may proceed with role (anonymous when no bearer was sent),
+// otherwise the HTTP status to answer with. outcome is the
+// admin_auth_total label. needAuth is true when the route needs more
+// than anonymous: the delegate is then consulted even without a
+// bearer (it decides about anonymous calls), as before roles existed.
+func (g *Gateway) authenticateAdmin(ctx context.Context, bearer, method, path, remoteAddr string, needAuth bool) (role adminRole, outcome string, status int) {
+	if needAuth || bearer != "" {
+		switch outcome, delegateRole, _ := g.consultAdminDelegate(ctx, bearer, method, path, remoteAddr); outcome {
+		case adminDelegateAccept:
+			return delegateRole, "ok_delegate", 0
+		case adminDelegateReject:
+			return adminRoleAnonymous, "denied_delegate", http.StatusUnauthorized
+		}
+	}
+	tok := g.cfg.adminToken
+	if len(tok) == 0 {
+		if !needAuth && bearer == "" {
+			return adminRoleAnonymous, "", 0
+		}
+		return adminRoleAnonymous, "no_token_configured", http.StatusInternalServerError
+	}
+	if bearer == "" {
+		return adminRoleAnonymous, "denied_bearer", 0
+	}
+	got, err := decodeAdminTokenString(bearer)
+	if err != nil {
+		return adminRoleAnonymous, "denied_bearer", http.StatusUnauthorized
+	}
+	// Both comparisons run every time, so the response time does not
+	// tell which token was close.
+	isAdmin := tokenEqual(got, tok)
+	isDev := tokenEqual(got, g.DevToken())
+	switch {
+	case isAdmin:
+		return adminRoleAdmin, "ok_bearer", 0
+	case isDev:
+		return adminRoleDev, "ok_bearer", 0
+	}
+	return adminRoleAnonymous, "denied_bearer", http.StatusUnauthorized
 }
 
 func isAdminPublicMethod(method string) bool {
@@ -113,21 +164,16 @@ func (g *Gateway) isDestructiveRead(path string) bool {
 	return false
 }
 
-func checkBearerEqual(r *http.Request, want []byte) bool {
-	authz := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(authz, prefix) {
+// tokenEqual compares a presented token with want in constant time.
+// An empty want never matches.
+func tokenEqual(got, want []byte) bool {
+	if len(want) == 0 {
 		return false
 	}
-	got := strings.TrimSpace(authz[len(prefix):])
-	gotBytes, err := decodeAdminTokenString(got)
-	if err != nil {
+	if subtle.ConstantTimeEq(int32(len(got)), int32(len(want))) == 0 {
 		return false
 	}
-	if subtle.ConstantTimeEq(int32(len(gotBytes)), int32(len(want))) == 0 {
-		return false
-	}
-	return subtle.ConstantTimeCompare(gotBytes, want) == 1
+	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
 // decodeAdminTokenString accepts hex (the canonical form, what we
@@ -148,36 +194,55 @@ func decodeAdminTokenString(s string) ([]byte, error) {
 // 32-byte token is generated, persisted (when dir != ""), and
 // returned. dir == "" means in-memory only (regenerated each boot).
 func loadOrGenerateAdminToken(dir string) ([]byte, error) {
+	return loadOrGenerateToken(dir, adminTokenFilename)
+}
+
+// loadOrGenerateToken is loadOrGenerateAdminToken for any token file
+// under dir (the admin token, the dev token).
+func loadOrGenerateToken(dir, name string) ([]byte, error) {
 	if dir == "" {
 		return generateAdminToken()
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("admin token dir: %w", err)
+		return nil, fmt.Errorf("%s dir: %w", name, err)
 	}
-	path := filepath.Join(dir, adminTokenFilename)
+	path := filepath.Join(dir, name)
 	b, err := os.ReadFile(path)
 	if err == nil {
 		s := strings.TrimSpace(string(b))
 		decoded, derr := hex.DecodeString(s)
 		if derr != nil {
-			return nil, fmt.Errorf("admin token at %s: %w", path, derr)
+			return nil, fmt.Errorf("%s at %s: %w", name, path, derr)
 		}
 		if len(decoded) == 0 {
-			return nil, fmt.Errorf("admin token at %s: empty", path)
+			return nil, fmt.Errorf("%s at %s: empty", name, path)
 		}
 		return decoded, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read admin token at %s: %w", path, err)
+		return nil, fmt.Errorf("read %s at %s: %w", name, path, err)
 	}
 	tok, err := generateAdminToken()
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(hex.EncodeToString(tok)+"\n"), 0o600); err != nil {
-		return nil, fmt.Errorf("write admin token at %s: %w", path, err)
+	if err := writeTokenFile(path, tok); err != nil {
+		return nil, err
 	}
 	return tok, nil
+}
+
+// writeTokenFile persists tok hex-encoded at path (0600), replacing
+// the file atomically.
+func writeTokenFile(path string, tok []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(hex.EncodeToString(tok)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 func generateAdminToken() ([]byte, error) {
@@ -200,17 +265,9 @@ func (g *Gateway) AdminTokenPath() string {
 	return filepath.Join(g.cfg.adminDataDir, adminTokenFilename)
 }
 
-type adminAuthCtxKey struct{}
-
-// withAdminAuth marks ctx as having passed AdminMiddleware bearer
-// verification. Used by handlers that want to short-circuit additional
-// checks once the middleware has approved.
-func withAdminAuth(ctx context.Context) context.Context {
-	return context.WithValue(ctx, adminAuthCtxKey{}, true)
-}
-
-// isAdminAuth reports whether ctx was authenticated by AdminMiddleware.
+// isAdminAuth reports whether ctx was authenticated by AdminMiddleware
+// with the admin role.
 func isAdminAuth(ctx context.Context) bool {
-	v, _ := ctx.Value(adminAuthCtxKey{}).(bool)
-	return v
+	r, ok := adminRoleFromContext(ctx)
+	return ok && r == adminRoleAdmin
 }

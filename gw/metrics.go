@@ -75,9 +75,13 @@ type Metrics interface {
 	// RecordAdminAuth records the outcome of an AdminMiddleware
 	// auth check. method is the HTTP method (POST/PUT/...). outcome
 	// is one of: "ok_delegate" (delegate said OK), "ok_bearer" (boot
-	// token matched), "denied_delegate" (delegate said DENIED),
-	// "denied_bearer" (no/wrong bearer + no delegate accept),
-	// "no_token_configured" (gateway has no boot token).
+	// or dev token matched), "denied_delegate" (delegate said
+	// DENIED), "denied_bearer" (no/wrong bearer + no delegate
+	// accept), "forbidden_role" (valid bearer, role too low for the
+	// route), "no_token_configured" (gateway has no boot token).
+	// Sinks that also implement RecordAdminAuthRole(method, outcome,
+	// role string) get the role instead (the built-in Prometheus sink
+	// does).
 	RecordAdminAuth(method, outcome string)
 
 	// RecordGraphQLSubFanout records a downstream-GraphQL
@@ -204,7 +208,7 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 	adminAuth := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: p + "_admin_auth_total",
 		Help: "Outcomes of AdminMiddleware auth checks (delegate + boot-token bearer).",
-	}, []string{"method", "outcome"})
+	}, []string{"method", "outcome", "role"})
 	gqlSubFanout := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: p + "_graphql_sub_fanout_total",
 		Help: "Downstream-GraphQL subscription fanout open/close events. One open per upstream subscribe; one close when the last local consumer leaves.",
@@ -298,7 +302,13 @@ func (m *prometheusMetrics) RecordSignAuth(code string) {
 }
 
 func (m *prometheusMetrics) RecordAdminAuth(method, outcome string) {
-	m.adminAuth.WithLabelValues(method, outcome).Inc()
+	m.adminAuth.WithLabelValues(method, outcome, "").Inc()
+}
+
+// RecordAdminAuthRole is RecordAdminAuth with the role label
+// (anonymous, dev, admin); see adminAuthRoleRecorder.
+func (m *prometheusMetrics) RecordAdminAuthRole(method, outcome, role string) {
+	m.adminAuth.WithLabelValues(method, outcome, role).Inc()
 }
 
 func (m *prometheusMetrics) RecordGraphQLSubFanout(namespace, event string) {

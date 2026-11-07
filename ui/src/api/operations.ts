@@ -36,6 +36,17 @@ export const DashboardQuery = graphql(`
   }
 `);
 
+// Role of the stored token (anonymous / dev / admin); see api/role.ts.
+export const WhoamiQuery = graphql(`
+  query Whoami {
+    admin {
+      whoami {
+        role
+      }
+    }
+  }
+`);
+
 export const EnvironmentQuery = graphql(`
   query Environment {
     admin {
@@ -53,6 +64,7 @@ export const ServicesQuery = graphql(`
         services {
           namespace
           version
+          public
           hashHex
           replicaCount
           manualDeprecationReason
@@ -351,6 +363,7 @@ export const DependencyGraphQuery = graphql(`
           namespace
           version
           kind
+          public
           owner {
             team
             contact

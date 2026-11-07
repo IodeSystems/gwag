@@ -27,9 +27,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // AdminAuthorizer is the optional delegate the gateway calls before
-// AdminMiddleware accepts a write to /admin/*. Implement it in your
-// authz service and register it under namespace "_admin_auth" /
-// version v1.
+// AdminMiddleware accepts a write to /admin/*, and before it accepts a
+// read that presents a bearer. Implement it in your authz service and
+// register it under namespace "_admin_auth" / version v1.
 //
 // Policy: if a delegate is registered, the gateway consults it on
 // every protected request. OK accepts, DENIED rejects (without
@@ -63,9 +63,9 @@ func (c *adminAuthorizerClient) Authorize(ctx context.Context, in *AuthorizeRequ
 // for forward compatibility.
 //
 // AdminAuthorizer is the optional delegate the gateway calls before
-// AdminMiddleware accepts a write to /admin/*. Implement it in your
-// authz service and register it under namespace "_admin_auth" /
-// version v1.
+// AdminMiddleware accepts a write to /admin/*, and before it accepts a
+// read that presents a bearer. Implement it in your authz service and
+// register it under namespace "_admin_auth" / version v1.
 //
 // Policy: if a delegate is registered, the gateway consults it on
 // every protected request. OK accepts, DENIED rejects (without

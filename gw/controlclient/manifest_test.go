@@ -51,6 +51,7 @@ func TestSelfRegister_SendsManifest(t *testing.T) {
 				ProtoSource: proto,
 				Depends:     []Dependency{{Service: "library", Lines: []string{"v1", "v2"}}},
 				Owner:       &Owner{Team: "orders", Contact: "#orders"},
+				Public:      true,
 			},
 			{Namespace: "plain", OpenAPISpec: []byte(`{}`)},
 		},
@@ -74,8 +75,11 @@ func TestSelfRegister_SendsManifest(t *testing.T) {
 	if o := b.GetOwner(); o.GetTeam() != "orders" || o.GetContact() != "#orders" {
 		t.Errorf("owner=%v", o)
 	}
+	if !b.GetPublic() {
+		t.Error("public=false, want true")
+	}
 	plain := req.GetServices()[1]
-	if len(plain.GetDepends()) != 0 || plain.GetOwner() != nil {
+	if len(plain.GetDepends()) != 0 || plain.GetOwner() != nil || plain.GetPublic() {
 		t.Errorf("binding without manifest sent depends=%v owner=%v", plain.GetDepends(), plain.GetOwner())
 	}
 }

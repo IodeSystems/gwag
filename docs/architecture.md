@@ -189,15 +189,17 @@ side routing.
 | `/api/schema`, `/api/schema/graphql` | public | SDL (or `?format=json` for introspection) |
 | `/api/schema/proto?service=...` | public | FileDescriptorSet (transformed) |
 | `/api/schema/openapi?service=...` | public | Re-emit ingested OpenAPI specs |
-| `/api/admin/*` reads (GET) | public | huma reads (peers, services list) |
-| `/api/admin/*` writes | bearer | huma mutations (forget, sign) |
+| `/api/admin/*` graph / status / services reads | public services only without a token | see [admin-auth.md](./admin-auth.md) |
+| `/api/admin/*` other reads | dev or admin bearer | peers, instances, injectors, MCP, external dependents |
+| `/api/admin/*` writes | admin bearer (external dependents: dev) | huma mutations (forget, sign, drain) |
 | `/api/health` | public | JSON status; 503 when `Drain()` is in flight |
 | `/api/metrics` | public (or behind reverse-proxy auth) | Prometheus scrape |
 | `/api/...` (unmatched) | n/a | JSON 404 |
 | `/`, `/{anything}` | public | Embedded SPA bundle from `ui/dist/`; `index.html` SPA fallback for unknown paths |
 
-The bearer is the gateway's boot token (logged at startup, persisted
-to `<adminDataDir>/admin-token` if `WithAdminDataDir(...)` is set).
+The bearer is the gateway's boot (admin) token or its dev token (both
+logged at startup, persisted to `<adminDataDir>/admin-token` and
+`<adminDataDir>/dev-token` if `WithAdminDataDir(...)` is set).
 The pluggable AdminAuthorizer delegate (registered under
 `_admin_auth/v1`) is consulted first; the boot token is the
 always-works emergency hatch underneath. Outbound auth to upstream

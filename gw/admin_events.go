@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	aev1 "github.com/iodesystems/gwag/v2/gw/proto/adminevents/v1"
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
 //go:embed proto/adminevents/v1/adminevents.proto
@@ -108,15 +109,79 @@ func (g *Gateway) adminEventsWatchServicesHandler(ctx context.Context, args map[
 	if err != nil {
 		return nil, err
 	}
+	// Admin visibility rules apply here too: without the dev or admin
+	// token (Authorization header or connection_init payload), only
+	// events for public services arrive, with addr blanked.
+	full := g.adminRoleFromRequestContext(ctx, "SUBSCRIBE", "admin_events_watchServices") >= adminRoleDev
 	source, release, err := broker.acquire(subject, outputDesc)
 	if err != nil {
 		return nil, err
 	}
+	if full {
+		go func() {
+			<-ctx.Done()
+			release()
+		}()
+		return source, nil
+	}
+	out := make(chan any, cap(source))
 	go func() {
-		<-ctx.Done()
-		release()
+		defer close(out)
+		defer release()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-source:
+				if !ok {
+					return
+				}
+				m, isMap := ev.(map[string]any)
+				if !isMap {
+					continue
+				}
+				ns, _ := m["namespace"].(string)
+				ver, _ := m["version"].(string)
+				if !g.isPublicLine(ctx, ns, ver) {
+					continue
+				}
+				scrubbed := make(map[string]any, len(m))
+				for k, v := range m {
+					scrubbed[k] = v
+				}
+				scrubbed["addr"] = ""
+				select {
+				case out <- scrubbed:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
 	}()
-	return source, nil
+	return out, nil
+}
+
+// isPublicLine reports whether (ns, ver) is a registered line that
+// admin readers without a token may see. A line no longer registered
+// (its last replica left) is not, unless WithPublicServices names its
+// namespace or all services.
+func (g *Gateway) isPublicLine(ctx context.Context, ns, ver string) bool {
+	g.mu.Lock()
+	byConfig := g.isPublicLocked(ns, false)
+	g.mu.Unlock()
+	if byConfig || g.cp == nil {
+		return byConfig
+	}
+	reg, err := g.cp.ListServices(ctx, &cpv1.ListServicesRequest{})
+	if err != nil {
+		return false
+	}
+	for _, s := range reg.GetServices() {
+		if s.GetNamespace() == ns && s.GetVersion() == ver {
+			return s.GetPublic()
+		}
+	}
+	return false
 }
 
 // publishServiceChange fires a ServiceChange event onto the NATS

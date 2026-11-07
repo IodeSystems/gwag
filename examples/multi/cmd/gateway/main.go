@@ -95,6 +95,7 @@ func main() {
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	callerIDPublic := flag.Bool("caller-id-public", false, "Take the caller id from the X-Caller-Id header (gRPC: caller-id metadata). Forgeable; dev and demos only. Feeds usage edges and the dependency graph.")
 	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
+	publicServices := flag.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists its boot admin token (empty → in-memory only). Set this to a writable path so a worked example (e.g. cmd/mcp-demo) can read <dir>/admin-token without scraping logs. Implicitly set when --nats-data is.")
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
@@ -195,6 +196,9 @@ func main() {
 	if *callerIDPublic {
 		gwOpts = append(gwOpts, gateway.WithCallerIDPublic())
 	}
+	if *publicServices != "" {
+		gwOpts = append(gwOpts, gateway.WithPublicServices(strings.Split(*publicServices, ",")...))
+	}
 	// Seed the MCP allowlist so /mcp exposes greeter + library + admin
 	// out of the box. Operators retune at runtime via
 	// /api/admin/mcp/{include,exclude,auto-include}.
@@ -284,8 +288,10 @@ func main() {
 	mux.Handle("/api/schema/openapi", gw.SchemaOpenAPIHandler())
 	mux.Handle("/api/metrics", gw.MetricsHandler())
 	mux.Handle("/api/health", gw.HealthHandler())
-	// Bearer-gated: writes require the boot token; reads stay public so
-	// the UI's services-list/peer views work unauthenticated.
+	// Bearer-gated by role: the admin token for every route, the dev
+	// token for every read plus external-dependent edits; without a
+	// token, the graph / status / services reads show public services
+	// only (--public-services, ServiceBinding.public).
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
 	// MCP Streamable HTTP transport at /mcp. MountMCP wraps the
 	// handler in AdminMiddleware (bearer-gated) and registers at the
@@ -302,8 +308,10 @@ func main() {
 	mux.Handle("/", apiOrUI(gateway.UIHandler(gwui.FS())))
 	if path := gw.AdminTokenPath(); path != "" {
 		log.Printf("admin token = %s  (persisted to %s)", gw.AdminTokenHex(), path)
+		log.Printf("dev token   = %s  (persisted to %s)", gw.DevTokenHex(), gw.DevTokenPath())
 	} else {
 		log.Printf("admin token = %s  (in-memory, regenerated on restart)", gw.AdminTokenHex())
+		log.Printf("dev token   = %s  (in-memory, regenerated on restart)", gw.DevTokenHex())
 	}
 
 	// Self-ingest the huma admin OpenAPI so its operations become

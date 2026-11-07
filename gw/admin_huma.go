@@ -43,6 +43,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return nil, nil, fmt.Errorf("AdminHumaRouter: ControlPlane impl is not *controlPlane")
 	}
 
+	registerAdminRoleRoutes(api, g)
 	registerUsageEdges(api, g, cp)
 	registerInstanceDrain(api, g)
 	registerDependencyGraph(api, g, cp)
@@ -84,11 +85,16 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		// the proto wire shape so we can surface them without proto
 		// regen. Lookups by (namespace, version).
 		rej := cp.gw.rejectedJoinsSnapshot()
+		view := g.adminViewFor(ctx, resp)
 		out := &servicesOut{}
 		out.Body.Environment = resp.GetEnvironment()
 		out.Body.Services = []serviceInfo{}
 		for _, s := range resp.GetServices() {
+			if !view.line(s.GetNamespace(), s.GetVersion()) {
+				continue
+			}
 			info := serviceInfo{
+				Public:                  s.GetPublic(),
 				Namespace:               s.GetNamespace(),
 				Version:                 s.GetVersion(),
 				HashHex:                 s.GetHashHex(),
@@ -110,10 +116,14 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 					CurrentMaxConcurrencyPerInstance: r.CurrentMaxConcurrencyPerInstance,
 				}
 			}
+			view.service(&info)
 			out.Body.Services = append(out.Body.Services, info)
 		}
 		out.Body.StableVN = []stableVNEntry{}
 		for ns, vN := range resp.GetStableVn() {
+			if !view.namespace(ns) {
+				continue
+			}
 			out.Body.StableVN = append(out.Body.StableVN, stableVNEntry{
 				Namespace: ns,
 				VN:        vN,
@@ -302,10 +312,18 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		Method:      http.MethodGet,
 		Path:        "/admin/services/{namespace}/{version}/stats",
 		Summary:     "Per-method rolling stats (1m / 1h / 24h windows) for one (namespace, version). Plan §5.",
-	}, func(_ context.Context, in *serviceStatsIn) (*serviceStatsOut, error) {
+	}, func(ctx context.Context, in *serviceStatsIn) (*serviceStatsOut, error) {
 		window, err := parseStatsWindow(in.Window)
 		if err != nil {
 			return nil, err
+		}
+		reg, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{})
+		if err != nil {
+			return nil, err
+		}
+		view := g.adminViewFor(ctx, reg)
+		if !view.line(in.Namespace, in.Version) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("no service %s/%s", in.Namespace, in.Version))
 		}
 		rows := g.snapshot(window, nowFunc())
 		out := &serviceStatsOut{}
@@ -317,7 +335,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			}
 			out.Body.Methods = append(out.Body.Methods, methodStatsOut{
 				Method:     r.Method,
-				Caller:     r.Caller,
+				Caller:     view.caller(r.Caller),
 				Count:      r.Count,
 				OkCount:    r.OkCount,
 				Throughput: r.Throughput,
@@ -325,6 +343,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				P95Millis:  int64(r.P95 / time.Millisecond),
 				P99Millis:  int64(r.P99 / time.Millisecond),
 			})
+		}
+		if !view.full {
+			out.Body.Methods = mergeMethodStats(out.Body.Methods)
 		}
 		return out, nil
 	})
@@ -377,18 +398,24 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		// (ns, ver) appears in the response, even if zero traffic
 		// has hit it yet. Otherwise a freshly-registered service
 		// is invisible on the dashboard until its first dispatch.
-		if svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{}); err == nil {
-			for _, s := range svcResp.GetServices() {
-				k := aggKey{s.GetNamespace(), s.GetVersion()}
-				if _, ok := bucket[k]; !ok {
-					bucket[k] = &agg{}
-				}
+		svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{})
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range svcResp.GetServices() {
+			k := aggKey{s.GetNamespace(), s.GetVersion()}
+			if _, ok := bucket[k]; !ok {
+				bucket[k] = &agg{}
 			}
 		}
+		view := g.adminViewFor(ctx, svcResp)
 		out := &servicesStatsOut{}
 		out.Body.Window = in.Window
 		out.Body.Services = []serviceStatsRow{}
 		for k, a := range bucket {
+			if !view.line(k.ns, k.ver) {
+				continue
+			}
 			out.Body.Services = append(out.Body.Services, serviceStatsRow{
 				Namespace:  k.ns,
 				Version:    k.ver,
@@ -416,12 +443,20 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{})
+		if err != nil {
+			return nil, err
+		}
+		view := g.adminViewFor(ctx, svcResp)
 		rows := g.history(window, nowFunc())
 		out := &servicesHistoryOut{}
 		out.Body.Window = in.Window
 		out.Body.Services = []serviceHistoryRow{}
 		seen := make(map[serviceKey]bool, len(rows))
 		for _, r := range rows {
+			if !view.line(r.Namespace, r.Version) {
+				continue
+			}
 			seen[serviceKey{namespace: r.Namespace, version: r.Version}] = true
 			row := serviceHistoryRow{
 				Namespace: r.Namespace,
@@ -445,18 +480,16 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		// yet still appear, with an empty Buckets slice — the UI
 		// renders a row with a "no traffic" dot strip rather than
 		// dropping the service entirely.
-		if svcResp, err := cp.ListServices(ctx, &cpv1.ListServicesRequest{}); err == nil {
-			for _, s := range svcResp.GetServices() {
-				k := serviceKey{namespace: s.GetNamespace(), version: s.GetVersion()}
-				if seen[k] {
-					continue
-				}
-				out.Body.Services = append(out.Body.Services, serviceHistoryRow{
-					Namespace: s.GetNamespace(),
-					Version:   s.GetVersion(),
-					Buckets:   []historyBucketOut{},
-				})
+		for _, s := range svcResp.GetServices() {
+			k := serviceKey{namespace: s.GetNamespace(), version: s.GetVersion()}
+			if seen[k] || !view.line(k.namespace, k.version) {
+				continue
 			}
+			out.Body.Services = append(out.Body.Services, serviceHistoryRow{
+				Namespace: s.GetNamespace(),
+				Version:   s.GetVersion(),
+				Buckets:   []historyBucketOut{},
+			})
 		}
 		return out, nil
 	})
@@ -493,9 +526,13 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		type depKey struct{ ns, ver string }
 		type depReasons struct{ manual, auto string }
 		deprecated := map[depKey]depReasons{}
+		view := g.adminViewFor(ctx, svcResp)
 		for _, s := range svcResp.GetServices() {
 			ns := s.GetNamespace()
 			ver := s.GetVersion()
+			if !view.line(ns, ver) {
+				continue
+			}
 			manual := s.GetManualDeprecationReason()
 			auto := ""
 			if max, ok := maxVN[ns]; ok && ir.ParseRuntimeVersionN(ver) < max {
@@ -518,9 +555,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 			p50, p95, p99  time.Duration
 		}
 		type serviceAgg struct {
-			reasons depReasons
-			methods map[string]*methodAgg
-			totalCount uint64
+			reasons         depReasons
+			methods         map[string]*methodAgg
+			totalCount      uint64
 			totalThroughput float64
 		}
 		services := map[depKey]*serviceAgg{}
@@ -551,7 +588,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				a.methods[r.Method] = m
 			}
 			m.callers = append(m.callers, callerStatsRow{
-				Caller:     r.Caller,
+				Caller:     view.caller(r.Caller),
 				Count:      r.Count,
 				OkCount:    r.OkCount,
 				Throughput: r.Throughput,
@@ -589,6 +626,9 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				Methods:         []deprecatedMethodRow{},
 			}
 			for method, m := range a.methods {
+				if !view.full {
+					m.callers = mergeCallerStats(m.callers)
+				}
 				// Caller breakdown sorted by count desc; the
 				// operator's "who's still hitting this" question.
 				sort.Slice(m.callers, func(i, j int) bool {
@@ -829,6 +869,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		return out, nil
 	})
 
+	g.indexAdminRoutes(api.OpenAPI())
 	spec, err := json.Marshal(api.OpenAPI())
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal openapi: %w", err)
@@ -849,8 +890,11 @@ type peersOut struct {
 }
 
 type serviceInfo struct {
-	Namespace    string `json:"namespace"`
-	Version      string `json:"version"`
+	Namespace string `json:"namespace"`
+	Version   string `json:"version"`
+	// Public: admin readers without a token see this line
+	// (ServiceBinding.public, AsPublic or WithPublicServices).
+	Public       bool   `json:"public"`
 	HashHex      string `json:"hashHex"`
 	ReplicaCount uint32 `json:"replicaCount"`
 	// ManualDeprecationReason is the operator-set reason from

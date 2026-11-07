@@ -13,6 +13,7 @@ import {
   Switch,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -31,7 +32,7 @@ import { client } from '@/api/client';
 import { DependencyGraphQuery } from '@/api/operations';
 import { EmptyState, EnvBadge, PageHeader } from '@/ui';
 import { useEvents } from '@/providers/EventsProvider';
-import { useAdminToken } from '@/components/SettingsDrawer';
+import { roleAllows, roleTip, useAdminRole } from '@/api/role';
 import {
   buildFlow,
   externalId,
@@ -71,7 +72,7 @@ function GraphPage() {
   // Add / edit dialog: undefined = closed, null = add.
   const [editing, setEditing] = useState<ExternalDependent | null | undefined>(undefined);
   const [showGateway, setShowGateway] = useState(false);
-  const token = useAdminToken();
+  const { role } = useAdminRole();
   const queryClient = useQueryClient();
   const queryKey = ['dependencyGraph', windowVal];
   const { data, isLoading, error } = useQuery({
@@ -108,15 +109,18 @@ function GraphPage() {
         }
         actions={
           <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              disabled={token === null}
-              title={token === null ? 'Sign in with the admin token to add one' : undefined}
-              onClick={() => setEditing(null)}
-            >
-              External dependent
-            </Button>
+            <Tooltip title={roleTip(role, 'dev')}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  disabled={!roleAllows(role, 'dev')}
+                  onClick={() => setEditing(null)}
+                >
+                  External dependent
+                </Button>
+              </span>
+            </Tooltip>
             <FormControlLabel
               control={<Switch size="small" checked={showGateway} onChange={(e) => setShowGateway(e.target.checked)} />}
               label="Gateway services"
@@ -172,7 +176,7 @@ function GraphPage() {
         <NodeDetail
           graph={graph}
           line={line}
-          canDrain={token !== null}
+          canDrain={roleAllows(role, 'admin')}
           onClose={() => setSelected(null)}
           onChanged={refetch}
         />
@@ -181,7 +185,7 @@ function GraphPage() {
         <ExternalDetail
           graph={graph}
           ext={ext}
-          canEdit={token !== null}
+          canEdit={roleAllows(role, 'dev')}
           onEdit={(x) => setEditing(x)}
           onClose={() => setSelected(null)}
           onChanged={refetch}

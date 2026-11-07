@@ -267,7 +267,7 @@ func (g *Gateway) PeerCount(ctx context.Context) (int, error) {
 			NodeID string `json:"nodeId"`
 		} `json:"peers"`
 	}
-	if err := g.Get(ctx, "/api/admin/peers", &out); err != nil {
+	if err := g.Get(ctx, "/api/admin/peers", &out, Bearer(g.Token())); err != nil {
 		return 0, err
 	}
 	return len(out.Peers), nil
@@ -283,7 +283,7 @@ func (g *Gateway) PeerNames(ctx context.Context) ([]string, error) {
 			Name string `json:"name"`
 		} `json:"peers"`
 	}
-	if err := g.Get(ctx, "/api/admin/peers", &out); err != nil {
+	if err := g.Get(ctx, "/api/admin/peers", &out, Bearer(g.Token())); err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}

@@ -5,6 +5,7 @@ import {
   Badge,
   Box,
   Button,
+  Chip,
   Drawer,
   IconButton,
   List,
@@ -32,6 +33,7 @@ import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
 import EventsTray from './EventsTray';
 import { EnvBadge, PresetPicker, ThemeToggle, useThemeMode } from '@/ui';
 import { EventsProvider, useEvents } from '@/providers/EventsProvider';
+import { useAdminRole } from '@/api/role';
 
 const drawerWidth = 220;
 
@@ -60,10 +62,13 @@ function LayoutInner({ children }: { children: ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const token = useAdminToken();
+  const { role, invalid } = useAdminRole();
   const { unread, markRead } = useEvents();
-  const settingsTooltip = token
-    ? 'Settings — admin token set'
-    : 'Settings — no admin token set';
+  const settingsTooltip = invalid
+    ? 'Settings — the gateway rejected this token'
+    : token
+      ? `Settings — signed in as ${role}`
+      : 'Settings — no token set';
   const eventsTooltip = unread > 0 ? `Events (${unread} new)` : 'Events';
 
   const openEvents = () => {
@@ -71,12 +76,11 @@ function LayoutInner({ children }: { children: ReactNode }) {
     setEventsOpen(true);
   };
 
-  // Without an admin token the UI runs in "status" mode: the
-  // Dashboard's read-only tiles render fine (admin reads are public),
-  // but the side-nav, events tray, and the deeper pages — where
-  // mutations and HMAC-signed subscriptions only work with auth —
-  // stay out of view. A prominent "Sign in" button + dismissible
-  // banner explain how to upgrade to the full admin UI.
+  // Without a token the UI runs in "status" mode: the graph and
+  // status pages show the services the gateway marks public, but the
+  // side-nav, events tray, and the deeper pages (dev or admin reads,
+  // mutations) stay out of view. A "Sign in" button and a banner
+  // explain how to see more.
   if (!token) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column' }}>
@@ -107,9 +111,12 @@ function LayoutInner({ children }: { children: ReactNode }) {
         <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
           <Toolbar />
           <Alert severity="info" sx={{ mb: 2 }}>
-            Read-only view. Sign in with the gateway's admin token
-            (printed at startup, persisted under the gateway's data dir)
-            to unlock services / peers / schema panels and mutations (drain).
+            Public view: only services marked public are shown, without
+            owner contacts or external dependents. Sign in with the dev
+            token to see every service and edit external dependents, or
+            with the admin token for every operation (drain, deprecate).
+            The gateway prints both at startup and keeps them under its
+            data dir.
           </Alert>
           {children}
         </Box>
@@ -126,6 +133,12 @@ function LayoutInner({ children }: { children: ReactNode }) {
             gwag
           </Typography>
           {environment && <EnvBadge name={environment} />}
+          <Chip
+            size="small"
+            sx={{ mx: 1 }}
+            color={invalid ? 'warning' : role === 'admin' ? 'secondary' : 'default'}
+            label={invalid ? 'Token rejected' : role === 'admin' ? 'Admin' : role === 'dev' ? 'Dev' : 'Public'}
+          />
           <PresetPicker compact />
           <ThemeToggle />
           <Tooltip title={eventsTooltip}>
@@ -140,7 +153,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
               <Badge
                 color="warning"
                 variant="dot"
-                invisible={token !== null}
+                invisible={token !== null && !invalid}
                 overlap="circular"
               >
                 <SettingsIcon />

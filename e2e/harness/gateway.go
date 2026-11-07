@@ -307,7 +307,7 @@ func (c *Cluster) WaitPeers(want int, timeout time.Duration) {
 				} `json:"peers"`
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := g.do(ctx, http.MethodGet, "/api/admin/peers", nil, &out, nil)
+			_, err := g.do(ctx, http.MethodGet, "/api/admin/peers", nil, &out, []ReqOpt{Bearer(g.Token())})
 			cancel()
 			if err != nil {
 				return fmt.Errorf("%s: %w", g.Name, err)

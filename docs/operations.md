@@ -305,7 +305,7 @@ instance or line. Default sink only.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `admin_auth_total` | counter | `method`, `outcome` | Admin auth checks: `ok_delegate`, `ok_bearer`, `denied_delegate`, `denied_bearer`, `no_token_configured`. |
+| `admin_auth_total` | counter | `method`, `outcome`, `role` | Admin auth checks: `ok_delegate`, `ok_bearer`, `denied_delegate`, `denied_bearer`, `forbidden_role` (valid token, role too low for the route), `no_token_configured`. `role`: `admin`, `dev` or `anonymous`. A read without a bearer is not counted. |
 | `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
 | `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
 | `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |

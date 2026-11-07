@@ -138,6 +138,7 @@ func main() {
 	var depends listFlag
 	flag.Var(&depends, "depends", "Dependency SERVICE:LINE[,LINE...] (repeatable), e.g. library:v1,v2")
 	owner := flag.String("owner", "", "Owning team (empty = no owner in the manifest)")
+	public := flag.Bool("public", false, "Register with public=true: shown to admin readers without a token")
 	instance := flag.String("instance", "", "Instance id (default: <namespace>@<addr>)")
 	addr := flag.String("addr", "127.0.0.1:0", "Service listen address")
 	controlAddr := flag.String("control", "127.0.0.1:0", "Control HTTP listen address (GET /stats, POST /faults)")
@@ -213,6 +214,7 @@ func main() {
 		svcs[i].Namespace = *namespace
 		svcs[i].Depends = deps
 		svcs[i].Owner = own
+		svcs[i].Public = *public
 		svcs[i].MaxConcurrency = uint32(*maxConc)
 	}
 

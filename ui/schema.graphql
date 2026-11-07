@@ -27,6 +27,7 @@ type AdminMutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -60,6 +61,7 @@ type AdminQueryNamespace {
     window: String
   ): admin_UsageEdgesOutBody
   v1: AdminV1QueryNamespace!
+  whoami: admin_WhoamiOutBody
 }
 
 type AdminStableMutationNamespace {
@@ -85,6 +87,7 @@ type AdminStableMutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -114,6 +117,7 @@ type AdminStableQueryNamespace {
     version: String
     window: String
   ): admin_UsageEdgesOutBody
+  whoami: admin_WhoamiOutBody
 }
 
 type AdminV1MutationNamespace {
@@ -139,6 +143,7 @@ type AdminV1MutationNamespace {
     id: String!
   ): admin_PutExternalDependentOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
+  rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
 }
@@ -168,6 +173,7 @@ type AdminV1QueryNamespace {
     version: String
     window: String
   ): admin_UsageEdgesOutBody
+  whoami: admin_WhoamiOutBody
 }
 
 type Gateway_Adminevents_V1_ServiceChange {
@@ -436,6 +442,7 @@ type admin_ForgetOutBody {
 }
 
 type admin_GraphActiveEdge {
+  """Caller id. Without a token, a caller that is not a public service reads "hidden"."""
   caller: String!
   """Registered namespace the caller maps to; empty = external caller."""
   consumerNamespace: String!
@@ -511,6 +518,8 @@ type admin_GraphNode {
   lastSeenUnixMs: Long!
   namespace: String!
   owner: admin_OwnerInfo
+  """Shown to admin readers without a token."""
+  public: Boolean!
   readyCount: Long!
   replicaCount: Int!
   sunsetReason: String!
@@ -729,6 +738,11 @@ type admin_RetractStableOutBody {
   priorVN: Int!
 }
 
+type admin_RotateDevTokenOutBody {
+  """The new dev token, hex. The old one no longer works on this node."""
+  devToken: String!
+}
+
 type admin_SchemaExpandEnumValue {
   deprecated: String
   description: String
@@ -809,6 +823,7 @@ type admin_ServiceInfo {
   manualDeprecationReason: String
   namespace: String!
   owner: admin_OwnerInfo
+  public: Boolean!
   rejectedJoins: admin_RejectedJoinInfo
   replicaCount: Int!
   version: String!
@@ -891,4 +906,16 @@ type admin_UsageServiceRow {
   namespace: String!
   totalCount: Long!
   version: String!
+}
+
+type admin_WhoamiOutBody {
+  """Role of the presented bearer. anonymous: no bearer; reads show public services only."""
+  role: admin_WhoamiOutBodyRole!
+}
+
+"""Role of the presented bearer. anonymous: no bearer; reads show public services only."""
+enum admin_WhoamiOutBodyRole {
+  admin
+  anonymous
+  dev
 }

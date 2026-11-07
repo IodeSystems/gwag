@@ -82,7 +82,7 @@ export function NodeDetail({ graph, line, canDrain, onClose, onChanged }: NodeDe
       header: '',
       align: 'right',
       cell: (i) => (
-        <Tooltip title={canDrain ? '' : 'Sign in with the admin token to drain'}>
+        <Tooltip title={canDrain ? '' : 'Needs the admin token'}>
           <span>
             <Button
               size="small"
