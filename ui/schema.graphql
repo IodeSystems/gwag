@@ -300,6 +300,7 @@ type admin_DependencyStatusInfo {
 }
 
 input admin_DeprecateInBodyInput {
+  """Why this version is deprecated; surfaces as @deprecated in SDL."""
   reason: String!
 }
 
