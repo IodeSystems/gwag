@@ -54,6 +54,7 @@ func upCmd(args []string) int {
 	allowTier := fs.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway")
 	insecureSubscribe := fs.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	signerSecret := fs.String("signer-secret", "", "Hex-encoded bearer for SignSubscriptionToken (admin token also works)")
+	environment := fs.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
@@ -113,6 +114,7 @@ func upCmd(args []string) int {
 		gateway.WithAllowTier(tiers...),
 		gateway.WithCluster(cluster),
 		gateway.WithAdminDataDir(dir),
+		gateway.WithEnvironment(*environment),
 	}
 	if *insecureSubscribe {
 		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())

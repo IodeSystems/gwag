@@ -9,6 +9,12 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- Control plane: service manifest fields on `ServiceBinding`: `depends` (field 10, `repeated Dependency {service, lines}`, the provider namespaces and lines a binding calls) and `owner` (field 11, `Owner {team, contact}`). Optional; a Register without them works as before. Stored on the (namespace, version) slot, replicated through the registry KV, and reported in `ServiceInfo.depends` / `ServiceInfo.owner` (fields 6, 7). The latest registration on a slot is the one reported. A `depends` entry with an empty service, no lines, a line that is not `vN` / `unstable`, or a repeated service rejects the Register.
+- `controlclient.Service.Depends` / `.Owner` (`controlclient.Dependency`, `controlclient.Owner`) send the manifest from `SelfRegister`.
+- `WithEnvironment(name)` and `--environment` (`gwag`, `gwag up`, example gateway): a label naming the environment (cluster) the gateway belongs to. Reported in `ListServicesResponse.environment` (field 4) and `gwag services list`. It does not change routing or the NATS cluster name.
+- Admin API `GET /admin/services` (GraphQL `admin.listServices`): `environment` on the response, and `depends: [{service, lines}]` (never null) and `owner: {team, contact}` (omitted when not declared) on each service.
+
 ## v2.11.0 — 2026-11-06
 
 GraphQL error extensions default to gat's `{status, code}` shape (see Migration), proto lists render non-null elements, Connect ingress in the `gwag` binary, gRPC for gat BYO OpenAPI ops, and a sweep of export, validation and ingress fixes.
