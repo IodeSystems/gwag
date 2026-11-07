@@ -21,6 +21,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "codegen.ts"],
+  "include": ["src", "scripts", "codegen.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

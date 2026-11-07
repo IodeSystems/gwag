@@ -55,6 +55,14 @@ function useFormCtx(): FormCtx {
   return v;
 }
 
+/**
+ * Full helper text as a title attribute, for the case where the theme
+ * clamps a long helper to two lines. Only plain strings can be a title.
+ */
+function helperTitle(text: ReactNode): string | undefined {
+  return typeof text === 'string' ? text : undefined;
+}
+
 /** Error text for a field: server error first, then TanStack validation errors. */
 function useFieldError(name: string, field: LooseField): string | undefined {
   const { serverErrors } = useFormCtx();
@@ -123,6 +131,7 @@ export function FormTextField({
               error={!!error}
               helperText={error ?? helperText}
               slotProps={{
+                formHelperText: { title: helperTitle(error ?? helperText) },
                 input: monospace ? { sx: { fontFamily: (t) => t.gwag.mono, fontSize: '0.8125rem' } } : undefined,
               }}
             />
@@ -180,7 +189,7 @@ export function FormSelect({ name, label, options, helperText }: FormSelectProps
                   </MenuItem>
                 ))}
               </Select>
-              {(error ?? helperText) && <FormHelperText>{error ?? helperText}</FormHelperText>}
+              <FormHelperText title={helperTitle(error ?? helperText)}>{error ?? helperText ?? ' '}</FormHelperText>
             </FormControl>
           )}
         </FieldInner>
@@ -217,12 +226,28 @@ export function FormSwitch({ name, label, helperText }: FormSwitchProps) {
                   />
                 }
               />
-              {(error ?? helperText) && <FormHelperText>{error ?? helperText}</FormHelperText>}
+              <FormHelperText title={helperTitle(error ?? helperText)}>{error ?? helperText ?? ' '}</FormHelperText>
             </FormControl>
           )}
         </FieldInner>
       )}
     </form.Field>
+  );
+}
+
+/**
+ * Lay fields out side by side. Everything aligns to the top (labels,
+ * inputs, helper text), so an error under one field moves nothing else.
+ */
+export function FormRow({ children }: { children: ReactNode }) {
+  return (
+    <Stack
+      direction="row"
+      spacing={2}
+      sx={{ alignItems: 'flex-start', '& > *': { flex: 1, minWidth: 0 } }}
+    >
+      {children}
+    </Stack>
   );
 }
 
@@ -346,7 +371,7 @@ function FormBody<TValues extends Record<string, unknown>>({
               }}
             >
               <DialogContent>
-                <Stack spacing={2} sx={{ pt: 1 }}>
+                <Stack spacing={1} sx={{ pt: 1 }}>
                   {description && <DialogContentText>{description}</DialogContentText>}
                   {formErrors.length > 0 && (
                     <Alert severity="error">

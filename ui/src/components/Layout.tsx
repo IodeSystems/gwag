@@ -29,7 +29,7 @@ import NotificationsIcon from '@mui/icons-material/Notifications';
 import { Link } from '@tanstack/react-router';
 import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
 import EventsTray from './EventsTray';
-import { EnvBadge, ThemeToggle, useThemeMode } from '@/ui';
+import { EnvBadge, PresetPicker, ThemeToggle, useThemeMode } from '@/ui';
 import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 
 const drawerWidth = 220;
@@ -84,6 +84,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
               gwag
             </Typography>
             <EnvBadge name={environment} />
+            <PresetPicker compact />
             <ThemeToggle />
             <Button
               color="inherit"
@@ -117,6 +118,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
             gwag
           </Typography>
           <EnvBadge name={environment} />
+          <PresetPicker compact />
           <ThemeToggle />
           <Tooltip title={eventsTooltip}>
             <IconButton color="inherit" onClick={openEvents} aria-label="events">

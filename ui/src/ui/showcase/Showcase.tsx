@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Box,
   Button,
@@ -24,12 +25,14 @@ import {
   EmptyState,
   EnvBadge,
   FormDialog,
+  FormRow,
   FormSelect,
   FormSwitch,
   FormTextField,
   KeyValue,
   Page,
   Panel,
+  PresetPicker,
   ScopedTheme,
   StatusChip,
   ThemeToggle,
@@ -39,8 +42,10 @@ import {
   useToast,
   type Column,
   type Mode,
+  type PresetId,
   type StatusKey,
 } from '@/ui';
+import { PresetGallery } from './Gallery';
 import { GraphQLRequestError } from '@/api/client';
 
 interface Svc {
@@ -93,8 +98,85 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <Typography variant="overline" color="text.secondary">
         {label}
       </Typography>
-      <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', mt: 0.5 }}>
+      <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'flex-start', mt: 0.5 }}>
         {children}
+      </Stack>
+    </Box>
+  );
+}
+
+/**
+ * Layout-stability demo. Three fields in a row; the middle one toggles an
+ * error. "Measure" records offsetTop/offsetHeight of the neighbours and of
+ * the block below before and after the toggle, and reports the largest move.
+ */
+function FormLayoutDemo() {
+  const [err, setErr] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  const snap = () =>
+    Array.from(root.current?.querySelectorAll<HTMLElement>('[data-probe]') ?? []).map((el) => ({
+      name: el.dataset.probe ?? '',
+      top: el.getBoundingClientRect().top,
+      height: el.getBoundingClientRect().height,
+    }));
+
+  const measure = () => {
+    flushSync(() => setErr(false));
+    const before = snap();
+    flushSync(() => setErr(true));
+    const after = snap();
+    const rows = before.map((b, i) => ({
+      name: b.name,
+      dTop: after[i].top - b.top,
+      dHeight: after[i].height - b.height,
+    }));
+    const max = Math.max(...rows.map((r) => Math.max(Math.abs(r.dTop), Math.abs(r.dHeight))));
+    setReport(
+      `max shift ${max.toFixed(2)}px (${rows
+        .map((r) => `${r.name}: top ${r.dTop.toFixed(1)}, height ${r.dHeight.toFixed(1)}`)
+        .join('; ')})`,
+    );
+  };
+
+  return (
+    <Box ref={root}>
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start' }}>
+        <Box sx={{ flex: 1 }} data-probe="left">
+          <TextField fullWidth label="Namespace" defaultValue="greeter" helperText="Lowercase letters and dashes." />
+        </Box>
+        <Box sx={{ flex: 1 }} data-probe="middle">
+          <TextField
+            fullWidth
+            label="Address"
+            defaultValue="greeter-svc:50051"
+            error={err}
+            helperText={err ? 'Unreachable: connection refused after 3 attempts.' : undefined}
+          />
+        </Box>
+        <Box sx={{ flex: 1 }} data-probe="right">
+          <TextField fullWidth select label="Kind" defaultValue="proto">
+            <MenuItem value="proto">gRPC (.proto)</MenuItem>
+            <MenuItem value="openapi">OpenAPI</MenuItem>
+          </TextField>
+        </Box>
+      </Stack>
+      <Typography variant="body2" data-probe="below" sx={{ mt: 1 }}>
+        Block below the row. It must not move when the middle field shows an error.
+      </Typography>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1.5 }}>
+        <Button variant="outlined" size="small" onClick={() => setErr((v) => !v)}>
+          Toggle error
+        </Button>
+        <Button variant="outlined" size="small" onClick={measure}>
+          Measure
+        </Button>
+        {report && (
+          <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
+            {report}
+          </Typography>
+        )}
       </Stack>
     </Box>
   );
@@ -122,7 +204,7 @@ function DialogsDemo() {
         title="Register service"
         description="Submit as-is: the fake server rejects it with extensions.fields (body.name, body.inner.key) and one unmatched path."
         submitLabel="Register"
-        defaultValues={{ name: 'Greeter', inner: { key: '' }, kind: 'proto', enabled: true }}
+        defaultValues={{ name: 'Greeter', inner: { key: '' }, kind: 'proto', owner: '', tier: '', enabled: true }}
         onClose={() => setForm(false)}
         onSubmit={async (v) => {
           await new Promise((r) => setTimeout(r, 600));
@@ -154,6 +236,10 @@ function DialogsDemo() {
             { value: 'graphql', label: 'GraphQL' },
           ]}
         />
+        <FormRow>
+          <FormTextField name="owner" label="Owner" helperText="Team that pages for this service." />
+          <FormTextField name="tier" label="Tier" />
+        </FormRow>
         <FormSwitch name="enabled" label="Enabled" />
       </FormDialog>
       <ConfirmDialog
@@ -297,6 +383,10 @@ function Body() {
         </Stack>
       </Panel>
 
+      <Section title="Form layout stability">
+        <FormLayoutDemo />
+      </Section>
+
       <Section title="Dialogs">
         <DialogsDemo />
       </Section>
@@ -394,25 +484,33 @@ function Body() {
   );
 }
 
-type View = 'current' | 'dark' | 'light' | 'both';
+export type View = 'gallery' | 'current' | 'dark' | 'light' | 'both';
 
-function Framed({ mode, environment }: { mode: Mode; environment: string }) {
+function Framed({
+  mode,
+  preset,
+  environment,
+}: {
+  mode: Mode;
+  preset: PresetId;
+  environment: string;
+}) {
   return (
-    <ScopedTheme mode={mode} environment={environment}>
+    <ScopedTheme mode={mode} preset={preset} environment={environment}>
       <ToastProvider>
         <Box
           sx={(t) => ({
             bgcolor: 'background.default',
             color: 'text.primary',
             p: 3,
-            borderRadius: 2,
+            borderRadius: `${t.gwag.radius.lg}px`,
             border: `1px solid ${t.gwag.tokens.border}`,
-            boxShadow: `inset 0 3px 0 ${t.gwag.envAccent}`,
+            ...t.gwag.accentFrame,
             minWidth: 0,
           })}
         >
           <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-            {mode} theme
+            {preset} / {mode}
           </Typography>
           <Body />
         </Box>
@@ -421,9 +519,17 @@ function Framed({ mode, environment }: { mode: Mode; environment: string }) {
   );
 }
 
-export function Showcase() {
-  const { mode, environment: appEnv } = useThemeMode();
-  const [view, setView] = useState<View>('current');
+export function Showcase({
+  view = 'gallery',
+  onViewChange,
+}: {
+  view?: View;
+  onViewChange?: (v: View) => void;
+}) {
+  const { mode, preset, setPreset, environment: appEnv } = useThemeMode();
+  const [localView, setLocalView] = useState<View>(view);
+  const cur = onViewChange ? view : localView;
+  const setView = onViewChange ?? setLocalView;
   const [env, setEnv] = useState(appEnv);
 
   return (
@@ -432,17 +538,24 @@ export function Showcase() {
         direction="row"
         spacing={2}
         useFlexGap
-        sx={{ mb: 3, flexWrap: 'wrap', alignItems: 'center' }}
+        sx={{ mb: 3, flexWrap: 'wrap', alignItems: 'flex-start' }}
       >
-        <Typography variant="h3">UI kit</Typography>
+        <Typography variant="h3" sx={{ pt: 0.75 }}>
+          UI kit
+        </Typography>
+        <Box sx={{ minWidth: 220 }}>
+          <PresetPicker />
+        </Box>
         <ToggleButtonGroup
           exclusive
           size="small"
-          value={view}
+          value={cur}
           onChange={(_e, v: View | null) => v && setView(v)}
-          aria-label="theme view"
+          aria-label="view"
+          sx={{ mt: '3px' }}
         >
-          <ToggleButton value="current">App theme ({mode})</ToggleButton>
+          <ToggleButton value="gallery">Gallery</ToggleButton>
+          <ToggleButton value="current">Full ({mode})</ToggleButton>
           <ToggleButton value="dark">Dark</ToggleButton>
           <ToggleButton value="light">Light</ToggleButton>
           <ToggleButton value="both">Side by side</ToggleButton>
@@ -460,19 +573,23 @@ export function Showcase() {
             </MenuItem>
           ))}
         </TextField>
-        <ThemeToggle />
+        <Box sx={{ pt: '1px' }}>
+          <ThemeToggle />
+        </Box>
       </Stack>
-      {view === 'both' ? (
+      {cur === 'gallery' ? (
+        <PresetGallery mode={mode} environment={env} selected={preset} onSelect={setPreset} />
+      ) : cur === 'both' ? (
         <Stack direction={{ xs: 'column', xl: 'row' }} spacing={3} useFlexGap>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Framed mode="dark" environment={env} />
+            <Framed mode="dark" preset={preset} environment={env} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Framed mode="light" environment={env} />
+            <Framed mode="light" preset={preset} environment={env} />
           </Box>
         </Stack>
       ) : (
-        <Framed mode={view === 'current' ? mode : view} environment={env} />
+        <Framed mode={cur === 'current' ? mode : cur} preset={preset} environment={env} />
       )}
     </Box>
   );

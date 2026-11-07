@@ -1,7 +1,17 @@
-import { Box, IconButton, Tooltip } from '@mui/material';
+import { useState } from 'react';
+import {
+  Box,
+  IconButton,
+  ListItemText,
+  Menu,
+  MenuItem,
+  TextField,
+  Tooltip,
+} from '@mui/material';
+import PaletteIcon from '@mui/icons-material/Palette';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import { useThemeMode } from './theme';
+import { presetList, useThemeMode, type Mode, type Preset } from './theme';
 
 /** Dark/light switch. Persists via AppThemeProvider. */
 export function ThemeToggle() {
@@ -46,5 +56,89 @@ export function EnvBadge({ name }: { name?: string }) {
     >
       {name ?? 'env'}
     </Box>
+  );
+}
+
+/** Three-colour chip showing a preset's page, surface and primary colours. */
+export function PresetSwatch({ preset, mode }: { preset: Preset; mode: Mode }) {
+  const t = preset.modes[mode];
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      sx={{
+        display: 'inline-flex',
+        flexShrink: 0,
+        height: 16,
+        border: `1px solid ${t.borderStrong}`,
+        borderRadius: `${Math.min(preset.radius.sm, 4)}px`,
+        overflow: 'hidden',
+        '& > span': { width: 10, height: '100%' },
+      }}
+    >
+      <span style={{ background: t.bg }} />
+      <span style={{ background: t.surface }} />
+      <span style={{ background: t.primary }} />
+    </Box>
+  );
+}
+
+/**
+ * Preset picker. `compact` renders a palette icon button with a menu (for
+ * the app bar); otherwise a labelled select (for settings).
+ */
+export function PresetPicker({ compact }: { compact?: boolean }) {
+  const { preset, setPreset, mode } = useThemeMode();
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const current = presetList.find((p) => p.id === preset) ?? presetList[0];
+
+  if (compact) {
+    return (
+      <>
+        <Tooltip title={`Theme preset: ${current.label}`}>
+          <IconButton
+            color="inherit"
+            onClick={(e) => setAnchor(e.currentTarget)}
+            aria-label="theme preset"
+            aria-haspopup="menu"
+          >
+            <PaletteIcon />
+          </IconButton>
+        </Tooltip>
+        <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
+          {presetList.map((p) => (
+            <MenuItem
+              key={p.id}
+              selected={p.id === preset}
+              onClick={() => {
+                setPreset(p.id);
+                setAnchor(null);
+              }}
+              sx={{ gap: 1.5 }}
+            >
+              <PresetSwatch preset={p} mode={mode} />
+              <ListItemText primary={p.label} secondary={p.blurb} slotProps={{ secondary: { sx: { maxWidth: 260, whiteSpace: 'normal' } } }} />
+            </MenuItem>
+          ))}
+        </Menu>
+      </>
+    );
+  }
+  return (
+    <TextField
+      select
+      fullWidth
+      label="Theme preset"
+      value={preset}
+      onChange={(e) => setPreset(e.target.value as Preset['id'])}
+      helperText={current.blurb}
+    >
+      {presetList.map((p) => (
+        <MenuItem key={p.id} value={p.id} sx={{ gap: 1.5 }}>
+          <PresetSwatch preset={p} mode={mode} />
+          {p.label}
+        </MenuItem>
+      ))}
+    </TextField>
   );
 }
