@@ -53,6 +53,11 @@ type registryValue struct {
 	// TimeoutMs is ServiceBinding.timeout_ms: per-call upstream
 	// timeout; 0 → each gateway's own WithUpstreamTimeout default.
 	TimeoutMs uint32 `json:"timeout_ms,omitempty"`
+
+	// Manifest is ServiceBinding.depends / owner. Embedded so the JSON
+	// keys are "depends" / "owner"; both omitted when unset, so values
+	// written by older gateways decode to the zero manifest.
+	serviceManifest
 }
 
 // IsOpenAPI reports whether this entry represents an OpenAPI source.

@@ -87,6 +87,12 @@ type slot struct {
 	// across schema rebuilds (the slot itself owns it, not the IR).
 	deprecationReason string
 
+	// manifest is the declared depends + owner from the latest
+	// control-plane registration on this slot (setSlotManifestLocked).
+	// Zero for slots registered without one. Not part of the schema
+	// hash, so it never causes a swap or a reject.
+	manifest serviceManifest
+
 	// Request-ready IR. Populated by `bakeSlotIRLocked` on slot
 	// creation and re-baked on `Use(...)`. nil only between slot
 	// allocation and the per-kind handle being attached (a transient

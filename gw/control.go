@@ -175,6 +175,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		// 0 → gateway default.
 		timeoutMs uint32
 
+		// Declared depends + owner from the binding; stored on the
+		// slot after join.
+		manifest serviceManifest
+
 		isOpenAPI bool
 		isGraphQL bool
 	}
@@ -200,6 +204,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		}
 		if setForms == 0 {
 			return nil, fmt.Errorf("controlplane: ServiceBinding must set proto_source, openapi_spec, OR graphql_endpoint")
+		}
+		manifest, err := manifestFromBinding(b)
+		if err != nil {
+			return nil, fmt.Errorf("controlplane: %w", err)
 		}
 
 		if hasGraphQL {
@@ -240,6 +248,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				maxConcurrency:            b.GetMaxConcurrency(),
 				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
 				timeoutMs:                 b.GetTimeoutMs(),
+				manifest:                  manifest,
 				isGraphQL:                 true,
 			})
 			continue
@@ -270,6 +279,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				maxConcurrency:            b.GetMaxConcurrency(),
 				maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
 				timeoutMs:                 b.GetTimeoutMs(),
+				manifest:                  manifest,
 				isOpenAPI:                 true,
 			})
 			continue
@@ -323,6 +333,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			maxConcurrency:            b.GetMaxConcurrency(),
 			maxConcurrencyPerInstance: b.GetMaxConcurrencyPerInstance(),
 			timeoutMs:                 b.GetTimeoutMs(),
+			manifest:                  manifest,
 		})
 	}
 
@@ -355,6 +366,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				MaxConcurrency:            p.maxConcurrency,
 				MaxConcurrencyPerInstance: p.maxConcurrencyPerInstance,
 				TimeoutMs:                 p.timeoutMs,
+				serviceManifest:           p.manifest,
 			}
 			switch {
 			case p.isGraphQL:
@@ -445,6 +457,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				rollback()
 				return nil, err
 			}
+			cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
 			continue
 		}
 		if p.isOpenAPI {
@@ -455,6 +468,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				rollback()
 				return nil, err
 			}
+			cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
 			continue
 		}
 		err := cp.gw.joinPoolLocked(poolEntry{
@@ -473,6 +487,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			rollback()
 			return nil, err
 		}
+		cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
 	}
 
 	reg := &registration{
@@ -852,7 +867,8 @@ func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStab
 func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRequest) (*cpv1.ListServicesResponse, error) {
 	cp.gw.mu.Lock()
 	out := &cpv1.ListServicesResponse{
-		Services: make([]*cpv1.ServiceInfo, 0, len(cp.gw.slots)),
+		Services:    make([]*cpv1.ServiceInfo, 0, len(cp.gw.slots)),
+		Environment: cp.gw.cfg.environment,
 	}
 	for k, s := range cp.gw.slots {
 		if cp.gw.internal[k.namespace] {
@@ -886,6 +902,8 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			HashHex:                 hex.EncodeToString(s.hash[:]),
 			ReplicaCount:            uint32(replicaCount),
 			ManualDeprecationReason: s.deprecationReason,
+			Depends:                 s.manifest.protoDepends(),
+			Owner:                   s.manifest.protoOwner(),
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {

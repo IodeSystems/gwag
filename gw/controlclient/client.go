@@ -117,6 +117,53 @@ type Service struct {
 	// replica individually. 0 → unbounded per replica (only the
 	// service-level cap applies).
 	MaxConcurrencyPerInstance uint32
+
+	// Depends lists the services this binding calls through the
+	// gateway, each with the lines it ships clients for. Part of the
+	// service manifest; the gateway stores it and reports it in
+	// ListServices / /admin/services. Optional.
+	Depends []Dependency
+
+	// Owner names the team that owns this binding. Part of the
+	// service manifest. Optional.
+	Owner *Owner
+}
+
+// Dependency names one provider service (its gateway namespace) and
+// the lines the caller accepts, e.g. {Service: "library", Lines:
+// []string{"v1", "v2"}}. Lines must be "vN" or "unstable"; at least
+// one is required.
+//
+// Stability: stable
+type Dependency struct {
+	Service string
+	Lines   []string
+}
+
+// Owner is the team responsible for a service binding and how to
+// reach it (email, chat channel, URL — free-form).
+//
+// Stability: stable
+type Owner struct {
+	Team    string
+	Contact string
+}
+
+// manifestProto converts the Service's manifest fields to the wire
+// shape.
+func (s Service) manifestProto() ([]*cpv1.Dependency, *cpv1.Owner) {
+	var deps []*cpv1.Dependency
+	for _, d := range s.Depends {
+		deps = append(deps, &cpv1.Dependency{
+			Service: d.Service,
+			Lines:   append([]string(nil), d.Lines...),
+		})
+	}
+	var owner *cpv1.Owner
+	if s.Owner != nil {
+		owner = &cpv1.Owner{Team: s.Owner.Team, Contact: s.Owner.Contact}
+	}
+	return deps, owner
 }
 
 // Options configures a SelfRegister call. GatewayAddr, ServiceAddr,
@@ -292,6 +339,7 @@ func (r *Registration) register(ctx context.Context) error {
 		if set == 0 {
 			return fmt.Errorf("service %q: must set ProtoSource (or ProtoFS), OpenAPISpec, or GraphQLEndpoint", s.Namespace)
 		}
+		depends, owner := s.manifestProto()
 		if hasGraphQL {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
 				Namespace:                 s.Namespace,
@@ -299,6 +347,8 @@ func (r *Registration) register(ctx context.Context) error {
 				GraphqlEndpoint:           s.GraphQLEndpoint,
 				MaxConcurrency:            s.MaxConcurrency,
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
+				Depends:                   depends,
+				Owner:                     owner,
 			})
 			continue
 		}
@@ -309,6 +359,8 @@ func (r *Registration) register(ctx context.Context) error {
 				OpenapiSpec:               s.OpenAPISpec,
 				MaxConcurrency:            s.MaxConcurrency,
 				MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
+				Depends:                   depends,
+				Owner:                     owner,
 			})
 			continue
 		}
@@ -319,6 +371,8 @@ func (r *Registration) register(ctx context.Context) error {
 			ProtoImports:              protoImports,
 			MaxConcurrency:            s.MaxConcurrency,
 			MaxConcurrencyPerInstance: s.MaxConcurrencyPerInstance,
+			Depends:                   depends,
+			Owner:                     owner,
 		})
 	}
 

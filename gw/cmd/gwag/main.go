@@ -218,6 +218,7 @@ func runGateway() {
 	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists (and reloads) its boot admin token; empty = in-memory only. Set a writable path so 'gwag sign --gateway --bearer $(cat <dir>/admin-token)' works against this gateway instead of local --secret signing.")
+	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
@@ -240,7 +241,7 @@ func runGateway() {
 		fmt.Fprintf(os.Stderr, "--allow-tier: %v\n", err)
 		os.Exit(2)
 	}
-	gwOpts := []gateway.Option{gateway.WithAllowTier(tiers...)}
+	gwOpts := []gateway.Option{gateway.WithAllowTier(tiers...), gateway.WithEnvironment(*environment)}
 	if *adminDataDir != "" {
 		gwOpts = append(gwOpts, gateway.WithAdminDataDir(*adminDataDir))
 	}
@@ -363,6 +364,9 @@ func servicesCmd(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ListServices: %v\n", err)
 		return 1
+	}
+	if env := resp.GetEnvironment(); env != "" {
+		fmt.Printf("# environment: %s\n", env)
 	}
 	if len(resp.GetServices()) == 0 {
 		fmt.Println("(no services registered)")

@@ -82,6 +82,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		// regen. Lookups by (namespace, version).
 		rej := cp.gw.rejectedJoinsSnapshot()
 		out := &servicesOut{}
+		out.Body.Environment = resp.GetEnvironment()
 		out.Body.Services = []serviceInfo{}
 		for _, s := range resp.GetServices() {
 			info := serviceInfo{
@@ -90,6 +91,8 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				HashHex:                 s.GetHashHex(),
 				ReplicaCount:            s.GetReplicaCount(),
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
+				Depends:                 adminDepends(s.GetDepends()),
+				Owner:                   adminOwner(s.GetOwner()),
 			}
 			if r := rej[poolKey{namespace: s.GetNamespace(), version: s.GetVersion()}]; r != nil {
 				info.RejectedJoins = &rejectedJoinInfo{
@@ -856,6 +859,37 @@ type serviceInfo struct {
 	// match the existing vN occupant. Helps operators spot stale
 	// JetStream KV state vs. binary-version drift without profiling.
 	RejectedJoins *rejectedJoinInfo `json:"rejectedJoins,omitempty"`
+	// Depends / Owner are the manifest of the latest registration on
+	// this (namespace, version). Depends is never nil (empty = no
+	// declared dependencies); Owner is omitted when not declared.
+	Depends []dependencyInfo `json:"depends"`
+	Owner   *ownerInfo       `json:"owner,omitempty"`
+}
+
+type dependencyInfo struct {
+	Service string   `json:"service"`
+	Lines   []string `json:"lines"`
+}
+
+type ownerInfo struct {
+	Team    string `json:"team"`
+	Contact string `json:"contact"`
+}
+
+func adminDepends(in []*cpv1.Dependency) []dependencyInfo {
+	out := make([]dependencyInfo, 0, len(in)) // never nil — JSON null breaks NonNull
+	for _, d := range in {
+		lines := append([]string{}, d.GetLines()...)
+		out = append(out, dependencyInfo{Service: d.GetService(), Lines: lines})
+	}
+	return out
+}
+
+func adminOwner(o *cpv1.Owner) *ownerInfo {
+	if o == nil {
+		return nil
+	}
+	return &ownerInfo{Team: o.GetTeam(), Contact: o.GetContact()}
 }
 
 // rejectedJoinInfo is the admin-side projection of
@@ -882,8 +916,10 @@ type stableVNEntry struct {
 
 type servicesOut struct {
 	Body struct {
-		Services []serviceInfo   `json:"services"`
-		StableVN []stableVNEntry `json:"stableVN"`
+		// Environment is the gateway's WithEnvironment name; "" = unset.
+		Environment string          `json:"environment"`
+		Services    []serviceInfo   `json:"services"`
+		StableVN    []stableVNEntry `json:"stableVN"`
 	}
 }
 

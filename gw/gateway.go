@@ -268,6 +268,9 @@ type config struct {
 	ejectAfter      int
 	ejectFor        time.Duration
 
+	// environment is the WithEnvironment label ("" = unset).
+	environment string
+
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
@@ -838,6 +841,18 @@ func WithTracer(tp oteltrace.TracerProvider) Option {
 // Stability: stable
 func WithCluster(c *Cluster) Option {
 	return func(cfg *config) { cfg.cluster = c }
+}
+
+// WithEnvironment names the environment this gateway belongs to
+// (e.g. "dev", "staging", "prod") — one environment is one gateway
+// cluster, so every node of a cluster should get the same name. The
+// name is a label for operators and tools: ListServices and the admin
+// /admin/services route report it. It does not change routing or the
+// NATS cluster name (ClusterOptions.ClusterName does that).
+//
+// Stability: stable
+func WithEnvironment(name string) Option {
+	return func(cfg *config) { cfg.environment = name }
 }
 
 // WithTLS configures mTLS for outbound gRPC dials made by the

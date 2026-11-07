@@ -12,6 +12,10 @@ changes on MINOR, drops on MAJOR.
 ### Added
 - gat: a failed huma input check (constraint or Resolver) reaches GraphQL with `extensions.fields: [{path, message}]` next to `status` / `code`, one entry per huma `ErrorDetail`. `path` is in GraphQL argument terms: `body.name` (the body arg is `body`), a bare `limit` for a query / path / header / cookie param, list indexes as dot segments (`body.items.1.name`). Errors without details carry no `fields`.
 - Admin op `usageEdges` (`GET /admin/services/usage?window=1m|1h|24h&namespace=&version=`): active dependencies by method for every service. One edge per (caller, namespace, version, method) with count, okCount and lastSeenUnixMs, plus a per-(namespace, version) rollup that lists registered services with no traffic. Per-node, in-memory; caller identity comes from `WithCallerIDExtractor` / `WithCallerHeaders`.
+- Control plane: service manifest fields on `ServiceBinding`: `depends` (field 10, `repeated Dependency {service, lines}`, the provider namespaces and lines a binding calls) and `owner` (field 11, `Owner {team, contact}`). Optional; a Register without them works as before. Stored on the (namespace, version) slot, replicated through the registry KV, and reported in `ServiceInfo.depends` / `ServiceInfo.owner` (fields 6, 7). The latest registration on a slot is the one reported. A `depends` entry with an empty service, no lines, a line that is not `vN` / `unstable`, or a repeated service rejects the Register.
+- `controlclient.Service.Depends` / `.Owner` (`controlclient.Dependency`, `controlclient.Owner`) send the manifest from `SelfRegister`.
+- `WithEnvironment(name)` and `--environment` (`gwag`, `gwag up`, example gateway): a label naming the environment (cluster) the gateway belongs to. Reported in `ListServicesResponse.environment` (field 4) and `gwag services list`. It does not change routing or the NATS cluster name.
+- Admin API `GET /admin/services` (GraphQL `admin.listServices`): `environment` on the response, and `depends: [{service, lines}]` (never null) and `owner: {team, contact}` (omitted when not declared) on each service.
 
 ## v2.11.0 — 2026-11-06
 
