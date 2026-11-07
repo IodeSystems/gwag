@@ -8,6 +8,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -339,8 +340,9 @@ func (m *prometheusMetrics) setPubSubBusDegraded(degraded bool) {
 }
 
 // classifyError maps an error to a stable label value. gRPC status
-// codes win when present; otherwise we fall back to gateway-internal
-// rejection codes; otherwise "internal".
+// codes win when present; otherwise gateway Reject codes map to the
+// gRPC code of the same name; otherwise "Internal". Every value is the
+// grpc codes.Code.String() form (CamelCase), or "ok".
 func classifyError(err error) string {
 	if err == nil {
 		return "ok"
@@ -350,9 +352,30 @@ func classifyError(err error) string {
 	}
 	var rej *rejection
 	if errors.As(err, &rej) {
-		return rej.Code.String()
+		return rejectionCodeLabel(rej.Code)
 	}
-	return "internal"
+	return codes.Internal.String()
+}
+
+// rejectionCodeLabel maps a gateway Code to the grpc codes.Code string
+// so Reject errors share label values with gRPC status errors.
+func rejectionCodeLabel(c Code) string {
+	switch c {
+	case CodeUnauthenticated:
+		return codes.Unauthenticated.String()
+	case CodePermissionDenied:
+		return codes.PermissionDenied.String()
+	case CodeResourceExhausted:
+		return codes.ResourceExhausted.String()
+	case CodeInvalidArgument:
+		return codes.InvalidArgument.String()
+	case CodeNotFound:
+		return codes.NotFound.String()
+	case CodeInternal:
+		return codes.Internal.String()
+	default:
+		return codes.Unknown.String()
+	}
 }
 
 // MetricsHandler returns an http.Handler serving the Prometheus

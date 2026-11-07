@@ -164,7 +164,7 @@ Admin auth denials are already counted in `admin_auth_total`
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `dispatch_duration_seconds` | histogram | `namespace`, `version`, `method`, `code`, `caller` | One upstream dispatch. `code`: `ok`, the gRPC status string, or a `Reject` code. `caller` comes from `WithCallerIDExtractor` / `WithCallerHeaders`, default `unknown`, capped by `WithCallerIDMetricsTopK` (overflow is `__other__`). |
+| `dispatch_duration_seconds` | histogram | `namespace`, `version`, `method`, `code`, `caller` | One upstream dispatch. `code`: `ok` or the gRPC code name (`Internal`, `DeadlineExceeded`), the same for every upstream kind. A `Reject` code uses the gRPC name of the same meaning (`Unauthenticated`, `PermissionDenied`, `ResourceExhausted`, `InvalidArgument`, `NotFound`, `Internal`). `caller` comes from `WithCallerIDExtractor` / `WithCallerHeaders`, default `unknown`, capped by `WithCallerIDMetricsTopK` (overflow is `__other__`). |
 | `pool_queue_dwell_seconds` | histogram | `namespace`, `version`, `method`, `kind` | Time waiting for an in-flight slot. `kind`: `unary`, `stream`, `unary_instance`. |
 | `pool_backoff_total` | counter | `namespace`, `version`, `method`, `kind`, `reason` | Dispatches refused by backpressure (`reason=wait_timeout`). |
 | `pool_queue_depth` | gauge | `namespace`, `version`, `kind` | Dispatches waiting for a pool slot. |

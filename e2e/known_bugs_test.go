@@ -56,14 +56,11 @@ func TestKnownBugSelectionNotApplied(t *testing.T) {
 	}
 }
 
-// TestKnownBugCodeLabelCase: the same upstream failure (an internal
-// error) gets code="Internal" on a proto dispatch but code="INTERNAL"
-// on OpenAPI and downstream-GraphQL dispatches (classifyError uses
-// grpc codes.Code.String for one and the gateway's own Code.String
-// for the other), so one PromQL selector cannot count errors across
-// kinds.
-func TestKnownBugCodeLabelCase(t *testing.T) {
-	knownBug(t, "dispatch code label is Internal for proto, INTERNAL for OpenAPI/GraphQL")
+// TestDispatchCodeLabelCanonical: the same upstream failure (an
+// internal error) carries one code label, "Internal" (the grpc
+// codes.Code.String form), on proto, OpenAPI and downstream-GraphQL
+// dispatches, so one PromQL selector counts errors across kinds.
+func TestDispatchCodeLabelCanonical(t *testing.T) {
 	env := harness.New(t)
 	gw := env.Gateway(harness.GatewayOpts{})
 	fixtures := []*harness.Fixture{
@@ -94,7 +91,7 @@ func TestKnownBugCodeLabelCase(t *testing.T) {
 			codes[s.Labels["code"]] = true
 		}
 	}
-	if len(codes) != 1 {
-		t.Errorf("one failure class, %d code labels: %v\n%s", len(codes), codes, after.Describe(dispatchCount, nil))
+	if len(codes) != 1 || !codes["Internal"] {
+		t.Errorf("one failure class, want only code=Internal, got %v\n%s", codes, after.Describe(dispatchCount, nil))
 	}
 }

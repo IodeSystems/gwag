@@ -139,6 +139,6 @@ Proto packages are `fixture.<ns>.<line>`; OpenAPI paths are
 
 - Connect (`/api/connect`) takes the caller id from gRPC metadata, so a
   Connect client sends `Caller-Id`, not `X-Caller-Id`.
-- Dispatch metric `code` label: `ok`, or the gRPC code name for proto
-  (`Internal`) but upper case for OpenAPI and GraphQL (`INTERNAL`). See
-  `TestKnownBugCodeLabelCase`.
+- Dispatch metric `code` label: `ok`, or the gRPC code name
+  (`Internal`, `DeadlineExceeded`) for every kind. See
+  `TestDispatchCodeLabelCanonical`.
