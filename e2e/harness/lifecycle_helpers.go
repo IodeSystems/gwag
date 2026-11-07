@@ -93,16 +93,14 @@ func (a *Admin) WaitInstanceAny(namespace, version, id string, timeout time.Dura
 	return state
 }
 
-// SchemaSDL fetches the GraphQL SDL (GET /api/schema/graphql) with the
-// admin token: every service. service, when set, is a selector such as
-// "orders" or "orders:v1".
+// SchemaSDL fetches the public GraphQL SDL (GET /api/schema/graphql).
+// service, when set, is a selector such as "orders" or "orders:v1".
 func (g *Gateway) SchemaSDL(ctx context.Context, service string) (string, error) {
 	u := g.SchemaURL(service)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("X-Gwag-Token", g.Token())
 	resp, err := g.http.Do(req)
 	if err != nil {
 		return "", err

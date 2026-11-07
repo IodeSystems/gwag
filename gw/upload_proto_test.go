@@ -150,7 +150,7 @@ func registerUploadGateway(t *testing.T, fix *uploadProtoFixture, opts ...Option
 // over HTTP — same view a codegen tool gets.
 func fetchSDL(t *testing.T, gw *Gateway) string {
 	t.Helper()
-	srv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	srv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(srv.Close)
 	resp, err := http.Get(srv.URL + "/schema/graphql")
 	if err != nil {
