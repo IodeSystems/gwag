@@ -27,9 +27,12 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
+	"os/signal"
 	"path"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -214,6 +217,29 @@ type Options struct {
 	// sets it. Empty defeats the lint, so don't paper over a CI bug
 	// by clearing the field — unset means "trunk", set means "release".
 	BuildTag string
+
+	// DrainOnSIGTERM makes SelfRegister catch SIGTERM. On the signal
+	// the Registration asks the gateway to drain it (Drain), waits for
+	// safe_to_stop (at most DrainTimeout), deregisters (Close), then
+	// calls OnDrained, or when OnDrained is nil re-raises SIGTERM with
+	// the default handler so the process exits as it would have.
+	//
+	// Off by default: catching SIGTERM changes the process's signal
+	// handling. A service with its own SIGTERM handler leaves this off
+	// and calls Drain from that handler instead.
+	DrainOnSIGTERM bool
+
+	// DrainTimeout bounds the wait for safe_to_stop on SIGTERM. 0 →
+	// 60s. On timeout the Registration deregisters anyway.
+	DrainTimeout time.Duration
+
+	// DrainPollInterval is how often Drain polls the gateway. 0 →
+	// 500ms.
+	DrainPollInterval time.Duration
+
+	// OnDrained runs after the SIGTERM drain and deregister. nil →
+	// re-raise SIGTERM.
+	OnDrained func()
 }
 
 // Registration is the live handle returned by SelfRegister. Close
@@ -231,6 +257,10 @@ type Registration struct {
 	done   chan struct{}
 	logger func(string, ...any)
 	opts   Options
+
+	closeOnce sync.Once
+	closeErr  error
+	sigStop   chan struct{}
 }
 
 // SelfRegister registers with the gateway control plane and starts a
@@ -292,8 +322,89 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 		}
 	}
 	go r.heartbeatLoop(hi)
+	if opts.DrainOnSIGTERM {
+		r.watchSIGTERM()
+	}
 
 	return r, nil
+}
+
+// watchSIGTERM runs the DrainOnSIGTERM path.
+func (r *Registration) watchSIGTERM() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGTERM)
+	r.sigStop = make(chan struct{})
+	go func() {
+		defer signal.Stop(ch)
+		select {
+		case <-r.sigStop:
+			return
+		case <-ch:
+		}
+		timeout := r.opts.DrainTimeout
+		if timeout <= 0 {
+			timeout = 60 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		if err := r.Drain(ctx); err != nil {
+			r.logger("controlclient: drain on SIGTERM: %v; deregistering anyway", err)
+		}
+		cancel()
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = r.Close(cctx)
+		ccancel()
+		if r.opts.OnDrained != nil {
+			r.opts.OnDrained()
+			return
+		}
+		signal.Stop(ch)
+		signal.Reset(syscall.SIGTERM)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+}
+
+// Drain asks the gateway to drain this registration: stop routing new
+// requests to it, wait for requests in flight to finish, and hold
+// while a dependent would be left without a covering instance. Drain
+// polls until the gateway reports safe_to_stop, or returns ctx's
+// error with the last state. The registration stays registered (and
+// heartbeating); call Close after Drain to deregister.
+//
+// Stability: stable
+func (r *Registration) Drain(ctx context.Context) error {
+	interval := r.opts.DrainPollInterval
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	var last *cpv1.DrainInstanceResponse
+	logged := cpv1.DrainState_DRAIN_STATE_UNSPECIFIED
+	for {
+		r.mu.Lock()
+		id := r.id
+		r.mu.Unlock()
+		resp, err := r.client.DrainInstance(ctx, &cpv1.DrainInstanceRequest{Instance: id})
+		switch {
+		case err != nil && ctx.Err() == nil:
+			r.logger("controlclient: drain: %v", err)
+		case err == nil:
+			last = resp
+			if resp.GetState() == cpv1.DrainState_DRAIN_STATE_SAFE_TO_STOP {
+				return nil
+			}
+			if resp.GetState() != logged {
+				logged = resp.GetState()
+				r.logger("controlclient: drain: %s inflight=%d %s", resp.GetState(), resp.GetInflight(), strings.Join(resp.GetReasons(), "; "))
+			}
+		}
+		select {
+		case <-ctx.Done():
+			if last != nil {
+				return fmt.Errorf("drain: %w (state %s, reasons %v)", ctx.Err(), last.GetState(), last.GetReasons())
+			}
+			return fmt.Errorf("drain: %w", ctx.Err())
+		case <-time.After(interval):
+		}
+	}
 }
 
 func (r *Registration) register(ctx context.Context) error {
@@ -418,25 +529,28 @@ func (r *Registration) heartbeatLoop(interval time.Duration) {
 }
 
 // Close stops the heartbeat and gracefully deregisters. Safe to call
-// once. ctx is used only for the Deregister call.
+// more than once (and concurrently with the DrainOnSIGTERM path);
+// later calls return the first call's result. ctx is used only for
+// the Deregister call.
 //
 // Stability: stable
 func (r *Registration) Close(ctx context.Context) error {
-	select {
-	case <-r.stop:
-		return nil
-	default:
-	}
-	close(r.stop)
-	<-r.done
+	r.closeOnce.Do(func() {
+		if r.sigStop != nil {
+			close(r.sigStop)
+		}
+		close(r.stop)
+		<-r.done
 
-	r.mu.Lock()
-	id := r.id
-	r.mu.Unlock()
-	if id != "" {
-		_, _ = r.client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
-	}
-	return r.conn.Close()
+		r.mu.Lock()
+		id := r.id
+		r.mu.Unlock()
+		if id != "" {
+			_, _ = r.client.Deregister(ctx, &cpv1.DeregisterRequest{RegistrationId: id})
+		}
+		r.closeErr = r.conn.Close()
+	})
+	return r.closeErr
 }
 
 // resolveProtoFS walks fsys, returns the bytes of `entry` as the
