@@ -1,0 +1,77 @@
+package gateway
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// Per-request cost of the gateway alone, by upstream kind. The
+// upstream is a canned http.RoundTripper, so no socket and no backend
+// work lands in the numbers: allocs/op is what gwag itself allocates
+// from GraphQL ingress to response bytes. Allocation counts do not
+// depend on host load, so these numbers are usable on a busy box.
+
+type cannedRT struct{ body func(req []byte) []byte }
+
+func (c cannedRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	var req []byte
+	if r.Body != nil {
+		req, _ = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(c.body(req))),
+		Request:    r,
+	}, nil
+}
+
+func benchIngress(b *testing.B, gw *Gateway, query string, want string) {
+	h := gw.Handler()
+	body := []byte(`{"query":` + jsonQuote(query) + `}`)
+	run := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := run(); !strings.Contains(rr.Body.String(), want) {
+		b.Fatalf("response %s, want %s", rr.Body.String(), want)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		run()
+	}
+}
+
+func BenchmarkIngressAlloc_OpenAPI(b *testing.B) {
+	client := &http.Client{Transport: cannedRT{func([]byte) []byte { return []byte(`{"id":"x","name":"thing"}`) }}}
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	if err := gw.AddOpenAPIBytes([]byte(minimalOpenAPISpec), To("http://upstream.invalid"), As("test"), OpenAPIClient(client)); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, `{ test { getThing(id:"x") { id name } } }`, `"name":"thing"`)
+}
+
+func BenchmarkIngressAlloc_GraphQL(b *testing.B) {
+	client := &http.Client{Transport: cannedRT{func(req []byte) []byte {
+		if bytes.Contains(req, []byte("IntrospectionQuery")) {
+			return []byte(petsIntrospection)
+		}
+		return []byte(`{"data":{"user":{"id":"x","name":"thing"}}}`)
+	}}}
+	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("ignored")))
+	b.Cleanup(gw.Close)
+	if err := gw.AddGraphQL("http://upstream.invalid/graphql", As("pets"), OpenAPIClient(client)); err != nil {
+		b.Fatal(err)
+	}
+	benchIngress(b, gw, `{ pets { user(id:"x") { id name } } }`, `"name":"thing"`)
+}

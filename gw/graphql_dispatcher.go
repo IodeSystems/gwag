@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/IodeSystems/graphql-go/v2"
@@ -74,6 +75,79 @@ type graphQLDispatcher struct {
 
 	canonicalQuery    string
 	canonicalArgNames []string
+
+	printed forwardPrintCache
+}
+
+// forwardQuery prints the upstream query for this field. Printing
+// walks the AST through graphql-go's visitor, which was ~80% of the
+// allocations on a forwarded request. The plan cache keeps parsed
+// documents, so the same query reaches here with the same AST nodes:
+// the printed text is cached by (field, operation) identity.
+func (d *graphQLDispatcher) forwardQuery(info *graphql.ResolveInfo) (string, error) {
+	key := forwardKey{field: info.FieldASTs[0], op: info.Operation}
+	if q, ok := d.printed.get(key); ok {
+		return q, nil
+	}
+	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
+	opType := ast.OperationTypeQuery
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		if op.Operation == ast.OperationTypeMutation {
+			opType = ast.OperationTypeMutation
+		}
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           opType,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{rewritten},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	q, ok := raw.(string)
+	if !ok {
+		return "", Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw))
+	}
+	d.printed.put(key, q)
+	return q, nil
+}
+
+// forwardKey identifies one field in one parsed operation. The
+// operation is part of the key because a fragment's field node is
+// shared by every operation that spreads it, with different variable
+// definitions.
+type forwardKey struct {
+	field *ast.Field
+	op    ast.Node
+}
+
+// forwardPrintCacheMax bounds the cache. Keys hold AST nodes alive
+// after the plan cache evicts their document, so the cache empties
+// when full; with the plan cache off, every request is a miss.
+const forwardPrintCacheMax = 256
+
+type forwardPrintCache struct {
+	mu sync.RWMutex
+	m  map[forwardKey]string
+}
+
+func (c *forwardPrintCache) get(k forwardKey) (string, bool) {
+	c.mu.RLock()
+	q, ok := c.m[k]
+	c.mu.RUnlock()
+	return q, ok
+}
+
+func (c *forwardPrintCache) put(k forwardKey, q string) {
+	c.mu.Lock()
+	if c.m == nil || len(c.m) >= forwardPrintCacheMax {
+		c.m = make(map[forwardKey]string)
+	}
+	c.m[k] = q
+	c.mu.Unlock()
 }
 
 func newGraphQLDispatcher(m *graphQLMirror, op *ir.Operation, opLabel string, metrics Metrics, isGrouped bool) *graphQLDispatcher {
@@ -119,27 +193,9 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	var printed string
 	var vars map[string]any
 	if info != nil && len(info.FieldASTs) > 0 {
-		rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
-		opType := ast.OperationTypeQuery
-		var varDefs []*ast.VariableDefinition
-		if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-			if op.Operation == ast.OperationTypeMutation {
-				opType = ast.OperationTypeMutation
-			}
-			varDefs = op.VariableDefinitions
-		}
-		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-			Operation:           opType,
-			VariableDefinitions: varDefs,
-			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-				Selections: []ast.Selection{rewritten},
-			}),
-		})
-		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-		raw := printer.Print(doc)
-		got, ok := raw.(string)
-		if !ok {
-			return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+		got, err := d.forwardQuery(info)
+		if err != nil {
+			return nil, record(err)
 		}
 		printed = got
 		vars = info.VariableValues
@@ -217,27 +273,9 @@ func (d *graphQLDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	var printed string
 	var vars map[string]any
 	if info != nil && len(info.FieldASTs) > 0 {
-		rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
-		opType := ast.OperationTypeQuery
-		var varDefs []*ast.VariableDefinition
-		if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-			if op.Operation == ast.OperationTypeMutation {
-				opType = ast.OperationTypeMutation
-			}
-			varDefs = op.VariableDefinitions
-		}
-		opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-			Operation:           opType,
-			VariableDefinitions: varDefs,
-			SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-				Selections: []ast.Selection{rewritten},
-			}),
-		})
-		doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-		raw := printer.Print(doc)
-		got, ok := raw.(string)
-		if !ok {
-			return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+		got, err := d.forwardQuery(info)
+		if err != nil {
+			return dst, record(err)
 		}
 		printed = got
 		vars = info.VariableValues
