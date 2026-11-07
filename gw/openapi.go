@@ -730,8 +730,12 @@ func dispatchOpenAPIRaw(
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()), err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, rejectUpstreamStatus(resp.StatusCode,
+		rej := rejectUpstreamStatus(resp.StatusCode,
 			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
+		if resp.StatusCode < 500 {
+			rej.fields = upstreamFieldErrors(respBytes)
+		}
+		return nil, rej
 	}
 	return respBytes, nil
 }

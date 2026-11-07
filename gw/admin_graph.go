@@ -35,6 +35,13 @@ import (
 //   - anything else (incl. "unknown") → an external caller,
 //     consumerNamespace "".
 //
+// External dependents (external_dependents.go): each declaration
+// that has not expired adds one desired edge per pinned service, with
+// consumerKind "external", consumerNamespace = its id and
+// consumerVersion "". They count in the sunset rule like any other
+// dependent. Every declaration, expired ones included, is listed in
+// externalDependents.
+//
 // Sunset-able (design): provider line L may go when every dependent
 // that accepts L also accepts another line with a ready instance, and
 // L had no traffic in the window. Uses the same ready set as the start
@@ -77,6 +84,7 @@ type graphNode struct {
 }
 
 type graphDesiredEdge struct {
+	ConsumerKind      string   `json:"consumerKind" enum:"service,external" doc:"service: a registered line; external: a declared external dependent (consumerNamespace is its id, consumerVersion is empty)."`
 	ConsumerNamespace string   `json:"consumerNamespace"`
 	ConsumerVersion   string   `json:"consumerVersion"`
 	Provider          string   `json:"provider" doc:"Provider namespace."`
@@ -113,6 +121,8 @@ type dependencyGraphOut struct {
 		Nodes        []graphNode        `json:"nodes"`
 		DesiredEdges []graphDesiredEdge `json:"desiredEdges"`
 		ActiveEdges  []graphActiveEdge  `json:"activeEdges"`
+
+		ExternalDependents []externalDependentInfo `json:"externalDependents" doc:"Declared external dependents, expired ones included (expired ones add no edges)."`
 	}
 }
 
@@ -156,6 +166,8 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 	out.Body.Nodes = []graphNode{}
 	out.Body.DesiredEdges = []graphDesiredEdge{}
 	out.Body.ActiveEdges = []graphActiveEdge{}
+	out.Body.ExternalDependents = []externalDependentInfo{}
+	now := nowFunc()
 
 	// Drain state per registration.
 	drains := map[string]instanceDrainStatus{}
@@ -166,19 +178,25 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 	nodes := map[poolKey]*graphNode{}
 	namespaces := map[string]bool{}
 	type edgeKey struct {
+		external bool
 		consumer poolKey
 		provider string
 		lines    string
 	}
 	edges := map[edgeKey]*graphDesiredEdge{}
 	var edgeOrder []edgeKey
-	addEdge := func(consumer poolKey, provider string, lines []string, fromInstance bool) {
+	addEdge := func(consumer poolKey, provider string, lines []string, fromInstance, external bool) {
 		sorted := append([]string(nil), lines...)
 		sort.Strings(sorted)
-		k := edgeKey{consumer, provider, strings.Join(sorted, ",")}
+		k := edgeKey{external, consumer, provider, strings.Join(sorted, ",")}
 		e := edges[k]
 		if e == nil {
+			kind := "service"
+			if external {
+				kind = "external"
+			}
 			e = &graphDesiredEdge{
+				ConsumerKind:      kind,
 				ConsumerNamespace: consumer.namespace,
 				ConsumerVersion:   consumer.version,
 				Provider:          provider,
@@ -231,13 +249,26 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			}
 			n.Instances = append(n.Instances, gi)
 			for _, d := range inst.GetDepends() {
-				addEdge(k, d.GetService(), d.GetLines(), true)
+				addEdge(k, d.GetService(), d.GetLines(), true, false)
 			}
 		}
 		if len(s.GetInstances()) == 0 {
 			for _, d := range s.GetDepends() {
-				addEdge(k, d.GetService(), d.GetLines(), false)
+				addEdge(k, d.GetService(), d.GetLines(), false, false)
 			}
+		}
+	}
+
+	// External dependents: edges for the ones that count now.
+	extLabel := map[string]string{}
+	for _, x := range g.externals.all() {
+		out.Body.ExternalDependents = append(out.Body.ExternalDependents, adminExternalDependent(x, now))
+		if x.expired(now) {
+			continue
+		}
+		extLabel[x.ID] = x.label()
+		for _, d := range x.Depends {
+			addEdge(poolKey{namespace: x.ID}, d.Service, d.Lines, false, true)
 		}
 	}
 
@@ -322,7 +353,11 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 				}
 			}
 			if !covered {
-				reasons = append(reasons, fmt.Sprintf("%s/%s accepts %s [%s]: no other ready line", e.ConsumerNamespace, e.ConsumerVersion, e.Provider, strings.Join(e.Lines, ", ")))
+				who := e.ConsumerNamespace + "/" + e.ConsumerVersion
+				if ek.external {
+					who = extLabel[e.ConsumerNamespace]
+				}
+				reasons = append(reasons, fmt.Sprintf("%s accepts %s [%s]: no other ready line", who, e.Provider, strings.Join(e.Lines, ", ")))
 			}
 		}
 		if n.TrafficCount > 0 {
@@ -352,6 +387,9 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 	}
 	sort.SliceStable(out.Body.DesiredEdges, func(i, j int) bool {
 		a, b := out.Body.DesiredEdges[i], out.Body.DesiredEdges[j]
+		if a.ConsumerKind != b.ConsumerKind {
+			return a.ConsumerKind > b.ConsumerKind // service before external
+		}
 		if a.ConsumerNamespace != b.ConsumerNamespace {
 			return a.ConsumerNamespace < b.ConsumerNamespace
 		}

@@ -263,7 +263,7 @@ instance or line. Default sink only.
 | `service_instances` | gauge | `namespace`, `version`, `state` | Instances by start-gate state: `ready`, `waiting`, `degraded`. |
 | `service_drain_instances` | gauge | `namespace`, `version`, `drain_state` | Instances by drain state: `draining`, `blocked`, `safe_to_stop`. |
 | `start_gate_transitions_total` | counter | `namespace`, `version`, `from`, `to` | State changes (`none`, `waiting`, `ready`, `degraded`, `removed`). READY/DEGRADED flips are sampled every 2s and at scrape, so a shorter flip can go uncounted. |
-| `dependency_unmet` | gauge | `consumer_namespace`, `consumer_version`, `provider` | 1 when no accepted line of the provider has a ready instance. |
+| `dependency_unmet` | gauge | `consumer_kind`, `consumer_namespace`, `consumer_version`, `provider` | 1 when no accepted line of the provider has a ready instance. `consumer_kind`: `service` (a registered line) or `external` (a declared external dependent: `consumer_namespace` is its id, `consumer_version` is empty; see [lifecycle.md](./lifecycle.md#external-dependents)). Expired declarations have no series. |
 | `line_sunsetable` | gauge | `namespace`, `version` | 1 when the line is sunset-able (admin dependency graph rule, default 1h usage window). |
 | `drain_requests_total` | counter | `outcome` | Drain requests: `requested`, `already_requested`, `cancelled`, `unknown_instance`, `error`. |
 

@@ -177,8 +177,11 @@ export function NodeDetail({ graph, line, canDrain, onClose, onChanged }: NodeDe
             <EdgeList
               empty="No dependent accepts this line."
               items={dependents.map((e) => ({
-                key: `${e.consumerNamespace}/${e.consumerVersion}|${(e.lines ?? []).join(',')}`,
-                text: `${e.consumerNamespace} ${e.consumerVersion} accepts [${(e.lines ?? []).join(', ')}]`,
+                key: `${e.consumerKind}:${e.consumerNamespace}/${e.consumerVersion}|${(e.lines ?? []).join(',')}`,
+                text:
+                  e.consumerKind === 'external'
+                    ? `external ${e.consumerNamespace} pins [${(e.lines ?? []).join(', ')}]`
+                    : `${e.consumerNamespace} ${e.consumerVersion} accepts [${(e.lines ?? []).join(', ')}]`,
                 met: e.met,
                 note: '',
               }))}

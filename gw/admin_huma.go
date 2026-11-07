@@ -46,6 +46,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	registerUsageEdges(api, g, cp)
 	registerInstanceDrain(api, g)
 	registerDependencyGraph(api, g, cp)
+	registerExternalDependents(api, g)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "listPeers",

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   FormControl,
   FormControlLabel,
   InputLabel,
@@ -24,6 +25,7 @@ import {
   useReactFlow,
   type Node,
 } from '@xyflow/react';
+import AddIcon from '@mui/icons-material/Add';
 import '@xyflow/react/dist/style.css';
 import { client } from '@/api/client';
 import { DependencyGraphQuery } from '@/api/operations';
@@ -32,13 +34,18 @@ import { useEvents } from '@/providers/EventsProvider';
 import { useAdminToken } from '@/components/SettingsDrawer';
 import {
   buildFlow,
+  externalId,
   withoutGatewayLines,
   type EdgeView,
+  type ExternalData,
+  type ExternalDependent,
   type Graph,
   type LineData,
 } from '@/components/graph/model';
 import { nodeTypes } from '@/components/graph/nodes';
 import { NodeDetail } from '@/components/graph/NodeDetail';
+import { ExternalDetail } from '@/components/graph/ExternalDetail';
+import { ExternalDependentDialog } from '@/components/graph/ExternalDependentDialog';
 
 export const Route = createFileRoute('/')({
   component: GraphPage,
@@ -46,7 +53,9 @@ export const Route = createFileRoute('/')({
 
 // Main screen: the live dependency graph. One node per (service,
 // line), grouped by service; desired edges (declared depends) solid,
-// active edges (observed traffic) dashed with call counts. Data is the
+// active edges (observed traffic) dashed with call counts. Declared
+// external dependents (consumers the gateway cannot see) are nodes on
+// the left with desired edges to the lines they pin. Data is the
 // admin dependencyGraph op, refetched on every service change event
 // (debounced) and polled every 5s for traffic.
 
@@ -57,7 +66,10 @@ const EVENT_DEBOUNCE_MS = 300;
 function GraphPage() {
   const [windowVal, setWindow] = useState<Window>('1h');
   const [view, setView] = useState<EdgeView>('both');
+  // Flow node id of the selection: "line:ns/ver" or "ext:id".
   const [selected, setSelected] = useState<string | null>(null);
+  // Add / edit dialog: undefined = closed, null = add.
+  const [editing, setEditing] = useState<ExternalDependent | null | undefined>(undefined);
   const [showGateway, setShowGateway] = useState(false);
   const token = useAdminToken();
   const queryClient = useQueryClient();
@@ -79,7 +91,9 @@ function GraphPage() {
 
   const raw = data?.admin?.dependencyGraph ?? null;
   const graph = useMemo(() => (raw && !showGateway ? withoutGatewayLines(raw) : raw), [raw, showGateway]);
-  const line = graph?.nodes?.find((n) => n.id === selected) ?? null;
+  const line = graph?.nodes?.find((n) => `line:${n.id}` === selected) ?? null;
+  const ext = graph?.externalDependents?.find((x) => externalId(x.id) === selected) ?? null;
+  const refetch = () => void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] });
 
   return (
     <Box>
@@ -94,6 +108,15 @@ function GraphPage() {
         }
         actions={
           <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              disabled={token === null}
+              title={token === null ? 'Sign in with the admin token to add one' : undefined}
+              onClick={() => setEditing(null)}
+            >
+              External dependent
+            </Button>
             <FormControlLabel
               control={<Switch size="small" checked={showGateway} onChange={(e) => setShowGateway(e.target.checked)} />}
               label="Gateway services"
@@ -134,13 +157,13 @@ function GraphPage() {
       )}
       {isLoading && <Typography>Loading…</Typography>}
       {error && <Alert severity="error">{error.message}</Alert>}
-      {graph && (graph.nodes ?? []).length === 0 && (
+      {graph && (graph.nodes ?? []).length === 0 && (graph.externalDependents ?? []).length === 0 && (
         <EmptyState
           title="No services registered"
           description="The graph fills in as services register against the gateway."
         />
       )}
-      {graph && (graph.nodes ?? []).length > 0 && (
+      {graph && ((graph.nodes ?? []).length > 0 || (graph.externalDependents ?? []).length > 0) && (
         <ReactFlowProvider>
           <Flow graph={graph} view={view} selected={selected} onSelect={setSelected} />
         </ReactFlowProvider>
@@ -151,7 +174,27 @@ function GraphPage() {
           line={line}
           canDrain={token !== null}
           onClose={() => setSelected(null)}
-          onChanged={() => void queryClient.invalidateQueries({ queryKey: ['dependencyGraph'] })}
+          onChanged={refetch}
+        />
+      )}
+      {graph && (
+        <ExternalDetail
+          graph={graph}
+          ext={ext}
+          canEdit={token !== null}
+          onEdit={(x) => setEditing(x)}
+          onClose={() => setSelected(null)}
+          onChanged={refetch}
+        />
+      )}
+      {editing !== undefined && (
+        <ExternalDependentDialog
+          initial={editing}
+          onClose={() => setEditing(undefined)}
+          onSaved={() => {
+            setEditing(undefined);
+            refetch();
+          }}
         />
       )}
     </Box>
@@ -184,8 +227,7 @@ function Flow({
   );
   const { nodes, edges } = useMemo(() => {
     const flow = buildFlow(graph, view, colors);
-    const sel = selected ? `line:${selected}` : null;
-    return { nodes: flow.nodes.map((n) => (n.id === sel ? { ...n, selected: true } : n)), edges: flow.edges };
+    return { nodes: flow.nodes.map((n) => (n.id === selected ? { ...n, selected: true } : n)), edges: flow.edges };
   }, [graph, view, colors, selected]);
 
   // Refit when the set of nodes changes (a service joined or left),
@@ -223,7 +265,9 @@ function Flow({
         onNodeClick={(_, n: Node) => {
           if (n.type === 'line') {
             const l = (n.data as LineData).line;
-            onSelect(l.id);
+            onSelect(`line:${l.id}`);
+          } else if (n.type === 'external') {
+            onSelect(externalId((n.data as ExternalData).ext.id));
           }
         }}
         onPaneClick={() => onSelect(null)}

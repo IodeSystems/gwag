@@ -98,6 +98,7 @@ Fixture: Echo(ctx, line, msg, opts...) (Echo, error)  // GraphQL; line "" = late
 Admin: Services(ctx) · WaitInstance(ns, ver, id, state, timeout)   // state "" = gone
        Graph(ctx, window) · DrainInstance(ctx, id, cancel) · WaitDrainState(id, state, timeout)
        Deprecate/Undeprecate(ctx, ns, ver[, reason]) · Registrations(ctx) · MCPInclude(ctx, glob)
+       PutExternalDependent(ctx, x) warnings · DeleteExternalDependent(ctx, id) · ExternalDependents(ctx)
        Do(ctx, method, "/admin/...", body, out)                    // with the bearer
 
 Scrape: Counter(name, Labels) · Samples(name, Labels) · Has(name) · Describe(name, Labels)

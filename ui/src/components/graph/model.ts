@@ -1,7 +1,8 @@
 // Turns the admin dependencyGraph response into React Flow nodes and
-// edges, with a layered left-to-right layout: callers on the left,
-// providers on the right, one column per dependency depth. Layout is
-// per namespace (a group node), with its lines stacked inside.
+// edges, with a layered left-to-right layout: callers and declared
+// external dependents on the left, providers on the right, one column
+// per dependency depth. Layout is per namespace (a group node), with
+// its lines stacked inside.
 
 import { MarkerType, type Edge, type Node } from '@xyflow/react';
 import type { DependencyGraphQuery } from '@/gql/graphql';
@@ -10,6 +11,7 @@ export type Graph = NonNullable<DependencyGraphQuery['admin']['dependencyGraph']
 export type GraphLine = NonNullable<Graph['nodes']>[number];
 export type DesiredEdge = NonNullable<Graph['desiredEdges']>[number];
 export type ActiveEdge = NonNullable<Graph['activeEdges']>[number];
+export type ExternalDependent = NonNullable<Graph['externalDependents']>[number];
 
 export type EdgeView = 'desired' | 'active' | 'both';
 
@@ -30,6 +32,7 @@ export type GroupData = {
 };
 export type LineData = { line: GraphLine; [k: string]: unknown };
 export type CallerData = { caller: string; count: number; [k: string]: unknown };
+export type ExternalData = { ext: ExternalDependent; [k: string]: unknown };
 
 export const GROUP_W = 300;
 const LINE_W = GROUP_W - 16;
@@ -41,10 +44,13 @@ const COL_GAP = 140;
 const ROW_GAP = 32;
 const CALLER_W = 180;
 const CALLER_H = 56;
+const EXT_W = 220;
+const EXT_H = 72;
 
 export const groupId = (ns: string) => `ns:${ns}`;
 export const lineId = (ns: string, ver: string) => `line:${ns}/${ver}`;
 const callerId = (c: string) => `caller:${c}`;
+export const externalId = (id: string) => `ext:${id}`;
 
 function groupHeight(lines: number): number {
   if (lines === 0) return GROUP_HEADER + MISSING_H;
@@ -68,7 +74,7 @@ export function withoutGatewayLines(g: Graph): Graph {
     ...g,
     nodes: (g.nodes ?? []).filter((l) => !hidden.has(l.namespace)),
     desiredEdges: (g.desiredEdges ?? []).filter(
-      (e) => !hidden.has(e.provider) && !hidden.has(e.consumerNamespace),
+      (e) => !hidden.has(e.provider) && (e.consumerKind === 'external' || !hidden.has(e.consumerNamespace)),
     ),
     activeEdges: (g.activeEdges ?? []).filter(
       (e) => !hidden.has(e.namespace) && !hidden.has(e.consumerNamespace),
@@ -108,11 +114,22 @@ export function buildFlow(
     }
   }
 
+  // Declared external dependents: drawn with the desired edges.
+  const externals = view === 'active' ? [] : (g.externalDependents ?? []);
+
   // Layer assignment: longest path from the callers, by namespace.
-  const vertices = [...[...callers.keys()].map(callerId), ...namespaces.map(groupId)];
+  const vertices = [
+    ...[...callers.keys()].map(callerId),
+    ...externals.map((x) => externalId(x.id)),
+    ...namespaces.map(groupId),
+  ];
   const adj: [string, string][] = [];
+  const consumerVertex = (e: DesiredEdge) =>
+    e.consumerKind === 'external' ? externalId(e.consumerNamespace) : groupId(e.consumerNamespace);
   for (const e of desired) {
-    if (e.consumerNamespace !== e.provider) adj.push([groupId(e.consumerNamespace), groupId(e.provider)]);
+    if (e.consumerKind === 'external' || e.consumerNamespace !== e.provider) {
+      adj.push([consumerVertex(e), groupId(e.provider)]);
+    }
   }
   for (const e of active) {
     const from = e.consumerNamespace === '' ? callerId(e.caller) : groupId(e.consumerNamespace);
@@ -120,6 +137,7 @@ export function buildFlow(
   }
   const layer = new Map<string, number>(vertices.map((v) => [v, 0]));
   for (const c of callers.keys()) layer.set(callerId(c), -1);
+  for (const x of externals) layer.set(externalId(x.id), -1);
   // Bounded relaxation: active edges can form cycles.
   for (let i = 0; i < vertices.length; i++) {
     let changed = false;
@@ -140,8 +158,8 @@ export function buildFlow(
   }
 
   const heightOf = (v: string) =>
-    v.startsWith('caller:') ? CALLER_H : groupHeight(byNs.get(v.slice(3))?.length ?? 0);
-  const widthOf = (v: string) => (v.startsWith('caller:') ? CALLER_W : GROUP_W);
+    v.startsWith('caller:') ? CALLER_H : v.startsWith('ext:') ? EXT_H : groupHeight(byNs.get(v.slice(3))?.length ?? 0);
+  const widthOf = (v: string) => (v.startsWith('caller:') ? CALLER_W : v.startsWith('ext:') ? EXT_W : GROUP_W);
 
   // Order each column by the mean row of its predecessors (one pass,
   // left to right) to cut down crossings; ties by name.
@@ -186,6 +204,15 @@ export function buildFlow(
       selectable: false,
     });
   }
+  for (const x of externals) {
+    nodes.push({
+      id: externalId(x.id),
+      type: 'external',
+      position: pos.get(externalId(x.id))!,
+      data: { ext: x } satisfies ExternalData,
+      style: { width: EXT_W, height: EXT_H },
+    });
+  }
   for (const ns of namespaces) {
     const ls = (byNs.get(ns) ?? []).slice().sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }));
     nodes.push({
@@ -224,12 +251,15 @@ export function buildFlow(
   // ones in the met colour, others muted); unmet → error colour, to
   // the accepted lines or the provider group when none exists.
   for (const e of desired) {
-    const source = lineSet.has(lineId(e.consumerNamespace, e.consumerVersion))
-      ? lineId(e.consumerNamespace, e.consumerVersion)
-      : groupId(e.consumerNamespace);
+    const source =
+      e.consumerKind === 'external'
+        ? externalId(e.consumerNamespace)
+        : lineSet.has(lineId(e.consumerNamespace, e.consumerVersion))
+          ? lineId(e.consumerNamespace, e.consumerVersion)
+          : groupId(e.consumerNamespace);
     const present = new Set(e.presentLines ?? []);
     const targets = (e.lines ?? []).filter((l) => lineSet.has(lineId(e.provider, l)));
-    const base = `d:${e.consumerNamespace}/${e.consumerVersion}->${e.provider}[${(e.lines ?? []).join(',')}]`;
+    const base = `d:${e.consumerKind}:${e.consumerNamespace}/${e.consumerVersion}->${e.provider}[${(e.lines ?? []).join(',')}]`;
     if (targets.length === 0) {
       edges.push({
         id: base,
