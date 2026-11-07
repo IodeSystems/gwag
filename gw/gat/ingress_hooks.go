@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/IodeSystems/graphql-go/v2"
+
+	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 )
 
 // Ingress hooks let a host put its own request handling around gat's
@@ -264,4 +266,42 @@ func stringVariables(s string) (map[string]any, error) {
 	var vars map[string]any
 	err := json.Unmarshal([]byte(s), &vars)
 	return vars, err
+}
+
+// IntrospectionViewFunc picks the schema an introspecting request runs
+// against (see IntrospectionView). nil keeps the served schema.
+//
+// Stability: experimental
+type IntrospectionViewFunc func(ctx context.Context) *graphql.Schema
+
+// IntrospectionView sets fn, which picks the schema a request runs
+// against when its document selects __schema or __type, so a host can
+// describe a narrower schema to some callers. The whole document is
+// then validated and run against that schema. Other requests never
+// call fn: their only cost is a scan of the query text for the two
+// names. plans caches the plans made against the schemas fn returns;
+// give it the same validation rules as the main cache (nil plans every
+// such request afresh with the spec rules only). Applies to HTTP
+// requests, batches and graphql-transport-ws subscribe messages. nil
+// disables it. Call before serving. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) IntrospectionView(fn IntrospectionViewFunc, plans *graphql.PlanCache) *Gateway {
+	g.introView = fn
+	g.introPlans = plans
+	return g
+}
+
+// introspectionSnap is the snapshot a request with document query
+// runs on: snap, or the IntrospectionView one when the document
+// introspects and the hook picks another schema.
+func (g *Gateway) introspectionSnap(ctx context.Context, snap *snapshot, query string) *snapshot {
+	if g.introView == nil || !gqlguard.MayIntrospect(query) || !gqlguard.SelectsIntrospection(query) {
+		return snap
+	}
+	s := g.introView(ctx)
+	if s == nil || s == snap.schema {
+		return snap
+	}
+	return &snapshot{schema: s, annotations: snap.annotations, services: snap.services, plans: g.introPlans}
 }
