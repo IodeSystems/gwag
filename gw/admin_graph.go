@@ -36,11 +36,10 @@ import (
 //     consumerNamespace "".
 //
 // External dependents (external_dependents.go): each declaration
-// that has not expired adds one desired edge per pinned service, with
-// consumerKind "external", consumerNamespace = its id and
-// consumerVersion "". They count in the sunset rule like any other
-// dependent. Every declaration, expired ones included, is listed in
-// externalDependents.
+// adds one desired edge per pinned service, with consumerKind
+// "external", consumerNamespace = its id and consumerVersion "". They
+// count in the sunset rule like any other dependent, review-due ones
+// included. Every declaration is listed in externalDependents.
 //
 // Sunset-able (design): provider line L may go when every dependent
 // that accepts L also accepts another line with a ready instance, and
@@ -122,7 +121,7 @@ type dependencyGraphOut struct {
 		DesiredEdges []graphDesiredEdge `json:"desiredEdges"`
 		ActiveEdges  []graphActiveEdge  `json:"activeEdges"`
 
-		ExternalDependents []externalDependentInfo `json:"externalDependents" doc:"Declared external dependents, expired ones included (expired ones add no edges)."`
+		ExternalDependents []externalDependentInfo `json:"externalDependents" doc:"Declared external dependents. Review-due ones (reviewDue) still add edges."`
 	}
 }
 
@@ -259,13 +258,10 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 		}
 	}
 
-	// External dependents: edges for the ones that count now.
+	// External dependents: every declaration counts, review-due or not.
 	extLabel := map[string]string{}
 	for _, x := range g.externals.all() {
 		out.Body.ExternalDependents = append(out.Body.ExternalDependents, adminExternalDependent(x, now))
-		if x.expired(now) {
-			continue
-		}
 		extLabel[x.ID] = x.label()
 		for _, d := range x.Depends {
 			addEdge(poolKey{namespace: x.ID}, d.Service, d.Lines, false, true)

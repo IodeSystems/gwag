@@ -30,12 +30,15 @@ import (
 // It does not affect the start gate: it registers no instance and
 // is nobody's dependency.
 //
-// Expiry: an optional expiresAt. Past it, the declaration stops
-// counting everywhere, but it stays stored and listed with
-// expired=true until an operator renews or deletes it. Expiry is
-// evaluated against the clock at read time on every node, so it needs
-// no KV TTL and no delete event (a TTL-expired key raises no event to
-// watchers, which would leave the declaration live on other nodes).
+// Review date: every declaration has a reviewAt. Past it, the
+// declaration keeps counting everywhere; nothing happens by itself.
+// It is listed with reviewDue=true, raises a notification item
+// (admin_notifications.go) and adds to the declarations_review_due
+// gauge until an operator sets a new date: a PUT, or the review op
+// (POST .../{id}/review), which changes only the review fields. A
+// stored declaration without a review date (written before reviewAt
+// existed) is review-due. reviewDue is computed from the clock at read
+// time on every node, so the bucket needs no TTL.
 //
 // Storage: in memory standalone; in cluster mode the
 // gwag-external-dependents KV bucket (no TTL, replicas raised and
@@ -54,19 +57,29 @@ var externalIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 // externalDependent is one declaration, as stored (KV JSON value).
 type externalDependent struct {
-	ID            string               `json:"id"`
-	Name          string               `json:"name,omitempty"`
-	Kind          string               `json:"kind"`
-	Owner         *manifestOwner       `json:"owner,omitempty"`
-	Depends       []manifestDependency `json:"depends"`
-	Note          string               `json:"note,omitempty"`
-	ExpiresUnixMs int64                `json:"expires_unix_ms,omitempty"`
-	UpdatedUnixMs int64                `json:"updated_unix_ms"`
+	ID      string               `json:"id"`
+	Name    string               `json:"name,omitempty"`
+	Kind    string               `json:"kind"`
+	Owner   *manifestOwner       `json:"owner,omitempty"`
+	Depends []manifestDependency `json:"depends"`
+	Note    string               `json:"note,omitempty"`
+	// ReviewUnixMs is reviewAt. 0 only on a value stored before
+	// reviewAt existed; such a declaration is review-due.
+	ReviewUnixMs int64 `json:"review_unix_ms,omitempty"`
+	// ReviewedUnixMs / ReviewedBy are set by the review op only.
+	ReviewedUnixMs int64  `json:"reviewed_unix_ms,omitempty"`
+	ReviewedBy     string `json:"reviewed_by,omitempty"`
+	// LastOp is the op that wrote this value: changeOpPut or
+	// changeOpReview. Delta sinks on other nodes read it from the KV
+	// watch (declaration_sinks.go).
+	LastOp        string `json:"last_op,omitempty"`
+	UpdatedUnixMs int64  `json:"updated_unix_ms"`
 }
 
-// expired reports whether e has an expiry at or before now.
-func (e externalDependent) expired(now time.Time) bool {
-	return e.ExpiresUnixMs > 0 && now.UnixMilli() >= e.ExpiresUnixMs
+// reviewDue reports whether e's review date is at or before now, or
+// missing.
+func (e externalDependent) reviewDue(now time.Time) bool {
+	return e.ReviewUnixMs == 0 || now.UnixMilli() >= e.ReviewUnixMs
 }
 
 // label names e in reasons: `external acme (Acme Corp)`.
@@ -107,7 +120,7 @@ func (x *externalDependents) get(id string) (externalDependent, bool) {
 	return e, ok
 }
 
-// all returns every declaration, expired ones included, sorted by id.
+// all returns every declaration, sorted by id.
 func (x *externalDependents) all() []externalDependent {
 	x.mu.Lock()
 	out := make([]externalDependent, 0, len(x.m))
@@ -119,16 +132,17 @@ func (x *externalDependents) all() []externalDependent {
 	return out
 }
 
-// active returns the declarations that count at now, sorted by id.
-func (x *externalDependents) active(now time.Time) []externalDependent {
-	all := x.all()
-	out := all[:0]
-	for _, e := range all {
-		if !e.expired(now) {
-			out = append(out, e)
+// reviewDueCount is the number of declarations review-due at now.
+func (x *externalDependents) reviewDueCount(now time.Time) int {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	n := 0
+	for _, e := range x.m {
+		if e.reviewDue(now) {
+			n++
 		}
 	}
-	return out
+	return n
 }
 
 // externalFieldError is one validation failure at a huma location
@@ -231,20 +245,24 @@ func (g *Gateway) externalKV() jetstream.KeyValue {
 	return g.peers.externals
 }
 
-// putExternalDependent stores e (already normalised): the cluster KV
-// first, so a failed write changes nothing, then this node's copy.
+// putExternalDependent stores e (already normalised, LastOp set): the
+// cluster KV first, so a failed write changes nothing, then this
+// node's copy. It then hands the change to the sinks
+// (declaration_sinks.go) without waiting on hook delivery.
 func (g *Gateway) putExternalDependent(ctx context.Context, e externalDependent) error {
-	prev, _ := g.externals.get(e.ID)
-	if kv := g.externalKV(); kv != nil {
+	prev, had := g.externals.get(e.ID)
+	var rev uint64
+	kv := g.externalKV()
+	if kv != nil {
 		b, err := json.Marshal(e)
 		if err != nil {
 			return err
 		}
-		// Two call timeouts: room for kvPutRetry to retry a put lost
+		// Two call timeouts: room for kvPutRevRetry to retry a put lost
 		// to a replica change. The same value written twice is the
 		// same state.
 		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
-		err = kvPutRetry(kctx, kv, e.ID, b)
+		rev, err = kvPutRevRetry(kctx, kv, e.ID, b)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("external dependent: kv put: %w", err)
@@ -252,6 +270,12 @@ func (g *Gateway) putExternalDependent(ctx context.Context, e externalDependent)
 	}
 	g.externals.set(e)
 	g.publishExternalChange(prev, e)
+	after := e
+	c := declarationChange{op: e.LastOp, id: e.ID, after: &after, seq: rev, at: time.UnixMilli(e.UpdatedUnixMs)}
+	if had {
+		c.before = &prev
+	}
+	g.declarationChanged(c, kv != nil)
 	return nil
 }
 
@@ -262,9 +286,14 @@ func (g *Gateway) deleteExternalDependent(ctx context.Context, id string) (bool,
 	if !ok {
 		return false, nil
 	}
-	if kv := g.externalKV(); kv != nil {
+	var rev uint64
+	kv := g.externalKV()
+	if kv != nil {
 		kctx, cancel := context.WithTimeout(ctx, 2*kvCallTimeout)
 		err := kvDeleteRetry(kctx, kv, id)
+		if err == nil {
+			rev = g.externalDeleteRevision(kctx, id)
+		}
 		cancel()
 		if err != nil {
 			return false, fmt.Errorf("external dependent: kv delete: %w", err)
@@ -272,7 +301,47 @@ func (g *Gateway) deleteExternalDependent(ctx context.Context, id string) (bool,
 	}
 	g.externals.remove(id)
 	g.publishExternalChange(prev, externalDependent{})
+	g.declarationChanged(declarationChange{op: changeOpDelete, id: id, before: &prev, seq: rev, at: nowFunc()}, kv != nil)
 	return true, nil
+}
+
+// kvPutRevRetry is kvPutRetry that returns the revision of the put.
+func kvPutRevRetry(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
+	for {
+		actx, cancel := context.WithTimeout(ctx, kvPutAttemptTimeout)
+		rev, err := kv.Put(actx, key, value)
+		cancel()
+		if err == nil {
+			return rev, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, err
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// externalDeleteRevision is the stream sequence of the delete marker
+// just written for id: KeyValue.Delete does not return it. 0 when the
+// lookup fails; the hook then labels the change with the newest
+// revision this node has seen.
+func (g *Gateway) externalDeleteRevision(ctx context.Context, id string) uint64 {
+	g.mu.Lock()
+	t := g.peers
+	g.mu.Unlock()
+	if t == nil {
+		return 0
+	}
+	s, err := t.js.Stream(ctx, "KV_"+externalDependentsBucketName)
+	if err != nil {
+		return 0
+	}
+	m, err := s.GetLastMsgForSubject(ctx, "$KV."+externalDependentsBucketName+"."+id)
+	if err != nil {
+		return 0
+	}
+	return m.Sequence
 }
 
 // kvDeleteRetry is kvPutRetry for a delete: a delete sent while the
@@ -313,8 +382,8 @@ func (g *Gateway) publishExternalChange(a, b externalDependent) {
 }
 
 // openExternalDependentsBucket creates (or opens) the bucket. No TTL:
-// declarations live until deleted; expiry is a field, read on every
-// node (see the file comment).
+// declarations live until deleted; the review date is a field, read
+// on every node (see the file comment).
 func openExternalDependentsBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
 	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: externalDependentsBucketName, Replicas: 1})
 	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
@@ -348,6 +417,8 @@ func (t *peerTracker) externalsWatchLoop(ctx context.Context) {
 				return
 			}
 			if ev == nil {
+				// The initial replay is done.
+				t.gw.declView.caughtUp(t.gw)
 				continue
 			}
 			t.gw.observeExternalKV(ev)
@@ -355,10 +426,13 @@ func (t *peerTracker) externalsWatchLoop(ctx context.Context) {
 	}
 }
 
+// observeExternalKV applies one bucket event to g.externals and to
+// the replicated view the file sink writes from (declaration_sinks.go).
 func (g *Gateway) observeExternalKV(ev jetstream.KeyValueEntry) {
 	switch ev.Operation() {
 	case jetstream.KeyValueDelete, jetstream.KeyValuePurge:
 		g.externals.remove(ev.Key())
+		g.observeDeclaration(ev.Key(), nil, ev.Revision(), ev.Created())
 		return
 	}
 	var e externalDependent
@@ -367,4 +441,5 @@ func (g *Gateway) observeExternalKV(ev jetstream.KeyValueEntry) {
 		return
 	}
 	g.externals.set(e)
+	g.observeDeclaration(ev.Key(), &e, ev.Revision(), ev.Created())
 }

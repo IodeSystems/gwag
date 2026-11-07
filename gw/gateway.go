@@ -199,6 +199,10 @@ type Gateway struct {
 	// externals holds the declared external dependents
 	// (external_dependents.go).
 	externals externalDependents
+	// declView and declSinks feed the declaration change sinks
+	// (declaration_sinks.go). declSinks is nil when none is configured.
+	declView  declarationView
+	declSinks *declarationSinks
 
 	// warnedEventsAuth tracks (namespace, version) tuples we've already
 	// emitted a deprecation warning for, so heartbeat-driven re-registers
@@ -295,6 +299,9 @@ type config struct {
 	// auth instead of letting them through as public reads. A trailing
 	// "*" makes an entry a prefix match.
 	destructiveReads []string
+	// declHook / declFile: WithDeclarationsHook / WithDeclarationsFile.
+	declHook *DeclarationsHookOptions
+	declFile *DeclarationsFileOptions
 	signerSecret     []byte
 	openAPIHTTP  *http.Client
 	pprof        bool
@@ -1422,6 +1429,8 @@ func New(opts ...Option) *Gateway {
 		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
 	}
+	g.declSinks = newDeclarationSinks(g, cfg.declHook, cfg.declFile)
+	g.declSinks.start(life, cfg.cluster == nil)
 	g.gql = g.newGraphQLIngress()
 	// gwag.ps.v1.PubSub is installed on every gateway. With a cluster
 	// it rides NATS (local-only while NATS is down); without one it is

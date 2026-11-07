@@ -12,7 +12,8 @@ import (
 )
 
 // Service-lifecycle metrics: start gate, per-instance drain, declared
-// dependencies and sunset-ability.
+// dependencies, sunset-ability, and external-dependent reviews and
+// hook deliveries.
 //
 // Gauges are computed at scrape time from the same views the admin
 // API serves (ListServices + buildDependencyGraph), so a series exists
@@ -55,13 +56,15 @@ type seenGate struct {
 type lifecycleMetrics struct {
 	g *Gateway
 
-	transitions *prometheus.CounterVec
-	drainReqs   *prometheus.CounterVec
+	transitions  *prometheus.CounterVec
+	drainReqs    *prometheus.CounterVec
+	hookFailures prometheus.Counter
 
 	instances *prometheus.Desc
 	drains    *prometheus.Desc
 	unmet     *prometheus.Desc
 	sunset    *prometheus.Desc
+	reviewDue *prometheus.Desc
 
 	mu   sync.Mutex
 	seen map[string]seenGate // gate instance id -> last counted state
@@ -80,6 +83,13 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 			Name: p + "_drain_requests_total",
 			Help: "Instance drain requests handled by this node, by outcome: requested (new), already_requested (repeat or poll), cancelled, unknown_instance, error.",
 		}, []string{"outcome"}),
+		hookFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: p + "_declarations_hook_failures_total",
+			Help: "Declarations hook deliveries this node gave up on: retries ran out, a 4xx answer other than 408/429, or the delivery queue was full. Each one is also a declaration_hook_failed notification.",
+		}),
+		reviewDue: prometheus.NewDesc(p+"_declarations_review_due",
+			"External dependents past their review date (or with none). They still count as dependents; each is a declaration_review_due notification. Cluster-wide set, read on this node.",
+			nil, nil),
 		instances: prometheus.NewDesc(p+"_service_instances",
 			"Control-plane instances per (namespace, version) by start-gate state (ready, waiting, degraded). Per-node view; series exist only while the line is registered.",
 			[]string{"namespace", "version", "state"}, nil),
@@ -93,7 +103,7 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 			"1 when the admin dependency graph marks the line sunset-able, else 0: every dependent has another ready line and the line had no traffic on this node in the last 1h (the graph's default window); the only line of a namespace is never sunset-able. Per-node view.",
 			[]string{"namespace", "version"}, nil),
 	}
-	pm.registry.MustRegister(m.transitions, m.drainReqs, m)
+	pm.registry.MustRegister(m.transitions, m.drainReqs, m.hookFailures, m)
 	return m
 }
 
@@ -104,6 +114,7 @@ func (m *lifecycleMetrics) Describe(chan<- *prometheus.Desc) {}
 func (m *lifecycleMetrics) Collect(ch chan<- prometheus.Metric) {
 	g := m.g
 	m.observeGate()
+	ch <- prometheus.MustNewConstMetric(m.reviewDue, prometheus.GaugeValue, float64(g.externals.reviewDueCount(nowFunc())))
 	if g.cp == nil {
 		return
 	}
@@ -202,6 +213,15 @@ func (m *lifecycleMetrics) observeGate() {
 			delete(m.seen, id)
 		}
 	}
+}
+
+// recordHookFailure counts one declarations hook delivery given up.
+// nil-safe.
+func (m *lifecycleMetrics) recordHookFailure() {
+	if m == nil {
+		return
+	}
+	m.hookFailures.Inc()
 }
 
 func (m *lifecycleMetrics) recordDrainRequest(cancel, existed bool, err error) {

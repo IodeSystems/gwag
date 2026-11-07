@@ -163,7 +163,7 @@ curl -X PUT https://gw.internal/api/admin/external-dependents/acme \
   -d '{"name":"Acme Corp","kind":"customer",
        "owner":{"team":"books","contact":"acme-api@example.com"},
        "depends":[{"service":"library","lines":["v1"]}],
-       "note":"contract 2026-14","expiresAt":"2027-06-30T00:00:00Z"}'
+       "note":"contract 2026-14","reviewAt":"2027-06-30T00:00:00Z"}'
 ```
 
 It counts wherever a registered dependent counts: library v1 is not
@@ -174,12 +174,168 @@ is 1 while no pinned line has a ready instance. It does not affect the
 start gate. `kind` is `customer`, `partner`, `app` or `other`; lines
 follow the `depends` rule (`vN` or `unstable`). A pin on a service or
 line that is not registered is accepted, with a warning in the
-response. Past `expiresAt` the declaration stops counting but stays
-listed with `expired: true` until it is renewed or deleted
-(`DELETE /admin/external-dependents/acme`). In a cluster the
-declarations live in the `gwag-external-dependents` KV bucket and
-apply on every node. The admin UI draws them on the dependency graph
-and edits them there.
+response. In a cluster the declarations live in the
+`gwag-external-dependents` KV bucket and apply on every node. The
+admin UI draws them on the dependency graph and edits them there.
+
+#### Review date
+
+`reviewAt` (RFC 3339) is required. A declaration pins lines for months
+or years, so the gateway does not act on the date by itself: past
+`reviewAt` the declaration keeps counting everywhere (sunset rule,
+drain coverage, `dependency_unmet`, graph edges). It is listed with
+`reviewDue: true`, is an item in `GET /admin/notifications` (the admin
+UI's bell), and adds to the `declarations_review_due` gauge, until a
+person reviews it. The response warns when `reviewAt` is in the past
+or more than a year out; it still stores the declaration.
+
+To review, confirm the pins with the owner and set the next date:
+
+```bash
+curl -X POST https://gw.internal/api/admin/external-dependents/acme/review \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"reviewAt":"2028-06-30T00:00:00Z","by":"ops@example.com"}'
+```
+
+The review op changes only `reviewAt`, `reviewedAt` (now) and
+`reviewedBy` (the `by` field, self-reported and not checked); a new
+`reviewAt` must be in the future. A PUT can also set a new date; it
+keeps `reviewedAt` / `reviewedBy`. A declaration stored without a
+review date is review-due. Delete it with
+`DELETE /admin/external-dependents/acme`.
+
+#### Notifications
+
+`GET /admin/notifications` (GraphQL `admin.listNotifications`) lists
+the items that need a person, oldest first:
+
+```json
+{"items": [{"kind": "declaration_review_due", "id": "review-due/acme",
+  "title": "Review external dependent Acme Corp",
+  "detail": "Review date 2027-06-30T00:00:00Z has passed. It still pins library [v1]. ...",
+  "since": "2027-06-30T00:00:00Z", "href": "/?select=ext:acme"}]}
+```
+
+| `kind` | Item | Goes away |
+|---|---|---|
+| `declaration_review_due` | A declaration past `reviewAt`. Same on every node. | When it is reviewed or deleted. |
+| `declaration_hook_failed` | A declarations hook delivery that ran out of retries. Only on the node that tried it; in memory, at most 20. | Full mode: when a later delivery succeeds. Delta mode: when the node restarts. |
+
+More kinds may be added; a client shows an unknown kind by its
+`title`, `detail` and `href`. `href` is an admin UI route.
+
+#### Declaration sinks
+
+Two optional sinks tell systems outside the gateway about every put,
+review and delete. Each has a mode: `full` (the whole current set) or
+`delta` (one change).
+
+| Flag (`gwag up`, example gateway) | Library |
+|---|---|
+| `--declarations-hook URL` | `WithDeclarationsHook(DeclarationsHookOptions{URL, ...})` |
+| `--declarations-hook-secret S` | `DeclarationsHookOptions.Secret` |
+| `--declarations-hook-mode full\|delta` (default full) | `DeclarationsHookOptions.Mode` |
+| `--declarations-file PATH` | `WithDeclarationsFile(DeclarationsFileOptions{Path, ...})` |
+| `--declarations-file-mode full\|delta` (default full) | `DeclarationsFileOptions.Mode` |
+
+**Hook.** A POST of one JSON payload per change, `Content-Type:
+application/json`. The admin response does not wait for it: a worker
+queue sends it after the declaration is stored. In a cluster only the
+node that accepted the write sends it, so each change is POSTed once.
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-Gwag-Event` | `put`, `review` or `delete` |
+| `X-Gwag-Delivery` | Random id, the same on every retry of one change. Deduplicate on it. |
+| `X-Gwag-Timestamp` | Unix seconds when this try was sent. |
+| `X-Gwag-Signature` | With a secret: `sha256=` + hex(HMAC-SHA256(secret, timestamp + `.` + body)). The key is the secret's bytes as given. |
+
+To verify: recompute the HMAC over the timestamp header, a `.` and the
+raw body, compare in constant time, and reject a timestamp more than a
+few minutes old (that blocks replay).
+
+A 2xx answer is success. A network error, a 5xx, 408 or 429 is retried
+with exponential backoff (500ms, doubling, at most 8s between tries,
+6 tries in all; `DeclarationsHookOptions` changes these). Any other
+4xx is not retried. When a change is given up, the node logs it,
+increments `declarations_hook_failures_total` and lists a
+`declaration_hook_failed` notification. The queue (256 changes) is in
+memory: a delivery still pending when the accepting node stops is
+lost, and a change that finds the queue full fails at once. In full
+mode the next successful delivery carries the whole set; in delta mode
+resync from `GET /admin/external-dependents`.
+
+**File.** Every node writes its own file at PATH from the replicated
+set, on every change it sees through the KV watch (standalone: on
+every write). The directory must exist.
+
+- `full`: the file is the full payload below, indented JSON. Each
+  change replaces it: a temp file in the same directory, fsynced,
+  mode 0644, renamed over PATH, so a reader sees the old file or the
+  new one, never part of one. Written at start (standalone) or once
+  the node has replayed the bucket (cluster). JSON, not YAML: it is
+  the same document the hook sends, and needs no second schema.
+- `delta`: one delta payload per line (JSON Lines), appended. A node
+  writes no lines for the state it loads at start, only for changes
+  after it; use full mode, or the `seq` gaps, to detect what a node
+  missed while it was down. The gateway never rotates the file. It
+  opens the file for each line, so an outside rotation that renames
+  it (logrotate's default) works: the next change creates a new file.
+
+**Payloads (stable).** `seq` orders changes: in a cluster it is the KV
+revision of the change, the same on every node; standalone it counts
+from 1 and restarts with the process, as the set does. A receiver keeps
+the payload with the highest `seq`. Times are RFC 3339 UTC.
+
+Full, `schema: "gwag.declarations.full/v1"`:
+
+```json
+{
+  "schema": "gwag.declarations.full/v1",
+  "seq": 42,
+  "at": "2026-11-07T12:00:00.000Z",
+  "declarations": [
+    {
+      "id": "acme",
+      "name": "Acme Corp",
+      "kind": "customer",
+      "owner": {"team": "books", "contact": "acme-api@example.com"},
+      "depends": [{"service": "library", "lines": ["v1"]}],
+      "note": "contract 2026-14",
+      "reviewAt": "2027-06-30T00:00:00Z",
+      "reviewedAt": "",
+      "reviewedBy": "",
+      "updatedAt": "2026-11-07T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+`seq` is the revision the set is as of; `at` is when the payload was
+built; `declarations` is sorted by `id` and never null. In a declaration
+`owner` is `null` when none was given, and an empty string means unset
+for the other string fields.
+
+Delta, `schema: "gwag.declarations.delta/v1"`:
+
+```json
+{
+  "schema": "gwag.declarations.delta/v1",
+  "seq": 43,
+  "op": "review",
+  "id": "acme",
+  "before": {"id": "acme", "reviewAt": "2027-06-30T00:00:00Z", "...": "..."},
+  "after":  {"id": "acme", "reviewAt": "2028-06-30T00:00:00Z", "...": "..."},
+  "at": "2027-07-01T09:30:00.000Z"
+}
+```
+
+`op` is `put`, `review` or `delete`. `before` is `null` when the put
+created the declaration; `after` is `null` on delete. Both have the
+declaration shape above. A new field may be added to either schema; a
+field is not removed or changed in meaning without a new `schema`
+value.
 
 ## Promotion path
 
