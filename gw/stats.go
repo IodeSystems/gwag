@@ -166,6 +166,10 @@ type methodStats struct {
 	win1m  *statsWindow
 	win1h  *statsWindow
 	win24h *statsWindow
+	// lastSeenUnixMs is the wall-clock ms of the most recent
+	// observation (process lifetime). Written under mu with the
+	// bucket increments; no extra synchronisation on the hot path.
+	lastSeenUnixMs int64
 }
 
 func newMethodStats() *methodStats {
@@ -255,6 +259,7 @@ func (s *statsRegistry) record(k statsKey, latency time.Duration, ok bool, now t
 	m.win1m.observe(nowUnix, latency, ok)
 	m.win1h.observe(nowUnix, latency, ok)
 	m.win24h.observe(nowUnix, latency, ok)
+	m.lastSeenUnixMs = now.UnixMilli()
 }
 
 // snapshot reads one (ns, ver, method) at the given window and
@@ -273,7 +278,9 @@ func (s *statsRegistry) snapshot(k statsKey, window time.Duration, now time.Time
 	if w == nil {
 		return statsSnapshot{}
 	}
-	return w.snapshot(now.Unix(), int64(window/time.Second))
+	snap := w.snapshot(now.Unix(), int64(window/time.Second))
+	snap.LastSeenUnixMs = m.lastSeenUnixMs
+	return snap
 }
 
 func (m *methodStats) windowFor(window time.Duration) *statsWindow {
@@ -453,6 +460,10 @@ type statsSnapshot struct {
 	P50        time.Duration
 	P95        time.Duration
 	P99        time.Duration
+	// LastSeenUnixMs is the most recent observation for the series
+	// (0 = none). Not windowed: it can predate the window only when
+	// Count is 0, and such rows are dropped by Gateway.snapshot.
+	LastSeenUnixMs int64
 }
 
 // snapshot returns one row per (namespace, version, method) that has

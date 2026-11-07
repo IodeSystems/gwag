@@ -9,6 +9,9 @@ changes on MINOR, drops on MAJOR.
 
 ## Unreleased
 
+### Added
+- Admin op `usageEdges` (`GET /admin/services/usage?window=1m|1h|24h&namespace=&version=`): active dependencies by method for every service. One edge per (caller, namespace, version, method) with count, okCount and lastSeenUnixMs, plus a per-(namespace, version) rollup that lists registered services with no traffic. Per-node, in-memory; caller identity comes from `WithCallerIDExtractor` / `WithCallerHeaders`.
+
 ## v2.11.0 — 2026-11-06
 
 GraphQL error extensions default to gat's `{status, code}` shape (see Migration), proto lists render non-null elements, Connect ingress in the `gwag` binary, gRPC for gat BYO OpenAPI ops, and a sweep of export, validation and ingress fixes.
