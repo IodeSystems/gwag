@@ -17,18 +17,24 @@ import (
 
 // TestS4ClusterOps runs a 3-node cluster under load that an LB with
 // health checks spreads over the nodes. Services register through two
-// different nodes' control planes. The story kills a node (SIGKILL),
-// brings it back, then rolls every node one at a time (SIGTERM, start,
-// wait for ready), and requires that no call sent to a node that stayed
-// up fails, and that no call fails at all during the roll.
+// different nodes' control planes and know every node's control plane
+// (controlclient GatewayAddrs), so a registration moves when its node
+// goes. The story kills a node (SIGKILL), brings it back, then rolls
+// every node one at a time (SIGTERM, start, wait for ready), and
+// requires that no call sent to a live node fails, and that no call
+// fails at all during the roll. Last, it kills the only node a
+// service can register through: every node drops that service.
 func TestS4ClusterOps(t *testing.T) {
 	env := harness.New(t)
 	cluster := env.Cluster(3, harness.GatewayOpts{Environment: "e2e"})
 	n1, n2, n3 := cluster.Nodes[0], cluster.Nodes[1], cluster.Nodes[2]
 
-	// orders registers through n1, billing through n2.
-	orders := env.Fixture(n1, harness.FixtureOpts{Namespace: "orders", Owner: "commerce"})
-	billing := env.Fixture(n2, harness.FixtureOpts{Kind: harness.KindOpenAPI, Namespace: "billing", Owner: "finance"})
+	// orders registers through n1, billing through n2; each fails
+	// over to the other nodes.
+	orders := env.Fixture(n1, harness.FixtureOpts{Namespace: "orders", Owner: "commerce",
+		FailoverGateways: []*harness.Gateway{n2, n3}})
+	billing := env.Fixture(n2, harness.FixtureOpts{Kind: harness.KindOpenAPI, Namespace: "billing", Owner: "finance",
+		FailoverGateways: []*harness.Gateway{n3, n1}})
 	fixtures := []*harness.Fixture{orders, billing}
 
 	ctx := harness.Ctx(t, 8*time.Minute)
@@ -105,6 +111,13 @@ func TestS4ClusterOps(t *testing.T) {
 			}
 			return nil
 		})
+		// And the registry and peers streams finished moving to 3
+		// replicas. Seen in 1 of 3 runs, before and after expiry
+		// markers: the registry stuck in a 2-replica group with n2,
+		// so the kill left it without a quorum until n2 came back
+		// (/api/admin/peers 500 for 75s). With markers, the entries
+		// that expired meanwhile also left the survivors' routing.
+		cluster.WaitStreamsReplicated(t, 3, 75*time.Second)
 		before := map[string]*harness.Scrape{}
 		for _, g := range survivors {
 			before[g.Name] = g.MustScrape(t)
@@ -125,7 +138,7 @@ func TestS4ClusterOps(t *testing.T) {
 		}
 
 		// billing's registration, held by n2's control plane. It dies
-		// with n2; the fixture registers again once n2 is back.
+		// with n2; the fixture registers again through n3 or n1.
 		billingReg := func(g *harness.Gateway) []string {
 			ss, err := g.Admin().Services(ctx)
 			if err != nil {
@@ -193,6 +206,22 @@ func TestS4ClusterOps(t *testing.T) {
 			return nil
 		})
 
+		t.Run("the dead node's registration expires on every survivor", func(t *testing.T) {
+			// billing moved to a survivor at once; its entries from n2
+			// expire 30s after n2's last refresh and leave a delete
+			// marker, so both survivors drop the old registration.
+			harness.Eventually(t, 75*time.Second, "survivors list only billing's new registration", func() error {
+				for _, g := range survivors {
+					ids := billingReg(g)
+					if len(ids) != 1 || ids[0] == oldBillingReg[0] {
+						return fmt.Errorf("%s lists billing registrations %v, old %s", g.Name, ids, oldBillingReg[0])
+					}
+				}
+				return nil
+			})
+			t.Logf("old billing registration gone on both survivors %s after SIGKILL", time.Since(killedAt).Round(time.Millisecond))
+		})
+
 		t.Run("services registered through the dead node are listed", func(t *testing.T) {
 			for _, g := range survivors {
 				ss, err := g.Admin().Services(ctx)
@@ -208,41 +237,23 @@ func TestS4ClusterOps(t *testing.T) {
 			}
 		})
 
-		// Not /api/health alone here, unlike the rolling upgrade. Only
-		// the control plane that took a registration refreshes its
-		// registry entry (30s TTL), so billing's entry expires while
-		// n2 is down. The expiry raises no delete event: n1 and n3
-		// keep routing billing, but a node that replays the registry
-		// after the expiry (n2 now, or any node the roll restarts
-		// later) does not see billing until the fixture registers
-		// again through the restarted n2, on its next heartbeat. The
-		// operator keeps n2 out of rotation until it routes, and the
-		// roll waits for the new registration.
-		lb.Pull(n2)
+		// The LB's health probe alone decides when n2 takes calls
+		// again: /api/health turns 200 once the registry is replayed,
+		// and every node holds the same registry.
+		n2FailedDown := lb.Stats()[n2.Name].Failed
 		n2.Proc.Restart()
 		restartedAt := time.Now()
+		lb.WaitInRotation(t, n2, 60*time.Second)
+		t.Logf("n2 back in LB rotation %s after restart", time.Since(restartedAt).Round(time.Millisecond))
 		n2.WaitReady()
-		t.Logf("n2 healthy %s after restart (start to /api/health 200 and control plane)", time.Since(restartedAt).Round(time.Millisecond))
 		cluster.WaitPeers(3, 60*time.Second)
-		harness.Eventually(t, 60*time.Second, "billing registers again through n2", func() error {
-			ids := billingReg(n2)
-			for _, id := range ids {
-				if id != oldBillingReg[0] {
-					return nil
-				}
+		sent0 := lb.Stats()[n2.Name].OK
+		harness.Eventually(t, 30*time.Second, "n2 serves traffic again", func() error {
+			if d := lb.Stats()[n2.Name].OK - sent0; d < 20 {
+				return fmt.Errorf("%d calls", d)
 			}
-			return fmt.Errorf("n2 lists billing registrations %v, old %s", ids, oldBillingReg[0])
+			return nil
 		})
-		for _, f := range fixtures {
-			f := f
-			harness.Eventually(t, 60*time.Second, "n2 routes "+f.Opts.Namespace, func() error {
-				_, err := f.EchoVia(ctx, n2, "v1", "probe")
-				return err
-			})
-		}
-		lb.Restore(n2)
-		lb.WaitInRotation(t, n2, 10*time.Second)
-		t.Logf("n2 rejoined with 3 peers and routing %s after restart", time.Since(restartedAt).Round(time.Millisecond))
 
 		t.Run("rejoined node serves the same schema", func(t *testing.T) {
 			harness.Eventually(t, 60*time.Second, "n2 serves the pre-kill SDL and hashes", func() error {
@@ -277,7 +288,7 @@ func TestS4ClusterOps(t *testing.T) {
 		res := load.Stop()
 		t.Logf("node loss: %s; %s", res, lb.StatsString())
 
-		t.Run("no failures on nodes that stayed up", func(t *testing.T) {
+		t.Run("no failures on live nodes", func(t *testing.T) {
 			st := lb.Stats()
 			for _, g := range survivors {
 				if s := st[g.Name]; s.Failed != 0 || s.OK == 0 {
@@ -286,7 +297,13 @@ func TestS4ClusterOps(t *testing.T) {
 					errMu.Unlock()
 				}
 			}
-			t.Logf("calls that failed on the killed node (in flight at SIGKILL or sent before the LB noticed): %d", st[n2.Name].Failed)
+			// n2 after its restart, from the LB's first call to it on.
+			if d := st[n2.Name].Failed - n2FailedDown; d != 0 {
+				errMu.Lock()
+				t.Errorf("n2 failed %d calls after its restart, want 0; first errors: %v", d, nodeErrs[n2.Name])
+				errMu.Unlock()
+			}
+			t.Logf("calls that failed on the killed node (in flight at SIGKILL or sent before the LB noticed): %d", n2FailedDown)
 		})
 
 		t.Run("metrics", func(t *testing.T) {
@@ -328,8 +345,11 @@ func TestS4ClusterOps(t *testing.T) {
 			if code := g.Proc.Stop(30 * time.Second); code != 0 {
 				t.Errorf("%s exited with code %d on SIGTERM, want 0", g.Name, code)
 			}
-			// The LB's own probe sees the node gone.
-			lb.WaitOutOfRotation(t, g, 5*time.Second)
+			// The LB's own probe sees the node gone. Not
+			// WaitOutOfRotation: a pulled node passes it at once,
+			// and Restore before a failed probe sends calls to the
+			// stopped node (seen: 6 connection-refused calls).
+			lb.WaitProbeFails(t, g, 5*time.Second)
 			// From here the LB's health probe alone decides when the
 			// node takes calls again.
 			lb.Restore(g)
@@ -399,6 +419,83 @@ func TestS4ClusterOps(t *testing.T) {
 				}
 			}
 		})
+	})
+
+	t.Run("only owner node lost", func(t *testing.T) {
+		// ledger knows only n3's control plane, so nothing refreshes
+		// its registry entry while n3 is down.
+		ledger := env.Fixture(n3, harness.FixtureOpts{Namespace: "ledger"})
+		for _, g := range cluster.Nodes {
+			g := g
+			harness.Eventually(t, 30*time.Second, g.Name+" routes ledger", func() error {
+				_, err := ledger.EchoVia(ctx, g, "v1", "before")
+				return err
+			})
+		}
+		survivors := []*harness.Gateway{n1, n2}
+		listsLedger := func(g *harness.Gateway) (bool, error) {
+			ss, err := g.Admin().Services(ctx)
+			if err != nil {
+				return false, err
+			}
+			return ss.Service(ledger.Opts.Namespace, "v1") != nil, nil
+		}
+
+		n3.Proc.Kill()
+		killedAt := time.Now()
+		// The entry expires 30s (registry TTL) after n3's last
+		// refresh; its delete marker reaches every node.
+		harness.Eventually(t, 75*time.Second, "both survivors drop ledger", func() error {
+			for _, g := range survivors {
+				listed, err := listsLedger(g)
+				if err != nil {
+					return err
+				}
+				if listed {
+					return fmt.Errorf("%s still lists ledger", g.Name)
+				}
+				if _, err := ledger.EchoVia(ctx, g, "v1", "after-expiry"); err == nil {
+					return fmt.Errorf("%s still routes ledger", g.Name)
+				}
+			}
+			return nil
+		})
+		t.Logf("ledger dropped on both survivors %s after SIGKILL", time.Since(killedAt).Round(time.Millisecond))
+		// Dropped for good, on both, with the same schema.
+		harness.Consistently(t, 5*time.Second, "survivors agree ledger is gone", func() error {
+			for _, g := range survivors {
+				if listed, err := listsLedger(g); err != nil || listed {
+					return fmt.Errorf("%s lists ledger (err %v)", g.Name, err)
+				}
+			}
+			return nil
+		})
+		if a, b := mustSDL(t, ctx, n1), mustSDL(t, ctx, n2); a != b {
+			t.Errorf("n1 and n2 serve different SDL after ledger expired")
+		}
+		// orders and billing know n1 and n2 too.
+		for _, g := range survivors {
+			for _, f := range fixtures {
+				f, g := f, g
+				harness.Eventually(t, 30*time.Second, g.Name+" routes "+f.Opts.Namespace, func() error {
+					_, err := f.EchoVia(ctx, g, "v1", "after-n3-loss")
+					return err
+				})
+			}
+		}
+
+		// n3 comes back; ledger's next heartbeat reaches it, finds
+		// the registration unknown and registers again.
+		n3.Proc.Restart()
+		n3.WaitReady()
+		cluster.WaitPeers(3, 75*time.Second)
+		for _, g := range cluster.Nodes {
+			g := g
+			harness.Eventually(t, 60*time.Second, g.Name+" routes ledger again", func() error {
+				_, err := ledger.EchoVia(ctx, g, "v1", "back")
+				return err
+			})
+		}
 	})
 }
 
