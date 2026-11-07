@@ -196,6 +196,10 @@ type Options struct {
 	// HeartbeatInterval defaults to TTL/3 (or 10s if TTL is 0).
 	HeartbeatInterval time.Duration
 
+	// ReadyPollInterval is how often SelfRegister polls Heartbeat
+	// while a binding is WAITING on its dependencies. 0 → 1s.
+	ReadyPollInterval time.Duration
+
 	// DialOptions are appended to the gateway-conn dial. Insecure is
 	// the default if none are supplied.
 	DialOptions []grpc.DialOption
@@ -261,12 +265,31 @@ type Registration struct {
 	closeOnce sync.Once
 	closeErr  error
 	sigStop   chan struct{}
+
+	// bindings is the start-gate state from the latest Register or
+	// Heartbeat response (gate.go). Guarded by mu.
+	bindings []BindingStatus
 }
 
 // SelfRegister registers with the gateway control plane and starts a
 // background heartbeat goroutine. Returns a Registration; call
 // Close when the service shuts down to deregister and stop the goroutine.
-// Blocks until the initial Register RPC succeeds or ctx is cancelled.
+//
+// Blocks until the gateway reports every binding ready, or ctx ends:
+//
+//   - While the gateway is unreachable (Unavailable and similar), the
+//     Register is retried with backoff, forever, and each failure is
+//     logged. The service does not start without the gateway (fail
+//     closed). A refused Register (bad request, dependency cycle)
+//     returns its error.
+//   - A binding whose Depends have no ready instance on any accepted
+//     line is WAITING. SelfRegister polls Heartbeat every
+//     ReadyPollInterval and logs which dependencies are missing until
+//     the gateway reports it ready.
+//
+// Bindings without Depends are ready at once. When ctx ends first,
+// the registration is deregistered and ctx's error returned. Use
+// PresentLines / Bindings to pick which line of a dependency to call.
 //
 // Stability: stable
 func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
@@ -308,7 +331,12 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 		opts:   opts,
 	}
 
-	if err := r.register(ctx); err != nil {
+	if err := r.registerRetry(ctx); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := r.waitReady(ctx); err != nil {
+		r.deregister()
 		_ = conn.Close()
 		return nil, err
 	}
@@ -494,6 +522,7 @@ func (r *Registration) register(ctx context.Context) error {
 	r.mu.Lock()
 	r.id = resp.GetRegistrationId()
 	r.ttl = time.Duration(resp.GetTtlSeconds()) * time.Second
+	r.bindings = bindingsFromProto(resp.GetBindings())
 	r.mu.Unlock()
 	return nil
 }
@@ -523,7 +552,9 @@ func (r *Registration) heartbeatLoop(interval time.Duration) {
 				if err := r.register(context.Background()); err != nil {
 					r.logger("controlclient: re-register failed: %v", err)
 				}
+				continue
 			}
+			r.setBindings(resp.GetBindings())
 		}
 	}
 }

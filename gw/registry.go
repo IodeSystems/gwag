@@ -54,6 +54,13 @@ type registryValue struct {
 	// timeout; 0 → each gateway's own WithUpstreamTimeout default.
 	TimeoutMs uint32 `json:"timeout_ms,omitempty"`
 
+	// Waiting marks a binding held by the start gate: its depends are
+	// not all present yet. Reconcilers record it but do not join it
+	// to a pool. The owning node re-Puts the value with Waiting=false
+	// when the deps arrive (start_gate.go). Omitted when false, so
+	// values from older gateways decode as ready.
+	Waiting bool `json:"waiting,omitempty"`
+
 	// Manifest is ServiceBinding.depends / owner. Embedded so the JSON
 	// keys are "depends" / "owner"; both omitted when unset, so values
 	// written by older gateways decode to the zero manifest.

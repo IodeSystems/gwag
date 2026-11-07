@@ -84,7 +84,7 @@ func waitDrainState(t *testing.T, g *Gateway, instance string, want cpv1.DrainSt
 	return nil
 }
 
-func helloVia(t *testing.T, base string) error {
+func drainHelloVia(t *testing.T, base string) error {
 	t.Helper()
 	resp, err := http.Post(base+"/graphql", "application/json",
 		strings.NewReader(`{"query":"{ greeter { hello(name:\"x\") { greeting } } }"}`))
@@ -134,7 +134,7 @@ func TestInstanceDrain_StopsRoutingToThatInstanceOnly(t *testing.T) {
 
 	beforeA := ga.helloCalls.Load()
 	for i := 0; i < 10; i++ {
-		if err := helloVia(t, srv.URL); err != nil {
+		if err := drainHelloVia(t, srv.URL); err != nil {
 			t.Fatalf("hello %d: %v", i, err)
 		}
 	}
@@ -150,7 +150,7 @@ func TestInstanceDrain_StopsRoutingToThatInstanceOnly(t *testing.T) {
 		t.Fatalf("after cancel state=%v", st)
 	}
 	for i := 0; i < 10; i++ {
-		if err := helloVia(t, srv.URL); err != nil {
+		if err := drainHelloVia(t, srv.URL); err != nil {
 			t.Fatalf("hello after cancel: %v", err)
 		}
 	}
@@ -164,7 +164,7 @@ func TestInstanceDrain_LastInstanceStopsRouting(t *testing.T) {
 	g, srv := newStandalone(t)
 	registerOn(t, g, greeterReq(t, addr, "greeter-a", "v1"))
 	waitDrainState(t, g, "greeter-a", cpv1.DrainState_DRAIN_STATE_SAFE_TO_STOP, 5*time.Second)
-	if err := helloVia(t, srv.URL); err == nil {
+	if err := drainHelloVia(t, srv.URL); err == nil {
 		t.Fatalf("dispatch reached the only (draining) instance")
 	}
 }
@@ -181,7 +181,7 @@ func TestInstanceDrain_WaitsForInflight(t *testing.T) {
 	registerOn(t, g, greeterReq(t, addrA, "greeter-a", "v1"))
 
 	done := make(chan error, 1)
-	go func() { done <- helloVia(t, srv.URL) }()
+	go func() { done <- drainHelloVia(t, srv.URL) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for ga.helloCalls.Load() == 0 {
 		if time.Now().After(deadline) {
@@ -221,7 +221,7 @@ func TestInstanceDrain_BlockedWhenLastCoveringInstance(t *testing.T) {
 		t.Fatalf("reasons=%v", r)
 	}
 	// Blocked holds the drain; routing continues.
-	if err := helloVia(t, srv.URL); err != nil {
+	if err := drainHelloVia(t, srv.URL); err != nil {
 		t.Fatalf("blocked drain stopped routing: %v", err)
 	}
 	if ga.helloCalls.Load() != 1 {
@@ -468,7 +468,7 @@ func TestInstanceDrain_ClusterCrossNode(t *testing.T) {
 	}
 	beforeA, beforeB := ga.helloCalls.Load(), gb.helloCalls.Load()
 	for i := 0; i < 5; i++ {
-		if err := helloVia(t, a.httpSrv.URL); err != nil {
+		if err := drainHelloVia(t, a.httpSrv.URL); err != nil {
 			t.Fatalf("hello via A: %v", err)
 		}
 	}

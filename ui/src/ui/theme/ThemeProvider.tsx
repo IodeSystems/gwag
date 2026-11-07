@@ -8,9 +8,11 @@ import {
 } from 'react';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import { createAppTheme } from './theme';
+import { DEFAULT_PRESET, isPresetId, type PresetId } from './presets';
 import type { Mode } from './tokens';
 
 const STORAGE_KEY = 'gwag.ui.themeMode';
+const PRESET_KEY = 'gwag.ui.themePreset';
 export const DEFAULT_ENVIRONMENT = 'dev';
 
 function readMode(): Mode {
@@ -31,7 +33,27 @@ function writeMode(m: Mode) {
   }
 }
 
+function readPreset(): PresetId {
+  try {
+    const v = localStorage.getItem(PRESET_KEY);
+    if (isPresetId(v)) return v;
+  } catch {
+    // storage unavailable: fall through
+  }
+  return DEFAULT_PRESET;
+}
+
+function writePreset(p: PresetId) {
+  try {
+    localStorage.setItem(PRESET_KEY, p);
+  } catch {
+    // preference simply does not persist
+  }
+}
+
 interface ModeCtx {
+  preset: PresetId;
+  setPreset: (p: PresetId) => void;
   mode: Mode;
   setMode: (m: Mode) => void;
   toggle: () => void;
@@ -55,11 +77,16 @@ export function AppThemeProvider({
     setModeState(m);
     writeMode(m);
   }, []);
+  const [preset, setPresetState] = useState<PresetId>(readPreset);
+  const setPreset = useCallback((p: PresetId) => {
+    setPresetState(p);
+    writePreset(p);
+  }, []);
   const toggle = useCallback(() => setMode(mode === 'dark' ? 'light' : 'dark'), [mode, setMode]);
-  const theme = useMemo(() => createAppTheme(mode, environment), [mode, environment]);
+  const theme = useMemo(() => createAppTheme(mode, environment, preset), [mode, environment, preset]);
   const value = useMemo(
-    () => ({ mode, setMode, toggle, environment }),
-    [mode, setMode, toggle, environment],
+    () => ({ preset, setPreset, mode, setMode, toggle, environment }),
+    [preset, setPreset, mode, setMode, toggle, environment],
   );
   return (
     <Ctx.Provider value={value}>
@@ -71,17 +98,22 @@ export function AppThemeProvider({
   );
 }
 
-/** Nested provider with a fixed mode, for side-by-side previews. */
+/** Nested provider with a fixed preset and mode, for previews. */
 export function ScopedTheme({
   mode,
+  preset = DEFAULT_PRESET,
   environment = DEFAULT_ENVIRONMENT,
   children,
 }: {
   mode: Mode;
+  preset?: PresetId;
   environment?: string;
   children: ReactNode;
 }) {
-  const theme = useMemo(() => createAppTheme(mode, environment), [mode, environment]);
+  const theme = useMemo(
+    () => createAppTheme(mode, environment, preset),
+    [mode, environment, preset],
+  );
   return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
 }
 

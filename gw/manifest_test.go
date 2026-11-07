@@ -27,6 +27,15 @@ func greeterBinding(t *testing.T, ver string) *cpv1.ServiceBinding {
 	}
 }
 
+func libraryBinding(t *testing.T, ver string) *cpv1.ServiceBinding {
+	t.Helper()
+	return &cpv1.ServiceBinding{
+		Namespace:   "library",
+		Version:     ver,
+		ProtoSource: testProtoBytes(t, "library.proto"),
+	}
+}
+
 func listServiceInfo(t *testing.T, g *Gateway, ns, ver string) (*cpv1.ListServicesResponse, *cpv1.ServiceInfo) {
 	t.Helper()
 	resp, err := g.ControlPlane().ListServices(context.Background(), &cpv1.ListServicesRequest{})
@@ -390,7 +399,8 @@ func assertGreeterLines(t *testing.T, base string) {
 
 // Cluster: manifest rides the registry KV, so the peer that did not
 // receive the Register reports it too; v1+v2 in one Register reaches
-// both lines on the peer.
+// both lines on the peer. library/v1 rides the same Register so v2's
+// dependency is present and the start gate opens.
 func TestManifest_ClusterReplication(t *testing.T) {
 	resetSharedCluster(t)
 	_, _ = getSharedCluster(t)
@@ -404,7 +414,7 @@ func TestManifest_ClusterReplication(t *testing.T) {
 	v2.Owner = &cpv1.Owner{Team: "catalog", Contact: "#catalog"}
 	req := &cpv1.RegisterRequest{
 		Addr:     addr,
-		Services: []*cpv1.ServiceBinding{greeterBinding(t, "v1"), v2},
+		Services: []*cpv1.ServiceBinding{greeterBinding(t, "v1"), v2, libraryBinding(t, "v1")},
 	}
 	regCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

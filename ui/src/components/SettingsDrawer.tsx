@@ -7,6 +7,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { PresetPicker } from '@/ui';
 import {
   getAdminToken,
   setAdminToken,
@@ -63,6 +64,11 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
         <Typography variant="h6" gutterBottom>
           Settings
         </Typography>
+
+        <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+          Appearance
+        </Typography>
+        <PresetPicker />
 
         <Typography variant="subtitle2" sx={{ mt: 2 }}>
           Admin bearer token
