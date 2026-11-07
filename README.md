@@ -165,9 +165,9 @@ with (no network; ratios travel, absolutes don't):
 <!-- BEGIN gat-headline -->
 | Surface | gat | hand-written | Ratio |
 |---|---:|---:|---:|
-| REST | 19.6µs (huma, unmodified) | 77.0µs (grpc-gateway) | 0.25× |
-| gRPC | 31.5µs (binary codec) | 21.4µs (connect-go) | 1.47× |
-| GraphQL | 116.7µs | 254.1µs (gqlgen) | 0.46× |
+| REST | 15.4µs (huma, unmodified) | 49.8µs (grpc-gateway) | 0.31× |
+| gRPC | 16.9µs (binary codec) | 13.1µs (connect-go) | 1.29× |
+| GraphQL | 102.0µs | 142.3µs (gqlgen) | 0.72× |
 
 gat's REST path *is* huma — `gat.Register` wraps `huma.Register`
 and adds nothing to it. GraphQL comes out ahead of gqlgen: the
@@ -175,10 +175,9 @@ executor walks a cached plan and appends response JSON straight
 into a pooled buffer, where gqlgen assembles an intermediate
 first. gRPC is the surface translation costs — gat allocates a
 dynamicpb message per element and walks it by reflection, where
-connect-go has generated structs. The ratio is worst on the
-binary codec shown here; a JSON-codec caller narrows it, but only
-because JSON penalises connect-go more than it penalises gat.
-Per-caller numbers and method:
+connect-go has generated structs. The row shows the binary
+codec; the ratio moves with the caller's wire format and the
+host. Per-caller numbers and method:
 [`compare/gatbench/`](./compare/gatbench).
 <!-- END gat-headline -->
 
