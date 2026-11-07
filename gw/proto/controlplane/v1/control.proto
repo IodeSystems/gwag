@@ -187,6 +187,14 @@ message ServiceBinding {
   // Manifest: the team that owns this binding and how to reach it.
   // Unset = no declared owner.
   Owner owner = 11;
+
+  // Manifest: show this (namespace, version) to admin readers that
+  // present no token (the dependency graph, status page and services
+  // list). Admin visibility only: calls through the gateway are not
+  // affected. false = visible only with the dev or admin token, unless
+  // the gateway makes every service public (--public-services=all).
+  // Stored on the slot and replicated across the cluster like owner.
+  bool public = 12;
 }
 
 // Dependency names one provider service and the lines a consumer
@@ -386,6 +394,10 @@ message ServiceInfo {
   // replica_count and are always ready. A (namespace, version) with
   // only WAITING instances is listed with replica_count 0.
   repeated InstanceStatus instances = 8;
+  // True when admin readers without a token may see this
+  // (namespace, version): ServiceBinding.public of the latest
+  // registration, or the gateway's public-services setting.
+  bool public = 9;
 }
 
 // SubscribeAuthCode is the result of an attempted subscribe. Both the

@@ -375,7 +375,14 @@ type ServiceBinding struct {
 	Depends []*Dependency `protobuf:"bytes,10,rep,name=depends,proto3" json:"depends,omitempty"`
 	// Manifest: the team that owns this binding and how to reach it.
 	// Unset = no declared owner.
-	Owner         *Owner `protobuf:"bytes,11,opt,name=owner,proto3" json:"owner,omitempty"`
+	Owner *Owner `protobuf:"bytes,11,opt,name=owner,proto3" json:"owner,omitempty"`
+	// Manifest: show this (namespace, version) to admin readers that
+	// present no token (the dependency graph, status page and services
+	// list). Admin visibility only: calls through the gateway are not
+	// affected. false = visible only with the dev or admin token, unless
+	// the gateway makes every service public (--public-services=all).
+	// Stored on the slot and replicated across the cluster like owner.
+	Public        bool `protobuf:"varint,12,opt,name=public,proto3" json:"public,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -485,6 +492,13 @@ func (x *ServiceBinding) GetOwner() *Owner {
 		return x.Owner
 	}
 	return nil
+}
+
+func (x *ServiceBinding) GetPublic() bool {
+	if x != nil {
+		return x.Public
+	}
+	return false
 }
 
 // Dependency names one provider service and the lines a consumer
@@ -1610,7 +1624,11 @@ type ServiceInfo struct {
 	// registrations (AddProto etc.) are not listed; they count in
 	// replica_count and are always ready. A (namespace, version) with
 	// only WAITING instances is listed with replica_count 0.
-	Instances     []*InstanceStatus `protobuf:"bytes,8,rep,name=instances,proto3" json:"instances,omitempty"`
+	Instances []*InstanceStatus `protobuf:"bytes,8,rep,name=instances,proto3" json:"instances,omitempty"`
+	// True when admin readers without a token may see this
+	// (namespace, version): ServiceBinding.public of the latest
+	// registration, or the gateway's public-services setting.
+	Public        bool `protobuf:"varint,9,opt,name=public,proto3" json:"public,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1699,6 +1717,13 @@ func (x *ServiceInfo) GetInstances() []*InstanceStatus {
 		return x.Instances
 	}
 	return nil
+}
+
+func (x *ServiceInfo) GetPublic() bool {
+	if x != nil {
+		return x.Public
+	}
+	return false
 }
 
 type SignSubscriptionTokenRequest struct {
@@ -2327,7 +2352,7 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\vttl_seconds\x18\x03 \x01(\rR\n" +
 	"ttlSeconds\x12\x1f\n" +
 	"\vinstance_id\x18\x04 \x01(\tR\n" +
-	"instanceId\"\xd8\x04\n" +
+	"instanceId\"\xf0\x04\n" +
 	"\x0eServiceBinding\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12!\n" +
 	"\fproto_source\x18\x02 \x01(\fR\vprotoSource\x12^\n" +
@@ -2341,7 +2366,8 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"timeout_ms\x18\t \x01(\rR\ttimeoutMs\x12=\n" +
 	"\adepends\x18\n" +
 	" \x03(\v2#.gateway.controlplane.v1.DependencyR\adepends\x124\n" +
-	"\x05owner\x18\v \x01(\v2\x1e.gateway.controlplane.v1.OwnerR\x05owner\x1a?\n" +
+	"\x05owner\x18\v \x01(\v2\x1e.gateway.controlplane.v1.OwnerR\x05owner\x12\x16\n" +
+	"\x06public\x18\f \x01(\bR\x06public\x1a?\n" +
 	"\x11ProtoImportsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"<\n" +
@@ -2416,7 +2442,7 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\venvironment\x18\x04 \x01(\tR\venvironment\x1a;\n" +
 	"\rStableVnEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03\"\xfd\x02\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03\"\x95\x03\n" +
 	"\vServiceInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x19\n" +
@@ -2425,7 +2451,8 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x19manual_deprecation_reason\x18\x05 \x01(\tR\x17manualDeprecationReason\x12=\n" +
 	"\adepends\x18\x06 \x03(\v2#.gateway.controlplane.v1.DependencyR\adepends\x124\n" +
 	"\x05owner\x18\a \x01(\v2\x1e.gateway.controlplane.v1.OwnerR\x05owner\x12E\n" +
-	"\tinstances\x18\b \x03(\v2'.gateway.controlplane.v1.InstanceStatusR\tinstances\"k\n" +
+	"\tinstances\x18\b \x03(\v2'.gateway.controlplane.v1.InstanceStatusR\tinstances\x12\x16\n" +
+	"\x06public\x18\t \x01(\bR\x06public\"k\n" +
 	"\x1cSignSubscriptionTokenRequest\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
