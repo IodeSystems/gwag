@@ -59,6 +59,7 @@ type peerTracker struct {
 	deprecated jetstream.KeyValue
 	mcpConfig  jetstream.KeyValue
 	drain      jetstream.KeyValue
+	externals  jetstream.KeyValue
 
 	nodeID string
 	self   []byte
@@ -73,6 +74,7 @@ type peerTracker struct {
 	deprecatedDone chan struct{}
 	mcpConfigDone  chan struct{}
 	drainDone      chan struct{}
+	externalsDone  chan struct{}
 
 	currentR atomic.Int32
 
@@ -187,6 +189,12 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, err
 	}
 
+	externals, err := openExternalDependentsBucket(ctx, cl.JS)
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -207,6 +215,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		deprecated:     deprecated,
 		mcpConfig:      mcpConfig,
 		drain:          drain,
+		externals:      externals,
 		nodeID:         cl.NodeID,
 		self:           selfBytes,
 		live:           map[string]struct{}{cl.NodeID: {}},
@@ -216,6 +225,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		deprecatedDone: make(chan struct{}),
 		mcpConfigDone:  make(chan struct{}),
 		drainDone:      make(chan struct{}),
+		externalsDone:  make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -237,6 +247,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		close(t.deprecatedDone)
 		close(t.mcpConfigDone)
 		close(t.drainDone)
+		close(t.externalsDone)
 		return nil, err
 	}
 
@@ -258,6 +269,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.deprecatedWatchLoop(tctx)
 	go t.mcpConfigWatchLoop(tctx)
 	go t.drainWatchLoop(tctx)
+	go t.externalsWatchLoop(tctx)
 	return t, nil
 }
 
@@ -353,6 +365,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 		{deprecatedBucketName, deprecatedTTL},
 		{mcpConfigBucketName, mcpConfigTTL},
 		{drainBucketName, 0},
+		{externalDependentsBucketName, 0},
 	} {
 		_, err := t.js.UpdateKeyValue(c, jetstream.KeyValueConfig{
 			Bucket:   b.name,
@@ -416,6 +429,9 @@ func (t *peerTracker) stop() {
 	}
 	if t.drainDone != nil {
 		<-t.drainDone
+	}
+	if t.externalsDone != nil {
+		<-t.externalsDone
 	}
 	t.rec.stop()
 }

@@ -196,6 +196,10 @@ type Gateway struct {
 	// drains is the per-instance drain state (instance_drain.go).
 	drains instanceDrains
 
+	// externals holds the declared external dependents
+	// (external_dependents.go).
+	externals externalDependents
+
 	// warnedEventsAuth tracks (namespace, version) tuples we've already
 	// emitted a deprecation warning for, so heartbeat-driven re-registers
 	// don't spam logs. Keyed on "<ns>:<ver>". The SubscriptionAuthorizer

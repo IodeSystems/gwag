@@ -137,6 +137,7 @@ func resetSharedCluster(t *testing.T) {
 			deprecatedBucketName,
 			mcpConfigBucketName,
 			drainBucketName,
+			externalDependentsBucketName,
 		} {
 			kv, err := cl.JS.KeyValue(jsCtx, bucket)
 			if err != nil {

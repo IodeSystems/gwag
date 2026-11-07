@@ -147,6 +147,40 @@ asymmetric reality that *adding* fields is always safe but
 Stop heartbeating; the gateway evicts after TTL. The schema
 rebuilds; the field disappears.
 
+### External dependents
+
+A line is sunset-able (admin graph `sunsetable`, metric
+`line_sunsetable`) when every dependent that accepts it also accepts
+another line with a ready instance, and it had no traffic in the
+window. Dependents are the `depends` of registered services. A
+consumer the gateway cannot see (an API customer, a partner
+integration, a mobile app release) is declared as an external
+dependent:
+
+```bash
+curl -X PUT https://gw.internal/api/admin/external-dependents/acme \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Acme Corp","kind":"customer",
+       "owner":{"team":"books","contact":"acme-api@example.com"},
+       "depends":[{"service":"library","lines":["v1"]}],
+       "note":"contract 2026-14","expiresAt":"2027-06-30T00:00:00Z"}'
+```
+
+It counts wherever a registered dependent counts: library v1 is not
+sunset-able while Acme pins only v1, a drain of the last ready v1
+instance is `blocked` with a reason naming Acme, and
+`dependency_unmet{consumer_kind="external",consumer_namespace="acme"}`
+is 1 while no pinned line has a ready instance. It does not affect the
+start gate. `kind` is `customer`, `partner`, `app` or `other`; lines
+follow the `depends` rule (`vN` or `unstable`). A pin on a service or
+line that is not registered is accepted, with a warning in the
+response. Past `expiresAt` the declaration stops counting but stays
+listed with `expired: true` until it is renewed or deleted
+(`DELETE /admin/external-dependents/acme`). In a cluster the
+declarations live in the `gwag-external-dependents` KV bucket and
+apply on every node. The admin UI draws them on the dependency graph
+and edits them there.
+
 ## Promotion path
 
 The tier flow above is the per-namespace story. Two extra gates wire

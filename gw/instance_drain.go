@@ -24,7 +24,8 @@ import (
 //     dependent D whose depends accept L, D must keep at least one
 //     accepted line with a ready instance other than this one. If
 //     not, the drain is BLOCKED: routing continues, reasons name the
-//     dependents.
+//     dependents. Declared external dependents that have not expired
+//     (external_dependents.go) count as dependents here.
 //  2. otherwise stops picking the instance's replicas (every line,
 //     every kind) and waits for in-flight requests to it to reach 0.
 //  3. reports SAFE_TO_STOP.
@@ -273,7 +274,7 @@ func drainBefore(a, b drainRequest) bool {
 func (g *Gateway) coverageReasons(target string) []string {
 	d := &g.drains
 	type depLine struct {
-		key poolKey
+		who string // "ns/ver", or an external dependent's label
 		dep manifestDependency
 	}
 	d.mu.Lock()
@@ -294,7 +295,7 @@ func (g *Gateway) coverageReasons(target string) []string {
 		}
 		for k, m := range other.lines {
 			for _, dep := range m.Depends {
-				deps = append(deps, depLine{key: k, dep: dep})
+				deps = append(deps, depLine{who: k.namespace + "/" + k.version, dep: dep})
 			}
 		}
 	}
@@ -304,6 +305,11 @@ func (g *Gateway) coverageReasons(target string) []string {
 	}
 	ready := d.ready
 	d.mu.Unlock()
+	for _, x := range g.externals.active(nowFunc()) {
+		for _, dep := range x.Depends {
+			deps = append(deps, depLine{who: x.label(), dep: dep})
+		}
+	}
 	if ready == nil {
 		ready = g.defaultReadyInstances
 	}
@@ -337,7 +343,7 @@ func (g *Gateway) coverageReasons(target string) []string {
 			if covered {
 				continue
 			}
-			r := fmt.Sprintf("%s/%s accepts %s [%s]: no other ready instance", dl.key.namespace, dl.key.version, k.namespace, strings.Join(dl.dep.Lines, ", "))
+			r := fmt.Sprintf("%s accepts %s [%s]: no other ready instance", dl.who, k.namespace, strings.Join(dl.dep.Lines, ", "))
 			if !seen[r] {
 				seen[r] = true
 				reasons = append(reasons, r)
