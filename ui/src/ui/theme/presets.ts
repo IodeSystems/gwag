@@ -438,7 +438,7 @@ export const presetList: Preset[] = [
   presets.terminal,
 ];
 
-export const DEFAULT_PRESET: PresetId = 'glow';
+export const DEFAULT_PRESET: PresetId = 'walnut';
 
 export function isPresetId(v: unknown): v is PresetId {
   return typeof v === 'string' && v in presets;
