@@ -350,6 +350,56 @@ type graphqlGroupDispatcher struct {
 	ns      string
 	ver     string
 	label   string // e.g. "query greeter"
+
+	printed forwardPrintCache
+}
+
+// forwardQuery prints the upstream query for this group field. Cached
+// per (field, operation) AST node like graphQLDispatcher.forwardQuery;
+// the plan cache hands the same nodes to repeated requests.
+func (d *graphqlGroupDispatcher) forwardQuery(info *graphql.ResolveInfo) (string, error) {
+	localField := info.FieldASTs[0]
+	key := forwardKey{field: localField, op: info.Operation}
+	if q, ok := d.printed.get(key); ok {
+		return q, nil
+	}
+	// Build the upstream field: same name as the local group field
+	// (graphql-origin: local and remote share the namespace path
+	// structure post-introspection), with the local sub-selection
+	// rewritten via the mirror so inline-fragment type conditions get
+	// unprefixed.
+	groupField := ast.NewField(&ast.Field{
+		Alias:      localField.Alias,
+		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
+		Arguments:  localField.Arguments,
+		Directives: localField.Directives,
+	})
+	if localField.SelectionSet != nil {
+		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
+	}
+	opType := ast.OperationTypeQuery
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		if op.Operation == ast.OperationTypeMutation {
+			opType = ast.OperationTypeMutation
+		}
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           opType,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{groupField},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	q, ok := raw.(string)
+	if !ok {
+		return "", Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw))
+	}
+	d.printed.put(key, q)
+	return q, nil
 }
 
 func newGraphqlGroupDispatcher(m *graphQLMirror, group *ir.OperationGroup, metrics Metrics) *graphqlGroupDispatcher {
@@ -398,36 +448,9 @@ func (d *graphqlGroupDispatcher) Dispatch(ctx context.Context, _ map[string]any)
 	// rewritten via the mirror so inline-fragment type conditions get
 	// unprefixed.
 	localField := info.FieldASTs[0]
-	groupField := ast.NewField(&ast.Field{
-		Alias:      localField.Alias,
-		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
-		Arguments:  localField.Arguments,
-		Directives: localField.Directives,
-	})
-	if localField.SelectionSet != nil {
-		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
-	}
-
-	opType := ast.OperationTypeQuery
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		if op.Operation == ast.OperationTypeMutation {
-			opType = ast.OperationTypeMutation
-		}
-		varDefs = op.VariableDefinitions
-	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           opType,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{groupField},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	printed, ok := raw.(string)
-	if !ok {
-		return nil, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+	printed, err := d.forwardQuery(info)
+	if err != nil {
+		return nil, record(err)
 	}
 
 	src := d.mirror.src
@@ -489,36 +512,9 @@ func (d *graphqlGroupDispatcher) DispatchAppend(ctx context.Context, _ map[strin
 	}
 
 	localField := info.FieldASTs[0]
-	groupField := ast.NewField(&ast.Field{
-		Alias:      localField.Alias,
-		Name:       ast.NewName(&ast.Name{Value: d.group.Name}),
-		Arguments:  localField.Arguments,
-		Directives: localField.Directives,
-	})
-	if localField.SelectionSet != nil {
-		groupField.SelectionSet = d.mirror.rewriteSelectionSet(localField.SelectionSet)
-	}
-
-	opType := ast.OperationTypeQuery
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		if op.Operation == ast.OperationTypeMutation {
-			opType = ast.OperationTypeMutation
-		}
-		varDefs = op.VariableDefinitions
-	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           opType,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{groupField},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	printed, ok := raw.(string)
-	if !ok {
-		return dst, record(Reject(CodeInternal, fmt.Sprintf("graphql ingest: printer returned %T (%v)", raw, raw)))
+	printed, err := d.forwardQuery(info)
+	if err != nil {
+		return dst, record(err)
 	}
 
 	src := d.mirror.src
@@ -735,6 +731,36 @@ func isLeafIntrospectionType(r *introspectionTypeRef) bool {
 	return false
 }
 
+// forwardSubscriptionQuery prints the upstream subscription for this
+// field, cached per (field, operation) AST node. A subscription field
+// belongs to exactly one dispatcher, so it shares the unary cache.
+func (d *graphQLDispatcher) forwardSubscriptionQuery(info *graphql.ResolveInfo) (string, error) {
+	key := forwardKey{field: info.FieldASTs[0], op: info.Operation}
+	if q, ok := d.printed.get(key); ok {
+		return q, nil
+	}
+	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
+	var varDefs []*ast.VariableDefinition
+	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
+		varDefs = op.VariableDefinitions
+	}
+	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
+		Operation:           ast.OperationTypeSubscription,
+		VariableDefinitions: varDefs,
+		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
+			Selections: []ast.Selection{rewritten},
+		}),
+	})
+	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
+	raw := printer.Print(doc)
+	q, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
+	}
+	d.printed.put(key, q)
+	return q, nil
+}
+
 // dispatchSubscribe opens a multiplexed subscription against the
 // upstream and returns a chan any of pre-plucked frames. The
 // renderer's Subscribe path treats the dispatcher result as the
@@ -753,23 +779,9 @@ func (d *graphQLDispatcher) dispatchSubscribe(ctx context.Context) (any, error) 
 	if info == nil || len(info.FieldASTs) == 0 {
 		return nil, fmt.Errorf("graphql ingest: no AST for subscription %s", d.remoteFieldName)
 	}
-	rewritten := d.mirror.rewriteFieldForRemote(info.FieldASTs[0], d.remoteFieldName)
-	var varDefs []*ast.VariableDefinition
-	if op, ok := info.Operation.(*ast.OperationDefinition); ok && op != nil {
-		varDefs = op.VariableDefinitions
-	}
-	opDef := ast.NewOperationDefinition(&ast.OperationDefinition{
-		Operation:           ast.OperationTypeSubscription,
-		VariableDefinitions: varDefs,
-		SelectionSet: ast.NewSelectionSet(&ast.SelectionSet{
-			Selections: []ast.Selection{rewritten},
-		}),
-	})
-	doc := ast.NewDocument(&ast.Document{Definitions: []ast.Node{opDef}})
-	raw := printer.Print(doc)
-	printed, ok := raw.(string)
-	if !ok {
-		return nil, fmt.Errorf("graphql ingest: printer returned %T (%v)", raw, raw)
+	printed, err := d.forwardSubscriptionQuery(info)
+	if err != nil {
+		return nil, err
 	}
 
 	src := d.mirror.src
