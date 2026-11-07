@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { client } from '@/api/client';
 import { ServicesQuery } from '@/api/operations';
+import { CodeBlock, EmptyState, Page, Panel } from '@/ui';
 
 export const Route = createFileRoute('/schema')({
   component: Schema,
@@ -131,76 +132,63 @@ function Schema() {
   };
 
   return (
-    <Box
-      sx={{
-        m: -3,
-        height: 'calc(100vh - 64px)',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <Box
-        sx={{
-          px: 2,
-          py: 1,
-          borderBottom: 1,
-          borderColor: 'divider',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-        }}
-      >
-        <FormControl>
-          <RadioGroup
-            row
-            value={format}
-            onChange={(e) => setFormat(e.target.value as Format)}
+    <Page
+      title="Schema"
+      subtitle="Gateway schema in each exported format, optionally filtered by service."
+      actions={
+        <>
+          <Button
+            size="small"
+            startIcon={<FilterListIcon />}
+            onClick={() => setFilterOpen(true)}
           >
-            {(Object.keys(formats) as Format[]).map((k) => (
-              <FormControlLabel
-                key={k}
-                value={k}
-                control={<Radio size="small" />}
-                label={formats[k].label}
-              />
-            ))}
-          </RadioGroup>
-        </FormControl>
-        <Box sx={{ flex: 1 }} />
-        <Button
-          size="small"
-          startIcon={<FilterListIcon />}
-          onClick={() => setFilterOpen(true)}
-        >
-          {picked.size > 0 ? `Filter (${picked.size})` : 'Filter'}
-        </Button>
-        <Button
-          size="small"
-          startIcon={<DownloadIcon />}
-          disabled={!data}
-          onClick={downloadCurrent}
-        >
-          Download
-        </Button>
-      </Box>
-      <Box
-        component="pre"
-        sx={{
-          flex: 1,
-          m: 0,
-          p: 2,
-          overflow: 'auto',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          whiteSpace: 'pre',
-        }}
+            {picked.size > 0 ? `Filter (${picked.size})` : 'Filter'}
+          </Button>
+          <Button
+            size="small"
+            startIcon={<DownloadIcon />}
+            disabled={!data}
+            onClick={downloadCurrent}
+          >
+            Download
+          </Button>
+        </>
+      }
+    >
+      <Panel
+        title={spec.label}
+        actions={
+          <FormControl>
+            <RadioGroup
+              row
+              value={format}
+              onChange={(e) => setFormat(e.target.value as Format)}
+            >
+              {(Object.keys(formats) as Format[]).map((k) => (
+                <FormControlLabel
+                  key={k}
+                  value={k}
+                  control={<Radio size="small" />}
+                  label={formats[k].label}
+                />
+              ))}
+            </RadioGroup>
+          </FormControl>
+        }
+        flush
       >
-        {isLoading && <Typography>Loading…</Typography>}
+        {isLoading && <Typography sx={{ p: 2 }}>Loading…</Typography>}
         {error && (
-          <Typography color="error">{error.message}</Typography>
+          <EmptyState compact title="Could not load schema" description={error.message} />
         )}
-        {!isLoading && !error && data?.text}
-      </Box>
+        {!isLoading && !error && data && (
+          <CodeBlock
+            code={data.text}
+            language={format}
+            maxHeight="calc(100vh - 320px)"
+          />
+        )}
+      </Panel>
 
       <FilterDialog
         open={filterOpen}
@@ -211,7 +199,7 @@ function Schema() {
           setFilterOpen(false);
         }}
       />
-    </Box>
+    </Page>
   );
 }
 
