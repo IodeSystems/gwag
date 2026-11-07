@@ -67,7 +67,9 @@ func (r *reconciler) stop() {
 
 // watchLoop subscribes to all pool.> keys. KV replays the current
 // state (one Put per existing key) before delivering new events, so
-// boot-time consumers get the full picture.
+// boot-time consumers get the full picture. The nil entry that ends
+// the replay marks the node ready for /health, once replayComplete
+// agrees the replay held every key.
 func (r *reconciler) watchLoop(ctx context.Context) {
 	defer close(r.done)
 	for {
@@ -84,10 +86,26 @@ func (r *reconciler) watchLoop(ctx context.Context) {
 			}
 			continue
 		}
+		replayed := 0 // entries before the nil marker
+		short := false
 		for ev := range w.Updates() {
 			if ev == nil {
+				// End of the initial values. handlePut applies each
+				// value and rebuilds the schema before it returns, so
+				// every replayed key is routable now. Later watches
+				// (after a reconnect) also send nil; once synced the
+				// node stays synced.
+				if r.gw.registrySync.Load() == registrySyncDone {
+					continue
+				}
+				if !r.replayComplete(ctx, replayed) {
+					short = true
+					break
+				}
+				r.gw.markRegistrySynced()
 				continue
 			}
+			replayed++
 			ns, ver, rid, ok := parseReplicaKey(ev.Key())
 			if !ok {
 				continue
@@ -103,7 +121,44 @@ func (r *reconciler) watchLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if short {
+			// Watch again: the next replay is checked the same way.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
 	}
+}
+
+// replayComplete checks a watch's initial replay against the bucket's
+// stream state, which the stream leader reports. The nil marker alone
+// is not enough: a watch created while a node rejoins the cluster can
+// report 0 initial values for a stream that holds keys (seen in the
+// e2e S4 restart loop), and the node would then turn ready without
+// its services. The replay delivers the last entry of every key,
+// deletes included, so it must hold at least NumSubjects entries.
+// A key added after the watch started makes the check fail once more
+// and costs one more replay.
+func (r *reconciler) replayComplete(ctx context.Context, replayed int) bool {
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	st, err := r.kv.Status(sctx)
+	if err != nil {
+		r.gw.cfg.cluster.Server.Warnf("reconciler: registry status after replay: %v", err)
+		return false
+	}
+	bs, ok := st.(*jetstream.KeyValueBucketStatus)
+	if !ok {
+		return true // cannot check; trust the marker
+	}
+	want := bs.StreamInfo().State.NumSubjects
+	if uint64(replayed) >= want {
+		return true
+	}
+	r.gw.cfg.cluster.Server.Warnf("reconciler: registry replay delivered %d of %d keys; watching again", replayed, want)
+	return false
 }
 
 // handlePut is idempotent: if the replica is already in the pool

@@ -147,6 +147,11 @@ type Gateway struct {
 	// docs/operations.md).
 	draining atomic.Bool
 
+	// registrySync tracks the cluster node's initial registry replay
+	// (registrySyncNone / Pending / Done). Health is 503 "starting"
+	// while it is Pending. See health.go.
+	registrySync atomic.Int32
+
 	// wsConns is the registry of live WebSocket subscription
 	// connections. Each entry is a cancel func bound to the
 	// connection's serveWebSocket lifetime; Drain cancels all to

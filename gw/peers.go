@@ -85,6 +85,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	if g.cfg.cluster == nil {
 		return nil, errors.New("gateway: cluster is not configured")
 	}
+	g.armRegistrySync()
 	g.mu.Lock()
 	if g.peers != nil {
 		t := g.peers

@@ -8,8 +8,22 @@ import (
 )
 
 // HealthHandler returns an http.Handler for /health-style probes.
-//   - 200 + JSON when serving normally.
-//   - 503 + JSON when Drain has been called.
+//   - 200 + JSON, status "serving", when serving normally.
+//   - 503 + JSON, status "starting", on a cluster node that has not
+//     yet replayed the service registry from JetStream KV (see
+//     registry sync below).
+//   - 503 + JSON, status "draining", when Drain has been called.
+//
+// Registry sync: a cluster node learns its services from the registry
+// KV bucket. Until the reconciler's watch has delivered every existing
+// value and the schema has been rebuilt from them, the node would
+// answer "Cannot query field" for services the rest of the cluster
+// routes, so health stays 503. The gate arms when cluster tracking
+// starts (ControlPlane on a WithCluster gateway). A gateway without a
+// cluster, or one whose control plane is never mounted, has nothing to
+// replay and is ready at once. If JetStream is unreachable the node
+// stays "starting" (and logs the retry) rather than serve a partial
+// schema.
 //
 // The body's "pubsub" field is the ps.pub / ps.sub transport: "nats",
 // "local" (no cluster), or "local_degraded" (cluster NATS connection
@@ -25,8 +39,12 @@ func (g *Gateway) HealthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		status := "serving"
 		code := http.StatusOK
-		if g.draining.Load() {
+		switch {
+		case g.draining.Load():
 			status = "draining"
+			code = http.StatusServiceUnavailable
+		case g.registrySync.Load() == registrySyncPending:
+			status = "starting"
 			code = http.StatusServiceUnavailable
 		}
 		body := map[string]any{
@@ -45,6 +63,25 @@ func (g *Gateway) HealthHandler() http.Handler {
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(body)
 	})
+}
+
+// Registry sync states for Gateway.registrySync.
+const (
+	registrySyncNone    int32 = iota // no cluster tracking: nothing to replay
+	registrySyncPending              // tracking started, initial replay not done
+	registrySyncDone                 // initial replay applied
+)
+
+// armRegistrySync moves None to Pending. Pending and Done stay as
+// they are, so a second arm after the replay cannot un-ready the node.
+func (g *Gateway) armRegistrySync() {
+	g.registrySync.CompareAndSwap(registrySyncNone, registrySyncPending)
+}
+
+// markRegistrySynced is called by the reconciler at the end of the
+// registry KV's initial values.
+func (g *Gateway) markRegistrySynced() {
+	g.registrySync.Store(registrySyncDone)
 }
 
 // IsDraining reports whether Drain has been called.

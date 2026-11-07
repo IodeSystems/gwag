@@ -8,8 +8,29 @@
 {"status":"serving","active_streams":0,"node_id":"NA..."}
 ```
 
-with HTTP 200 normally, or HTTP 503 once `gw.Drain(ctx)` has been called.
-Wire `/health` to your load balancer's health check.
+with HTTP 200 normally. It returns HTTP 503, same body shape, in two
+states:
+
+- `"status":"starting"`: a cluster node (`WithCluster` plus
+  `ControlPlane()`) that has not yet replayed the service registry
+  from JetStream KV. The reconciler's KV watch delivers every existing
+  value, then an end-of-initial-values marker; the node turns ready
+  when it has applied every value before that marker and rebuilt the
+  schema. The reconciler also checks the replay against the key count
+  the registry stream's leader reports, and watches again if the
+  replay came up short (a rejoining node can get a marker before any
+  value). A gateway without a cluster is ready at once. A node that
+  cannot reach JetStream stays `starting` and logs
+  `cluster tracking pending` on each retry; it does not become ready
+  after a timeout, because its schema would miss the cluster's
+  services.
+- `"status":"draining"`: `gw.Drain(ctx)` has been called.
+
+Wire `/health` to your load balancer's health check. It is the only
+endpoint: it answers both "is the process up" and "may it take
+traffic". On Kubernetes use it as the readiness probe; a liveness
+probe on it must allow for the `starting` window (use a
+`startupProbe`, or a TCP liveness probe on the HTTP port).
 
 `gw.Drain(ctx)` performs the rolling-deploy preamble:
 
