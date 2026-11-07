@@ -124,6 +124,14 @@ def cpu_model():
     for line in Path("/proc/cpuinfo").read_text().splitlines():
         if line.startswith("model name"):
             return line.split(":", 1)[1].strip()
+    # arm64 /proc/cpuinfo has no "model name"; lscpu decodes the part id.
+    try:
+        out = subprocess.run(["lscpu"], capture_output=True, text=True).stdout
+    except OSError:
+        return "unknown"
+    for line in out.splitlines():
+        if line.startswith("Model name:"):
+            return line.split(":", 1)[1].strip()
     return "unknown"
 
 

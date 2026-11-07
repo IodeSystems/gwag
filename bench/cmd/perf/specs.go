@@ -77,12 +77,32 @@ func CollectSpecs() HostSpecs {
 // hit is good enough. Multi-socket asymmetric boxes are rare enough
 // we don't try to be clever.
 func readCPUModelLinux() (string, bool) {
+	// arm64 /proc/cpuinfo has no "model name", only hex part ids;
+	// lscpu decodes them ("Neoverse-V1").
+	if runtime.GOARCH != "amd64" {
+		if model, ok := lscpuModel(); ok {
+			return model, true
+		}
+	}
 	f, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return "", false
 	}
 	defer f.Close()
 	return scanCPUModel(f)
+}
+
+func lscpuModel() (string, bool) {
+	out, err := exec.Command("lscpu").Output()
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(line, "Model name:"); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
 }
 
 func scanCPUModel(r io.Reader) (string, bool) {

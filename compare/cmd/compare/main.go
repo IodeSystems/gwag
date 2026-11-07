@@ -172,6 +172,27 @@ type scenarioOutcome struct {
 	AchievedAtCeiling float64 `json:"achieved_at_ceiling"`
 	P99AtCeilingUs    int64   `json:"p99_at_ceiling_us"`
 	SelfMeanUsAtCeil  int64   `json:"self_mean_us_at_ceiling"`
+	// Set when even the first rung missed the 50ms bar, so the table
+	// can say "below the first rung" and not "0 RPS".
+	FirstRPS   int   `json:"first_rps,omitempty"`
+	FirstP99Us int64 `json:"first_p99_us,omitempty"`
+}
+
+// headline renders the knee, or the first rung's p99 when no rung
+// stayed under the bar.
+func (so *scenarioOutcome) headline() string {
+	if so.RecommendedRPS == 0 && so.FirstRPS > 0 {
+		return fmt.Sprintf("< %d RPS (p99 %.1fms @ %d)", so.FirstRPS, float64(so.FirstP99Us)/1000, so.FirstRPS)
+	}
+	return fmt.Sprintf("%d RPS @ p99 %.1fms", so.RecommendedRPS, float64(so.P99AtCeilingUs)/1000)
+}
+
+// selfTime is "—" for gateways that export no self-time metric.
+func (so *scenarioOutcome) selfTime() string {
+	if so.SelfMeanUsAtCeil == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%dµs", so.SelfMeanUsAtCeil)
 }
 
 func loadConfig(p string) (*config, error) {
@@ -584,8 +605,12 @@ func summariseSweep(path, name string) (*scenarioOutcome, error) {
 	}
 	out := &scenarioOutcome{Scenario: name, SweepPath: filepath.Base(path)}
 	// Recommended ceiling = last step whose p99 stayed under 50ms.
-	for _, s := range v.Steps {
+	for i, s := range v.Steps {
 		if s.ClientP99UsMedian > 50_000 {
+			if i == 0 {
+				out.FirstRPS = s.TargetRPS
+				out.FirstP99Us = s.ClientP99UsMedian
+			}
 			break
 		}
 		out.RecommendedRPS = s.TargetRPS
@@ -628,7 +653,7 @@ func renderComparison(outDir, repoRoot string, cfg *config, picked []gatewayCfg,
 				b.WriteString("not supported | ")
 				continue
 			}
-			fmt.Fprintf(&b, "%d RPS @ p99 %.1fms | ", so.RecommendedRPS, float64(so.P99AtCeilingUs)/1000)
+			fmt.Fprintf(&b, "%s | ", so.headline())
 		}
 		b.WriteString("\n")
 	}
@@ -654,8 +679,13 @@ func renderComparison(outDir, repoRoot string, cfg *config, picked []gatewayCfg,
 			if so == nil {
 				continue
 			}
-			fmt.Fprintf(&b, "| %s | %d | %.0f | %.1fms | %dµs |\n",
-				sc.Name, so.RecommendedRPS, so.AchievedAtCeiling, float64(so.P99AtCeilingUs)/1000, so.SelfMeanUsAtCeil)
+			if so.RecommendedRPS == 0 && so.FirstRPS > 0 {
+				fmt.Fprintf(&b, "| %s | < %d | — | %.1fms @ %d | — |\n",
+					sc.Name, so.FirstRPS, float64(so.FirstP99Us)/1000, so.FirstRPS)
+				continue
+			}
+			fmt.Fprintf(&b, "| %s | %d | %.0f | %.1fms | %s |\n",
+				sc.Name, so.RecommendedRPS, so.AchievedAtCeiling, float64(so.P99AtCeilingUs)/1000, so.selfTime())
 		}
 		b.WriteString("\n")
 	}
@@ -693,6 +723,12 @@ func cpuModel() string {
 	}
 	for _, line := range strings.Split(string(raw), "\n") {
 		if k, v, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(k) == "model name" {
+			return strings.TrimSpace(v)
+		}
+	}
+	// arm64 /proc/cpuinfo has no "model name"; lscpu decodes the part id.
+	for _, line := range strings.Split(cmdOut(".", "lscpu"), "\n") {
+		if v, ok := strings.CutPrefix(line, "Model name:"); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
 	}

@@ -21,7 +21,9 @@ backends:
 # requires the same target URL shape, the same query, the same RPS
 # rungs — the orchestrator enforces this by sharing one sweep config.
 sweep:
-  steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+  # Low rungs resolve the knee on small hosts; the sweep stops at the
+  # first rung over the bar, so they cost one rung each on big ones.
+  steps: [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 40000, 50000, 60000]
   reps: 3
   duration: 5s
 

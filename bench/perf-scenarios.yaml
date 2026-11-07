@@ -34,7 +34,7 @@ scenarios:
     query: |
       { hello_proto { hello(name: "world") { greeting } } }
     sweep:
-      steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+      steps: [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 40000, 50000, 60000]
       reps: 3
       duration: 5s
 
@@ -46,7 +46,7 @@ scenarios:
     query: |
       mutation { hello_openapi { Hello(body: { name: "world" }) { greeting } } }
     sweep:
-      steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+      steps: [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 40000, 50000, 60000]
       reps: 3
       duration: 5s
 
@@ -58,6 +58,6 @@ scenarios:
     query: |
       { hello_graphql { hello(name: "world") { greeting } } }
     sweep:
-      steps: [1000, 5000, 10000, 20000, 30000, 40000, 50000, 60000]
+      steps: [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 40000, 50000, 60000]
       reps: 3
       duration: 5s
