@@ -49,6 +49,7 @@ func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 			conns: map[string]*sharedConn{},
 		}
 		go g.cp.janitor()
+		go g.cp.gateLoop()
 	}
 	cp := g.cp
 	g.mu.Unlock()
@@ -118,8 +119,18 @@ type registration struct {
 
 	// kvKeys is the set of registry KV keys this registration owns.
 	// Heartbeat re-Puts each one to refresh the bucket TTL; Deregister
-	// deletes them. Empty in non-cluster mode.
+	// deletes them. Empty in non-cluster mode. Guarded by cp.mu
+	// (promotion rewrites a value).
 	kvKeys []registryKeyRef
+
+	// bindings is the start-gate state of each binding, in request
+	// order (start_gate.go). Guarded by cp.mu.
+	bindings []*regBinding
+
+	// putMu serialises KV re-Puts of kvKeys (heartbeat, promotion),
+	// so an older value never lands after a newer one. Taken before
+	// cp.mu.
+	putMu sync.Mutex
 }
 
 type registryKeyRef struct {
@@ -127,6 +138,44 @@ type registryKeyRef struct {
 	version   string
 	replicaID string
 	value     []byte // pre-marshalled JSON for cheap re-Put on heartbeat
+}
+
+// preparedBinding is one validated ServiceBinding of a Register,
+// ready to join a pool (now, or when the start gate opens).
+type preparedBinding struct {
+	namespace string
+	version   string
+	hash      [32]byte
+
+	// Proto path
+	fileDesc     protoreflect.FileDescriptor
+	protoSource  []byte
+	protoImports map[string][]byte
+
+	// OpenAPI path
+	openAPISpec []byte
+
+	// GraphQL path
+	graphqlEndpoint      string
+	graphqlIntrospection []byte
+
+	// Per-binding concurrency caps captured from the ServiceBinding.
+	// 0 → gateway default (service-level) or unbounded (per-
+	// instance). Frozen at first registration; later joins must
+	// agree.
+	maxConcurrency            uint32
+	maxConcurrencyPerInstance uint32
+
+	// Per-call upstream timeout from ServiceBinding.timeout_ms;
+	// 0 → gateway default.
+	timeoutMs uint32
+
+	// Declared depends + owner from the binding; stored on the
+	// slot after join.
+	manifest serviceManifest
+
+	isOpenAPI bool
+	isGraphQL bool
 }
 
 type sharedConn struct {
@@ -147,42 +196,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		ttl = defaultTTL
 	}
 
-	type prepared struct {
-		namespace string
-		version   string
-		hash      [32]byte
-
-		// Proto path
-		fileDesc     protoreflect.FileDescriptor
-		protoSource  []byte
-		protoImports map[string][]byte
-
-		// OpenAPI path
-		openAPISpec []byte
-
-		// GraphQL path
-		graphqlEndpoint      string
-		graphqlIntrospection []byte
-
-		// Per-binding concurrency caps captured from the ServiceBinding.
-		// 0 → gateway default (service-level) or unbounded (per-
-		// instance). Frozen at first registration; later joins must
-		// agree.
-		maxConcurrency            uint32
-		maxConcurrencyPerInstance uint32
-
-		// Per-call upstream timeout from ServiceBinding.timeout_ms;
-		// 0 → gateway default.
-		timeoutMs uint32
-
-		// Declared depends + owner from the binding; stored on the
-		// slot after join.
-		manifest serviceManifest
-
-		isOpenAPI bool
-		isGraphQL bool
-	}
-	prep := make([]prepared, 0, len(req.GetServices()))
+	prep := make([]preparedBinding, 0, len(req.GetServices()))
 	type nsverKey struct{ ns, ver string }
 	used := map[nsverKey]bool{}
 	for _, b := range req.GetServices() {
@@ -239,7 +253,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			if err != nil {
 				return nil, fmt.Errorf("controlplane: introspect %s: %w", endpoint, err)
 			}
-			prep = append(prep, prepared{
+			prep = append(prep, preparedBinding{
 				namespace:                 ns,
 				version:                   ver,
 				hash:                      hashIntrospection(rawIntro),
@@ -271,7 +285,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				return nil, fmt.Errorf("controlplane: duplicate (namespace=%s, version=%s) in request", ns, ver)
 			}
 			used[k] = true
-			prep = append(prep, prepared{
+			prep = append(prep, preparedBinding{
 				namespace:                 ns,
 				version:                   ver,
 				hash:                      hash,
@@ -323,7 +337,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
 		warnUnsupportedStreaming(cp.gw, ns, ver, fd)
-		prep = append(prep, prepared{
+		prep = append(prep, preparedBinding{
 			namespace:                 ns,
 			version:                   ver,
 			hash:                      hash,
@@ -350,9 +364,18 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	// Cluster mode: KV is the source of truth. Don't dial or touch
 	// pools — the reconciler picks up our KV.Put and joins both the
 	// receiving gateway's pool and every other gateway's pool.
+	// Waiting bindings are Put with Waiting=true; reconcilers skip
+	// them until the gate loop re-Puts them (start_gate.go).
 	if clusterKV != nil {
+		cp.gw.mu.Lock()
+		waiting, err := cp.gw.admitLocked(prep)
+		cp.gw.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		var kvKeys []registryKeyRef
-		for _, p := range prep {
+		var bindings []*regBinding
+		for i, p := range prep {
 			replicaID := newReplicaID()
 			val := registryValue{
 				RegID:                     id,
@@ -366,6 +389,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				MaxConcurrency:            p.maxConcurrency,
 				MaxConcurrencyPerInstance: p.maxConcurrencyPerInstance,
 				TimeoutMs:                 p.timeoutMs,
+				Waiting:                   waiting[i],
 				serviceManifest:           p.manifest,
 			}
 			switch {
@@ -399,6 +423,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				replicaID: replicaID,
 				value:     b,
 			})
+			bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: i, val: val})
 		}
 		reg := &registration{
 			id:       id,
@@ -406,15 +431,24 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			instance: req.GetInstanceId(),
 			ttl:      ttl,
 			kvKeys:   kvKeys,
+			bindings: bindings,
 		}
 		for _, p := range prep {
 			reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
 		}
 		reg.lastBeatMs.Store(time.Now().UnixMilli())
 		cp.regs[id] = reg
+		cp.gw.mu.Lock()
+		statuses := cp.bindingStatusesLocked(reg)
+		cp.gw.mu.Unlock()
+		cp.logWaiting(reg.id, statuses)
+		// A waiter may be met already by a Put the reconciler had not
+		// applied when admitLocked ran.
+		cp.gw.kickGate()
 		return &cpv1.RegisterResponse{
 			RegistrationId: id,
 			TtlSeconds:     uint32(ttl / time.Second),
+			Bindings:       statuses,
 		}, nil
 	}
 
@@ -424,6 +458,11 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	// one binding is proto-shaped.
 	cp.gw.mu.Lock()
 	defer cp.gw.mu.Unlock()
+
+	waiting, err := cp.gw.admitLocked(prep)
+	if err != nil {
+		return nil, err
+	}
 
 	hasProtoBinding := false
 	for _, p := range prep {
@@ -446,48 +485,34 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		_, _ = cp.gw.removeReplicasByOwnerLocked(id)
 		cp.gw.removeOpenAPISourcesByOwnerLocked(id)
 		cp.gw.removeGraphQLSourcesByOwnerLocked(id)
+		cp.gw.removeGateInstancesByRegLocked(id)
 		if sc != nil {
 			cp.releaseConnLocked(req.GetAddr())
 		}
 	}
-	for _, p := range prep {
-		if p.isGraphQL {
-			// Standalone path: replicaID unused (no KV-driven removal).
-			if err := cp.gw.addGraphQLSourceLocked(p.namespace, p.version, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, id, "", msDuration(p.timeoutMs)); err != nil {
+	var bindings []*regBinding
+	for i, p := range prep {
+		if waiting[i] {
+			// Not in the pool until the gate opens; refuse now what
+			// the join would refuse later.
+			if err := cp.gw.checkWaitingSlotLocked(p.kind(), p.key(), p.hash); err != nil {
 				rollback()
 				return nil, err
 			}
-			cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
-			continue
-		}
-		if p.isOpenAPI {
-			// Standalone path: replicaID is unused (no KV-driven
-			// removal). Pass "" so addOpenAPISourceLocked treats this
-			// as a boot-time-style replica owned by the registration.
-			if err := cp.gw.addOpenAPISourceLocked(p.namespace, p.version, req.GetAddr(), p.openAPISpec, p.hash, id, "", int(p.maxConcurrency), int(p.maxConcurrencyPerInstance), msDuration(p.timeoutMs)); err != nil {
-				rollback()
-				return nil, err
-			}
-			cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
-			continue
-		}
-		err := cp.gw.joinPoolLocked(poolEntry{
-			namespace:                 p.namespace,
-			version:                   p.version,
-			hash:                      p.hash,
-			file:                      p.fileDesc,
-			addr:                      req.GetAddr(),
-			conn:                      sc.conn,
-			owner:                     id,
-			maxConcurrency:            int(p.maxConcurrency),
-			maxConcurrencyPerInstance: int(p.maxConcurrencyPerInstance),
-			timeout:                   msDuration(p.timeoutMs),
-		})
-		if err != nil {
+		} else if err := cp.joinPreparedLocked(id, req.GetAddr(), sc, p); err != nil {
 			rollback()
 			return nil, err
 		}
-		cp.gw.setSlotManifestLocked(poolKey{namespace: p.namespace, version: p.version}, p.manifest)
+		cp.gw.setGateInstanceLocked(standaloneGateID(id, p.key()), &gateInstance{
+			key:        p.key(),
+			hash:       p.hash,
+			regID:      id,
+			addr:       req.GetAddr(),
+			instanceID: req.GetInstanceId(),
+			manifest:   p.manifest,
+			waiting:    waiting[i],
+		})
+		bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: -1})
 	}
 
 	reg := &registration{
@@ -496,6 +521,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		instance: req.GetInstanceId(),
 		ttl:      ttl,
 		conn:     sc,
+		bindings: bindings,
 	}
 	for _, p := range prep {
 		reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
@@ -503,10 +529,56 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	reg.lastBeatMs.Store(time.Now().UnixMilli())
 	cp.regs[id] = reg
 
+	// This registration may open the gate for its own waiting
+	// bindings (v2 depending on v1 of the same request) and for
+	// earlier waiters.
+	cp.promoteStandaloneLocked()
+	statuses := cp.bindingStatusesLocked(reg)
+	cp.logWaiting(reg.id, statuses)
+
 	return &cpv1.RegisterResponse{
 		RegistrationId: id,
 		TtlSeconds:     uint32(ttl / time.Second),
+		Bindings:       statuses,
 	}, nil
+}
+
+// joinPreparedLocked adds one binding to its pool / source and stores
+// its manifest on the slot. sc is the registration's shared conn; nil
+// unless the registration has a proto binding. Caller holds g.mu.
+func (cp *controlPlane) joinPreparedLocked(owner, addr string, sc *sharedConn, p preparedBinding) error {
+	g := cp.gw
+	switch {
+	case p.isGraphQL:
+		// Standalone path: replicaID unused (no KV-driven removal).
+		if err := g.addGraphQLSourceLocked(p.namespace, p.version, p.graphqlEndpoint, p.graphqlIntrospection, p.hash, owner, "", msDuration(p.timeoutMs)); err != nil {
+			return err
+		}
+	case p.isOpenAPI:
+		// Standalone path: replicaID is unused (no KV-driven
+		// removal). Pass "" so addOpenAPISourceLocked treats this
+		// as a boot-time-style replica owned by the registration.
+		if err := g.addOpenAPISourceLocked(p.namespace, p.version, addr, p.openAPISpec, p.hash, owner, "", int(p.maxConcurrency), int(p.maxConcurrencyPerInstance), msDuration(p.timeoutMs)); err != nil {
+			return err
+		}
+	default:
+		if err := g.joinPoolLocked(poolEntry{
+			namespace:                 p.namespace,
+			version:                   p.version,
+			hash:                      p.hash,
+			file:                      p.fileDesc,
+			addr:                      addr,
+			conn:                      sc.conn,
+			owner:                     owner,
+			maxConcurrency:            int(p.maxConcurrency),
+			maxConcurrencyPerInstance: int(p.maxConcurrencyPerInstance),
+			timeout:                   msDuration(p.timeoutMs),
+		}); err != nil {
+			return err
+		}
+	}
+	g.setSlotManifestLocked(p.key(), p.manifest)
+	return nil
 }
 
 // deleteKVKeys best-effort removes all of the given keys from the
@@ -536,15 +608,27 @@ func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatReques
 	// JSON value. Best-effort; transient KV errors are logged-and-go
 	// because the in-memory regs map still has the registration and
 	// the next heartbeat will retry.
+	// putMu + a copy under cp.mu: the gate loop may rewrite a value
+	// (promotion) concurrently.
 	if kv := cp.gw.registryKV(); kv != nil {
-		for _, r := range reg.kvKeys {
+		reg.putMu.Lock()
+		cp.mu.Lock()
+		refs := append([]registryKeyRef(nil), reg.kvKeys...)
+		cp.mu.Unlock()
+		for _, r := range refs {
 			kctx, cancel := kvCtx(ctx)
 			_ = kvPutRetry(kctx, kv, replicaKey(r.namespace, r.version, r.replicaID), r.value)
 			cancel()
 		}
+		reg.putMu.Unlock()
 	}
 
-	return &cpv1.HeartbeatResponse{Ok: true}, nil
+	cp.mu.Lock()
+	cp.gw.mu.Lock()
+	statuses := cp.bindingStatusesLocked(reg)
+	cp.gw.mu.Unlock()
+	cp.mu.Unlock()
+	return &cpv1.HeartbeatResponse{Ok: true, Bindings: statuses}, nil
 }
 
 func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequest) (*cpv1.DeregisterResponse, error) {
@@ -564,6 +648,7 @@ func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequ
 	_, _ = cp.gw.removeReplicasByOwnerLocked(reg.id)
 	cp.gw.removeOpenAPISourcesByOwnerLocked(reg.id)
 	cp.gw.removeGraphQLSourcesByOwnerLocked(reg.id)
+	cp.gw.removeGateInstancesByRegLocked(reg.id)
 	cp.gw.mu.Unlock()
 	if reg.conn != nil {
 		cp.releaseConnLocked(reg.addr)
@@ -870,6 +955,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 		Services:    make([]*cpv1.ServiceInfo, 0, len(cp.gw.slots)),
 		Environment: cp.gw.cfg.environment,
 	}
+	insts := cp.gw.gateInstancesLocked()
 	for k, s := range cp.gw.slots {
 		if cp.gw.internal[k.namespace] {
 			continue
@@ -904,6 +990,23 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			ManualDeprecationReason: s.deprecationReason,
 			Depends:                 s.manifest.protoDepends(),
 			Owner:                   s.manifest.protoOwner(),
+			Instances:               cp.instanceStatusesLocked(insts[k]),
+		})
+		delete(insts, k)
+	}
+	// (namespace, version)s whose instances are all waiting: no slot
+	// yet. Listed so the UI can show them; manifest from the first.
+	for k, l := range insts {
+		if cp.gw.internal[k.namespace] {
+			continue
+		}
+		out.Services = append(out.Services, &cpv1.ServiceInfo{
+			Namespace: k.namespace,
+			Version:   k.version,
+			HashHex:   hex.EncodeToString(l[0].hash[:]),
+			Depends:   l[0].manifest.protoDepends(),
+			Owner:     l[0].manifest.protoOwner(),
+			Instances: cp.instanceStatusesLocked(l),
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {

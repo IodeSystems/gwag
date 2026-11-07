@@ -16,6 +16,13 @@ changes on MINOR, drops on MAJOR.
 - `controlclient.Service.Depends` / `.Owner` (`controlclient.Dependency`, `controlclient.Owner`) send the manifest from `SelfRegister`.
 - `WithEnvironment(name)` and `--environment` (`gwag`, `gwag up`, example gateway): a label naming the environment (cluster) the gateway belongs to. Reported in `ListServicesResponse.environment` (field 4) and `gwag services list`. It does not change routing or the NATS cluster name.
 - Admin API `GET /admin/services` (GraphQL `admin.listServices`): `environment` on the response, and `depends: [{service, lines}]` (never null) and `owner: {team, contact}` (omitted when not declared) on each service.
+- Control plane start gate: `RegisterResponse.bindings` (field 3) and `HeartbeatResponse.bindings` (field 2) report, per binding in request order, a `BindingStatus {namespace, version, state, depends}`. `state` is `InstanceState` `READY`, `WAITING` (a dependency has no ready instance on any accepted line) or `DEGRADED` (was ready, a dependency is gone since; it keeps serving). Each `DependencyStatus {service, lines, present_lines}` names the accepted lines that have a ready instance now, so the service can pick the line to call. An empty list (older gateway) means ready.
+- `ServiceInfo.instances` (field 8, `InstanceStatus {replica_id, registration_id, instance_id, addr, state, depends}`): every control-plane-registered instance with its start-gate state, waiting ones included. Admin API `GET /admin/services` carries it as `instances: [{replicaId, registrationId, instanceId, addr, state: ready|waiting|degraded, depends: [{service, lines, presentLines}]}]` (never null).
+- A Register whose `depends` close a cycle in the (service, line) graph, counting every accepted line and every known instance across the cluster, is refused with `FailedPrecondition` and the cycle in the message (`greeter/v1 -> library/v1 -> greeter/v1`).
+
+### Changed
+- A control-plane binding with `depends` is not added to its pool until every dependency has a ready instance on at least one accepted line: until then it has no schema fields, takes no traffic and does not advance `stable`. It joins on its own when the dependencies register (standalone or on any cluster node). Bindings without `depends` register exactly as before. In cluster mode the registry KV value gains `waiting` (omitted when false).
+- `ListServices` / `GET /admin/services` also list a (namespace, version) whose instances are all waiting, with `replica_count` 0.
 
 ## v2.11.0 — 2026-11-06
 

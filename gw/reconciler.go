@@ -122,6 +122,28 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 
 	g := r.gw
 
+	// Start gate: every value is recorded (admin listing, cycle
+	// check, cross-node readiness); a waiting one is not joined. Any
+	// change can open the gate for a waiter, so kick the gate loop.
+	defer g.kickGate()
+	var hash0 [32]byte
+	copy(hash0[:], v.Hash)
+	g.mu.Lock()
+	waiting := g.setGateInstanceLocked(replicaKey(ns, ver, replicaID), &gateInstance{
+		key:        poolKey{namespace: ns, version: ver},
+		hash:       hash0,
+		regID:      v.RegID,
+		replicaID:  replicaID,
+		addr:       v.Addr,
+		instanceID: v.InstanceID,
+		manifest:   v.serviceManifest,
+		waiting:    v.Waiting,
+	})
+	g.mu.Unlock()
+	if waiting {
+		return
+	}
+
 	if v.IsOpenAPI() {
 		var hash [32]byte
 		copy(hash[:], v.Hash)
@@ -200,7 +222,13 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 
 func (r *reconciler) handleDelete(ns, ver, replicaID string) {
 	g := r.gw
+	defer g.kickGate()
 	g.mu.Lock()
+	if g.removeGateInstanceLocked(replicaKey(ns, ver, replicaID)) {
+		// Was waiting: never joined, nothing to remove.
+		g.mu.Unlock()
+		return
+	}
 	key := poolKey{namespace: ns, version: ver}
 	// Slot kind decides which removal path applies — the slot is the
 	// source of truth, so a single switch replaces the previous "look
