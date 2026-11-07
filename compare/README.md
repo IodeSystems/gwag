@@ -12,8 +12,8 @@
 
 Two harnesses, two questions:
 
-- **Gateway comparison** — gwag vs Apollo Router vs graphql-mesh vs
-  WunderGraph, process to process, against the same `hello-proto`,
+- **Gateway comparison** — gwag and gat vs Hive Gateway, graphql-mesh
+  (v0), Apollo Router, WunderGraph Cosmo and Grafbase, process to process, against the same `hello-proto`,
   `hello-openapi`, `hello-graphql` backends. Each gateway runs its own
   sweep in turn (serial, single-process).
 - **[`gatbench/`](./gatbench)** — what gat's abstraction costs against
@@ -138,18 +138,20 @@ compare/
   cmd/compare/             Go orchestrator (boots backends, sweeps each gateway)
   cmd/gat-gateway/         gat fronting the same upstreams, for the gat row
   configs/
-    mesh/                  graphql-mesh config
+    hive/                  Hive Gateway (Mesh v1 compose) config
+    mesh/                  graphql-mesh v0 config
     apollo/                Apollo Router config
-    wundergraph/           WunderGraph config (TODO)
+    cosmo/                 WunderGraph Cosmo Router config
+    grafbase/              Grafbase Gateway config
   scripts/start-*.sh       per-gateway boot/stop
   run.sh                   container entrypoint
   sync-readme.py           splices comparison.md's headline into this file
   gatbench/                separate Go module: gat vs gqlgen / connect-go / grpc-gateway
 ```
 
-Status: gwag, gat and graphql-mesh wired; Apollo Router in
-single-subgraph mode against `hello-graphql`; WunderGraph not yet
-integrated. gat sits out the `graphql` scenario — ingesting a
+Status: gwag, gat, Hive Gateway and graphql-mesh wired for every
+scenario they support; Apollo Router, Cosmo and Grafbase in
+single-subgraph mode against `hello-graphql`. gat sits out the `graphql` scenario — ingesting a
 downstream GraphQL service is a full-gwag feature. Current numbers:
 [`comparison.md`](./comparison.md).
 
@@ -173,14 +175,17 @@ compare/run.sh local --only gwag        # debug: one gateway
 
 ## Caveats
 
-- **Apollo Router and WunderGraph are GraphQL-federation specialists.**
+- **Apollo Router, Cosmo and Grafbase are GraphQL-federation specialists.**
   They appear here in single-subgraph mode (forwarding to
   `hello-graphql`) — the closest apples-to-apples row for a
   GraphQL-in / GraphQL-out cost.
-- **graphql-mesh is the closest peer** on multi-format ingest.
-- **Numbers reflect this host's hardware**, not absolute speed.
-  Same driver hits every gateway, so the relative ordering carries
-  even if the absolute RPS doesn't.
+- **Hive Gateway and graphql-mesh are the closest peers** on
+  multi-format ingest. Hive runs one worker per core.
+- **Numbers reflect this host's hardware**, not absolute speed. The
+  load generator, the backends and the gateway share the host's
+  cores, so on a small host a gateway that spends less CPU per
+  request gains ground. Do not assume the ordering carries to a
+  host with a different core count.
 - **First Docker build pulls ~1 GB** (Go + Node + Apollo binary +
   npm tree); allow 5–10 minutes. If `graphql-mesh` or `Apollo
   Router` versions drift, pin in `configs/mesh/package.json` or
