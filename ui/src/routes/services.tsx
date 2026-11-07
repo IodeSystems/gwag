@@ -8,22 +8,10 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
-  Drawer,
-  IconButton,
-  Paper,
-  Snackbar,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { client } from '@/api/client';
@@ -34,6 +22,19 @@ import {
   UndeprecateMutation,
   RetractStableMutation,
 } from '@/api/operations';
+import {
+  DataTable,
+  DetailPanel,
+  EmptyState,
+  FormDialog,
+  FormTextField,
+  KeyValue,
+  Page,
+  Panel,
+  StatusChip,
+  useToast,
+  type Column,
+} from '@/ui';
 
 export const Route = createFileRoute('/services')({
   component: Services,
@@ -71,9 +72,25 @@ type DrawerTarget = {
   hashHex: string;
 };
 
+type ServiceRow = {
+  namespace: string;
+  version: string;
+  hashHex: string;
+  replicaCount: number;
+  tier: string;
+  isStableTarget: boolean;
+  stableTargetVN: number | undefined;
+  isAutoDeprecated: boolean;
+  isManualDeprecated: boolean;
+  manualReason: string;
+  stats:
+    | { count: number; throughput: number; p50Millis: number; p95Millis: number }
+    | undefined;
+};
+
 function Services() {
   const qc = useQueryClient();
-  const [toast, setToast] = useState<string | null>(null);
+  const toast = useToast();
   const [retractTarget, setRetractTarget] = useState<{
     namespace: string;
     currentVN: number;
@@ -82,7 +99,6 @@ function Services() {
   const [deprecateTarget, setDeprecateTarget] =
     useState<DeprecateTarget | null>(null);
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
-  const [reasonDraft, setReasonDraft] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['services'],
@@ -96,12 +112,13 @@ function Services() {
     onSuccess: (resp) => {
       void qc.invalidateQueries({ queryKey: ['services'] });
       const r = resp.admin.retractStable;
-      setToast(`stable v${r?.priorVN} → v${r?.newVN}`);
+      toast.success(`stable v${r?.priorVN} → v${r?.newVN}`);
       setRetractTarget(null);
     },
-    onError: (e: Error) => setToast(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
+  // Errors propagate to FormDialog (mutateAsync), which shows them on the form.
   const deprecate = useMutation({
     mutationFn: (vars: {
       namespace: string;
@@ -110,11 +127,8 @@ function Services() {
     }) => client.request(DeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
       void qc.invalidateQueries({ queryKey: ['services'] });
-      setToast(`deprecated ${vars.namespace} ${vars.version}`);
-      setDeprecateTarget(null);
-      setReasonDraft('');
+      toast.success(`deprecated ${vars.namespace} ${vars.version}`);
     },
-    onError: (e: Error) => setToast(e.message),
   });
 
   const undeprecate = useMutation({
@@ -122,14 +136,23 @@ function Services() {
       client.request(UndeprecateMutation, vars),
     onSuccess: (_resp, vars) => {
       void qc.invalidateQueries({ queryKey: ['services'] });
-      setToast(`undeprecated ${vars.namespace} ${vars.version}`);
+      toast.success(`undeprecated ${vars.namespace} ${vars.version}`);
     },
-    onError: (e: Error) => setToast(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
-  if (isLoading) return <Typography>Loading…</Typography>;
+  if (isLoading)
+    return (
+      <Page title="Services">
+        <Typography>Loading…</Typography>
+      </Page>
+    );
   if (error)
-    return <Typography color="error">{error.message}</Typography>;
+    return (
+      <Page title="Services">
+        <Typography color="error">{error.message}</Typography>
+      </Page>
+    );
 
   const services = data?.admin?.listServices?.services ?? [];
   const stableEntries = data?.admin?.listServices?.stableVN ?? [];
@@ -174,15 +197,7 @@ function Services() {
   // unknown widths come back as bigint-shaped (`unknown` in codegen);
   // coerce to Number for display — counts top out well below 2^53 for
   // the 24h windows surfaced here.
-  const statsByKey = new Map<
-    string,
-    {
-      count: number;
-      throughput: number;
-      p50Millis: number;
-      p95Millis: number;
-    }
-  >();
+  const statsByKey = new Map<string, NonNullable<ServiceRow['stats']>>();
   for (const r of statsRows) {
     if (!r) continue;
     statsByKey.set(`${r.namespace}@${r.version}`, {
@@ -193,171 +208,173 @@ function Services() {
     });
   }
 
+  const rows: ServiceRow[] = [];
+  for (const s of services) {
+    if (!s) continue;
+    const stableTargetVN = stableByNamespace.get(s.namespace);
+    const vN = vNumber(s.version);
+    const maxVN = maxVNByNamespace.get(s.namespace);
+    const manualReason = s.manualDeprecationReason ?? '';
+    rows.push({
+      namespace: s.namespace,
+      version: s.version,
+      hashHex: s.hashHex,
+      replicaCount: s.replicaCount,
+      tier: tierOf(s.version),
+      isStableTarget: stableTargetVN !== undefined && vN === stableTargetVN,
+      stableTargetVN,
+      isAutoDeprecated: vN !== null && maxVN !== undefined && vN < maxVN,
+      isManualDeprecated: manualReason.length > 0,
+      manualReason,
+      stats: statsByKey.get(`${s.namespace}@${s.version}`),
+    });
+  }
+
+  const columns: Column<ServiceRow>[] = [
+    { id: 'namespace', header: 'Namespace', cell: (r) => r.namespace },
+    { id: 'version', header: 'Version', cell: (r) => r.version },
+    {
+      id: 'tier',
+      header: 'Tier',
+      cell: (r) => (
+        <Stack direction="row" spacing={0.5}>
+          <Chip
+            label={r.tier}
+            size="small"
+            color={r.tier === 'unstable' ? 'warning' : 'default'}
+          />
+          {r.isStableTarget && (
+            <StatusChip status="ready" size="small" label="stable" />
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      cell: (r) =>
+        r.isAutoDeprecated || r.isManualDeprecated ? (
+          <Tooltip title={deprecationTooltip(r)}>
+            <span>
+              <StatusChip
+                status={r.isManualDeprecated ? 'degraded' : 'sunsetable'}
+                size="small"
+                label={deprecationLabel(r)}
+              />
+            </span>
+          </Tooltip>
+        ) : null,
+    },
+    {
+      id: 'replicas',
+      header: 'Replicas',
+      align: 'right',
+      cell: (r) => r.replicaCount,
+    },
+    {
+      id: 'calls',
+      header: <>Calls&nbsp;/&nbsp;24h</>,
+      align: 'right',
+      cell: (r) => (r.stats ? formatCount(r.stats.count) : '—'),
+    },
+    {
+      id: 'p50',
+      header: <>p50&nbsp;ms</>,
+      align: 'right',
+      cell: (r) => (r.stats && r.stats.count > 0 ? r.stats.p50Millis : '—'),
+    },
+    {
+      id: 'p95',
+      header: <>p95&nbsp;ms</>,
+      align: 'right',
+      cell: (r) => (r.stats && r.stats.count > 0 ? r.stats.p95Millis : '—'),
+    },
+    {
+      id: 'rate',
+      header: <>Calls&nbsp;/&nbsp;s</>,
+      align: 'right',
+      cell: (r) =>
+        r.stats && r.stats.count > 0 ? r.stats.throughput.toFixed(2) : '—',
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      align: 'right',
+      cell: (r) => (
+        <Box
+          sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {r.isManualDeprecated ? (
+            <Button
+              size="small"
+              disabled={undeprecate.isPending}
+              onClick={() =>
+                undeprecate.mutate({
+                  namespace: r.namespace,
+                  version: r.version,
+                })
+              }
+            >
+              Undeprecate
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              color="error"
+              onClick={() =>
+                setDeprecateTarget({
+                  namespace: r.namespace,
+                  version: r.version,
+                  currentReason: r.manualReason,
+                })
+              }
+            >
+              Deprecate
+            </Button>
+          )}
+          {r.isStableTarget && r.stableTargetVN !== undefined && (
+            <Button
+              size="small"
+              color="warning"
+              onClick={() => {
+                const current = r.stableTargetVN as number;
+                const candidates = (vNsByNamespace.get(r.namespace) ?? [])
+                  .filter((n) => n < current)
+                  .sort((a, b) => b - a);
+                setRetractTarget({
+                  namespace: r.namespace,
+                  currentVN: current,
+                  candidateVNs: candidates,
+                });
+              }}
+            >
+              Retract Stable
+            </Button>
+          )}
+        </Box>
+      ),
+    },
+  ];
+
   return (
-    <>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Namespace</TableCell>
-              <TableCell>Version</TableCell>
-              <TableCell>Tier</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Replicas</TableCell>
-              <TableCell align="right">Calls&nbsp;/&nbsp;24h</TableCell>
-              <TableCell align="right">p50&nbsp;ms</TableCell>
-              <TableCell align="right">p95&nbsp;ms</TableCell>
-              <TableCell align="right">Calls&nbsp;/&nbsp;s</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {services.map((s, i) => {
-              if (!s) return null;
-              const tier = tierOf(s.version);
-              const stableTargetVN = stableByNamespace.get(s.namespace);
-              const isStableTarget =
-                stableTargetVN !== undefined &&
-                vNumber(s.version) === stableTargetVN;
-              const vN = vNumber(s.version);
-              const maxVN = maxVNByNamespace.get(s.namespace);
-              const isAutoDeprecated =
-                vN !== null && maxVN !== undefined && vN < maxVN;
-              const manualReason = s.manualDeprecationReason ?? '';
-              const isManualDeprecated = manualReason.length > 0;
-              const isDeprecated = isAutoDeprecated || isManualDeprecated;
-              const stats = statsByKey.get(`${s.namespace}@${s.version}`);
-              return (
-                <TableRow
-                  key={i}
-                  hover
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() =>
-                    setDrawerTarget({
-                      namespace: s.namespace,
-                      version: s.version,
-                      hashHex: s.hashHex,
-                    })
-                  }
-                >
-                  <TableCell>{s.namespace}</TableCell>
-                  <TableCell>{s.version}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={0.5}>
-                      <Chip
-                        label={tier}
-                        size="small"
-                        color={tier === 'unstable' ? 'warning' : 'default'}
-                      />
-                      {isStableTarget && (
-                        <Chip label="stable" size="small" color="success" />
-                      )}
-                    </Stack>
-                  </TableCell>
-                  <TableCell>
-                    {isDeprecated && (
-                      <Tooltip
-                        title={deprecationTooltip({
-                          isAutoDeprecated,
-                          isManualDeprecated,
-                          manualReason,
-                        })}
-                      >
-                        <Chip
-                          label={deprecationLabel({
-                            isAutoDeprecated,
-                            isManualDeprecated,
-                          })}
-                          size="small"
-                          color={isManualDeprecated ? 'error' : 'warning'}
-                          variant="outlined"
-                        />
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                  <TableCell align="right">{s.replicaCount}</TableCell>
-                  <TableCell align="right">
-                    {stats ? formatCount(stats.count) : '—'}
-                  </TableCell>
-                  <TableCell align="right">
-                    {stats && stats.count > 0 ? stats.p50Millis : '—'}
-                  </TableCell>
-                  <TableCell align="right">
-                    {stats && stats.count > 0 ? stats.p95Millis : '—'}
-                  </TableCell>
-                  <TableCell align="right">
-                    {stats && stats.count > 0
-                      ? stats.throughput.toFixed(2)
-                      : '—'}
-                  </TableCell>
-                  <TableCell
-                    align="right"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        gap: 0.5,
-                        justifyContent: 'flex-end',
-                      }}
-                    >
-                      {isManualDeprecated ? (
-                        <Button
-                          size="small"
-                          disabled={undeprecate.isPending}
-                          onClick={() =>
-                            undeprecate.mutate({
-                              namespace: s.namespace,
-                              version: s.version,
-                            })
-                          }
-                        >
-                          Undeprecate
-                        </Button>
-                      ) : (
-                        <Button
-                          size="small"
-                          color="error"
-                          onClick={() => {
-                            setReasonDraft('');
-                            setDeprecateTarget({
-                              namespace: s.namespace,
-                              version: s.version,
-                              currentReason: manualReason,
-                            });
-                          }}
-                        >
-                          Deprecate
-                        </Button>
-                      )}
-                      {isStableTarget && stableTargetVN !== undefined && (
-                        <Button
-                          size="small"
-                          color="warning"
-                          onClick={() => {
-                            const candidates = (
-                              vNsByNamespace.get(s.namespace) ?? []
-                            )
-                              .filter((n) => n < stableTargetVN)
-                              .sort((a, b) => b - a);
-                            setRetractTarget({
-                              namespace: s.namespace,
-                              currentVN: stableTargetVN,
-                              candidateVNs: candidates,
-                            });
-                          }}
-                        >
-                          Retract Stable
-                        </Button>
-                      )}
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </TableContainer>
+    <Page title="Services">
+      <Panel flush>
+        <DataTable
+          columns={columns}
+          rows={rows}
+          getRowId={(r) => `${r.namespace}@${r.version}`}
+          emptyTitle="No services registered"
+          onRowClick={(r) =>
+            setDrawerTarget({
+              namespace: r.namespace,
+              version: r.version,
+              hashHex: r.hashHex,
+            })
+          }
+        />
+      </Panel>
 
       <Dialog
         open={retractTarget !== null}
@@ -401,6 +418,7 @@ function Services() {
         </DialogContent>
         <DialogActions>
           <Button
+            color="inherit"
             onClick={() => setRetractTarget(null)}
             disabled={retract.isPending}
           >
@@ -409,73 +427,44 @@ function Services() {
         </DialogActions>
       </Dialog>
 
-      <Dialog
+      <FormDialog
         open={deprecateTarget !== null}
-        onClose={() => {
-          if (!deprecate.isPending) setDeprecateTarget(null);
-        }}
-        fullWidth
-        maxWidth="sm"
-      >
-        <DialogTitle>
-          Deprecate {deprecateTarget?.namespace} {deprecateTarget?.version}
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
+        title={`Deprecate ${deprecateTarget?.namespace ?? ''} ${deprecateTarget?.version ?? ''}`}
+        description={
+          <>
             Marks this (namespace, version) with{' '}
             <code>@deprecated(reason: …)</code> in SDL. Auto-deprecation of
             older numbered cuts is unaffected; manual reason takes precedence
             in rendering.
-          </DialogContentText>
-          <TextField
-            autoFocus
-            fullWidth
-            label="Reason"
-            placeholder="e.g. moved to v2 (breaks Authn header on /list)"
-            value={reasonDraft}
-            onChange={(e) => setReasonDraft(e.target.value)}
-            disabled={deprecate.isPending}
-            multiline
-            minRows={2}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => setDeprecateTarget(null)}
-            disabled={deprecate.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            color="error"
-            disabled={deprecate.isPending || reasonDraft.trim().length === 0}
-            onClick={() => {
-              if (!deprecateTarget) return;
-              deprecate.mutate({
-                namespace: deprecateTarget.namespace,
-                version: deprecateTarget.version,
-                reason: reasonDraft.trim(),
-              });
-            }}
-          >
-            Deprecate
-          </Button>
-        </DialogActions>
-      </Dialog>
+          </>
+        }
+        submitLabel="Deprecate"
+        defaultValues={{ reason: '' }}
+        onClose={() => setDeprecateTarget(null)}
+        onSubmit={async (values) => {
+          if (!deprecateTarget) return;
+          await deprecate.mutateAsync({
+            namespace: deprecateTarget.namespace,
+            version: deprecateTarget.version,
+            reason: values.reason.trim(),
+          });
+        }}
+      >
+        <FormTextField
+          name="reason"
+          label="Reason"
+          placeholder="e.g. moved to v2 (breaks Authn header on /list)"
+          autoFocus
+          multiline
+          rows={2}
+        />
+      </FormDialog>
 
       <ServiceDrawer
         target={drawerTarget}
         onClose={() => setDrawerTarget(null)}
       />
-
-      <Snackbar
-        open={toast !== null}
-        autoHideDuration={3000}
-        onClose={() => setToast(null)}
-        message={toast ?? ''}
-      />
-    </>
+    </Page>
   );
 }
 
@@ -537,85 +526,66 @@ function ServiceDrawer({
     refetchInterval: 5_000,
   });
 
-  const methods = data?.admin?.serviceStats?.methods ?? [];
+  const methods = (data?.admin?.serviceStats?.methods ?? []).flatMap((m, i) =>
+    m ? [{ ...m, id: `${i}:${m.method}:${m.caller}` }] : [],
+  );
+  type MethodRow = (typeof methods)[number];
+  const columns: Column<MethodRow>[] = [
+    { id: 'method', header: 'Method', cell: (m) => m.method },
+    { id: 'caller', header: 'Caller', cell: (m) => m.caller },
+    {
+      id: 'count',
+      header: 'Count',
+      align: 'right',
+      cell: (m) => formatCount(Number(m.count)),
+    },
+    {
+      id: 'p50',
+      header: <>p50&nbsp;ms</>,
+      align: 'right',
+      cell: (m) => Number(m.p50Millis),
+    },
+    {
+      id: 'p95',
+      header: <>p95&nbsp;ms</>,
+      align: 'right',
+      cell: (m) => Number(m.p95Millis),
+    },
+  ];
 
   return (
-    <Drawer
-      anchor="right"
+    <DetailPanel
       open={target !== null}
       onClose={onClose}
-      slotProps={{ paper: { sx: { width: { xs: '100%', sm: 540 } } } }}
+      title={`${target?.namespace ?? ''} ${target?.version ?? ''}`}
+      width={540}
     >
-      <Box sx={{ p: 2 }}>
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            mb: 1,
-          }}
-        >
-          <Typography variant="h6">
-            {target?.namespace} {target?.version}
-          </Typography>
-          <IconButton onClick={onClose} size="small">
-            <CloseIcon />
-          </IconButton>
-        </Box>
+      <Stack spacing={2}>
         {target && (
-          <Typography variant="caption" color="text.secondary">
-            hash{' '}
-            <code style={{ fontSize: '0.75rem' }}>{target.hashHex}</code>
-          </Typography>
+          <KeyValue
+            labelWidth={60}
+            items={[{ label: 'hash', value: target.hashHex, mono: true }]}
+          />
         )}
-        <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-          Per-method &amp; caller (24h)
-        </Typography>
-        {isLoading && <Typography>Loading…</Typography>}
-        {error && (
-          <Typography color="error">{error.message}</Typography>
-        )}
-        {!isLoading && !error && methods.length === 0 && (
-          <Typography color="text.secondary" variant="body2">
-            No traffic recorded for this service in the last 24h.
-          </Typography>
-        )}
-        {methods.length > 0 && (
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Method</TableCell>
-                  <TableCell>Caller</TableCell>
-                  <TableCell align="right">Count</TableCell>
-                  <TableCell align="right">p50&nbsp;ms</TableCell>
-                  <TableCell align="right">p95&nbsp;ms</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {methods.map((m, i) => {
-                  if (!m) return null;
-                  return (
-                    <TableRow key={i}>
-                      <TableCell>{m.method}</TableCell>
-                      <TableCell>{m.caller}</TableCell>
-                      <TableCell align="right">
-                        {formatCount(Number(m.count))}
-                      </TableCell>
-                      <TableCell align="right">
-                        {Number(m.p50Millis)}
-                      </TableCell>
-                      <TableCell align="right">
-                        {Number(m.p95Millis)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        )}
-      </Box>
-    </Drawer>
+        <Panel title="Per-method & caller (24h)" flush={methods.length > 0}>
+          {isLoading && <Typography>Loading…</Typography>}
+          {error && <Typography color="error">{error.message}</Typography>}
+          {!isLoading && !error && methods.length === 0 && (
+            <EmptyState
+              compact
+              title="No traffic recorded"
+              description="No traffic recorded for this service in the last 24h."
+            />
+          )}
+          {methods.length > 0 && (
+            <DataTable
+              columns={columns}
+              rows={methods}
+              getRowId={(m) => m.id}
+            />
+          )}
+        </Panel>
+      </Stack>
+    </DetailPanel>
   );
 }
