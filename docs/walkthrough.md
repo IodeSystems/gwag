@@ -9,7 +9,7 @@ Time: 10-15 minutes if you have the codegen tools already installed.
 
 ## What you'll need
 
-- Go 1.21+ (to run the gateway and the example services)
+- Go 1.26+ (the `go` line in `go.mod`; to run the gateway and the example services)
 - `curl` (to hit the schema endpoints)
 - For codegen — install only the ecosystems you care about:
   - **TS / GraphQL**: `pnpm` (or `npm`) + `graphql-codegen` (pulled in via the example's package.json)
@@ -163,8 +163,10 @@ $EDITOR examples/multi/protos/greeter.proto
 Restart just the greeter service:
 
 ```bash
-# Ctrl-C the greeter process in the run.sh output (or kill it by PID)
-# Then re-run from examples/multi:
+# run.sh runs all three processes in one terminal, so stop the greeter
+# by PID (the compiled binary is named greeter), then re-run from
+# examples/multi:
+kill $(pgrep -x greeter)
 go run ./cmd/greeter &
 ```
 
@@ -187,7 +189,9 @@ Edit once; every typed client picks it up on the next codegen.
 ## Step 4: Add a new service
 
 Write a tiny self-registering service. The control-plane client
-takes `.proto` bytes (or `fs.FS` for multi-file layouts):
+takes `.proto` bytes (or `fs.FS` for multi-file layouts). The weather
+service below assumes a `weather.proto` next to it and a gRPC server
+on `:50053`:
 
 ```go
 package main
@@ -197,7 +201,7 @@ import (
     _ "embed"
     "log"
 
-    "github.com/iodesystems/gwag/v2/controlclient"
+    "github.com/iodesystems/gwag/v2/gw/controlclient"
 )
 
 //go:embed weather.proto
@@ -205,12 +209,17 @@ var weatherProto []byte
 
 func main() {
     ctx := context.Background()
+    // Blocks until the gateway is reachable and every Depends entry is ready.
     reg, err := controlclient.SelfRegister(ctx, controlclient.Options{
-        GatewayAddr: "localhost:50090",
-        ServiceAddr: "localhost:50053",
-        Services: []controlclient.Service{
-            {Namespace: "weather", ProtoSource: weatherProto},
-        },
+        GatewayAddrs: []string{"localhost:50090"}, // list every node of a cluster
+        ServiceAddr:  "localhost:50053",
+        Services: []controlclient.Service{{
+            Namespace:   "weather",
+            Version:     "v1",
+            ProtoSource: weatherProto,
+            Owner:       &controlclient.Owner{Team: "weather", Contact: "#weather"},
+        }},
+        DrainOnSIGTERM: true, // drain, deregister, exit on SIGTERM
     })
     if err != nil {
         log.Fatal(err)
@@ -220,6 +229,9 @@ func main() {
     // ... start your gRPC server on :50053 ...
 }
 ```
+
+Dependencies, version lines, draining and a complete runnable service:
+[`services.md`](./services.md).
 
 The moment your service heartbeats in, `Query.weather` appears in
 GraphQL, `?service=weather` works on all three schema endpoints,
