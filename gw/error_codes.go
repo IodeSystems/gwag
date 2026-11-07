@@ -34,8 +34,13 @@ func (e *connectCodedError) Extensions() map[string]any {
 		"code":   gat.ErrorCode(e.err).String(),
 	}
 	var rej *rejection
-	if errors.As(e.err, &rej) && rej.RetryAfter > 0 {
-		ext["retryAfterSeconds"] = int(rej.RetryAfter / time.Second)
+	if errors.As(e.err, &rej) {
+		if rej.RetryAfter > 0 {
+			ext["retryAfterSeconds"] = int(rej.RetryAfter / time.Second)
+		}
+		if fs := rej.fieldsExtension(); fs != nil {
+			ext["fields"] = fs
+		}
 	}
 	return ext
 }

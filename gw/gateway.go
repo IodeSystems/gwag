@@ -2304,6 +2304,10 @@ type rejection struct {
 	// cause is the transport error behind an upstream failure, kept
 	// so gat.ErrorCode sees a context deadline or cancellation.
 	cause error
+	// fields are per-field validation failures an upstream reported
+	// in its error body (upstream_fields.go); GraphQL renders them as
+	// extensions.fields.
+	fields []upstreamFieldError
 }
 
 func (r *rejection) Error() string { return r.Msg }
@@ -2323,6 +2327,9 @@ func (r *rejection) Extensions() map[string]any {
 	ext := map[string]any{"code": r.Code.String()}
 	if r.RetryAfter > 0 {
 		ext["retryAfterSeconds"] = int(r.RetryAfter / time.Second)
+	}
+	if fs := r.fieldsExtension(); fs != nil {
+		ext["fields"] = fs
 	}
 	return ext
 }
