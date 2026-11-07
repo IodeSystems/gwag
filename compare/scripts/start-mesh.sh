@@ -29,18 +29,25 @@ start() {
       return 1
     fi
   fi
-  (cd "$MESH_DIR" && nohup npx mesh start > "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE")
+  # setsid gives mesh its own process group so stop() reaches the node
+  # children npx spawns; see start-hive.sh. A pkill by pattern missed
+  # them and left mesh running through later measurements.
+  (cd "$MESH_DIR" && PID_FILE="$PID_FILE" setsid nohup bash -c \
+    'echo $$ > "$PID_FILE"; exec node_modules/.bin/mesh start' \
+    > "$LOG_FILE" 2>&1 &)
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s $PID_FILE ]] && break; sleep 0.2; done
   echo "mesh started, pid=$(cat "$PID_FILE")"
 }
 
 stop() {
   if [[ -f $PID_FILE ]]; then
     pid=$(cat "$PID_FILE")
-    # mesh forks a child node process — pkill the whole process group.
-    pkill -P "$pid" 2>/dev/null || true
-    kill "$pid" 2>/dev/null || true
-    sleep 1
-    pkill -f "node.*mesh" 2>/dev/null || true
+    kill -- "-$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 -- "-$pid" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -9 -- "-$pid" 2>/dev/null || true
     rm -f "$PID_FILE"
   fi
 }

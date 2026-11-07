@@ -16,6 +16,7 @@ raw=${RAW:-$(mktemp)}
 
 echo "running gatbench matrix (count=$count)..." >&2
 go test . -run '^$' -bench . -benchmem -benchtime=1s -count="$count" >"$raw"
+export GATBENCH_LOAD=${GATBENCH_LOAD:-$(cut -d' ' -f1 /proc/loadavg)}
 
 # Median-of-counts would be better than mean, but `go test` already
 # reports each count separately and the spread here is under 5%; a

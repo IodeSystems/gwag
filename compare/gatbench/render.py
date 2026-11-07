@@ -9,6 +9,7 @@ Writes results.md and rewrites the `<!-- BEGIN gat-matrix -->` and
 Called by report.sh; not meant to be run by hand.
 """
 
+import os
 import re
 import statistics
 import subprocess
@@ -107,7 +108,9 @@ def fmt_ns(ns):
 
 
 def load_avg():
-    return Path("/proc/loadavg").read_text().split()[0]
+    # report.sh records the load when the benchmarks end; a re-render
+    # from a saved RAW file would otherwise stamp the load at render time.
+    return os.environ.get("GATBENCH_LOAD") or Path("/proc/loadavg").read_text().split()[0]
 
 
 def spread(data):
@@ -198,13 +201,13 @@ def build_block(data):
         "Same two operations, same in-memory store, same selection set —"
         " only the framework in front differs. Requests run through"
         " `ServeHTTP` against an `httptest.ResponseRecorder`: no sockets,"
-        " no TLS. A loopback round trip costs ~300-400µs on this host and"
-        " would bury every delta below.",
+        " no TLS. A loopback round trip (~300-400µs, measured on a Ryzen"
+        " 3900X) would bury every delta below.",
         "",
         "**Read the ratios, not the absolutes.** What carries to another"
         " machine is \"gat's Connect ingress costs N× a hand-written"
         " connect-go service on this workload\" — and only to about one"
-        " decimal place: run-to-run noise moves each side a few percent"
+        " decimal place: run-to-run noise (the spread above) moves each side"
         " independently, so a ratio can shift by ~0.2× between runs"
         " without anything having changed.",
         "",
@@ -253,10 +256,9 @@ def build_headline(data):
         "into a pooled buffer, where gqlgen assembles an intermediate",
         "first. gRPC is the surface translation costs — gat allocates a",
         "dynamicpb message per element and walks it by reflection, where",
-        "connect-go has generated structs. The ratio is worst on the",
-        "binary codec shown here; a JSON-codec caller narrows it, but only",
-        "because JSON penalises connect-go more than it penalises gat.",
-        "Per-caller numbers and method:",
+        "connect-go has generated structs. The row shows the binary",
+        "codec; the ratio moves with the caller's wire format and the",
+        "host. Per-caller numbers and method:",
         "[`compare/gatbench/`](./compare/gatbench).",
         HEADLINE_END,
     ])
