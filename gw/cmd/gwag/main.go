@@ -60,7 +60,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"strings"
 	"time"
@@ -361,23 +360,18 @@ func parseMCPUpstream(v string) (ns string, transport gateway.MCPTransport, targ
 
 func servicesCmd(args []string) int {
 	if len(args) == 0 || args[0] != "list" {
-		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT] [--context NAME] [--bearer HEX]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT] [--context NAME]")
 		return 2
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])
 	fs := flag.NewFlagSet("services list", flag.ContinueOnError)
 	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw primary or localhost:50090)")
 	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
-	bearerHex := fs.String("bearer", "", "Dev or admin token (hex); default: the login's. Without one the gateway lists public services only.")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
 	login := resolveLogin(*ctxName)
 	addr := resolveCtx(*gwAddr, login.Gateway, "localhost:50090")
-	bearer := *bearerHex
-	if bearer == "" && sameHost(addr, login) {
-		bearer = login.Bearer
-	}
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dial %s: %v\n", addr, err)
@@ -387,17 +381,10 @@ func servicesCmd(args []string) int {
 	client := cpv1.NewControlPlaneClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if bearer != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearer)
-	}
-	var header metadata.MD
-	resp, err := client.ListServices(ctx, &cpv1.ListServicesRequest{}, grpc.Header(&header))
+	resp, err := client.ListServices(ctx, &cpv1.ListServicesRequest{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ListServices: %v\n", err)
 		return 1
-	}
-	if v := header.Get(schemaViewMetadata); len(v) > 0 && v[0] == "public" {
-		fmt.Fprintln(os.Stderr, partialNote)
 	}
 	if env := resp.GetEnvironment(); env != "" {
 		fmt.Printf("# environment: %s\n", env)
@@ -436,7 +423,6 @@ func schemaFetchCmd(args []string) int {
 	endpoint := fs.String("endpoint", "", "Gateway /schema endpoint URL (default: from .gw primary + /schema or http://localhost:8080/schema)")
 	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	jsonOut := fs.Bool("json", false, "Fetch introspection JSON instead of SDL")
-	bearerHex := fs.String("bearer", "", "Dev or admin token (hex); default: the login's. Without one the gateway shows public services only.")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
@@ -453,7 +439,7 @@ func schemaFetchCmd(args []string) int {
 			url += "?format=json"
 		}
 	}
-	resp, err := getSchema(url, schemaBearer(url, *bearerHex, login))
+	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "GET %s: %v\n", url, err)
 		return 1
@@ -463,71 +449,8 @@ func schemaFetchCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "GET %s: %s\n", url, resp.Status)
 		return 1
 	}
-	if resp.Header.Get(schemaViewHeader) == "public" {
-		fmt.Fprintln(os.Stderr, partialNote)
-	}
 	_, _ = io.Copy(os.Stdout, resp.Body)
 	return 0
-}
-
-// schemaViewHeader / schemaViewMetadata name the view a schema export
-// or ListServices answered with: "full" or "public".
-const (
-	schemaViewHeader   = "X-Gwag-Schema-View"
-	schemaViewMetadata = "x-gwag-schema-view"
-)
-
-// partialNote is printed to stderr when the gateway answered with
-// the public view.
-const partialNote = "note: no dev or admin token; the gateway showed public services only (pass --bearer, or gwag login --token)"
-
-// getSchema GETs a schema export, presenting bearer ("" = none) in
-// gateway.RoleTokenHeader.
-func getSchema(url, bearer string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if bearer != "" {
-		req.Header.Set(gateway.RoleTokenHeader, bearer)
-	}
-	return http.DefaultClient.Do(req)
-}
-
-// schemaBearer is the token to send with a schema export GET: the
-// explicit one, else the login's when url points at the login's
-// gateway host, so a stored token never goes to another host.
-func schemaBearer(rawURL, explicit string, login loginEntry) string {
-	if explicit != "" {
-		return explicit
-	}
-	u, err := neturl.Parse(rawURL)
-	if err != nil || !sameHost(u.Host, login) {
-		return ""
-	}
-	return login.Bearer
-}
-
-// sameHost reports whether hostport names the host of the login's
-// endpoint or control-plane address.
-func sameHost(hostport string, login loginEntry) bool {
-	host := hostOnly(hostport)
-	if host == "" {
-		return false
-	}
-	if login.Endpoint != "" {
-		if u, err := neturl.Parse(login.Endpoint); err == nil && hostOnly(u.Host) == host {
-			return true
-		}
-	}
-	return login.Gateway != "" && hostOnly(login.Gateway) == host
-}
-
-func hostOnly(hostport string) string {
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		return h
-	}
-	return hostport
 }
 
 func schemaDiffCmd(args []string) int {
@@ -536,10 +459,8 @@ func schemaDiffCmd(args []string) int {
 	from := fs.String("from", "", "Old schema source (URL or file path; required)")
 	to := fs.String("to", "", "New schema source (URL or file path; required)")
 	strict := fs.Bool("strict", false, "Exit non-zero if any breaking changes are reported")
-	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
-	bearerHex := fs.String("bearer", "", "Dev or admin token (hex) for URL sources; default: the login's, for URLs on the login's host. Without one the gateway shows public services only.")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema diff --from OLD --to NEW [--strict] [--bearer HEX]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag schema diff --from OLD --to NEW [--strict]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
@@ -549,13 +470,12 @@ func schemaDiffCmd(args []string) int {
 		fs.Usage()
 		return 2
 	}
-	login := resolveLogin(*ctxName)
-	oldSDL, err := loadSchemaSource(*from, *bearerHex, login)
+	oldSDL, err := loadSchemaSource(*from)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load --from %s: %v\n", *from, err)
 		return 1
 	}
-	newSDL, err := loadSchemaSource(*to, *bearerHex, login)
+	newSDL, err := loadSchemaSource(*to)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load --to %s: %v\n", *to, err)
 		return 1
@@ -590,20 +510,16 @@ func schemaDiffCmd(args []string) int {
 }
 
 // loadSchemaSource fetches an SDL from either an HTTP(S) URL or a
-// local file path. URLs are detected by the http:// or https:// prefix
-// and fetched with the schemaBearer token.
-func loadSchemaSource(src, bearer string, login loginEntry) (string, error) {
+// local file path. URLs are detected by the http:// or https:// prefix.
+func loadSchemaSource(src string) (string, error) {
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		resp, err := getSchema(src, schemaBearer(src, bearer, login))
+		resp, err := http.Get(src)
 		if err != nil {
 			return "", err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
 			return "", fmt.Errorf("status %s", resp.Status)
-		}
-		if resp.Header.Get(schemaViewHeader) == "public" {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", src, partialNote)
 		}
 		b, err := io.ReadAll(resp.Body)
 		return string(b), err

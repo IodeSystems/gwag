@@ -19,7 +19,6 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { client } from '@/api/client';
-import { useAdminToken } from '@/components/SettingsDrawer';
 import { ServicesQuery } from '@/api/operations';
 import { CodeBlock, EmptyState, Page, Panel } from '@/ui';
 
@@ -84,14 +83,11 @@ function Schema() {
     return `${spec.basePath}${sep}service=${encodeURIComponent(selector)}`;
   }, [spec.basePath, selector]);
 
-  // Without a token the gateway exports public services only.
-  const token = useAdminToken();
   const { data, isLoading, error } = useQuery({
-    queryKey: ['schema', format, selector, token],
-    queryFn: async (): Promise<{ text: string; bytes: Blob; partial: boolean }> => {
-      const r = await fetch(url, token ? { headers: { 'X-Gwag-Token': token } } : undefined);
+    queryKey: ['schema', format, selector],
+    queryFn: async (): Promise<{ text: string; bytes: Blob }> => {
+      const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const partial = r.headers.get('X-Gwag-Schema-View') === 'public';
       const bytes = await r.blob();
       let text: string;
       switch (spec.contentType) {
@@ -117,7 +113,7 @@ function Schema() {
           break;
         }
       }
-      return { text, bytes, partial };
+      return { text, bytes };
     },
   });
 
@@ -138,11 +134,7 @@ function Schema() {
   return (
     <Page
       title="Schema"
-      subtitle={
-        data?.partial
-          ? 'Public services only: sign in with the dev or admin token to see every service.'
-          : 'Gateway schema in each exported format, optionally filtered by service.'
-      }
+      subtitle="Gateway schema in each exported format, optionally filtered by service."
       actions={
         <>
           <Button

@@ -13,16 +13,12 @@ import (
 // rebuilds × N ingests) to O(1 ingest at registration).
 //
 // Caller passes the ParseSelectors output (or nil for "all").
-// publicOnly keeps public services only (schema_view.go).
-func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector, publicOnly bool) ([]*ir.Service, error) {
+func (g *Gateway) gatewayServicesAsIR(selectors []ir.Selector) ([]*ir.Service, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	out := []*ir.Service{}
-	for k, s := range g.slots {
-		if publicOnly && !g.isPublicLocked(k.namespace, s.manifest.Public) {
-			continue
-		}
+	for _, s := range g.slots {
 		out = append(out, s.ir...)
 	}
 	return ir.Filter(out, selectors), nil

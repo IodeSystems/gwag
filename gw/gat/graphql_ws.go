@@ -186,9 +186,8 @@ func (g *Gateway) runGraphQLSubscription(ctx context.Context, id string, p wsSub
 	defer cleanup()
 	// Loaded per subscription, not per connection: a long-lived
 	// connection's new subscriptions see a replaced schema.
-	snap := g.introspectionSnap(ctx, g.snap.Load(), p.Query)
 	results := graphql.Subscribe(graphql.Params{
-		Schema:         *snap.schema,
+		Schema:         *g.snap.Load().schema,
 		RequestString:  p.Query,
 		VariableValues: p.Variables,
 		OperationName:  p.OperationName,

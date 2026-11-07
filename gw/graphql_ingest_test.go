@@ -119,7 +119,7 @@ func TestGraphQLIngest_SchemaPrefixesTypes(t *testing.T) {
 
 	// Hit /schema/graphql via gw.SchemaHandler — the SDL must contain
 	// the namespace-prefixed types.
-	schemaSrv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	schemaSrv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(schemaSrv.Close)
 	resp, err := http.Get(schemaSrv.URL)
 	if err != nil {
@@ -591,7 +591,7 @@ func TestGraphQLIngest_TwoVersions(t *testing.T) {
 
 	// SDL: nested namespace containers split latest vs older; type
 	// names follow the same `pets_` / `pets_v1_` split.
-	schemaSrv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	schemaSrv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(schemaSrv.Close)
 	resp, err := http.Get(schemaSrv.URL)
 	if err != nil {
@@ -698,7 +698,7 @@ func TestGraphQLIngest_UnionTypedMirror(t *testing.T) {
 	}
 
 	// SDL: union with namespace-prefixed variants.
-	schemaSrv := httptest.NewServer(schemaAsAdmin(gw, gw.SchemaHandler()))
+	schemaSrv := httptest.NewServer(gw.SchemaHandler())
 	t.Cleanup(schemaSrv.Close)
 	sdlResp, err := http.Get(schemaSrv.URL)
 	if err != nil {

@@ -29,8 +29,6 @@ import (
 //     service param → all services.
 //
 // Response: application/protobuf, the marshalled FileDescriptorSet.
-// Callers with no role token get the public services only (see
-// SchemaHandler).
 //
 // Caveats:
 //   - Hidden fields are stripped from message descriptors. Field
@@ -56,10 +54,6 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		full, ok := g.schemaExportFull(w, r)
-		if !ok {
-			return
-		}
 
 		// Pull every source through IR — proto, OpenAPI, GraphQL —
 		// then render each to a FileDescriptorProto. Same-kind
@@ -68,7 +62,7 @@ func (g *Gateway) SchemaProtoHandler() http.Handler {
 		// synthesized FileDescriptorProtos so /schema/proto's
 		// filter-by-namespace still has content even when the
 		// matching service was never registered as proto.
-		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors), !full)
+		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -178,21 +172,9 @@ type serviceSelector struct {
 // with an empty filter (= everything).
 type schemaFilter struct {
 	selectors []serviceSelector
-	// lines, when non-nil, keeps only these pools (and the selectors):
-	// the public view (schema_view.go).
-	lines map[poolKey]bool
-	// reuseDispatchers skips registering dispatchers: the build that
-	// just ran with the same registry did, and the new schema only
-	// renders a subset of its fields.
-	reuseDispatchers bool
 }
 
-func (f schemaFilter) matchPool(k poolKey) bool {
-	if f.lines != nil && !f.lines[k] {
-		return false
-	}
-	return matchSelectors(k, f.selectors)
-}
+func (f schemaFilter) matchPool(k poolKey) bool { return matchSelectors(k, f.selectors) }
 
 func parseProtoSelectors(raw string) ([]serviceSelector, error) {
 	raw = strings.TrimSpace(raw)
@@ -288,8 +270,7 @@ func transformFileDescriptor(
 //
 // Response: application/json, an object
 // `{"<ns>": {"<vN>": <spec>, ...}, ...}`. Single-version namespaces
-// surface as `{"<ns>": {"v1": <spec>}}`. Callers with no role token
-// get the public services only (see SchemaHandler).
+// surface as `{"<ns>": {"v1": <spec>}}`.
 //
 // Stability: stable
 func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
@@ -308,10 +289,6 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		full, ok := g.schemaExportFull(w, r)
-		if !ok {
-			return
-		}
 		filter := schemaFilter{selectors: selectors}
 
 		// Build per-source IR + render OpenAPI per service. The IR
@@ -320,7 +297,7 @@ func (g *Gateway) SchemaOpenAPIHandler() http.Handler {
 		// /schema/openapi tab in the UI is no longer empty when the
 		// filter narrows to a proto service.
 		_ = filter
-		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors), !full)
+		svcs, err := g.gatewayServicesAsIR(irSelectorsFromSchema(selectors))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

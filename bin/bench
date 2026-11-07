@@ -209,7 +209,6 @@ EOF
             --data-dir "$data" \
             --no-context-write \
             --insecure-subscribe \
-            --public-services all \
             $peers \
             > "$LOG_DIR/$name.log" 2>&1 &
         local pid=$!
@@ -242,8 +241,6 @@ EOF
     # leak risk is moot. `bin/bench perf profile` relies on it.
     # --insecure-subscribe enables ps.pub/ps.sub from the GraphQL UI
     # without HMAC friction — the bench is a local dev stack.
-    # --public-services all: the load generator and perf read
-    # /api/schema/* without a token, which shows public services only.
     # shellcheck disable=SC2086
     "$BIN_DIR/gateway" \
         --node-name "$name" \
@@ -252,7 +249,6 @@ EOF
         --nats-data "$data" \
         --pprof \
         --insecure-subscribe \
-        --public-services all \
         $peers \
         > "$LOG_DIR/$name.log" 2>&1 &
     local pid=$!

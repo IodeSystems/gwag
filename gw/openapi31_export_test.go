@@ -44,7 +44,7 @@ func schemaOpenAPIGateway(t *testing.T, spec string, opts ...Option) *Gateway {
 func getSchemaOpenAPI(t *testing.T, gw *Gateway, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	rr := httptest.NewRecorder()
-	schemaAsAdmin(gw, gw.SchemaOpenAPIHandler()).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/schema/openapi"+query, nil))
+	gw.SchemaOpenAPIHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/schema/openapi"+query, nil))
 	return rr
 }
 

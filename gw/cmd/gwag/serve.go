@@ -121,9 +121,7 @@ type fullGatewaySource struct {
 // /mcp is optional via --mcp. No NATS, no admin UI, no cluster — those
 // ride on `gwag up`.
 func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, shut gateway.ShutdownOptions) int {
-	// serve exposes one upstream with no admin roles: its schema is
-	// for everyone, as on the lite gat path.
-	gwOpts := []gateway.Option{gateway.WithPublicServices("all")}
+	gwOpts := []gateway.Option{}
 	if enableMCP && len(mcpIncludes) > 0 {
 		gwOpts = append(gwOpts, gateway.WithMCPInclude(mcpIncludes...))
 	}
