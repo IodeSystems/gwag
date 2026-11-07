@@ -3,17 +3,8 @@ import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
-  Alert,
   Box,
-  Chip,
-  Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -21,6 +12,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useQuery } from '@tanstack/react-query';
 import { client } from '@/api/client';
 import { DeprecatedStatsQuery } from '@/api/operations';
+import { DataTable, EmptyState, Page, Panel, StatusChip, type Column } from '@/ui';
 import type { ResultOf } from '@graphql-typed-document-node/core';
 
 export const Route = createFileRoute('/deprecated')({
@@ -41,17 +33,20 @@ function Deprecated() {
   });
 
   if (isLoading) return <Typography>Loading…</Typography>;
-  if (error)
-    return <Typography color="error">{error.message}</Typography>;
+  if (error) return <Typography color="error">{error.message}</Typography>;
 
   const services = data?.admin?.deprecatedStats?.services ?? [];
 
   if (services.length === 0) {
     return (
-      <Alert severity="success">
-        Nothing deprecated. No services flagged manually and no namespace has
-        an older numbered cut still registered.
-      </Alert>
+      <Page title="Deprecated">
+        <Panel>
+          <EmptyState
+            title="Nothing deprecated"
+            description="No services flagged manually and no namespace has an older numbered cut still registered."
+          />
+        </Panel>
+      </Page>
     );
   }
 
@@ -59,77 +54,46 @@ function Deprecated() {
   // gets a visible separator between the two follow-up actions.
   // Server already sorts by totalCount desc; we just slice on the
   // first zero-count row.
-  const withTraffic = services.filter((s) => s !== null && Number(s.totalCount) > 0);
-  const safeToRetire = services.filter((s) => s !== null && Number(s.totalCount) === 0);
+  const withTraffic = services.filter((s): s is ServiceRow => s !== null && Number(s.totalCount) > 0);
+  const safeToRetire = services.filter((s): s is ServiceRow => s !== null && Number(s.totalCount) === 0);
 
   return (
-    <Stack spacing={3}>
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Deprecated services with recent traffic
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Last 24h. The "should I chase this?" report — high call volume at
-          the top means consumers haven't migrated. Each service expands to
-          its per-method + per-caller breakdown.
-        </Typography>
+    <Page title="Deprecated">
+      <Panel
+        title="Deprecated services with recent traffic"
+        subtitle={
+          'Last 24h. The "should I chase this?" report — high call volume at the top means consumers haven\'t migrated. Each service expands to its per-method + per-caller breakdown.'
+        }
+      >
         {withTraffic.length === 0 ? (
-          <Alert severity="info">
-            No deprecated service has been called in the last 24h. See the
-            "Safe to retire" section below.
-          </Alert>
+          <EmptyState
+            compact
+            title="No recent traffic"
+            description={'No deprecated service has been called in the last 24h. See the "Safe to retire" section below.'}
+          />
         ) : (
-          withTraffic.map(
-            (s, i) => s && <ServiceCard key={i} service={s} />,
-          )
+          <Stack spacing={1}>
+            {withTraffic.map((s, i) => (
+              <ServiceCard key={i} service={s} />
+            ))}
+          </Stack>
         )}
-      </Box>
+      </Panel>
 
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Safe to retire
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Deprecated services with zero recorded traffic in the last 24h. No
-          detected callers — likely safe to deregister.
-        </Typography>
-        {safeToRetire.length === 0 ? (
-          <Alert severity="info">
-            Every deprecated service still has traffic. Nothing safe to drop
-            yet.
-          </Alert>
-        ) : (
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Namespace</TableCell>
-                  <TableCell>Version</TableCell>
-                  <TableCell>Reason</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {safeToRetire.map((s, i) => {
-                  if (!s) return null;
-                  return (
-                    <TableRow key={i}>
-                      <TableCell>{s.namespace}</TableCell>
-                      <TableCell>{s.version}</TableCell>
-                      <TableCell>
-                        <DeprecationBadges
-                          manualReason={s.manualReason ?? ''}
-                          autoReason={s.autoReason ?? ''}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        )}
-      </Box>
-    </Stack>
+      <Panel
+        title="Safe to retire"
+        subtitle="Deprecated services with zero recorded traffic in the last 24h. No detected callers — likely safe to deregister."
+        flush
+      >
+        <DataTable
+          columns={retireColumns}
+          rows={safeToRetire}
+          getRowId={(s) => `${s.namespace}:${s.version}`}
+          emptyTitle="Nothing safe to drop yet"
+          emptyDescription="Every deprecated service still has traffic."
+        />
+      </Panel>
+    </Page>
   );
 }
 
@@ -144,6 +108,63 @@ type ServiceRow = NonNullable<
     >['services']
   >[number]
 >;
+
+const retireColumns: Column<ServiceRow>[] = [
+  { id: 'namespace', header: 'Namespace', cell: (s) => s.namespace, sortValue: (s) => s.namespace },
+  { id: 'version', header: 'Version', cell: (s) => s.version, sortValue: (s) => s.version },
+  {
+    id: 'reason',
+    header: 'Reason',
+    cell: (s) => (
+      <DeprecationBadges manualReason={s.manualReason ?? ''} autoReason={s.autoReason ?? ''} />
+    ),
+  },
+];
+
+type MethodRow = { key: string; method: string; caller: string | null; count: number | null; p50: number | null; p95: number | null };
+
+const methodColumns: Column<MethodRow>[] = [
+  { id: 'method', header: 'Method', cell: (r) => r.method },
+  {
+    id: 'caller',
+    header: 'Caller',
+    cell: (r) =>
+      r.caller === null ? (
+        <Typography variant="body2" color="text.secondary">
+          no callers recorded
+        </Typography>
+      ) : (
+        r.caller
+      ),
+  },
+  { id: 'count', header: 'Count', align: 'right', cell: (r) => (r.count === null ? '' : formatCount(r.count)) },
+  { id: 'p50', header: <>p50&nbsp;ms</>, align: 'right', cell: (r) => r.p50 ?? '' },
+  { id: 'p95', header: <>p95&nbsp;ms</>, align: 'right', cell: (r) => r.p95 ?? '' },
+];
+
+function methodRows(methods: NonNullable<ServiceRow['methods']>): MethodRow[] {
+  const out: MethodRow[] = [];
+  methods.forEach((m, mi) => {
+    if (!m) return;
+    const callers = m.callers ?? [];
+    if (callers.length === 0) {
+      out.push({ key: `${mi}`, method: m.method, caller: null, count: null, p50: null, p95: null });
+      return;
+    }
+    callers.forEach((c, ci) => {
+      if (!c) return;
+      out.push({
+        key: `${mi}-${ci}`,
+        method: ci === 0 ? m.method : '',
+        caller: c.caller,
+        count: Number(c.count),
+        p50: Number(c.p50Millis),
+        p95: Number(c.p95Millis),
+      });
+    });
+  });
+  return out;
+}
 
 function ServiceCard({ service }: { service: ServiceRow }) {
   const methods = service.methods ?? [];
@@ -175,55 +196,7 @@ function ServiceCard({ service }: { service: ServiceRow }) {
             No per-method breakdown available.
           </Typography>
         ) : (
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Method</TableCell>
-                  <TableCell>Caller</TableCell>
-                  <TableCell align="right">Count</TableCell>
-                  <TableCell align="right">p50&nbsp;ms</TableCell>
-                  <TableCell align="right">p95&nbsp;ms</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {methods.map((m, mi) => {
-                  if (!m) return null;
-                  const callers = m.callers ?? [];
-                  if (callers.length === 0) {
-                    return (
-                      <TableRow key={mi}>
-                        <TableCell>{m.method}</TableCell>
-                        <TableCell colSpan={4}>
-                          <Typography variant="body2" color="text.secondary">
-                            no callers recorded
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }
-                  return callers.map((c, ci) => {
-                    if (!c) return null;
-                    return (
-                      <TableRow key={`${mi}-${ci}`}>
-                        <TableCell>{ci === 0 ? m.method : ''}</TableCell>
-                        <TableCell>{c.caller}</TableCell>
-                        <TableCell align="right">
-                          {formatCount(Number(c.count))}
-                        </TableCell>
-                        <TableCell align="right">
-                          {Number(c.p50Millis)}
-                        </TableCell>
-                        <TableCell align="right">
-                          {Number(c.p95Millis)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  });
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <DataTable columns={methodColumns} rows={methodRows(methods)} getRowId={(r) => r.key} />
         )}
       </AccordionDetails>
     </Accordion>
@@ -241,22 +214,16 @@ function DeprecationBadges({
     <Stack direction="row" spacing={0.5}>
       {manualReason && (
         <Tooltip title={`manual: ${manualReason}`}>
-          <Chip
-            label="manual"
-            size="small"
-            color="error"
-            variant="outlined"
-          />
+          <span>
+            <StatusChip status="degraded" label="manual" size="small" />
+          </span>
         </Tooltip>
       )}
       {autoReason && (
         <Tooltip title={`auto: ${autoReason}`}>
-          <Chip
-            label="auto"
-            size="small"
-            color="warning"
-            variant="outlined"
-          />
+          <span>
+            <StatusChip status="sunsetable" label="auto" size="small" />
+          </span>
         </Tooltip>
       )}
     </Stack>
