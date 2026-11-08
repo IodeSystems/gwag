@@ -125,7 +125,8 @@ entry's delete marker, so routing has no gap.
 ## Cluster KV replicas
 
 The cluster keeps its state in JetStream KV buckets (peers, registry,
-stable, deprecated, mcp config, drain, external dependents). They start
+stable, deprecated, mcp config, drain, external dependents, and
+`gwag-schemas` with `--schema-registry`). They start
 at one replica. As peers join, each node raises every bucket to the
 count the replica policy gives for the live peers. Set the policy with
 `--cluster-replicas` (`gwag up`, example gateway) or
@@ -158,6 +159,13 @@ Consequences:
   (30 s). `ForgetPeer` is the only path that lowers the count; it
   applies the same policy to the remaining peers. A policy change at
   restart raises but does not lower existing buckets.
+
+## Schema Registry
+
+`gwag up --schema-registry` serves the Confluent Schema Registry API at
+`/schema-registry` (read-only by default; state in the `gwag-schemas`
+bucket). `gwag schema import` copies an existing registry in, keeping
+the schema ids. See [schema-registry.md](./schema-registry.md).
 
 ## Backpressure
 
