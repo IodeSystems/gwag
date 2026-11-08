@@ -178,9 +178,10 @@ go / ts / python, see `docs/events.md`).
   `py/gwag-registration/gen.sh` (pinned generators; output committed,
   drift-checked by `examples/events/check.sh`; never edit
   `*/gen/`). The Schema Registry serves that file as the default subject
-  `gateway.controlplane.v1.ControlPlane` under a reserved id
-  (2147483647, counting down; `Store.RegisterReserved`), so imports
-  cannot collide with it. `examples/events/registration.sh` runs both
+  `gateway.controlplane.v1.ControlPlane`, an ordinary schema of the
+  default context. `gwag schema import --into .corp` puts another
+  registry in its own context (own id space), so imports cannot collide
+  with it. `examples/events/registration.sh` runs both
   clients against a real `gwag up`. See `docs/registration-clients.md`.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`

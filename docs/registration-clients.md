@@ -28,8 +28,8 @@ curl http://HOST:8080/schema-registry/subjects/gateway.controlplane.v1.ControlPl
 ```
 
 The reply has `schema` (the `.proto` text, comments included),
-`schemaType` `PROTOBUF` and `id` 2147483647 (a reserved id, outside any
-imported registry's range). Save `schema` as a `.proto` file and run
+`schemaType` `PROTOBUF` and an `id` of gwag's default context (an
+imported registry has its own context and id space). Save `schema` as a `.proto` file and run
 your own generator on it: protoc-gen-es, betterproto2, protoc-gen-go,
 buf. `gwag gen --lang ts|python` does it with the generators your
 project pins (see [`events.md`](./events.md)).

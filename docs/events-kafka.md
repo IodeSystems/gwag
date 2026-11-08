@@ -266,6 +266,54 @@ The shadow proto is in `go-kafka/corp/shadow/shop/v1/order.proto`;
 check. TypeScript uses the Go example's shadow proto; `gwag schema
 check` is the same command for every language.
 
+## One id space per producer
+
+A record carries a schema id, and the id means something only in the
+registry that gave it out. Each topic has one producing system, so
+each topic belongs to one id space: the producer's.
+
+| | **own** | **import** | **shadow** |
+|---|---|---|---|
+| Producer | a gwag service | another team | another team |
+| Id space | gwag's: the default context of gwag's registry (`/schema-registry`), or your registry | theirs: their registry, or the context it was imported into (`/schema-registry/contexts/.corp`) | theirs, as import |
+| Registry URL of the serde | gwag's | theirs | theirs |
+
+While the other team runs its own registry, there is nothing to do:
+each serde points at the registry of its topics. When gwag replaces
+their registry ([schema-registry.md](./schema-registry.md)),
+`gwag schema import --into .corp` copies it into the context `.corp`,
+ids unchanged, and the clients of their topics move to
+`http://HOST:8080/schema-registry/contexts/.corp`. gwag's own channels
+stay in the default context. The two id spaces never clash: id 5 of
+`.corp` and id 5 of `.` can be different schemas, and each record
+decodes through its own URL.
+
+One serde for both kinds of channel takes the other registry per
+channel:
+
+```go
+own, _ := sr.NewClient(sr.Config{URL: "http://gwag:8080/schema-registry"})
+corp, _ := sr.NewClient(sr.Config{URL: "http://gwag:8080/schema-registry/contexts/.corp"})
+serde, err := sr.NewSerde(own, sr.AutoRegister(), sr.ChannelClient("corp.orders.v1.Order", corp))
+```
+
+```ts
+const serde = new SchemaRegistrySerde(own, { autoRegister: true, channelClients: { "corp.orders.v1.Order": corp } });
+```
+
+```python
+serde = Serde(own, auto_register=True, channel_clients={"corp.orders.v1.Order": corp})
+```
+
+The key is the channel key: for an import, `<package>.<message name>`
+(or the `--bind` name); for a shadow, the package and the binding
+name. Publish and delivery on that channel use `corp`; every other
+channel uses `own`. A separate bus per kind, each with its own serde,
+works as well. `AutoRegister` covers every channel of the serde: a
+publish to a corp channel would register in their context. For a
+service that also publishes to their topics, use a separate serde
+without it.
+
 ## Kafka backend
 
 `github.com/iodesystems/gwag/v2/events/kafka`, its own Go module (the
@@ -453,12 +501,15 @@ through a generated bus; `core.publish` with only a type name fails.
 | `Normalize()` | `normalize: true` | `normalize=True` | `normalize=true` on lookups and registrations |
 | `WithReferenceSubject(f)` | `referenceSubject` | `reference_subject=f` | subject of an import; default the import path |
 | `TypeNames(map)` | `typeNames` | `type_names={...}` | registry type name to local type name (shadow); decode only |
+| `ChannelClient(key, c)` (repeatable) | `channelClients: { key: c }` | `channel_clients={key: c}` | registry of one channel, on publish and on delivery ([one id space per producer](#one-id-space-per-producer)) |
 
 `AutoRegister`, `UseLatest` and `UseSchemaID` are alternatives. Set at
 most one. A second one fails at construction with
 `schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one`:
 Go `NewSerde` returns `sr.ErrExclusiveModes`, TypeScript throws `Error`,
-Python raises `ValueError`.
+Python raises `ValueError`. An empty channel key or a missing client
+in a channel client fails the same way with
+`schema registry: channel client for channel "KEY": want a channel key and a client`.
 
 On decode, the message type comes from the schema id: the registry's
 `format=serialized` (base64 `FileDescriptorProto`), or, in TypeScript,

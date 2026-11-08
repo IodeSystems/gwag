@@ -164,8 +164,9 @@ Consequences:
 
 `gwag up --schema-registry` serves the Confluent Schema Registry API at
 `/schema-registry` (read-only by default; state in the `gwag-schemas`
-bucket). `gwag schema import` copies an existing registry in, keeping
-the schema ids. See [schema-registry.md](./schema-registry.md).
+bucket). `gwag schema import --into .corp` copies an existing registry
+into a context of its own, keeping the schema ids. See
+[schema-registry.md](./schema-registry.md).
 
 ## Backpressure
 
