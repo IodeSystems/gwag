@@ -49,6 +49,7 @@ func serveCmd(args []string) int {
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpInclude := &stringListValue{}
 	fs.Var(mcpInclude, "mcp-include", "MCP allowlist glob (repeatable). Implies --mcp.")
+	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
 		out := fs.Output()
 		fmt.Fprintln(out, "Usage: gwag serve {--openapi PATH --to URL | --proto PATH --to HOST:PORT | --graphql URL} [flags]")
@@ -57,6 +58,7 @@ func serveCmd(args []string) int {
 		fmt.Fprintln(out, "  --openapi / --proto:  embedded gat translator (no metrics, no NATS, no admin).")
 		fmt.Fprintln(out, "  --graphql:            full gateway (metrics, backpressure, subscription proxy).")
 		fmt.Fprintln(out, "  --mcp:                works with every source; with --openapi / --proto it promotes to the full gateway path.")
+		fmt.Fprintln(out, "  --schema-registry:    in-memory Schema Registry at /schema-registry; promotes to the full gateway path.")
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "Flags:")
 		fs.PrintDefaults()
@@ -94,14 +96,19 @@ func serveCmd(args []string) int {
 	// to the full gateway when --mcp is set, so /mcp shares the
 	// dispatcher and metrics path with every other ingress. Otherwise
 	// they stay on the lite gat path.
-	if *graphqlURL != "" || mcpOn {
+	srOpt, err := srFlags.option()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gwag serve:", err)
+		return 2
+	}
+	if *graphqlURL != "" || mcpOn || srOpt != nil {
 		src := fullGatewaySource{
 			graphqlURL:  *graphqlURL,
 			openapiPath: *openapiPath,
 			protoPath:   *protoPath,
 			target:      *target,
 		}
-		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values, shut)
+		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values, srFlags, srOpt, shut)
 	}
 	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version, shut)
 }
@@ -120,8 +127,11 @@ type fullGatewaySource struct {
 // subscription proxy) wrapping one upstream of any supported kind.
 // /mcp is optional via --mcp. No NATS, no admin UI, no cluster — those
 // ride on `gwag up`.
-func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, shut gateway.ShutdownOptions) int {
+func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, srFlags *schemaRegistryFlags, srOpt gateway.Option, shut gateway.ShutdownOptions) int {
 	gwOpts := []gateway.Option{}
+	if srOpt != nil {
+		gwOpts = append(gwOpts, srOpt)
+	}
 	if enableMCP && len(mcpIncludes) > 0 {
 		gwOpts = append(gwOpts, gateway.WithMCPInclude(mcpIncludes...))
 	}
@@ -159,6 +169,7 @@ func serveFullGateway(src fullGatewaySource, addr, namespace, version string, en
 	}
 
 	mux := fullGatewayMux(gw, enableMCP)
+	srFlags.mount(mux, gw)
 
 	log.Printf("gwag serve: %s → POST %s/api/graphql", label, strings.TrimRight(addr, "/"))
 	if enableMCP {

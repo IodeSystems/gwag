@@ -412,7 +412,7 @@ func servicesCmd(args []string) int {
 
 func schemaCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push|import) ...")
 		return 2
 	}
 	switch args[0] {
@@ -424,8 +424,10 @@ func schemaCmd(args []string) int {
 		return schemaCheckCmd(args[1:], os.Stdout, os.Stderr)
 	case "push":
 		return schemaPushCmd(args[1:], os.Stdout, os.Stderr)
+	case "import":
+		return schemaImportCmd(args[1:], os.Stdout, os.Stderr)
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push|import) ...")
 		return 2
 	}
 }

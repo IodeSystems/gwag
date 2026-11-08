@@ -64,6 +64,7 @@ func upCmd(args []string) int {
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
+	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
 		fmt.Fprintln(fs.Output(), "  Boots a standalone gateway: embedded NATS, admin endpoints, UI,")
@@ -141,6 +142,14 @@ func upCmd(args []string) int {
 	if *pprofEnable {
 		gwOpts = append(gwOpts, gateway.WithPprof())
 	}
+	srOpt, err := srFlags.option()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if srOpt != nil {
+		gwOpts = append(gwOpts, srOpt)
+	}
 	sinkOpts, err := declarationsSinkOptions(*declHook, *declHookSecret, *declHookMode, *declFile, *declFileMode)
 	if err != nil {
 		log.Fatal(err)
@@ -178,6 +187,7 @@ func upCmd(args []string) int {
 	mux.Handle("/api/health", gw.HealthHandler())
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
 	gw.MountMCP(mux)
+	srFlags.mount(mux, gw)
 	if pmux := gw.PprofMux(); pmux != nil {
 		mux.Handle("/debug/pprof/", gw.AdminMiddleware(pmux))
 		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")
