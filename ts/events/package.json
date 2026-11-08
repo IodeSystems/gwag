@@ -1,0 +1,33 @@
+{
+  "name": "@gwag/events",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runtime for the typed event channels that `gwag gen --lang ts` writes",
+  "type": "module",
+  "packageManager": "pnpm@11.0.8",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./jetstream": "./src/jetstream.ts",
+    "./memory": "./src/memory.ts",
+    "./eventstest": "./src/eventstest.ts",
+    "./proto/*_pb.js": "./src/gen/*_pb.ts"
+  },
+  "scripts": {
+    "gen": "./gen.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.17.0",
+    "@nats-io/jetstream": "3.4.0",
+    "@nats-io/transport-node": "3.4.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.17.0",
+    "@types/node": "24.19.1",
+    "typescript": "5.9.3"
+  }
+}
