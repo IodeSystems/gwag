@@ -383,7 +383,19 @@ func (s *graphQLSource) pickReplicaExcept(tried []*graphQLReplica) *graphQLRepli
 // record the outcome for ejection, and retry on another replica when
 // the request provably never got a connection (httpConnProbe).
 // GraphQL-level errors in a 200 response are not upstream failures.
-func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[string]any) (*graphQLResponse, error) {
+// label names the dispatcher's operation ("query hello") for replay
+// verification.
+func (s *graphQLSource) roundTrip(ctx context.Context, label, query string, vars map[string]any) (*graphQLResponse, error) {
+	if rs := replaySessionFrom(ctx); rs != nil {
+		rc := rs.begin(replayKey{replayKindGraphQL, s.namespace, s.version, label})
+		ctx = withReplayCall(ctx, rc)
+		if rs.replay {
+			// Green: post to the endpoint blue used; the replay call
+			// answers in doUpstreamHTTP.
+			return dispatchGraphQL(ctx, nil, rs.target(rc.key), query, vars, s.forwardHeaders)
+		}
+		defer rc.commit()
+	}
 	r := s.pickReplica()
 	if r == nil {
 		return nil, Reject(CodeInternal, fmt.Sprintf("graphql ingest: no live replicas for %s", s.namespace))
@@ -398,6 +410,9 @@ func (s *graphQLSource) roundTrip(ctx context.Context, query string, vars map[st
 		var probe *httpConnProbe
 		if attempt+1 < maxUpstreamAttempts && s.replicaCount() > attempt+1 && httpClientTraceable(r.httpClient) {
 			probe, attemptCtx = acquireHTTPConnProbe(callCtx)
+		}
+		if rc := replayCallFrom(ctx); rc != nil {
+			rc.target = r.endpoint
 		}
 		r.inflight.Add(1)
 		resp, err := dispatchGraphQL(attemptCtx, r.httpClient, r.endpoint, query, vars, s.forwardHeaders)
@@ -549,7 +564,7 @@ func dispatchGraphQL(
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
+	resp, err := doUpstreamHTTP(client, req)
 	if err != nil {
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()), err)
 	}

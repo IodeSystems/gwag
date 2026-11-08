@@ -378,7 +378,7 @@ func (d *graphQLDispatcher) dispatchUnary(ctx context.Context, args map[string]a
 	}
 
 	src := d.mirror.src
-	resp, err := src.roundTrip(ctx, printed, vars)
+	resp, err := src.roundTrip(ctx, d.label, printed, vars)
 	if err != nil {
 		return nil, record(err)
 	}
@@ -465,7 +465,7 @@ func (d *graphQLDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	}
 
 	src := d.mirror.src
-	resp, err := src.roundTrip(ctx, printed, vars)
+	resp, err := src.roundTrip(ctx, d.label, printed, vars)
 	if err != nil {
 		return dst, record(err)
 	}
@@ -604,7 +604,7 @@ func (d *graphqlGroupDispatcher) Dispatch(ctx context.Context, _ map[string]any)
 	}
 
 	src := d.mirror.src
-	resp, err := src.roundTrip(ctx, printed, info.VariableValues)
+	resp, err := src.roundTrip(ctx, d.label, printed, info.VariableValues)
 	if err != nil {
 		return nil, record(err)
 	}
@@ -668,7 +668,7 @@ func (d *graphqlGroupDispatcher) DispatchAppend(ctx context.Context, _ map[strin
 	}
 
 	src := d.mirror.src
-	resp, err := src.roundTrip(ctx, printed, info.VariableValues)
+	resp, err := src.roundTrip(ctx, d.label, printed, info.VariableValues)
 	if err != nil {
 		return dst, record(err)
 	}

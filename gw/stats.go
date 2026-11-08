@@ -230,6 +230,11 @@ func callerFromContext(ctx context.Context, headers []string) string {
 var nowFunc = time.Now
 
 func (s *statsRecordingMetrics) RecordDispatch(ctx context.Context, namespace, version, method string, d time.Duration, err error) {
+	if isReplaying(ctx) {
+		// A replayed dispatch (replay verification on green) called
+		// no upstream; keep it out of dispatch metrics and stats.
+		return
+	}
 	s.Metrics.RecordDispatch(ctx, namespace, version, method, d, err)
 	if s.stats != nil {
 		caller := s.callerLimiter.Apply(resolveCallerID(ctx, s.callerExtractor, s.callerHeaders))

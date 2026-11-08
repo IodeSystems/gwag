@@ -44,6 +44,26 @@ func newInternalProtoInvocationHandler(src *internalProtoSource, sd protoreflect
 	outputDesc := md.Output()
 	h := src.handlers[methodName]
 	return Handler(func(ctx context.Context, req protoreflect.ProtoMessage) (protoreflect.ProtoMessage, error) {
+		if s := replaySessionFrom(ctx); s != nil && h != nil {
+			// In-process handlers (ps.pub among them) are upstream
+			// calls for replay: recorded on blue, answered from the
+			// recording on green so their side effects do not run.
+			rc := s.begin(replayKey{replayKindInproc, ns, ver, methodName})
+			if s.replay {
+				return rc.replayProto(ctx, method, md, req)
+			}
+			defer rc.commit()
+			start := time.Now()
+			resp, err := h(ctx, req)
+			elapsed := time.Since(start)
+			rc.recordProto(ctx, "", method, req, resp, err)
+			metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+			addDispatchTime(ctx, elapsed)
+			if err != nil {
+				return nil, err
+			}
+			return normaliseInternalProtoResponse(resp, outputDesc)
+		}
 		start := time.Now()
 		if h == nil {
 			err := fmt.Errorf("gateway: no handler registered for %s/%s/%s", ns, ver, methodName)

@@ -73,6 +73,21 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			rpcMethodAttr(method),
 		)
 		defer span.End()
+		var rc *replayCall
+		if s := replaySessionFrom(ctx); s != nil {
+			rc = s.begin(replayKey{replayKindGRPC, ns, ver, string(md.Name())})
+			if s.replay {
+				// Green: build the outgoing metadata as the live path
+				// does, answer from the recording; no replica, no
+				// dispatch metrics.
+				callCtx, err := protoOutgoingContext(ctx, tr, headers)
+				if err != nil {
+					return nil, err
+				}
+				return rc.replayProto(callCtx, method, md, req)
+			}
+			defer rc.commit()
+		}
 		start := time.Now()
 		r := p.pickReplica()
 		if r == nil {
@@ -83,26 +98,13 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			return nil, err
 		}
 
-		callCtx := ctx
-		if len(headers) > 0 {
-			injected, err := applyHeaderInjectors(ctx, headers)
-			if err != nil {
-				elapsed := time.Since(start)
-				metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
-				addDispatchTime(ctx, elapsed)
-				return nil, err
-			}
-			if len(injected) > 0 {
-				kvs := make([]string, 0, 2*len(injected))
-				for k, v := range injected {
-					kvs = append(kvs, k, v)
-				}
-				callCtx = metadata.AppendToOutgoingContext(callCtx, kvs...)
-			}
-			releaseInjectorMap(injected)
+		callCtx, err := protoOutgoingContext(ctx, tr, headers)
+		if err != nil {
+			elapsed := time.Since(start)
+			metrics.RecordDispatch(ctx, ns, ver, method, elapsed, err)
+			addDispatchTime(ctx, elapsed)
+			return nil, err
 		}
-		callCtx = bridgeTraceMetadata(callCtx)
-		callCtx = tr.injectGRPC(callCtx)
 		policy := &p.policy
 		callCtx, cancel := withUpstreamTimeout(callCtx, policy)
 		defer cancel()
@@ -111,7 +113,6 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		// provably never got a transport stream (grpcPeerProbe), and
 		// only onto a replica not tried yet.
 		var tried [maxUpstreamAttempts]*replica
-		var err error
 		for attempt := 0; ; attempt++ {
 			tried[attempt] = r
 			// Per-instance cap: acquired AFTER the pick because the
@@ -137,6 +138,10 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			}
 			r.inflight.Add(-1)
 			releaseInstance()
+			if rc != nil {
+				// Each attempt overwrites; commit keeps the last.
+				rc.recordProto(callCtx, r.addr, method, req, resp, err)
+			}
 			if err == nil {
 				r.health.success()
 				elapsed := time.Since(start)
@@ -174,6 +179,29 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 		addDispatchTime(ctx, elapsed)
 		return nil, err
 	})
+}
+
+// protoOutgoingContext adds the injected headers and the trace
+// metadata to ctx's outgoing gRPC metadata: what an upstream call
+// sends besides the message.
+func protoOutgoingContext(ctx context.Context, tr *tracer, headers []headerInjector) (context.Context, error) {
+	callCtx := ctx
+	if len(headers) > 0 {
+		injected, err := applyHeaderInjectors(ctx, headers)
+		if err != nil {
+			return nil, err
+		}
+		if len(injected) > 0 {
+			kvs := make([]string, 0, 2*len(injected))
+			for k, v := range injected {
+				kvs = append(kvs, k, v)
+			}
+			callCtx = metadata.AppendToOutgoingContext(callCtx, kvs...)
+		}
+		releaseInjectorMap(injected)
+	}
+	callCtx = bridgeTraceMetadata(callCtx)
+	return tr.injectGRPC(callCtx), nil
 }
 
 // newProtoDispatcher wraps newProtoInvocationHandler with the user

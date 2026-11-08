@@ -232,6 +232,14 @@ type Gateway struct {
 	// the warnings of the latest Register of each line.
 	shadowMetrics *shadowMetrics
 	shadowWarn    shadowWarnings
+	// replayRec records requests for replay verification
+	// (WithReplayVerify, replay_verify.go); nil when off.
+	// replayMetrics is nil unless the default Prometheus sink is in
+	// use. replayGate is true while this gateway holds a count in
+	// replayActive (released by Close).
+	replayRec     *replayRecorder
+	replayMetrics *replayMetrics
+	replayGate    atomic.Bool
 	// declView and declSinks feed the declaration change sinks
 	// (declaration_sinks.go). declSinks is nil when none is configured.
 	declView  declarationView
@@ -318,6 +326,11 @@ type config struct {
 	metricPrefix   string
 	tracerProvider oteltrace.TracerProvider
 	backpressure   BackpressureOptions
+
+	// replayVerify: WithReplayVerify (blue). replayEndpoint:
+	// WithReplayVerifyEndpoint (green).
+	replayVerify   *ReplayVerifyOptions
+	replayEndpoint bool
 
 	// legacyErrorCodes: WithLegacyErrorCodes.
 	legacyErrorCodes bool
@@ -1533,6 +1546,18 @@ func New(opts ...Option) *Gateway {
 		g.lifecycle = newLifecycleMetrics(g, pm)
 		g.appKeyMetrics = newAppKeyMetrics(g, pm)
 		g.shadowMetrics = newShadowMetrics(pm)
+		g.replayMetrics = newReplayMetrics(pm)
+	}
+	if cfg.replayVerify != nil {
+		if cfg.replayVerify.Target == "" {
+			panic("gateway: WithReplayVerify: Target is required")
+		}
+		g.replayRec = newReplayRecorder(g, *cfg.replayVerify)
+		g.replayRec.start(life)
+	}
+	if cfg.replayVerify != nil || cfg.replayEndpoint {
+		g.replayGate.Store(true)
+		replayActive.Add(1)
 	}
 	go g.appKeyWarnLoop()
 	warnShortHexSecret("signer-secret", cfg.signerSecret)
@@ -1591,6 +1616,9 @@ func (g *Gateway) Close() {
 		g.psFailover.Close()
 	}
 	g.lifeCancel()
+	if g.replayGate.CompareAndSwap(true, false) {
+		replayActive.Add(-1)
+	}
 	if owned {
 		if fs, ok := store.(*FilesystemUploadStore); ok {
 			fs.Close()
@@ -2230,16 +2258,27 @@ func (g *Gateway) Use(transforms ...Transform) {
 //
 // Stability: stable
 func (g *Gateway) Handler() http.Handler {
+	h, err := g.graphqlHandler()
+	if err != nil {
+		return errorHandler(err)
+	}
+	// The replay recorder sits outside instrument so instrument still
+	// sees its own *httpRec writer.
+	return g.replayRecordHandler(g.instrument(ingGraphQL, false, h))
+}
+
+// graphqlHandler assembles the schema if needed and returns the bare
+// GraphQL HTTP handler (no traffic instrumentation).
+func (g *Gateway) graphqlHandler() (http.Handler, error) {
 	g.mu.Lock()
 	if g.schema.Load() == nil {
 		if err := g.assembleLocked(); err != nil {
 			g.mu.Unlock()
-			return errorHandler(err)
+			return nil, err
 		}
 	}
 	g.mu.Unlock()
-
-	return g.instrument(ingGraphQL, false, g.gql.Handler())
+	return g.gql.Handler(), nil
 }
 
 // SchemaHandler returns an http.Handler that exports the GraphQL
