@@ -90,13 +90,17 @@ func (b *Backend) ensureTopic(ctx context.Context, topic string) error {
 // commits keeps them. Where the commit is refused because the group
 // is live, its members hold their positions already.
 func (b *Backend) seedGroup(ctx context.Context, topic, group string, deliverAll bool) error {
-	committed, err := b.admin.FetchOffsets(ctx, group)
+	var committed kadm.OffsetResponses
+	err := retryMetadata(ctx, func() (err error) {
+		committed, err = b.admin.FetchOffsets(ctx, group)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("kafka: fetch offsets of %s: %w", group, err)
 	}
-	// A topic created a moment ago may not have a leader everywhere yet.
 	var listed kadm.ListedOffsets
-	for deadline := time.Now().Add(30 * time.Second); ; {
+	err = retryMetadata(ctx, func() error {
+		var err error
 		if deliverAll {
 			listed, err = b.admin.ListStartOffsets(ctx, topic)
 		} else {
@@ -105,17 +109,10 @@ func (b *Backend) seedGroup(ctx context.Context, topic, group string, deliverAll
 		if err == nil {
 			err = listed.Error()
 		}
-		if err == nil {
-			break
-		}
-		retry := errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.LeaderNotAvailable) || errors.Is(err, kerr.NotLeaderForPartition)
-		if !retry || time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("kafka: list offsets of %s: %w", topic, err)
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(50 * time.Millisecond):
-		}
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("kafka: list offsets of %s: %w", topic, err)
 	}
 	seed := listed.Offsets()
 	for p := range seed[topic] {
@@ -128,6 +125,30 @@ func (b *Backend) seedGroup(ctx context.Context, topic, group string, deliverAll
 	}
 	_, _ = b.admin.CommitOffsets(ctx, group, seed)
 	return nil
+}
+
+// retryMetadata runs fn until it succeeds, fails with an error that
+// is not about the broker still starting up, or 30s pass. A new topic
+// has no leader everywhere yet, and a fresh broker has no group
+// coordinator until __consumer_offsets is created.
+func retryMetadata(ctx context.Context, fn func() error) error {
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		starting := errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.LeaderNotAvailable) ||
+			errors.Is(err, kerr.NotLeaderForPartition) || errors.Is(err, kerr.CoordinatorNotAvailable) ||
+			errors.Is(err, kerr.CoordinatorLoadInProgress) || errors.Is(err, kerr.NotCoordinator)
+		if !starting || time.Now().After(deadline) || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func record(topic string, m *events.Message) *kgo.Record {
