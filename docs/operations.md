@@ -364,6 +364,7 @@ instance or line. Default sink only.
 | `app_key_auth_total` | counter | `op`, `outcome` | App-key checks. `op`: `register`, `heartbeat`, `deregister`, `drain_instance`, `schema_registry_write`, or an operator RPC (`forget_peer`, `retract_stable`, `deprecate`, `undeprecate`). `outcome`: `ok`, `ok_admin`, `missing`, `invalid`, `expired`, `denied_delegate`, `namespace_forbidden`, `unavailable`, `admin_required`. Control-plane checks run only with `--require-app-keys`. Default sink only. |
 | `app_key_expiry_seconds` | gauge | `key_id` | Seconds until each key the gateway minted expires; negative once expired. Cluster-wide set, read at scrape. Default sink only. |
 | `app_keys_expiring` | gauge | none | Minted keys that expire within 7 days and have not expired. Default sink only. |
+| `shadow_check_total` | counter | `outcome` | Shadow checks at Register (`(gwag.ps.v1.shadow)` message vs its subject in the gateway's registry): `match`, `mismatch` (also logged and returned as a warning), `not_found` (no context holds the subject), `error` (the check could not run). Not counted with the registry off. Default sink only. |
 | `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
 | `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
 | `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |
