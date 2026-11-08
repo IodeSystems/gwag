@@ -388,6 +388,11 @@ Two ways: restart the nodes in place, one at a time, or swap in new
 nodes and remove the old ones (replica swap). Both run two versions
 side by side for a while and end with `gwag cluster finalize`.
 
+A third way, a cutover to a separate cluster, is in progress:
+[`cutover.md`](./cutover.md). What exists is replay verification: the
+old cluster records requests with their upstream calls, the new one
+replays them without calling upstreams and reports what differs.
+
 ### Rolling restart
 
 One node at a time. With `odd` and 3 nodes (R3), never take down two.
@@ -562,4 +567,5 @@ See [`CHANGELOG.md`](../CHANGELOG.md).
 
 - [`services.md`](./services.md) — registering services against a cluster.
 - [`operations.md`](./operations.md) — drain, replicas, metrics.
+- [`cutover.md`](./cutover.md) — moving traffic to a separate cluster; replay verification.
 - [`admin-auth.md`](./admin-auth.md) — admin roles on the control plane.

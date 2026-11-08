@@ -189,6 +189,11 @@ release of real-world use validates their shape:
   The additive `Operation/Type/Field.Annotations` and `.Ref` fields on
   the stable IR structs are themselves additive, but the `Annotation`
   element type is experimental.
+- *Replay verification* — `WithReplayVerify`, `ReplayVerifyOptions`,
+  `ReplayMatch`, `WithReplayVerifyEndpoint`, `Gateway.ReplayVerify` and
+  the recording types (`ReplayExchange`, `ReplayLeg`, `ReplayMessage`,
+  `ReplayResult`, `ReplayLegResult`, `ReplayDiff`). The recording format
+  on `POST /admin/replay/verify` may change between minors.
 - *Destructive-read gate* — `WithDestructiveReads`. The Option shape is
   settled but its path-matching semantics are unvalidated (no concrete
   destructive route exists yet).
