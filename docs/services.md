@@ -173,6 +173,7 @@ The service registered once, with n1; all three nodes answer.
 | `OnDrained` | Runs after the SIGTERM drain. When nil, SIGTERM is raised again with the default handler. |
 | `BuildTag` | Set it in release builds (`-ldflags "-X main.buildTag=v1.2.3"`). `SelfRegister` then refuses a `unstable` version. |
 | `DialOptions` | Replaces the default insecure dial to the gateway, for TLS. |
+| `AppKey`, `AppKeyFunc` | App key sent on every control-plane call as `authorization: Bearer <key>`. `AppKeyFunc` is called per call (read a rotated key from a file). See App keys. |
 | `Logger` | Receives non-fatal events. Default `log.Printf`. |
 
 `controlclient.Service`, one per binding:
@@ -353,9 +354,96 @@ consequences: [`cluster.md`](./cluster.md#when-a-node-dies).
 The examples above registered against `gwag up` with no token. The
 admin roles gate the admin API; they are documented in
 [`admin-auth.md`](./admin-auth.md), including what a reader without a
-token sees of a `Public` service. Whether to expose the control-plane
-port beyond the services that need it is a network decision; it is not
-authenticated in these runs.
+token sees of a `Public` service. By default the control plane is not
+authenticated: any client that reaches the port can register any
+namespace. Turn on app keys to change that.
+
+### App keys
+
+An app key lets a service act on the namespaces it lists. Mint one
+with the admin token:
+
+```
+$ gwag key create --ns orders --ttl 30d --note "orders prod"
+gwk_3f9c0a1b2c3d4e5f_6a1e...
+id 3f9c0a1b2c3d4e5f, namespaces orders, expires 2026-12-07T10:00:00Z. The key is shown once; store it now.
+$ gwag key list
+ID               NAMESPACES                 EXPIRES               STATE         NOTE
+3f9c0a1b2c3d4e5f orders                     2026-12-07T10:00:00Z  valid         orders prod
+$ gwag key revoke 3f9c0a1b2c3d4e5f
+revoked 3f9c0a1b2c3d4e5f
+```
+
+The key goes to stdout alone, so `KEY=$(gwag key create ...)` works.
+The gateway stores the key's SHA-256, the namespaces and the expiry;
+the key cannot be shown again. The admin API is `POST /admin/app-keys`
+(`{namespaces, ttl, note}`), `GET /admin/app-keys` and
+`DELETE /admin/app-keys/{id}`; all three need the admin token (dev gets
+403). `--ttl` takes days (`30d`) or a Go duration (`720h`). In a
+cluster the keys live in the `gwag-app-keys` KV bucket and every check
+reads it, so a key minted or revoked on one node applies on every node
+at the next call. A standalone gateway keeps them in memory.
+
+Run the gateway with `--require-app-keys` (`gateway.WithRequireAppKeys()`)
+to enforce them. Off by default; `gwag up` stays open unless you pass
+the flag. With it, a remote caller (one with a gRPC peer) needs:
+
+| RPC | Needs |
+|---|---|
+| `Register` | a key covering every binding's namespace |
+| `Heartbeat`, `Deregister`, `DrainInstance` | a key covering every namespace of the registration |
+| `ForgetPeer`, `RetractStable`, `Deprecate`, `Undeprecate` | the admin token |
+| `ListRegistrations`, `ListPeers`, `ListServices` | nothing |
+| `SignSubscriptionToken` | the signer secret or admin token, as before |
+
+The key travels as gRPC metadata `authorization: Bearer <key>`. The
+admin token passes every check; the dev token passes none. No key or
+an unknown, expired or revoked key is `Unauthenticated`; a valid key
+that does not cover a namespace is `PermissionDenied`; a cluster node
+that has not joined JetStream yet answers `Unavailable` (controlclient
+retries). Register checks the key before it compiles a proto or
+introspects a GraphQL endpoint. Calls made in-process (the janitor,
+the admin API handlers, an embedding program) are not checked.
+
+```go
+reg, err := controlclient.SelfRegister(ctx, controlclient.Options{
+    GatewayAddr: "gateway:50090",
+    ServiceAddr: "orders:50051",
+    AppKey:      os.Getenv("GWAG_APP_KEY"),
+    Services:    []controlclient.Service{{Namespace: "orders", ProtoSource: ordersProto}},
+})
+```
+
+**Expiry and rotation.** Every key has an expiry. An expired or revoked
+key makes the next `Heartbeat` fail; the gateway does not refresh the
+registration, so it drops at its TTL (30 s by default) and the service
+does not register again with that key. Several keys may cover one
+namespace, so rotate without downtime: mint the new key, deploy it,
+then revoke the old one (or let it expire). With `AppKeyFunc` the
+service reads the key on every call and needs no restart. Each node
+logs a key that expires within 7 days, and a key that has expired, once
+a day:
+
+```
+gateway: app key 3f9c0a1b2c3d4e5f (namespaces orders) expires in 6d23h, at 2026-12-07T10:00:00Z; deploy a new key before then
+```
+
+`app_key_expiry_seconds{key_id}` and `app_keys_expiring` carry the same
+on `/metrics`; `app_key_auth_total{op,outcome}` counts the checks.
+
+**External keys.** Register an `AppKeyAuthorizer`
+([`appkeyauth/v1`](../gw/proto/appkeyauth/v1)) under `_app_key_auth/v1`
+to check keys against your own service. The gateway asks it before its
+own keys, with the key, the operation and the remote address. `OK`
+with `namespaces` accepts the key for those namespaces (the gateway
+checks coverage); `DENIED` rejects without falling through;
+`UNAVAILABLE`, `NOT_CONFIGURED`, an unset code or a transport error
+fall through to the keys the gateway minted. With
+`--require-app-keys` the delegate's own registration needs a key
+covering `_app_key_auth`, or the admin token.
+
+App keys also authorize Schema Registry writes; see
+[`schema-registry.md`](./schema-registry.md#auth-and-writes).
 
 ## In-process registration
 
