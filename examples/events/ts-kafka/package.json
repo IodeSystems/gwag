@@ -8,13 +8,12 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "start": "node src/main.ts",
-    "test": "node --test test/*.test.ts"
+    "start": "node src/main.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.17.0",
     "@gwag/events": "link:../../../ts/events",
-    "kafkajs": "2.2.4"
+    "@gwag/events-kafka": "link:../../../ts/events-kafka"
   },
   "devDependencies": {
     "@types/node": "24.19.1",

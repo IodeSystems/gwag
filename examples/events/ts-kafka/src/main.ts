@@ -5,9 +5,9 @@
 //   KAFKA_BROKERS=localhost:9092 pnpm start
 //
 // ../test.sh starts apache/kafka in docker and runs this and the
-// backend tests.
+// @gwag/events-kafka tests (ts/events-kafka).
 import { OrdersBus } from "../../ts/src/gen/orders/v1/orders_events.ts";
-import { KafkaBackend } from "./kafka.ts";
+import { KafkaBackend } from "@gwag/events-kafka";
 
 const brokers = process.env.KAFKA_BROKERS;
 if (!brokers) {

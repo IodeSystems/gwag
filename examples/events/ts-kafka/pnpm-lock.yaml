@@ -14,9 +14,9 @@ importers:
       '@gwag/events':
         specifier: link:../../../ts/events
         version: link:../../../ts/events
-      kafkajs:
-        specifier: 2.2.4
-        version: 2.2.4
+      '@gwag/events-kafka':
+        specifier: link:../../../ts/events-kafka
+        version: link:../../../ts/events-kafka
     devDependencies:
       '@types/node':
         specifier: 24.19.1
@@ -33,10 +33,6 @@ packages:
   '@types/node@24.19.1':
     resolution: {integrity: sha512-aS3/DG0oM05K0RIXXP+hKjinGG5IgSSVGzswZxW3O0sS3pH4/fycXundUC9XsszgKCk4gHXylTEK6hyFxVxnoQ==}
 
-  kafkajs@2.2.4:
-    resolution: {integrity: sha512-j/YeapB1vfPT2iOIUn/vxdyKEuhuY2PxMBvf5JWux6iSaukAccrMtXEY/Lb7OvavDhOWME589bpLrEdnVHjfjA==}
-    engines: {node: '>=14.0.0'}
-
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -52,8 +48,6 @@ snapshots:
   '@types/node@24.19.1':
     dependencies:
       undici-types: 7.24.6
-
-  kafkajs@2.2.4: {}
 
   typescript@5.9.3: {}
 
