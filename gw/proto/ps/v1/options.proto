@@ -24,6 +24,18 @@ option go_package = "github.com/iodesystems/gwag/v2/gw/proto/ps/v1;psv1";
 message ChannelBinding {
   // NATS-style channel subject pattern this message binds to. Required.
   string pattern = 1;
+
+  // Channel name. Generated event code names its typed calls after it
+  // (onName / publishName); the channel key is
+  // "<proto package>.<name>". Several messages in one package may
+  // share a name and pattern: the channel then carries any of them
+  // and the Gwag-Type header says which (a union). Empty = an
+  // unnamed binding (payload typing only, no generated calls).
+  //
+  // The pattern may name its wildcard segments: "events.orders.{orderId}"
+  // matches like "events.orders.*" and generated code takes and
+  // reports orderId.
+  string name = 2;
 }
 
 extend google.protobuf.MessageOptions {

@@ -195,6 +195,24 @@ message ServiceBinding {
   // the gateway makes every service public (--public-services=all).
   // Stored on the slot and replicated across the cluster like owner.
   bool public = 12;
+
+  // Manifest: the event channels this binding listens on, each with
+  // the consumer group it listens as. Example:
+  // {channel: "orders.v1.OrderEvents", group: "billing"}. The gateway
+  // resolves the channel key to the slot that declares it (see
+  // gwag.ps.v1.ChannelBinding.name) and counts the edge like a
+  // Dependency for the start gate and the sunset rule. Generated
+  // event code reports these (Subscriptions()). Empty = none declared.
+  repeated Subscription subscribes = 13;
+}
+
+// Subscription names one event channel a binding listens on.
+message Subscription {
+  // Channel key: "<proto package>.<channel name>", e.g.
+  // "orders.v1.OrderEvents".
+  string channel = 1;
+  // Consumer group (durable consumer name) the binding listens as.
+  string group = 2;
 }
 
 // Dependency names one provider service and the lines a consumer

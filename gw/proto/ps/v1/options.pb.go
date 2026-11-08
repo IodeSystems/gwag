@@ -40,7 +40,18 @@ const (
 type ChannelBinding struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// NATS-style channel subject pattern this message binds to. Required.
-	Pattern       string `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
+	Pattern string `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
+	// Channel name. Generated event code names its typed calls after it
+	// (onName / publishName); the channel key is
+	// "<proto package>.<name>". Several messages in one package may
+	// share a name and pattern: the channel then carries any of them
+	// and the Gwag-Type header says which (a union). Empty = an
+	// unnamed binding (payload typing only, no generated calls).
+	//
+	// The pattern may name its wildcard segments: "events.orders.{orderId}"
+	// matches like "events.orders.*" and generated code takes and
+	// reports orderId.
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -82,6 +93,13 @@ func (x *ChannelBinding) GetPattern() string {
 	return ""
 }
 
+func (x *ChannelBinding) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var file_gw_proto_ps_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -109,9 +127,10 @@ var File_gw_proto_ps_v1_options_proto protoreflect.FileDescriptor
 const file_gw_proto_ps_v1_options_proto_rawDesc = "" +
 	"\n" +
 	"\x1cgw/proto/ps/v1/options.proto\x12\n" +
-	"gwag.ps.v1\x1a google/protobuf/descriptor.proto\"*\n" +
+	"gwag.ps.v1\x1a google/protobuf/descriptor.proto\">\n" +
 	"\x0eChannelBinding\x12\x18\n" +
-	"\apattern\x18\x01 \x01(\tR\apattern:Z\n" +
+	"\apattern\x18\x01 \x01(\tR\apattern\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name:Z\n" +
 	"\abinding\x12\x1f.google.protobuf.MessageOptions\x18\xa2\x90\x03 \x01(\v2\x1a.gwag.ps.v1.ChannelBindingR\abinding\x88\x01\x01B4Z2github.com/iodesystems/gwag/v2/gw/proto/ps/v1;psv1b\x06proto3"
 
 var (
