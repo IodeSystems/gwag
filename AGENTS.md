@@ -44,8 +44,10 @@ Typed events:
 
 ```
 examples/events/check.sh               # regen + drift check, Go/TS/Python tests (docker for NATS parts)
-KAFKA=1 examples/events/check.sh       # also go-kafka, ts-kafka, py-kafka (docker)
+KAFKA=1 examples/events/check.sh       # also go-kafka (+ cp-schema-registry, uv), ts-kafka, py-kafka (docker)
 PY=0 examples/events/check.sh          # skip Python (needs uv)
+(cd events/kafka && go test ./...)     # own module; Kafka tests skip without KAFKA_BROKERS
+SR_URL=http://... go test ./events/schemaregistry/   # against a real registry (default: in-memory fake)
 ```
 
 No linter config (.golangci, etc.) — just `go vet`. No Makefile.
@@ -103,7 +105,7 @@ REBUILD=1 bin/gwag up                  # force a fresh build first
 For the real admin UI, run `bin/build` first — `bin/gwag` only seeds
 the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
-Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
+Subcommands: `peer list/forget`, `services list`, `schema fetch/diff/check/push`,
 `sign`, `login/logout/context/use`, `gen` (typed event code for
 go / ts / python, see `docs/events.md`).
 
@@ -146,10 +148,18 @@ go / ts / python, see `docs/events.md`).
   protoc-gen-go`, `node_modules/.bin/protoc-gen-es`, `uv run --locked`),
   never `PATH`. Generated and drift-checked: `examples/events/gen`,
   `examples/events/ts/src/gen`, `ts/events/src/gen`,
-  `examples/events/py/proto_gen`. `go-kafka`, `ts-kafka`, `py-kafka` are
-  own modules / projects (franz-go, kafkajs, aiokafka stay out of the
-  root deps). The bus is open: authorship is the application's job. See
-  `docs/events.md`.
+  `examples/events/py/proto_gen`. `events/kafka` (Go Kafka backend,
+  franz-go) is its own module with a `replace` to the root; never add
+  Kafka to the root `go.mod` (`go mod why github.com/twmb/franz-go`
+  must say not needed). `go-kafka`, `go-kafka/corp`, `ts-kafka`,
+  `py-kafka` are own modules / projects. `events/schemaregistry`
+  (Confluent Schema Registry serde, net/http + protocompile) is in the
+  root module. The gateway stays NATS-only: nothing in `gw/` imports
+  Kafka or the registry. Registry CLI: `gwag gen --registry URL
+  --subject S[@V]` (import, lock file), `gwag gen --check-lock`,
+  `gwag schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
+  `gwag schema push --registry URL` (own). The bus is open: authorship
+  is the application's job. See `docs/events.md`.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`
   is `mcp`, the slot owns the live client (a subprocess for stdio).
