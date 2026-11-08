@@ -41,6 +41,14 @@ type GatewayOpts struct {
 	// StartTimeout bounds the wait for /api/health and the control
 	// plane. Default 30s.
 	StartTimeout time.Duration
+	// Binary is the gateway binary to run. Default: the example
+	// gateway built from this tree (Binary(t, "gateway")); a release
+	// build comes from ReleaseBinary.
+	Binary string
+	// Legacy leaves out the flags a release gateway does not have:
+	// --caller-id-public, --environment and --shutdown-delay
+	// (v2.11.0 and older).
+	Legacy bool
 }
 
 // Gateway is a running gateway process.
@@ -106,8 +114,16 @@ func (e *Env) newGateway(opts GatewayOpts) *Gateway {
 
 func (g *Gateway) start(peers []string) {
 	g.env.t.Helper()
-	g.Proc = g.env.Start(g.Name, Binary(g.env.t, "gateway"), g.args(peers)...)
+	g.Proc = g.env.Start(g.Name, g.binary(), g.args(peers)...)
 	g.WaitReady()
+}
+
+// binary is the path of the gateway binary this node runs.
+func (g *Gateway) binary() string {
+	if g.opts.Binary != "" {
+		return g.opts.Binary
+	}
+	return Binary(g.env.t, "gateway")
 }
 
 // args is the gateway command line. peers are NATS cluster routes.
@@ -129,6 +145,9 @@ func (g *Gateway) args(peers []string) []string {
 		for _, p := range peers {
 			args = append(args, "--nats-peer", p)
 		}
+	}
+	if g.opts.Legacy {
+		return append(args, g.opts.Args...)
 	}
 	if !g.opts.NoCallerIDHeader {
 		args = append(args, "--caller-id-public")
@@ -249,13 +268,63 @@ func (e *Env) Cluster(n int, opts GatewayOpts) *Cluster {
 	// Start every node before waiting on any: a node in cluster mode
 	// may not serve until its peers' routes answer.
 	for _, g := range c.Nodes {
-		g.Proc = e.Start(g.Name, Binary(e.t, "gateway"), g.args(c.peersOf(g))...)
+		g.Proc = e.Start(g.Name, g.binary(), g.args(c.peersOf(g))...)
 	}
 	for _, g := range c.Nodes {
 		g.WaitReady()
 	}
 	c.WaitPeers(n, 60*time.Second)
 	return c
+}
+
+// NamedCluster starts one node per name, all at once, peered with
+// each other, and waits until every node sees all of them. opts
+// applies to every node (Name is ignored).
+func (e *Env) NamedCluster(names []string, opts GatewayOpts) *Cluster {
+	e.t.Helper()
+	c := &Cluster{env: e, opts: opts}
+	for _, name := range names {
+		o := opts
+		o.Name = name
+		o.NATS = true
+		c.Nodes = append(c.Nodes, e.newGateway(o))
+	}
+	for _, g := range c.Nodes {
+		g.Proc = e.Start(g.Name, g.binary(), g.args(c.peersOf(g))...)
+	}
+	for _, g := range c.Nodes {
+		g.WaitReady()
+	}
+	c.WaitNodes(e.t, names, 60*time.Second)
+	return c
+}
+
+// NewNode adds a node to the cluster with its own options (name,
+// binary) and allocates its ports, without starting it, so other
+// processes can be given its addresses first. Start it with
+// StartNode.
+func (c *Cluster) NewNode(opts GatewayOpts) *Gateway {
+	c.env.t.Helper()
+	opts.NATS = true
+	g := c.env.newGateway(opts)
+	c.Nodes = append(c.Nodes, g)
+	return g
+}
+
+// StartNode starts a node made by NewNode, peered with every node
+// that has been started (running or stopped), and waits until it
+// serves. It does not wait for peers. Start new nodes of a running
+// cluster one at a time: several fresh JetStream servers that start
+// together can elect their own meta leader (docs/cluster.md).
+func (c *Cluster) StartNode(g *Gateway) {
+	c.env.t.Helper()
+	var peers []string
+	for _, o := range c.Nodes {
+		if o != g && o.Proc != nil {
+			peers = append(peers, o.NATSRoute())
+		}
+	}
+	g.start(peers)
 }
 
 func (c *Cluster) peersOf(g *Gateway) []string {
@@ -287,7 +356,7 @@ func (c *Cluster) AddNode() *Gateway {
 func (c *Cluster) Live() []*Gateway {
 	var out []*Gateway
 	for _, g := range c.Nodes {
-		if g.Proc.Running() {
+		if g.Proc != nil && g.Proc.Running() {
 			out = append(out, g)
 		}
 	}
