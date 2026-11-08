@@ -74,8 +74,8 @@ type peerTracker struct {
 	// notifications holds the hook-failure notification items
 	// (notification_store.go).
 	notifications jetstream.KeyValue
-	// buckets is every managed bucket: replicaBuckets, plus
-	// gwag-schemas with WithSchemaRegistry.
+	// buckets is every managed bucket: replicaBuckets and
+	// gwag-schemas (skipped while it does not exist).
 	buckets []string
 
 	nodeID string
@@ -142,10 +142,15 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	}
 	cl := g.cfg.cluster
 
+	// Buckets this node creates get the replica count the cluster
+	// runs at (bootReplicaTarget), not R1: a raise later can place a
+	// replica on a node being evacuated (cluster_evacuate.go).
+	r := bootReplicaTarget(ctx, cl.JS)
+
 	// The feature level comes first: it decides the format of what
 	// the rest writes. A level this binary cannot run at stops here,
 	// before anything is written.
-	clusterKV, err := openClusterBucket(ctx, cl.JS)
+	clusterKV, err := openClusterBucket(ctx, cl.JS, r)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +165,6 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	}
 	g.setClusterLevelErr(nil)
 
-	// Both buckets are created at R=1 if they don't exist; live R is
-	// raised monotonically by reconcileReplicas as peers join.
 	// Peers and registry entries expire when their writer stops
 	// refreshing them. From levelDeleteMarkers on, both buckets leave
 	// a delete marker on expiry so every watcher sees the key go
@@ -169,87 +172,66 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	// reconciler.sweepLoop) drop expired keys.
 	markers := level >= levelDeleteMarkers
 	peerTTL, registryTTL := g.clusterTTLs()
-	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL, markers)
+	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL, markers, r, g.isJetStreamLeader)
 	if err != nil {
 		return nil, err
 	}
-	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL, markers)
-	if err != nil {
-		return nil, err
-	}
-
-	stable, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:   stableBucketName,
-		Replicas: 1,
-		TTL:      stableTTL,
-	})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("stable bucket: %w", err)
-	}
-	if stable == nil {
-		stable, err = cl.JS.KeyValue(ctx, stableBucketName)
-		if err != nil {
-			return nil, fmt.Errorf("stable bucket open: %w", err)
-		}
-	}
-
-	deprecated, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:   deprecatedBucketName,
-		Replicas: 1,
-		TTL:      deprecatedTTL,
-	})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("deprecated bucket: %w", err)
-	}
-	if deprecated == nil {
-		deprecated, err = cl.JS.KeyValue(ctx, deprecatedBucketName)
-		if err != nil {
-			return nil, fmt.Errorf("deprecated bucket open: %w", err)
-		}
-	}
-
-	mcpConfig, err := cl.JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:   mcpConfigBucketName,
-		Replicas: 1,
-		TTL:      mcpConfigTTL,
-	})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("mcp_config bucket: %w", err)
-	}
-	if mcpConfig == nil {
-		mcpConfig, err = cl.JS.KeyValue(ctx, mcpConfigBucketName)
-		if err != nil {
-			return nil, fmt.Errorf("mcp_config bucket open: %w", err)
-		}
-	}
-
-	drain, err := openDrainBucket(ctx, cl.JS)
+	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL, markers, r, g.isJetStreamLeader)
 	if err != nil {
 		return nil, err
 	}
 
-	externals, err := openExternalDependentsBucket(ctx, cl.JS)
+	stable, err := openKV(ctx, cl.JS, jetstream.KeyValueConfig{Bucket: stableBucketName, TTL: stableTTL}, r)
+	if err != nil {
+		return nil, err
+	}
+	deprecated, err := openKV(ctx, cl.JS, jetstream.KeyValueConfig{Bucket: deprecatedBucketName, TTL: deprecatedTTL}, r)
+	if err != nil {
+		return nil, err
+	}
+	mcpConfig, err := openKV(ctx, cl.JS, jetstream.KeyValueConfig{Bucket: mcpConfigBucketName, TTL: mcpConfigTTL}, r)
 	if err != nil {
 		return nil, err
 	}
 
-	notifications, err := openNotificationsBucket(ctx, cl.JS)
+	drain, err := openDrainBucket(ctx, cl.JS, r)
 	if err != nil {
 		return nil, err
 	}
 
-	appKeys, err := openAppKeysBucket(ctx, cl.JS)
+	externals, err := openExternalDependentsBucket(ctx, cl.JS, r)
 	if err != nil {
 		return nil, err
 	}
 
-	buckets := replicaBuckets
+	notifications, err := openNotificationsBucket(ctx, cl.JS, r)
+	if err != nil {
+		return nil, err
+	}
+
+	appKeys, err := openAppKeysBucket(ctx, cl.JS, r)
+	if err != nil {
+		return nil, err
+	}
+
 	var schemas jetstream.KeyValue
 	if g.sr != nil {
-		if schemas, err = openSchemasBucket(ctx, cl.JS); err != nil {
+		if schemas, err = openSchemasBucket(ctx, cl.JS, r); err != nil {
 			return nil, err
 		}
-		buckets = append(append([]string(nil), replicaBuckets...), schemasBucketName)
+	}
+	// gwag-schemas is managed whether or not this node serves the
+	// Schema Registry: another node may, and a raise or ForgetPeer
+	// must reach every bucket. A missing one is skipped.
+	buckets := append(append([]string(nil), replicaBuckets...), schemasBucketName)
+
+	// A bucket created during an evacuation can be placed on the
+	// node being evacuated.
+	kctx, kcancel := kvCtx(ctx)
+	evac, _, _ := getEvacuations(kctx, clusterKV)
+	kcancel()
+	for _, b := range buckets {
+		g.moveOffEvacuating(ctx, cl.JS, "KV_"+b, evac.Peers)
 	}
 
 	selfBytes, err := json.Marshal(peerEntry{
@@ -479,14 +461,16 @@ var replicaBuckets = []string{
 	clusterBucketName,
 }
 
-// reconcileReplicas raises every managed bucket to the replica count
-// the cluster policy (WithClusterReplicas) gives for the live peers.
-// Strictly monotonic — never lowers; ForgetPeer is the only path that
-// shrinks (a peer is only dropped from the live set after its entry
-// expired, so a brief loss never shrinks). Idempotent if already at
-// target. currentR is first set from the buckets' actual replica
-// count, so a raise another node applied (or one whose answer this
-// node never got) is not sent again.
+// reconcileReplicas raises every managed bucket and event stream to
+// the replica count the cluster policy (WithClusterReplicas) gives
+// for the live peers. Strictly monotonic — never lowers; ForgetPeer
+// is the only path that shrinks (a peer is only dropped from the live
+// set after its entry expired, so a brief loss never shrinks).
+// Idempotent if already at target. currentR is first set from the
+// buckets' actual replica count, so a raise another node applied (or
+// one whose answer this node never got) is not sent again. No raise
+// while a node is being evacuated (cluster_evacuate.go): the new
+// replicas could be placed on it. The refresh tick retries.
 func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	t.replMu.Lock()
 	defer t.replMu.Unlock()
@@ -497,7 +481,10 @@ func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	if desired <= cur {
 		return
 	}
-	if err := t.setReplicas(ctx, desired); err != nil {
+	if t.evacuating(ctx) {
+		return
+	}
+	if err := t.setReplicas(ctx, desired, false); err != nil {
 		// Best-effort. The next peer change or refresh tick retries.
 		return
 	}
@@ -515,7 +502,7 @@ func (t *peerTracker) syncReplicasLocked(ctx context.Context) int {
 }
 
 // appliedReplicas is the lowest configured replica count of the
-// managed buckets.
+// managed buckets that exist.
 func (t *peerTracker) appliedReplicas(ctx context.Context) (int, error) {
 	low := 0
 	for _, b := range t.buckets {
@@ -524,11 +511,14 @@ func (t *peerTracker) appliedReplicas(ctx context.Context) (int, error) {
 			return 0, fmt.Errorf("%s: %w", b, err)
 		}
 		if cfg == nil {
-			return 0, fmt.Errorf("%s: %w", b, errStreamMissing)
+			continue
 		}
 		if low == 0 || cfg.Replicas < low {
 			low = cfg.Replicas
 		}
+	}
+	if low == 0 {
+		return 0, errStreamMissing
 	}
 	return low, nil
 }
@@ -538,28 +528,105 @@ func (t *peerTracker) appliedReplicas(ctx context.Context) (int, error) {
 // per change, a lost answer verified by reading). If one fails we
 // still try the others; caller decides whether to retry. Only the
 // replica count changes; the rest of each bucket's config stays.
-func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
+// lower false raises only: a bucket or stream already above r (a
+// node with a higher fixed policy raised it) keeps its count. lower
+// true sets r exactly (ForgetPeer). A missing bucket is skipped.
+//
+// A lower comes from one ForgetPeer call, not from every node
+// reacting to the same event, so it writes at once: applyStream's
+// leader-first wait would cost up to applyStreamFollowerWait per
+// stream for a write no other node sends.
+func (t *peerTracker) setReplicas(ctx context.Context, r int, lower bool) error {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	leader := t.gw.isJetStreamLeader
+	if lower {
+		leader = func() bool { return true }
+	}
 	var firstErr error
 	for _, b := range t.buckets {
-		_, err := applyStream(c, t.js, "KV_"+b, t.gw.isJetStreamLeader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+		_, err := applyStream(c, t.js, "KV_"+b, leader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
 			if cur == nil {
 				return jetstream.StreamConfig{}, false
 			}
 			want := *cur
-			want.Replicas = r
+			want.Replicas = nextReplicas(cur.Replicas, r, lower)
 			return want, true
 		})
-		if err != nil && firstErr == nil {
+		if err != nil && !errors.Is(err, errStreamMissing) && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %w", b, err)
 		}
 	}
 	// Named-channel event streams follow the same policy.
-	if err := t.gw.setEventStreamReplicas(c, t.js, r); err != nil && firstErr == nil {
+	if err := t.gw.setEventStreamReplicas(c, t.js, r, lower, leader); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// nextReplicas is the replica count setReplicas gives a bucket or
+// stream at cur.
+func nextReplicas(cur, r int, lower bool) int {
+	if lower {
+		return r
+	}
+	return max(cur, r)
+}
+
+// bootReplicaTarget is the replica count for a bucket a booting node
+// creates: the count of the gwag-peers bucket, which every gateway
+// version keeps and setReplicas changes first, or 1 when there is no
+// such bucket yet (a new cluster). The peer tracker raises it from
+// there by the policy.
+//
+// It is read from JetStream, not kept as a separate cluster-wide
+// value: the stream configs are what every node, every version
+// (v2.11.0 raises its buckets by its own rules) and an operator with
+// the nats CLI already read and write. A second copy would drift
+// from them and need reconciling anyway.
+func bootReplicaTarget(ctx context.Context, js jetstream.JetStream) int {
+	cfg, err := readStreamConfig(ctx, js, "KV_"+peersBucketName)
+	if err != nil || cfg == nil || cfg.Replicas < 1 {
+		return 1
+	}
+	return cfg.Replicas
+}
+
+// openKV creates bucket cfg at r replicas, or opens it when it exists
+// (its config, replicas included, stays as it is). When the cluster
+// cannot place r replicas now (fewer servers up than the gwag-peers
+// count suggests) the bucket is created at R1 and raised later.
+func openKV(ctx context.Context, js jetstream.JetStream, cfg jetstream.KeyValueConfig, r int) (jetstream.KeyValue, error) {
+	cfg.Replicas = max(r, 1)
+	kv, err := js.CreateKeyValue(ctx, cfg)
+	if err != nil && cfg.Replicas > 1 && noPlacementErr(err) {
+		cfg.Replicas = 1
+		kv, err = js.CreateKeyValue(ctx, cfg)
+	}
+	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
+		return nil, fmt.Errorf("%s bucket: %w", cfg.Bucket, err)
+	}
+	if kv == nil {
+		if kv, err = js.KeyValue(ctx, cfg.Bucket); err != nil {
+			return nil, fmt.Errorf("%s bucket open: %w", cfg.Bucket, err)
+		}
+	}
+	return kv, nil
+}
+
+// noPlacementErr: JetStream cannot place the requested replicas (no
+// suitable peers, insufficient resources, replicas > 1 without a
+// cluster).
+func noPlacementErr(err error) bool {
+	var apiErr *jetstream.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode {
+	case 10005, 10023, 10074:
+		return true
+	}
+	return false
 }
 
 // clusterTTLs returns the peers and registry bucket TTLs.
@@ -570,13 +637,13 @@ func (g *Gateway) clusterTTLs() (peer, registry time.Duration) {
 	return peerTTL, registryTTL
 }
 
-// openExpiringBucket opens (creating it at R=1 if needed) a KV bucket
-// whose entries expire ttl after their last Put, with subject delete
-// markers on. JetStream removes an expired message without a delete
-// event; the marker it writes instead is what tells every watcher
-// (reconciler, peer tracker) that the key is gone. Without it a node
-// that was watching keeps the key forever, while a node that replays
-// the bucket after the expiry never sees it.
+// openExpiringBucket opens (creating it at r replicas if needed, see
+// openKV) a KV bucket whose entries expire ttl after their last Put,
+// with subject delete markers on. JetStream removes an expired message
+// without a delete event; the marker it writes instead is what tells
+// every watcher (reconciler, peer tracker) that the key is gone.
+// Without it a node that was watching keeps the key forever, while a
+// node that replays the bucket after the expiry never sees it.
 //
 // A bucket created by an older gateway has no markers. Its stream
 // config is updated in place with markers on and nothing else
@@ -584,37 +651,29 @@ func (g *Gateway) clusterTTLs() (peer, registry time.Duration) {
 // never off. markers is false below levelDeleteMarkers: the bucket is
 // then created, or left, without them, because a gateway older than
 // feature levels cannot update a bucket that has them.
-func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string, ttl time.Duration, markers bool) (jetstream.KeyValue, error) {
+func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string, ttl time.Duration, markers bool, r int, leader func() bool) (jetstream.KeyValue, error) {
 	kcfg := jetstream.KeyValueConfig{
-		Bucket:   name,
-		Replicas: 1,
-		TTL:      ttl,
+		Bucket: name,
+		TTL:    ttl,
 	}
 	if markers {
 		// A marker expires with the bucket TTL (MaxAge) whatever
 		// its own TTL; ask for the same.
 		kcfg.LimitMarkerTTL = ttl
 	}
-	kv, err := js.CreateKeyValue(ctx, kcfg)
-	if err == nil {
-		return kv, nil
+	kv, err := openKV(ctx, js, kcfg, r)
+	if err != nil || !markers {
+		return kv, err
 	}
-	if !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("%s bucket: %w", name, err)
-	}
-	stream, err := js.Stream(ctx, "KV_"+name)
-	if err != nil {
-		return nil, fmt.Errorf("%s bucket open: %w", name, err)
-	}
-	if cfg := stream.CachedInfo().Config; markers && cfg.SubjectDeleteMarkerTTL <= 0 {
-		withDeleteMarkers(&cfg, ttl)
-		if _, err := js.UpdateStream(ctx, cfg); err != nil {
-			return nil, fmt.Errorf("%s bucket: turn on delete markers: %w", name, err)
+	if _, err := applyStream(ctx, js, "KV_"+name, leader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+		if cur == nil {
+			return jetstream.StreamConfig{}, false
 		}
-	}
-	kv, err = js.KeyValue(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("%s bucket open: %w", name, err)
+		want := *cur
+		withDeleteMarkers(&want, ttl)
+		return want, true
+	}); err != nil {
+		return nil, fmt.Errorf("%s bucket: turn on delete markers: %w", name, err)
 	}
 	return kv, nil
 }

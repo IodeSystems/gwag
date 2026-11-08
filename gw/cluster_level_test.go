@@ -223,7 +223,7 @@ func TestClusterLevel_RefusesLevelAboveMax(t *testing.T) {
 	cl := newLevelCluster(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	kv, err := openClusterBucket(ctx, cl.JS)
+	kv, err := openClusterBucket(ctx, cl.JS, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

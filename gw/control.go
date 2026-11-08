@@ -908,8 +908,16 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 		return nil, fmt.Errorf("controlplane: remove from JetStream meta group: %w", err)
 	}
 	resp.MetaRemoved = metaRemoved
+	// A forgotten peer is stopped and out of placement: its
+	// evacuation no longer holds raises back.
+	cctx, ccancel := kvCtx(ctx)
+	err = t.clearEvacuating(cctx, req.GetNodeId())
+	ccancel()
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: clear evacuation record: %w", err)
+	}
 	if desired < curR {
-		if err := t.setReplicas(ctx, desired); err != nil {
+		if err := t.setReplicas(ctx, desired, true); err != nil {
 			return nil, fmt.Errorf("controlplane: shrink replicas: %w", err)
 		}
 		t.currentR.Store(int32(desired))

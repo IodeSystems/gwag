@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -210,21 +209,12 @@ func (g *Gateway) notificationWarn(what string, err error) {
 	}
 }
 
-// openNotificationsBucket creates (or opens) the bucket. No TTL and
+// openNotificationsBucket creates (at r replicas, see openKV) or opens the bucket. No TTL and
 // no stream limits: entries leave by explicit delete, and the count
 // and size are bounded by putNotification. Limits are left unset so
 // setReplicas, which rewrites the config, does not change them.
-func openNotificationsBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: notificationsBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("notifications bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, notificationsBucketName); err != nil {
-			return nil, fmt.Errorf("notifications bucket open: %w", err)
-		}
-	}
-	return kv, nil
+func openNotificationsBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: notificationsBucketName}, r)
 }
 
 // notificationsWatchLoop mirrors the bucket into g.notifs. A put

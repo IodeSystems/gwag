@@ -387,20 +387,11 @@ func (g *Gateway) publishExternalChange(a, b externalDependent) {
 	}
 }
 
-// openExternalDependentsBucket creates (or opens) the bucket. No TTL:
+// openExternalDependentsBucket creates (at r replicas, see openKV) or opens the bucket. No TTL:
 // declarations live until deleted; the review date is a field, read
 // on every node (see the file comment).
-func openExternalDependentsBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: externalDependentsBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("external dependents bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, externalDependentsBucketName); err != nil {
-			return nil, fmt.Errorf("external dependents bucket open: %w", err)
-		}
-	}
-	return kv, nil
+func openExternalDependentsBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: externalDependentsBucketName}, r)
 }
 
 // externalsWatchLoop mirrors the bucket into g.externals. A put

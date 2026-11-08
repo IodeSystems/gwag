@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -106,6 +107,11 @@ func streamsOnPeer(ctx context.Context, js jetstream.JetStream, name string) ([]
 		if ci.Leader == "" {
 			why = append(why, "no leader")
 		}
+		// A group being moved or resized can still change members;
+		// Replicas lists the current ones only.
+		if ci.Desired != nil {
+			why = append(why, "moving")
+		}
 		for _, r := range ci.Replicas {
 			switch {
 			case r.Name == name:
@@ -148,6 +154,13 @@ func (g *Gateway) evacuatePeer(ctx context.Context, nodeID string, checkOnly, le
 	}
 	name = pe.Name
 	if !checkOnly {
+		// Recorded first, so no raise starts after the evacuation.
+		kctx, cancel := kvCtx(ctx)
+		err := t.markEvacuating(kctx, nodeID, name)
+		cancel()
+		if err != nil {
+			return name, nil, false, false, fmt.Errorf("cluster: record evacuation: %w", err)
+		}
 		if err := g.jsServerAPI(ctx, jsAPIServerEvacuate, name, false); err != nil {
 			return name, nil, false, false, err
 		}
@@ -162,6 +175,11 @@ func (g *Gateway) evacuatePeer(ctx context.Context, nodeID string, checkOnly, le
 			return name, remaining, done, false, err
 		}
 		left = true
+		// Out of the meta group: nothing can be placed on it. Best
+		// effort; the record expires otherwise.
+		kctx, cancel := kvCtx(ctx)
+		_ = t.clearEvacuating(kctx, nodeID)
+		cancel()
 	}
 	return name, remaining, done, left, nil
 }
@@ -222,4 +240,191 @@ func (g *Gateway) jetStreamMeta() jetStreamMeta {
 	}
 	sort.Strings(m.Offline)
 	return m
+}
+
+// Evacuation records.
+//
+// NATS has no placement option that keeps a server out of a new
+// stream group: placement picks among the online meta members (tags
+// are server config, fixed at start). $JS.API.SERVER.EVACUATE keeps
+// the server out only of the groups it was a member of, and only
+// until each is back at full size. A replica raise or a stream create
+// during an evacuation can therefore place a replica on the node
+// again.
+//
+// evacuatePeer records the node under clusterEvacuationsKey in the
+// gwag-cluster bucket, with an expiry that every evacuate call renews.
+// While a record is active:
+//
+//   - no node raises the replica count of a bucket or stream
+//     (reconcileReplicas, ensureEventStream);
+//   - a node that creates a bucket or stream sends the evacuation
+//     again for each recorded node holding a replica of it
+//     (moveOffEvacuating), so the new group moves off the node and
+//     keeps it excluded.
+//
+// The record goes when the node leaves the meta group (ForgetPeer,
+// evacuate with leave) or when it expires: an evacuation whose caller
+// crashed or gave up blocks raises for evacuationTTL at most.
+// Gateways older than this (v2.11.0) do not read the record.
+
+const (
+	clusterEvacuationsKey = "evacuations"
+	evacuationTTL         = 5 * time.Minute
+)
+
+// evacuationRecord is the value of clusterEvacuationsKey: every node
+// being evacuated, by node id.
+type evacuationRecord struct {
+	Peers map[string]evacuatingPeer `json:"peers"`
+}
+
+type evacuatingPeer struct {
+	Name        string `json:"name"`
+	UntilUnixMs int64  `json:"until_unix_ms"`
+	SetBy       string `json:"set_by,omitempty"`
+}
+
+// getEvacuations reads the record with expired entries removed, and
+// its revision (0 when the key is absent).
+func getEvacuations(ctx context.Context, kv jetstream.KeyValue) (evacuationRecord, uint64, error) {
+	rec := evacuationRecord{Peers: map[string]evacuatingPeer{}}
+	e, err := kv.Get(ctx, clusterEvacuationsKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return rec, 0, nil
+	}
+	if err != nil {
+		return rec, 0, fmt.Errorf("evacuations: %w", err)
+	}
+	if err := json.Unmarshal(e.Value(), &rec); err != nil {
+		return rec, 0, fmt.Errorf("evacuations: %w", err)
+	}
+	if rec.Peers == nil {
+		rec.Peers = map[string]evacuatingPeer{}
+	}
+	now := time.Now().UnixMilli()
+	for id, p := range rec.Peers {
+		if p.UntilUnixMs <= now {
+			delete(rec.Peers, id)
+		}
+	}
+	return rec, e.Revision(), nil
+}
+
+// updateEvacuations applies change to the record with compare and
+// set, reading again when another node wrote it in between.
+func updateEvacuations(ctx context.Context, kv jetstream.KeyValue, change func(map[string]evacuatingPeer)) error {
+	for attempt := 0; ; attempt++ {
+		rec, rev, err := getEvacuations(ctx, kv)
+		if err != nil {
+			return err
+		}
+		change(rec.Peers)
+		b, _ := json.Marshal(rec)
+		if rev == 0 {
+			_, err = kv.Create(ctx, clusterEvacuationsKey, b)
+		} else {
+			_, err = kv.Update(ctx, clusterEvacuationsKey, b, rev)
+		}
+		if err == nil {
+			return nil
+		}
+		// A lost compare and set is an API error (key exists, wrong
+		// last sequence); anything else is final.
+		var apiErr *jetstream.APIError
+		if attempt >= 10 || ctx.Err() != nil || !(errors.As(err, &apiErr) || errors.Is(err, jetstream.ErrKeyExists)) {
+			return fmt.Errorf("evacuations: %w", err)
+		}
+	}
+}
+
+// markEvacuating records (or renews) the evacuation of nodeID.
+func (t *peerTracker) markEvacuating(ctx context.Context, nodeID, name string) error {
+	until := time.Now().Add(evacuationTTL).UnixMilli()
+	by := t.gw.cfg.cluster.Server.Name()
+	return updateEvacuations(ctx, t.cluster, func(m map[string]evacuatingPeer) {
+		m[nodeID] = evacuatingPeer{Name: name, UntilUnixMs: until, SetBy: by}
+	})
+}
+
+// clearEvacuating drops the record of nodeID, if any.
+func (t *peerTracker) clearEvacuating(ctx context.Context, nodeID string) error {
+	rec, _, err := getEvacuations(ctx, t.cluster)
+	if err != nil {
+		return err
+	}
+	if _, ok := rec.Peers[nodeID]; !ok {
+		return nil
+	}
+	return updateEvacuations(ctx, t.cluster, func(m map[string]evacuatingPeer) { delete(m, nodeID) })
+}
+
+// evacuations returns the active records. A read error is returned
+// with a nil map; callers that raise treat it as "evacuating".
+func (t *peerTracker) evacuations(ctx context.Context) (map[string]evacuatingPeer, error) {
+	kctx, cancel := kvCtx(ctx)
+	defer cancel()
+	rec, _, err := getEvacuations(kctx, t.cluster)
+	if err != nil {
+		return nil, err
+	}
+	return rec.Peers, nil
+}
+
+// evacuating reports whether a node is being evacuated. A read error
+// counts as yes: the caller skips a raise, and the next tick retries.
+func (t *peerTracker) evacuating(ctx context.Context) bool {
+	m, err := t.evacuations(ctx)
+	return err != nil || len(m) > 0
+}
+
+// moveOffEvacuating sends $JS.API.SERVER.EVACUATE again for every
+// recorded node that holds a replica of stream name. Called after a
+// create; evac is the active record (empty: nothing to do). Best
+// effort: the operator's evacuate loop checks every stream anyway.
+func (g *Gateway) moveOffEvacuating(ctx context.Context, js jetstream.JetStream, name string, evac map[string]evacuatingPeer) {
+	if len(evac) == 0 {
+		return
+	}
+	nodes, err := streamNodes(ctx, js, name)
+	if err != nil {
+		return
+	}
+	for _, p := range evac {
+		if !slices.Contains(nodes, p.Name) {
+			continue
+		}
+		err := g.jsServerAPI(ctx, jsAPIServerEvacuate, p.Name, true)
+		if cl := g.cfg.cluster; cl != nil && cl.Server != nil && err != nil {
+			cl.Server.Warnf("gateway: %s was placed on %s, which is being evacuated; evacuate again: %v", name, p.Name, err)
+		}
+	}
+}
+
+// streamNodes returns the servers holding, or about to hold, a
+// replica of stream name.
+func streamNodes(ctx context.Context, js jetstream.JetStream, name string) ([]string, error) {
+	c, cancel := context.WithTimeout(ctx, applyStreamAttemptTimeout)
+	defer cancel()
+	s, err := js.Stream(c, name)
+	if err != nil {
+		return nil, err
+	}
+	ci := s.CachedInfo().Cluster
+	if ci == nil {
+		return nil, nil
+	}
+	var out []string
+	if ci.Leader != "" {
+		out = append(out, ci.Leader)
+	}
+	for _, r := range ci.Replicas {
+		out = append(out, r.Name)
+	}
+	if ci.Desired != nil {
+		for _, r := range ci.Desired.Replicas {
+			out = append(out, r.Name)
+		}
+	}
+	return out, nil
 }

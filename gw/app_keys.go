@@ -432,19 +432,10 @@ func appKeyOutcome(err error) string {
 	return "invalid"
 }
 
-// openAppKeysBucket creates (or opens) the bucket. No TTL: a key
+// openAppKeysBucket creates (at r replicas, see openKV) or opens the bucket. No TTL: a key
 // lives until revoked; expiry is a field.
-func openAppKeysBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: appKeysBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("app keys bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, appKeysBucketName); err != nil {
-			return nil, fmt.Errorf("app keys bucket open: %w", err)
-		}
-	}
-	return kv, nil
+func openAppKeysBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: appKeysBucketName}, r)
 }
 
 // ---- expiry warning -------------------------------------------------

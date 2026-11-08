@@ -137,18 +137,9 @@ func (g *Gateway) setClusterLevelErr(err error) {
 	g.clusterLevelErr.Store(&s)
 }
 
-// openClusterBucket opens (creating at R1) the gwag-cluster bucket.
-func openClusterBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: clusterBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("cluster bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, clusterBucketName); err != nil {
-			return nil, fmt.Errorf("cluster bucket open: %w", err)
-		}
-	}
-	return kv, nil
+// openClusterBucket creates (at r replicas, see openKV) or opens the gwag-cluster bucket.
+func openClusterBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: clusterBucketName}, r)
 }
 
 // loadClusterLevel reads the active level, writing the first value

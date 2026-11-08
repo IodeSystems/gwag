@@ -450,11 +450,20 @@ at six nodes.
       ```
 
       It sends NATS `$JS.API.SERVER.EVACUATE` again every second until
-      no stream has a replica on the node and every replica is current,
-      then prints `peer=<name> done=true`. It resends because a replica
-      raise in between (a new bucket going from R1 to R3) can place a
-      replica back on the node. Exit code 3 means not done in time; run
-      it again.
+      no stream has a replica on the node, no stream is being moved, and
+      every replica is current, then prints `peer=<name> done=true`.
+      Exit code 3 means not done in time; run it again.
+
+      The first call records the evacuation in the `gwag-cluster`
+      bucket for 5 minutes (each call renews it). While it stands, no
+      node of this version raises a replica count, because NATS can
+      place a new replica on any online server, the evacuated one
+      included. A bucket or event stream created in that time can
+      still land on the node; the creating node sends the evacuation
+      again. The record goes with the forget in step 4, or expires.
+      Raises held back run after it. New buckets are created at the
+      cluster's replica count, so a green node does not add R1 buckets
+      that need a raise later.
    3. SIGTERM the blue node.
    4. When its peers entry has expired (30 s), forget it:
 
@@ -528,6 +537,21 @@ before an upgrade across them. For clusters:
   above.
 - A 2-node cluster now runs R1, not R2. Existing buckets at R2 stay
   until `ForgetPeer` or a fixed policy changes them.
+- Replica counts with v2.11.0 nodes in the cluster. A v2.11.0 node
+  creates its five buckets (peers, registry, stable, deprecated,
+  mcp config) at R1 when they are missing, and raises them to
+  min(live peers, 3) when its own live set grows; it never lowers
+  except through its own `ForgetPeer`. It does not read the evacuation
+  record, so do not restart or add a v2.11.0 node during an
+  evacuation. A node of this version creates missing buckets at the
+  count of `gwag-peers`, only raises, and lowers only through
+  `ForgetPeer`. Neither version lowers what the other raised, so the
+  count does not move back and forth. The buckets only this version
+  has (`gwag-cluster`, `gwag-app-keys`, `gwag-external-dependents`,
+  `gwag-notifications`, `gwag-drain`, `gwag-schemas`) and the event
+  streams are not touched by v2.11.0. A `ForgetPeer` sent to a
+  v2.11.0 node lowers only its five buckets; send it to a node of this
+  version.
 
 See [`CHANGELOG.md`](../CHANGELOG.md).
 

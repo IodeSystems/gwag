@@ -132,9 +132,15 @@ The cluster keeps its state in JetStream KV buckets (peers, registry,
 stable, deprecated, mcp config, drain, external dependents, app keys,
 notifications, `gwag-cluster` (the feature level, see
 [`cluster.md`](./cluster.md#feature-levels)), and `gwag-schemas` with
-`--schema-registry`). They start
-at one replica. As peers join, each node raises every bucket to the
-count the replica policy gives for the live peers. Set the policy with
+`--schema-registry`). A node creates a missing bucket at the replica
+count of `gwag-peers` (R1 on a new cluster), so a bucket a new node
+adds to a cluster at R3 starts at R3. If the cluster cannot place that
+many replicas at that moment, the bucket is created at R1 and raised
+later. Event streams of named channels (`EV_*`) are created at the
+same count, or at the policy count for the live peers if that is
+higher. As peers join, each node raises every bucket and event stream
+to the count the replica policy gives for the live peers. A raise
+never lowers a bucket that is already higher. Set the policy with
 `--cluster-replicas` (`gwag up`, example gateway) or
 `gateway.WithClusterReplicas`:
 
@@ -163,8 +169,26 @@ Consequences:
 - The count never drops when a peer is lost, so a brief loss does not
   flap. A peer only leaves the live set after its peers entry expired
   (30 s). `ForgetPeer` is the only path that lowers the count; it
-  applies the same policy to the remaining peers. A policy change at
-  restart raises but does not lower existing buckets.
+  applies the answering node's policy to the remaining peers, and sets
+  every bucket and every event stream to that count. A policy change
+  at restart raises but does not lower existing buckets. Nodes with
+  different policies do not move the count back and forth: each only
+  raises, so the highest policy wins until a `ForgetPeer`. To lower
+  without a forget, edit the streams with the `nats` CLI.
+- No node raises while a node is being evacuated (`gwag peer
+  evacuate`). NATS places new replicas on any online server, the
+  evacuated one included, and has no option to keep one server out of
+  a new placement. `EvacuatePeer` records the node in the `gwag-cluster`
+  bucket (key `evacuations`) for 5 minutes, renewed by every call. The
+  record goes when the node is forgotten, when it leaves the meta group
+  (`--leave`), or when it expires. A bucket or stream created during
+  that time can still be placed on the node; the node that created it
+  sends the evacuation again, and NATS moves it off. A raise that was
+  held back runs on the next refresh tick after the record goes.
+
+  The replica count is not stored separately: every node reads it from
+  the buckets' stream config, which every gateway version and the
+  `nats` CLI also change.
 
 ## Schema Registry
 

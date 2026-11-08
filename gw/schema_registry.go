@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -228,19 +227,10 @@ func (r *schemaRegistry) ownedSubjects(namespaces []string) map[string]bool {
 	return out
 }
 
-// openSchemasBucket opens (creating at R1) the bucket. No TTL; one
+// openSchemasBucket creates (at r replicas, see openKV) or opens the bucket. No TTL; one
 // value per key is enough (every write is a compare-and-set).
-func openSchemasBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: schemasBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("schemas bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, schemasBucketName); err != nil {
-			return nil, fmt.Errorf("schemas bucket open: %w", err)
-		}
-	}
-	return kv, nil
+func openSchemasBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: schemasBucketName}, r)
 }
 
 // bindCluster switches the registry to the cluster bucket.

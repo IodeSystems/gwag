@@ -768,19 +768,10 @@ func drainStateProto(s string) cpv1.DrainState {
 	return cpv1.DrainState_DRAIN_STATE_UNSPECIFIED
 }
 
-// openDrainBucket creates (or opens) the drain KV bucket. No TTL:
+// openDrainBucket creates (at r replicas, see openKV) or opens the drain KV bucket. No TTL:
 // requests live until cancelled or the instance goes.
-func openDrainBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: drainBucketName, Replicas: 1})
-	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		return nil, fmt.Errorf("drain bucket: %w", err)
-	}
-	if kv == nil {
-		if kv, err = js.KeyValue(ctx, drainBucketName); err != nil {
-			return nil, fmt.Errorf("drain bucket open: %w", err)
-		}
-	}
-	return kv, nil
+func openDrainBucket(ctx context.Context, js jetstream.JetStream, r int) (jetstream.KeyValue, error) {
+	return openKV(ctx, js, jetstream.KeyValueConfig{Bucket: drainBucketName}, r)
 }
 
 // drainWatchLoop mirrors the drain bucket into g.drains and runs the

@@ -130,22 +130,41 @@ func (g *Gateway) eventStreamReplicas() int {
 // write when the stream already has the config). It never lowers the
 // replica count of an existing stream (setEventStreamReplicas does,
 // on ForgetPeer), nor below currentR when the stream is written: a
-// bucket raise can finish after replicas was chosen. A failure is
-// logged and forgotten, so the next index rebuild retries.
+// bucket raise can finish after replicas was chosen. While a node is
+// being evacuated it does not raise an existing stream, and a stream
+// it creates is moved off that node (cluster_evacuate.go). A failure
+// is logged and forgotten, so the next index rebuild retries.
 func (g *Gateway) ensureEventStream(js jetstream.JetStream, pt *peerTracker, name, subject string, replicas int) {
 	ctx, cancel := context.WithTimeout(g.life, eventStreamCallTimeout)
 	defer cancel()
+	var (
+		evac    map[string]evacuatingPeer
+		hold    bool
+		created bool
+	)
+	if pt != nil {
+		var err error
+		evac, err = pt.evacuations(ctx)
+		hold = err != nil || len(evac) > 0
+	}
 	_, err := applyStream(ctx, js, name, g.isJetStreamLeader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
 		r := replicas
 		if pt != nil {
 			r = max(r, int(pt.currentR.Load()))
 		}
 		if cur != nil {
+			if hold {
+				r = cur.Replicas
+			}
 			r = max(r, cur.Replicas)
 		}
+		created = cur == nil
 		return g.eventStreamConfig(name, subject, r), true
 	})
 	if err == nil {
+		if created {
+			g.moveOffEvacuating(ctx, js, name, evac)
+		}
 		return
 	}
 	st := &g.eventStreams
@@ -163,10 +182,11 @@ func (g *Gateway) ensureEventStream(js jetstream.JetStream, pt *peerTracker, nam
 }
 
 // setEventStreamReplicas sets the replica count of every stream this
-// node ensured. Called with the KV bucket update (peerTracker
-// .setReplicas). A stream deleted by hand is skipped; the next ensure
-// creates it. Returns the first error.
-func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetStream, r int) error {
+// node ensured (every node ensures the stream of every registered
+// channel). Called with the KV bucket update (peerTracker
+// .setReplicas); lower and leader as there. A stream deleted by hand
+// is skipped; the next ensure creates it. Returns the first error.
+func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetStream, r int, lower bool, leader func() bool) error {
 	st := &g.eventStreams
 	st.mu.Lock()
 	names := make([]string, 0, len(st.known))
@@ -179,8 +199,11 @@ func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetSt
 	sort.Strings(names)
 	var firstErr error
 	for _, n := range names {
-		_, err := applyStream(ctx, js, n, g.isJetStreamLeader, func(*jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
-			return g.eventStreamConfig(n, subjects[n], r), false
+		_, err := applyStream(ctx, js, n, leader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+			if cur == nil {
+				return jetstream.StreamConfig{}, false
+			}
+			return g.eventStreamConfig(n, subjects[n], nextReplicas(cur.Replicas, r, lower)), true
 		})
 		if err != nil && !errors.Is(err, errStreamMissing) && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %w", n, err)
