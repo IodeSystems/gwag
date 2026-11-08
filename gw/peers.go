@@ -62,6 +62,7 @@ type peerTracker struct {
 	mcpConfig  jetstream.KeyValue
 	drain      jetstream.KeyValue
 	externals  jetstream.KeyValue
+	appKeys    jetstream.KeyValue
 	// notifications holds the hook-failure notification items
 	// (notification_store.go).
 	notifications jetstream.KeyValue
@@ -202,6 +203,12 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, err
 	}
 
+	appKeys, err := openAppKeysBucket(ctx, cl.JS)
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+
 	buckets := replicaBuckets
 	var schemas jetstream.KeyValue
 	if g.sr != nil {
@@ -233,6 +240,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		mcpConfig:         mcpConfig,
 		drain:             drain,
 		externals:         externals,
+		appKeys:           appKeys,
 		notifications:     notifications,
 		buckets:           buckets,
 		nodeID:            cl.NodeID,
@@ -413,6 +421,7 @@ var replicaBuckets = []string{
 	drainBucketName,
 	externalDependentsBucketName,
 	notificationsBucketName,
+	appKeysBucketName,
 }
 
 // reconcileReplicas raises every managed bucket to the replica count

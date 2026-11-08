@@ -70,6 +70,9 @@ func (g *Gateway) setDeprecationLocked(ns, ver, reason string) (priorReason stri
 // KV bucket when present, and triggers a schema rebuild + service-
 // change event so live peers re-fetch.
 func (cp *controlPlane) Deprecate(ctx context.Context, req *cpv1.DeprecateRequest) (*cpv1.DeprecateResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "deprecate"); err != nil {
+		return nil, err
+	}
 	ns, ver, reason := req.GetNamespace(), req.GetVersion(), req.GetReason()
 	if ns == "" || ver == "" {
 		return nil, errors.New("controlplane: namespace and version are required")
@@ -114,6 +117,9 @@ func (cp *controlPlane) Deprecate(ctx context.Context, req *cpv1.DeprecateReques
 // undeprecate can be undone). Auto-deprecation (older vN) is
 // untouched — only the manual override is removed.
 func (cp *controlPlane) Undeprecate(ctx context.Context, req *cpv1.UndeprecateRequest) (*cpv1.UndeprecateResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "undeprecate"); err != nil {
+		return nil, err
+	}
 	ns, ver := req.GetNamespace(), req.GetVersion()
 	if ns == "" || ver == "" {
 		return nil, errors.New("controlplane: namespace and version are required")

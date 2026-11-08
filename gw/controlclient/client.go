@@ -40,6 +40,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
@@ -252,6 +253,18 @@ type Options struct {
 	// the default if none are supplied.
 	DialOptions []grpc.DialOption
 
+	// AppKey is sent on every control-plane call as gRPC metadata
+	// `authorization: Bearer <AppKey>`. Needed when the gateway runs
+	// with WithRequireAppKeys (--require-app-keys); the key must cover
+	// every Service's namespace. Optional otherwise.
+	AppKey string
+
+	// AppKeyFunc, when set, is called before every control-plane call
+	// and its result is sent instead of AppKey: a service that reads
+	// its key from a file can pick up a rotated key without a
+	// restart. An error fails that call.
+	AppKeyFunc func(ctx context.Context) (string, error)
+
 	// Logger is called with non-fatal events (eviction recovery,
 	// heartbeat errors). Defaults to log.Printf-equivalent.
 	Logger func(format string, args ...any)
@@ -367,6 +380,9 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 	if len(dialOpts) == 0 {
 		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
+	if opts.AppKey != "" || opts.AppKeyFunc != nil {
+		dialOpts = append(append([]grpc.DialOption(nil), dialOpts...), grpc.WithChainUnaryInterceptor(appKeyInterceptor(opts)))
+	}
 	r := &Registration{
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
@@ -406,6 +422,24 @@ func SelfRegister(ctx context.Context, opts Options) (*Registration, error) {
 	}
 
 	return r, nil
+}
+
+// appKeyInterceptor adds `authorization: Bearer <key>` to each call.
+func appKeyInterceptor(opts Options) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, callOpts ...grpc.CallOption) error {
+		key := opts.AppKey
+		if opts.AppKeyFunc != nil {
+			k, err := opts.AppKeyFunc(ctx)
+			if err != nil {
+				return fmt.Errorf("controlclient: app key: %w", err)
+			}
+			key = k
+		}
+		if key != "" {
+			ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+key)
+		}
+		return invoker(ctx, method, req, reply, cc, callOpts...)
+	}
 }
 
 // watchSIGTERM runs the DrainOnSIGTERM path.
