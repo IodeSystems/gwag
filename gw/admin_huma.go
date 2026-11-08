@@ -10,6 +10,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
@@ -67,8 +69,53 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				NodeID:       p.GetNodeId(),
 				Name:         p.GetName(),
 				JoinedUnixMs: p.GetJoinedUnixMs(),
+				Version:      p.GetVersion(),
+				MinLevel:     p.GetMinLevel(),
+				MaxLevel:     p.GetMaxLevel(),
 			})
 		}
+		out.Body.ActiveLevel = resp.GetActiveLevel()
+		out.Body.MetaLeader = resp.GetMetaLeader()
+		out.Body.MetaSize = resp.GetMetaSize()
+		out.Body.MetaOffline = append([]string{}, resp.GetMetaOffline()...)
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "finalizeCluster",
+		Method:      http.MethodPost,
+		Path:        "/admin/cluster/finalize",
+		Summary:     "Raise the cluster feature level (ends the rollback window).",
+	}, func(ctx context.Context, in *finalizeIn) (*finalizeOut, error) {
+		resp, err := cp.FinalizeCluster(ctx, &cpv1.FinalizeClusterRequest{Level: in.Body.Level, DryRun: in.Body.DryRun})
+		if err != nil {
+			if status.Code(err) == codes.FailedPrecondition {
+				return nil, huma.Error409Conflict(err.Error())
+			}
+			return nil, err
+		}
+		out := &finalizeOut{}
+		out.Body.PreviousLevel = resp.GetPreviousLevel()
+		out.Body.ActiveLevel = resp.GetActiveLevel()
+		out.Body.Blockers = append([]string{}, resp.GetBlockers()...)
+		return out, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "evacuatePeer",
+		Method:      http.MethodPost,
+		Path:        "/admin/peers/{nodeId}/evacuate",
+		Summary:     "Move every JetStream stream replica off a live peer before it is stopped.",
+	}, func(ctx context.Context, in *evacuateIn) (*evacuateOut, error) {
+		resp, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: in.NodeID, CheckOnly: in.Body.CheckOnly, Leave: in.Body.Leave})
+		if err != nil {
+			return nil, err
+		}
+		out := &evacuateOut{}
+		out.Body.Name = resp.GetName()
+		out.Body.Remaining = append([]string{}, resp.GetRemaining()...)
+		out.Body.Done = resp.GetDone()
+		out.Body.Left = resp.GetLeft()
 		return out, nil
 	})
 
@@ -147,6 +194,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out := &forgetOut{}
 		out.Body.Removed = resp.GetRemoved()
 		out.Body.NewReplicas = resp.GetNewReplicas()
+		out.Body.MetaRemoved = resp.GetMetaRemoved()
 		return out, nil
 	})
 
@@ -889,11 +937,18 @@ type peerInfo struct {
 	NodeID       string `json:"nodeId"`
 	Name         string `json:"name,omitempty"`
 	JoinedUnixMs int64  `json:"joinedUnixMs"`
+	Version      string `json:"version,omitempty"`
+	MinLevel     uint32 `json:"minLevel"`
+	MaxLevel     uint32 `json:"maxLevel"`
 }
 
 type peersOut struct {
 	Body struct {
-		Peers []peerInfo `json:"peers"`
+		Peers       []peerInfo `json:"peers"`
+		ActiveLevel uint32     `json:"activeLevel"`
+		MetaLeader  string     `json:"metaLeader,omitempty"`
+		MetaSize    uint32     `json:"metaSize"`
+		MetaOffline []string   `json:"metaOffline"`
 	}
 }
 
@@ -1074,6 +1129,39 @@ type forgetOut struct {
 	Body struct {
 		Removed     bool   `json:"removed"`
 		NewReplicas uint32 `json:"newReplicas"`
+		MetaRemoved bool   `json:"metaRemoved"`
+	}
+}
+
+type finalizeIn struct {
+	Body struct {
+		Level  uint32 `json:"level,omitempty" doc:"Level to raise to; 0 or absent = the highest level this gateway's binary supports."`
+		DryRun bool   `json:"dryRun,omitempty"`
+	}
+}
+
+type finalizeOut struct {
+	Body struct {
+		PreviousLevel uint32   `json:"previousLevel"`
+		ActiveLevel   uint32   `json:"activeLevel"`
+		Blockers      []string `json:"blockers"`
+	}
+}
+
+type evacuateIn struct {
+	NodeID string `path:"nodeId"`
+	Body   struct {
+		CheckOnly bool `json:"checkOnly,omitempty"`
+		Leave     bool `json:"leave,omitempty"`
+	}
+}
+
+type evacuateOut struct {
+	Body struct {
+		Name      string   `json:"name"`
+		Remaining []string `json:"remaining"`
+		Done      bool     `json:"done"`
+		Left      bool     `json:"left"`
 	}
 }
 

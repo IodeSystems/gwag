@@ -161,6 +161,13 @@ type Gateway struct {
 	// while it is Pending. See health.go.
 	registrySync atomic.Int32
 
+	// clusterLevel is the cluster's active feature level as last read
+	// from the gwag-cluster bucket (clusterLevelMax when standalone).
+	// clusterLevelErr is non-nil while this binary cannot run at it;
+	// health reports "incompatible". See cluster_level.go.
+	clusterLevel    atomic.Int32
+	clusterLevelErr atomic.Pointer[string]
+
 	// wsConns is the registry of live WebSocket subscription
 	// connections. Each entry is a cancel func bound to the
 	// connection's serveWebSocket lifetime; Drain cancels all to
@@ -411,6 +418,10 @@ type config struct {
 
 	// clusterReplicas is the KV bucket replica policy. "" → odd.
 	clusterReplicas ClusterReplicas
+
+	// clusterAutoFinalize raises the cluster feature level as soon as
+	// every live peer supports it (WithClusterAutoFinalize).
+	clusterAutoFinalize bool
 
 	// allowedTiers gates which version tiers the gateway accepts at
 	// registration and renders in the schema. nil → default policy
@@ -1446,6 +1457,7 @@ func New(opts ...Option) *Gateway {
 		tracer:      newTracer(cfg.tracerProvider),
 	}
 	g.devToken.Store(&devTok)
+	g.clusterLevel.Store(int32(clusterLevelMax()))
 	g.sr = newSchemaRegistry(g)
 	// WithCallerIDDelegated needs the live *Gateway to look up the
 	// _caller_auth/v1 pool at call time, so the extractor wrapper is

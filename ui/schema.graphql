@@ -5,6 +5,7 @@ schema {
 }
 
 type AdminMutationNamespace {
+  createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -16,6 +17,8 @@ type AdminMutationNamespace {
   ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
+  evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
+  finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -36,6 +39,7 @@ type AdminMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
@@ -49,6 +53,7 @@ type AdminQueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
@@ -75,6 +80,7 @@ type AdminQueryNamespace {
 }
 
 type AdminStableMutationNamespace {
+  createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -86,6 +92,8 @@ type AdminStableMutationNamespace {
   ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
+  evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
+  finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -106,6 +114,7 @@ type AdminStableMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -117,6 +126,7 @@ type AdminStableQueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
@@ -141,6 +151,7 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
+  createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -152,6 +163,8 @@ type AdminV1MutationNamespace {
   ): admin_DismissNotificationOutBody
   drain(body: admin_DrainInBodyInput!): admin_DrainOutBody
   drainInstance(body: admin_DrainInstanceInBodyInput!, instance: String!): admin_InstanceDrainInfo
+  evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
+  finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
@@ -172,6 +185,7 @@ type AdminV1MutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
@@ -183,6 +197,7 @@ type AdminV1QueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
@@ -300,6 +315,28 @@ type Subscription {
 """The `Upload` scalar represents a file streamed in via the graphql-multipart-request-spec wire format (https://github.com/jaydenseric/graphql-multipart-request-spec). Input-only: serialization back to JSON returns null."""
 scalar Upload
 
+type admin_AppKeyInfo {
+  """RFC 3339."""
+  createdAt: String!
+  """Authenticated identity that minted the key."""
+  createdBy: String!
+  """Past expiresAt: calls with the key fail."""
+  expired: Boolean!
+  """RFC 3339."""
+  expiresAt: String!
+  """Expires within 7 days and has not expired yet."""
+  expiresSoon: Boolean!
+  """Key id: the part of the key after gwk_ and before the secret. Not secret."""
+  id: String!
+  """Namespaces the key covers."""
+  namespaces: [String!]
+  note: String!
+}
+
+type admin_AppKeysOutBody {
+  appKeys: [admin_AppKeyInfo!]
+}
+
 type admin_BindingInfo {
   """Channel key <proto package>.<name>; empty for an unnamed binding. Several bindings with one key form a union channel."""
   channel: String!
@@ -335,6 +372,21 @@ type admin_ChannelInfo {
 
 type admin_ChannelsOutBody {
   channels: [admin_ChannelInfo!]
+}
+
+input admin_CreateAppKeyInBodyInput {
+  """Namespaces the key covers."""
+  namespaces: [String!]
+  """Free text shown in the list, e.g. the service and environment."""
+  note: String
+  """Lifetime: days (30d) or a Go duration (720h)."""
+  ttl: String!
+}
+
+type admin_CreateAppKeyOutBody {
+  appKey: admin_AppKeyInfo!
+  """The key. Shown once; the gateway keeps only its hash."""
+  key: String!
 }
 
 type admin_DeleteExternalDependentOutBody {
@@ -435,6 +487,18 @@ type admin_DrainOutBody {
   reason: String
 }
 
+input admin_EvacuateInBodyInput {
+  checkOnly: Boolean
+  leave: Boolean
+}
+
+type admin_EvacuateOutBody {
+  done: Boolean!
+  left: Boolean!
+  name: String!
+  remaining: [String!]
+}
+
 type admin_ExternalDependentInfo {
   depends: [admin_ExternalPinInfo!]
   id: String!
@@ -487,7 +551,20 @@ type admin_ExternalPinInfo {
   service: String!
 }
 
+input admin_FinalizeInBodyInput {
+  dryRun: Boolean
+  """Level to raise to; 0 or absent = the highest level this gateway's binary supports."""
+  level: Int
+}
+
+type admin_FinalizeOutBody {
+  activeLevel: Int!
+  blockers: [String!]
+  previousLevel: Int!
+}
+
 type admin_ForgetOutBody {
+  metaRemoved: Boolean!
   newReplicas: Int!
   removed: Boolean!
 }
@@ -768,11 +845,18 @@ type admin_OwnerInfo {
 
 type admin_PeerInfo {
   joinedUnixMs: Long!
+  maxLevel: Int!
+  minLevel: Int!
   name: String
   nodeId: String!
+  version: String
 }
 
 type admin_PeersOutBody {
+  activeLevel: Int!
+  metaLeader: String
+  metaOffline: [String!]
+  metaSize: Int!
   peers: [admin_PeerInfo!]
 }
 
@@ -823,6 +907,10 @@ type admin_RetractStableOutBody {
 input admin_ReviewExternalDependentInBodyInput {
   """Next review date, RFC 3339; must be in the future. The reviewer is the authenticated caller; the body names no one."""
   reviewAt: String!
+}
+
+type admin_RevokeAppKeyOutBody {
+  revoked: Boolean!
 }
 
 type admin_RotateDevTokenOutBody {

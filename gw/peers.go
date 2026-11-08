@@ -44,10 +44,16 @@ const (
 // against the bucket's TTL — anything older than now-TTL is considered
 // disconnected (the bucket auto-expires the entry; if it's still
 // present, it's been refreshed at least once within TTL).
+//
+// Version, LevelMin and LevelMax are absent in entries written by a
+// gateway older than feature levels; such a peer counts as [0, 0].
 type peerEntry struct {
-	NodeID  string `json:"node_id"`
-	Name    string `json:"name,omitempty"`
-	JoinedM int64  `json:"joined_unix_ms"`
+	NodeID   string `json:"node_id"`
+	Name     string `json:"name,omitempty"`
+	JoinedM  int64  `json:"joined_unix_ms"`
+	Version  string `json:"version,omitempty"`
+	LevelMin int    `json:"level_min,omitempty"`
+	LevelMax int    `json:"level_max,omitempty"`
 }
 
 // peerTracker is created on the first Gateway.startClusterTracking
@@ -63,6 +69,8 @@ type peerTracker struct {
 	drain      jetstream.KeyValue
 	externals  jetstream.KeyValue
 	appKeys    jetstream.KeyValue
+	// cluster holds the active feature level (cluster_level.go).
+	cluster jetstream.KeyValue
 	// notifications holds the hook-failure notification items
 	// (notification_store.go).
 	notifications jetstream.KeyValue
@@ -79,6 +87,15 @@ type peerTracker struct {
 
 	mu   sync.Mutex
 	live map[string]struct{} // active peer NodeIDs (incl. self)
+	// names maps every peer NodeID this node has seen to its server
+	// name, so ForgetPeer can remove an expired peer from the
+	// JetStream meta group.
+	names map[string]string
+
+	// levelMu guards appliedLevel: the highest feature level whose
+	// Apply this node has run.
+	levelMu      sync.Mutex
+	appliedLevel int
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -89,6 +106,7 @@ type peerTracker struct {
 	drainDone         chan struct{}
 	externalsDone     chan struct{}
 	notificationsDone chan struct{}
+	levelDone         chan struct{}
 
 	// currentR is the managed buckets' replica count as last read
 	// from JetStream or applied by this node. replMu serialises the
@@ -117,18 +135,42 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	}
 	cl := g.cfg.cluster
 
-	// Both buckets are created at R=1 if they don't exist; live R is
-	// raised monotonically by reconcileReplicas as peers join.
-	// Peers and registry entries expire when their writer stops
-	// refreshing them. Both buckets leave a delete marker on expiry
-	// so every watcher sees the key go (openExpiringBucket).
-	peerTTL, registryTTL := g.clusterTTLs()
-	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL)
+	// The feature level comes first: it decides the format of what
+	// the rest writes. A level this binary cannot run at stops here,
+	// before anything is written.
+	clusterKV, err := openClusterBucket(ctx, cl.JS)
 	if err != nil {
 		g.mu.Unlock()
 		return nil, err
 	}
-	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL)
+	level, err := loadClusterLevel(ctx, cl.JS, clusterKV, cl.Server.Name())
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+	g.clusterLevel.Store(int32(level))
+	if err := checkClusterLevel(level); err != nil {
+		g.setClusterLevelErr(err)
+		g.mu.Unlock()
+		return nil, err
+	}
+	g.setClusterLevelErr(nil)
+
+	// Both buckets are created at R=1 if they don't exist; live R is
+	// raised monotonically by reconcileReplicas as peers join.
+	// Peers and registry entries expire when their writer stops
+	// refreshing them. From levelDeleteMarkers on, both buckets leave
+	// a delete marker on expiry so every watcher sees the key go
+	// (openExpiringBucket); below it the sweeps (sweepPeers,
+	// reconciler.sweepLoop) drop expired keys.
+	markers := level >= levelDeleteMarkers
+	peerTTL, registryTTL := g.clusterTTLs()
+	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL, markers)
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL, markers)
 	if err != nil {
 		g.mu.Unlock()
 		return nil, err
@@ -220,9 +262,12 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	}
 
 	selfBytes, err := json.Marshal(peerEntry{
-		NodeID:  cl.NodeID,
-		Name:    cl.Server.Name(),
-		JoinedM: time.Now().UnixMilli(),
+		NodeID:   cl.NodeID,
+		Name:     cl.Server.Name(),
+		JoinedM:  time.Now().UnixMilli(),
+		Version:  binaryVersion(),
+		LevelMin: clusterLevelMin,
+		LevelMax: clusterLevelMax(),
 	})
 	if err != nil {
 		g.mu.Unlock()
@@ -241,6 +286,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		drain:             drain,
 		externals:         externals,
 		appKeys:           appKeys,
+		cluster:           clusterKV,
 		notifications:     notifications,
 		buckets:           buckets,
 		nodeID:            cl.NodeID,
@@ -248,6 +294,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		peerTTL:           peerTTL,
 		registryTTL:       registryTTL,
 		live:              map[string]struct{}{cl.NodeID: {}},
+		names:             map[string]string{cl.NodeID: cl.Server.Name()},
 		cancel:            cancel,
 		done:              make(chan struct{}),
 		stableDone:        make(chan struct{}),
@@ -256,6 +303,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		drainDone:         make(chan struct{}),
 		externalsDone:     make(chan struct{}),
 		notificationsDone: make(chan struct{}),
+		levelDone:         make(chan struct{}),
 	}
 	t.currentR.Store(1)
 	g.peers = t
@@ -279,6 +327,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		close(t.drainDone)
 		close(t.externalsDone)
 		close(t.notificationsDone)
+		close(t.levelDone)
 		return nil, err
 	}
 
@@ -302,6 +351,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.drainWatchLoop(tctx)
 	go t.externalsWatchLoop(tctx)
 	go t.notificationsWatchLoop(tctx)
+	go t.levelWatchLoop(tctx)
 	if schemas != nil {
 		g.sr.bindCluster(schemas)
 	}
@@ -322,6 +372,8 @@ func (t *peerTracker) refreshLoop(ctx context.Context) {
 			cancel()
 			missing = t.sweepPeers(ctx, missing)
 			t.kickReconcile(ctx)
+			t.applyFeatures(ctx)
+			t.autoFinalize(ctx)
 		}
 	}
 }
@@ -398,6 +450,10 @@ func (t *peerTracker) watchLoop(ctx context.Context) {
 			switch ev.Operation() {
 			case jetstream.KeyValuePut:
 				t.live[ev.Key()] = struct{}{}
+				var pe peerEntry
+				if json.Unmarshal(ev.Value(), &pe) == nil && pe.Name != "" {
+					t.names[ev.Key()] = pe.Name
+				}
 			case jetstream.KeyValueDelete, jetstream.KeyValuePurge:
 				delete(t.live, ev.Key())
 			}
@@ -422,6 +478,7 @@ var replicaBuckets = []string{
 	externalDependentsBucketName,
 	notificationsBucketName,
 	appKeysBucketName,
+	clusterBucketName,
 }
 
 // reconcileReplicas raises every managed bucket to the replica count
@@ -526,16 +583,21 @@ func (g *Gateway) clusterTTLs() (peer, registry time.Duration) {
 // A bucket created by an older gateway has no markers. Its stream
 // config is updated in place with markers on and nothing else
 // changed (replicas, limits); the server allows turning markers on,
-// never off.
-func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string, ttl time.Duration) (jetstream.KeyValue, error) {
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+// never off. markers is false below levelDeleteMarkers: the bucket is
+// then created, or left, without them, because a gateway older than
+// feature levels cannot update a bucket that has them.
+func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string, ttl time.Duration, markers bool) (jetstream.KeyValue, error) {
+	kcfg := jetstream.KeyValueConfig{
 		Bucket:   name,
 		Replicas: 1,
 		TTL:      ttl,
+	}
+	if markers {
 		// A marker expires with the bucket TTL (MaxAge) whatever
 		// its own TTL; ask for the same.
-		LimitMarkerTTL: ttl,
-	})
+		kcfg.LimitMarkerTTL = ttl
+	}
+	kv, err := js.CreateKeyValue(ctx, kcfg)
 	if err == nil {
 		return kv, nil
 	}
@@ -546,12 +608,8 @@ func openExpiringBucket(ctx context.Context, js jetstream.JetStream, name string
 	if err != nil {
 		return nil, fmt.Errorf("%s bucket open: %w", name, err)
 	}
-	if cfg := stream.CachedInfo().Config; cfg.SubjectDeleteMarkerTTL <= 0 {
-		cfg.AllowMsgTTL = true
-		cfg.SubjectDeleteMarkerTTL = cfg.MaxAge
-		if cfg.SubjectDeleteMarkerTTL < time.Second {
-			cfg.SubjectDeleteMarkerTTL = ttl
-		}
+	if cfg := stream.CachedInfo().Config; markers && cfg.SubjectDeleteMarkerTTL <= 0 {
+		withDeleteMarkers(&cfg, ttl)
 		if _, err := js.UpdateStream(ctx, cfg); err != nil {
 			return nil, fmt.Errorf("%s bucket: turn on delete markers: %w", name, err)
 		}
@@ -619,6 +677,9 @@ func (t *peerTracker) stop() {
 	}
 	if t.notificationsDone != nil {
 		<-t.notificationsDone
+	}
+	if t.levelDone != nil {
+		<-t.levelDone
 	}
 	t.rec.stop()
 }

@@ -601,6 +601,7 @@ type gatewayCollector struct {
 	services *prometheus.Desc
 	ejected  *prometheus.Desc
 	peers    *prometheus.Desc
+	level    *prometheus.Desc
 }
 
 func newGatewayCollector(g *Gateway, p string) *gatewayCollector {
@@ -615,6 +616,9 @@ func newGatewayCollector(g *Gateway, p string) *gatewayCollector {
 		peers: prometheus.NewDesc(p+"_cluster_peers",
 			"Gateway nodes currently routed in the NATS cluster: distinct remote servers with a live route, plus this node; 0 when not clustered.",
 			nil, nil),
+		level: prometheus.NewDesc(p+"_cluster_feature_level",
+			"Cluster feature levels on this node: kind=active (the cluster's level as this node last read it), min and max (the levels this binary can run at). Cluster nodes only.",
+			[]string{"kind"}, nil),
 	}
 }
 
@@ -622,6 +626,7 @@ func (c *gatewayCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.services
 	ch <- c.ejected
 	ch <- c.peers
+	ch <- c.level
 }
 
 func (c *gatewayCollector) Collect(ch chan<- prometheus.Metric) {
@@ -674,6 +679,11 @@ func (c *gatewayCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.ejected, prometheus.GaugeValue, float64(n), k.ns, k.ver)
 	}
 	ch <- prometheus.MustNewConstMetric(c.peers, prometheus.GaugeValue, float64(peers))
+	if g.cfg.cluster != nil {
+		ch <- prometheus.MustNewConstMetric(c.level, prometheus.GaugeValue, float64(g.clusterLevel.Load()), "active")
+		ch <- prometheus.MustNewConstMetric(c.level, prometheus.GaugeValue, float64(clusterLevelMin), "min")
+		ch <- prometheus.MustNewConstMetric(c.level, prometheus.GaugeValue, float64(clusterLevelMax()), "max")
+	}
 }
 
 // livePeerCount counts this node plus the distinct remote NATS servers

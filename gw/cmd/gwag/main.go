@@ -31,7 +31,9 @@
 //
 //	# Talk to a running gateway:
 //	gwag peer list   --gateway localhost:50090
+//	gwag peer evacuate --gateway localhost:50090 --wait NODE_ID
 //	gwag peer forget --gateway localhost:50090 NODE_ID
+//	gwag cluster finalize --gateway localhost:50090
 //	gwag drain --list --gateway localhost:50090
 //	gwag drain --wait --gateway localhost:50090 INSTANCE
 //
@@ -205,6 +207,8 @@ func main() {
 			os.Exit(contextCmd(os.Args[2:]))
 		case "peer":
 			os.Exit(peerCmd(os.Args[2:]))
+		case "cluster":
+			os.Exit(clusterCmd(os.Args[2:]))
 		case "services":
 			os.Exit(servicesCmd(os.Args[2:]))
 		case "schema":
@@ -246,7 +250,8 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|evacuate|forget) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster finalize [--level N] [--dry-run]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")
@@ -664,7 +669,7 @@ func splitFlagsAndPositionals(args []string) (flags, positionals []string) {
 
 func peerCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gwag peer (list|forget NODE_ID) [--gateway HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag peer (list|evacuate NODE_ID|forget NODE_ID) [--gateway HOST:PORT]")
 		return 2
 	}
 	verb := args[0]
@@ -676,6 +681,9 @@ func peerCmd(args []string) int {
 	fs := flag.NewFlagSet("peer "+verb, flag.ContinueOnError)
 	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw primary or localhost:50090)")
 	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
+	checkOnly := fs.Bool("check", false, "evacuate: only report the streams still on the peer")
+	leave := fs.Bool("leave", false, "evacuate: once no stream is on the peer, remove it from the JetStream meta group (its JetStream turns off; stop it next)")
+	wait := fs.Duration("wait", 0, "evacuate: poll until done, up to this long (e.g. 2m)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [--context NAME] [args...]")
 		fs.PrintDefaults()
@@ -709,12 +717,15 @@ func peerCmd(args []string) int {
 			fmt.Println("(no peers)")
 			return 0
 		}
-		fmt.Printf("%-58s %-10s %s\n", "NODE_ID", "NAME", "JOINED")
-		for _, p := range resp.GetPeers() {
-			joined := time.UnixMilli(p.GetJoinedUnixMs()).Format(time.RFC3339)
-			fmt.Printf("%-58s %-10s %s\n", p.GetNodeId(), p.GetName(), joined)
-		}
+		printPeers(os.Stdout, resp)
 		return 0
+
+	case "evacuate":
+		if len(rest) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: gwag peer evacuate NODE_ID [--check] [--leave] [--wait 2m] [--gateway HOST:PORT]")
+			return 2
+		}
+		return evacuatePeer(client, login.Bearer, rest[0], *checkOnly, *leave, *wait)
 
 	case "forget":
 		if len(rest) < 1 {
@@ -726,7 +737,7 @@ func peerCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "ForgetPeer: %v\n", err)
 			return 1
 		}
-		fmt.Printf("removed=%v new_replicas=%d\n", resp.GetRemoved(), resp.GetNewReplicas())
+		fmt.Printf("removed=%v new_replicas=%d meta_removed=%v\n", resp.GetRemoved(), resp.GetNewReplicas(), resp.GetMetaRemoved())
 		return 0
 
 	default:

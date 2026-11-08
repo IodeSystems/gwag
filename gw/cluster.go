@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -29,6 +31,12 @@ type Cluster struct {
 	// NodeID is the NATS server's stable identifier within the cluster
 	// — used as the gateway's identity in the peers KV bucket.
 	NodeID string
+
+	// sys is a connection to the local server in the system account,
+	// for the JetStream server APIs ($JS.API.SERVER.EVACUATE,
+	// $JS.API.SERVER.REMOVE) that answer only there. Nil when
+	// standalone.
+	sys *nats.Conn
 }
 
 // ClusterOptions configures the embedded NATS server. ClientListen is
@@ -125,6 +133,7 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		port = natsd.RANDOM_PORT
 	}
 
+	var sysUser *natsd.User
 	srvOpts := &natsd.Options{
 		ServerName:     opts.NodeName,
 		Host:           host,
@@ -164,6 +173,18 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 			srvOpts.Cluster.TLSTimeout = 5
 		}
 		srvOpts.Routes = routes
+		// A system account user, so this process can call the
+		// JetStream server APIs (evacuate, remove). Clients without
+		// credentials still land in the global account: with only
+		// $G and $SYS defined, the server adds a no-auth user for $G.
+		sysUser, err = newSystemUser()
+		if err != nil {
+			return nil, err
+		}
+		sysAcc := natsd.NewAccount(natsd.DEFAULT_SYSTEM_ACCOUNT)
+		srvOpts.Accounts = []*natsd.Account{sysAcc}
+		srvOpts.SystemAccount = natsd.DEFAULT_SYSTEM_ACCOUNT
+		srvOpts.Users = []*natsd.User{{Username: sysUser.Username, Password: sysUser.Password, Account: sysAcc}}
 	}
 
 	srv, err := natsd.NewServer(srvOpts)
@@ -189,12 +210,33 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		return nil, fmt.Errorf("cluster: jetstream: %w", err)
 	}
 
+	var sys *nats.Conn
+	if sysUser != nil {
+		sys, err = nats.Connect("", nats.InProcessServer(srv), nats.UserInfo(sysUser.Username, sysUser.Password))
+		if err != nil {
+			conn.Close()
+			srv.Shutdown()
+			return nil, fmt.Errorf("cluster: system account connect: %w", err)
+		}
+	}
+
 	return &Cluster{
 		Server: srv,
 		Conn:   conn,
 		JS:     js,
 		NodeID: srv.ID(),
+		sys:    sys,
 	}, nil
+}
+
+// newSystemUser returns a system account user with a random
+// password. Only this process knows it.
+func newSystemUser() (*natsd.User, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return nil, fmt.Errorf("cluster: system user: %w", err)
+	}
+	return &natsd.User{Username: "gwag-system", Password: hex.EncodeToString(b)}, nil
 }
 
 // applyClusterLogger wires `opts`'s logger configuration onto srv.
@@ -265,6 +307,9 @@ func (c *Cluster) Close() {
 	}
 	if c.Conn != nil {
 		c.Conn.Close()
+	}
+	if c.sys != nil {
+		c.sys.Close()
 	}
 	if c.Server != nil {
 		c.Server.Shutdown()
