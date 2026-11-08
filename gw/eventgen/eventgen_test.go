@@ -51,6 +51,25 @@ func channelsOf(t *testing.T, body string) ([]*Channel, error) {
 	return Channels(files)
 }
 
+// A registry schema has no binding; ChannelsWith binds it from outside.
+func TestChannelsWithBindings(t *testing.T) {
+	dir := writeProtos(t, map[string]string{"corp.proto": "syntax = \"proto3\";\npackage corp.v1;\nmessage Order { string id = 1; }\n"})
+	files, err := Compile(context.Background(), []string{dir}, []string{"corp.proto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chans, err := Channels(files); err != nil || len(chans) != 0 {
+		t.Fatalf("Channels = %v, %v", chans, err)
+	}
+	chans, err := ChannelsWith(files, map[string]Binding{"corp.v1.Order": {Name: "Order", Pattern: "orders"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chans) != 1 || chans[0].Key != "corp.v1.Order" || chans[0].Pattern.String() != "orders" || chans[0].Kind != KindPlain {
+		t.Fatalf("ChannelsWith = %+v", chans)
+	}
+}
+
 func TestChannelKinds(t *testing.T) {
 	chans, err := channelsOf(t, `
 message Plain {

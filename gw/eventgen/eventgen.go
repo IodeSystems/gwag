@@ -173,6 +173,9 @@ type Config struct {
 	ModuleDir   string   // default "."
 	Grpc        bool
 	GwagVersion string // default GwagVersion()
+	// Bindings binds messages whose proto has no
+	// (gwag.ps.v1.binding), keyed by message full name.
+	Bindings map[string]Binding
 }
 
 // Generate runs cfg and returns the written paths (relative to Out),
@@ -212,7 +215,7 @@ func Generate(ctx context.Context, cfg Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	chans, err := Channels(files)
+	chans, err := ChannelsWith(files, cfg.Bindings)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +257,23 @@ func Generate(ctx context.Context, cfg Config) ([]string, error) {
 		return nil, err
 	}
 	return out.flush()
+}
+
+// Compile compiles files (on disk or relative to an import path) with
+// gwag's option files served, as Generate does, and returns them in
+// order.
+//
+// Stability: experimental
+func Compile(ctx context.Context, importPaths, files []string) ([]protoreflect.FileDescriptor, error) {
+	if len(importPaths) == 0 {
+		importPaths = []string{"."}
+	}
+	names, err := protoNames(importPaths, files)
+	if err != nil {
+		return nil, err
+	}
+	fds, _, err := compile(ctx, importPaths, names)
+	return fds, err
 }
 
 // RunPlugin runs one base generator over req.

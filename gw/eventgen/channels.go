@@ -82,6 +82,16 @@ func binding(md protoreflect.MessageDescriptor) (name, pattern string, ok bool) 
 	return name, pattern, ok
 }
 
+// Binding is a channel binding given outside the proto, for a message
+// whose file has no (gwag.ps.v1.binding): a schema imported from a
+// registry.
+//
+// Stability: experimental
+type Binding struct {
+	Name    string
+	Pattern string
+}
+
 // Channels returns the named channels declared in files, in
 // declaration order. Messages without a binding name are not
 // channels. Errors: a bad name or pattern, or one name with two
@@ -89,10 +99,21 @@ func binding(md protoreflect.MessageDescriptor) (name, pattern string, ok bool) 
 //
 // Stability: experimental
 func Channels(files []protoreflect.FileDescriptor) ([]*Channel, error) {
+	return ChannelsWith(files, nil)
+}
+
+// ChannelsWith is Channels where extra, keyed by message full name,
+// binds messages the proto does not. extra wins over the proto.
+//
+// Stability: experimental
+func ChannelsWith(files []protoreflect.FileDescriptor, extra map[string]Binding) ([]*Channel, error) {
 	var out []*Channel
 	byKey := map[string]*Channel{}
 	add := func(md protoreflect.MessageDescriptor) error {
 		name, pattern, ok := binding(md)
+		if b, has := extra[string(md.FullName())]; has {
+			name, pattern, ok = b.Name, b.Pattern, true
+		}
 		if !ok || name == "" {
 			return nil
 		}
