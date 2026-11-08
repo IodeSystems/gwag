@@ -29,7 +29,7 @@ type Bus struct {
 	nc *nats.Conn
 }
 
-var _ gat.Bus = (*Bus)(nil)
+var _ gat.HeaderBus = (*Bus)(nil)
 
 // New returns a Bus over nc.
 //
@@ -54,6 +54,31 @@ func (b *Bus) Publish(channel string, payload []byte) error {
 func (b *Bus) Subscribe(pattern string, fn func(channel string, payload []byte)) (func(), error) {
 	sub, err := b.nc.Subscribe(pattern, func(m *nats.Msg) {
 		fn(m.Subject, m.Data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() { _ = sub.Unsubscribe() })
+	}, nil
+}
+
+// PublishMsg sends payload on subject channel with header as NATS
+// headers. Header keys are sent as given.
+//
+// Stability: experimental
+func (b *Bus) PublishMsg(channel string, header gat.Header, payload []byte) error {
+	return b.nc.PublishMsg(&nats.Msg{Subject: channel, Header: nats.Header(header), Data: payload})
+}
+
+// SubscribeMsg is Subscribe with the message's NATS headers (nil when
+// the message has none).
+//
+// Stability: experimental
+func (b *Bus) SubscribeMsg(pattern string, fn func(channel string, header gat.Header, payload []byte)) (func(), error) {
+	sub, err := b.nc.Subscribe(pattern, func(m *nats.Msg) {
+		fn(m.Subject, gat.Header(m.Header), m.Data)
 	})
 	if err != nil {
 		return nil, err

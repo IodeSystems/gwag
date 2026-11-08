@@ -41,6 +41,43 @@ type Bus interface {
 	Subscribe(pattern string, fn func(channel string, payload []byte)) (unsubscribe func(), err error)
 }
 
+// Header is a set of message headers: NATS headers on gatnats, carried
+// in memory on LocalBus. Keys are used as given (no canonicalisation),
+// so "Nats-Msg-Id" stays "Nats-Msg-Id". The underlying type matches
+// nats.Header and http.Header, so a conversion is free.
+//
+// Stability: experimental
+type Header map[string][]string
+
+// Get returns the first value for key, or "".
+//
+// Stability: experimental
+func (h Header) Get(key string) string {
+	if v := h[key]; len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// Set replaces the values for key with value.
+//
+// Stability: experimental
+func (h Header) Set(key, value string) { h[key] = []string{value} }
+
+// HeaderBus is an optional Bus extension for transports that carry
+// headers with each payload. Callers type-assert a Bus to HeaderBus.
+// A plain Subscribe on a HeaderBus still sees every publish, headers
+// dropped; a plain Publish arrives at SubscribeMsg with a nil Header.
+//
+// LocalBus and gatnats.Bus implement it; NewPeerMeshBus does not.
+//
+// Stability: experimental
+type HeaderBus interface {
+	Bus
+	PublishMsg(channel string, header Header, payload []byte) error
+	SubscribeMsg(pattern string, fn func(channel string, header Header, payload []byte)) (unsubscribe func(), err error)
+}
+
 // ErrEmptyChannel is returned by LocalBus when Publish gets an empty
 // channel or Subscribe gets an empty pattern.
 //
@@ -63,8 +100,10 @@ type LocalBus struct {
 
 type localSub struct {
 	pattern string
-	fn      func(channel string, payload []byte)
+	fn      func(channel string, header Header, payload []byte)
 }
+
+var _ HeaderBus = (*LocalBus)(nil)
 
 // NewLocalBus returns an empty in-process bus.
 //
@@ -79,6 +118,14 @@ func NewLocalBus() *LocalBus {
 //
 // Stability: experimental
 func (b *LocalBus) Publish(channel string, payload []byte) error {
+	return b.PublishMsg(channel, nil, payload)
+}
+
+// PublishMsg is Publish with headers. Every subscriber gets the same
+// Header map; fn must not modify it.
+//
+// Stability: experimental
+func (b *LocalBus) PublishMsg(channel string, header Header, payload []byte) error {
 	if channel == "" {
 		return ErrEmptyChannel
 	}
@@ -87,7 +134,7 @@ func (b *LocalBus) Publish(channel string, payload []byte) error {
 		b.mu.RUnlock()
 		return nil
 	}
-	targets := make([]func(string, []byte), 0, len(b.subs))
+	targets := make([]func(string, Header, []byte), 0, len(b.subs))
 	for _, s := range b.subs {
 		if MatchChannel(s.pattern, channel) {
 			targets = append(targets, s.fn)
@@ -95,7 +142,7 @@ func (b *LocalBus) Publish(channel string, payload []byte) error {
 	}
 	b.mu.RUnlock()
 	for _, fn := range targets {
-		fn(channel, payload)
+		fn(channel, header, payload)
 	}
 	return nil
 }
@@ -104,6 +151,15 @@ func (b *LocalBus) Publish(channel string, payload []byte) error {
 //
 // Stability: experimental
 func (b *LocalBus) Subscribe(pattern string, fn func(channel string, payload []byte)) (func(), error) {
+	return b.SubscribeMsg(pattern, func(channel string, _ Header, payload []byte) {
+		fn(channel, payload)
+	})
+}
+
+// SubscribeMsg is Subscribe with headers.
+//
+// Stability: experimental
+func (b *LocalBus) SubscribeMsg(pattern string, fn func(channel string, header Header, payload []byte)) (func(), error) {
 	if pattern == "" {
 		return nil, ErrEmptyChannel
 	}
