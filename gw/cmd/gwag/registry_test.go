@@ -83,6 +83,22 @@ func TestGenImport(t *testing.T) {
 		t.Fatalf("lock %s: %v", b, err)
 	}
 
+	// The committed copy regenerates without the registry.
+	before := r.Total()
+	if err := os.RemoveAll(filepath.Join(dir, "gen")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := run(t, gen, "--import-dir", imp, "--lang", "go", "--out", filepath.Join(dir, "gen"),
+		"--module-dir", root, "--opt", "paths=source_relative"); code != 0 {
+		t.Fatalf("offline regen exit %d: %s", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "gen/registry/orders-value.events.go")); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.Total() - before; n != 0 {
+		t.Fatalf("offline regen made %d registry requests", n)
+	}
+
 	if code, out, errs := run(t, gen, "--check-lock", "--import-dir", imp); code != 0 || !strings.HasPrefix(out, "ok") {
 		t.Fatalf("check-lock exit %d: %s %s", code, out, errs)
 	}

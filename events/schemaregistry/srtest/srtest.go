@@ -48,6 +48,17 @@ func (r *Registry) Requests(key string) int {
 	return r.requests[key]
 }
 
+// Total returns how many requests the registry served.
+func (r *Registry) Total() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, c := range r.requests {
+		n += c
+	}
+	return n
+}
+
 // Add registers s under subject and returns its id and version.
 func (r *Registry) Add(subject string, s schemaregistry.Schema) (id, version int) {
 	r.mu.Lock()
