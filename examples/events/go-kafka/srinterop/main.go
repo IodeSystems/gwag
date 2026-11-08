@@ -2,11 +2,13 @@
 // with Schema Registry framing, for ../test.sh to check against
 // Confluent's own serializer and deserializer.
 //
-//	srinterop produce SHIPPED_TOPIC EVENTS_TOPIC
+//	srinterop produce SHIPPED_TOPIC EVENTS_TOPIC [lookup|latest]
 //	srinterop consume SHIPPED_TOPIC EVENTS_TOPIC N
 //
 // KAFKA_BROKERS and SR_URL name the broker and the registry. produce
-// registers orders.proto under <topic>-value on first publish (own).
+// registers orders.proto under <topic>-value on first publish (own);
+// with lookup it only looks the schema up, with latest it frames with
+// the subject's latest schema (UseLatest).
 // consume reads from the start of both topics and prints N lines; the
 // records need not carry gwag headers.
 package main
@@ -32,7 +34,7 @@ import (
 
 func main() {
 	if len(os.Args) < 4 {
-		log.Fatal("usage: srinterop produce|consume SHIPPED_TOPIC EVENTS_TOPIC [N]")
+		log.Fatal("usage: srinterop produce|consume SHIPPED_TOPIC EVENTS_TOPIC [N|lookup|latest]")
 	}
 	shipped, evs := os.Args[2], os.Args[3]
 	backend, err := kafka.New(strings.Split(os.Getenv("KAFKA_BROKERS"), ","), kafka.WithPartitions(1),
@@ -61,7 +63,19 @@ func main() {
 	must(err)
 	switch os.Args[1] {
 	case "produce":
-		bus := ordersv1.NewBus(backend, events.WithSerde(register))
+		serde := register
+		if len(os.Args) > 4 {
+			switch os.Args[4] {
+			case "lookup":
+				serde = lookup
+			case "latest":
+				serde, err = sr.NewSerde(client, sr.UseLatest())
+				must(err)
+			default:
+				log.Fatalf("produce mode %q: want lookup or latest", os.Args[4])
+			}
+		}
+		bus := ordersv1.NewBus(backend, events.WithSerde(serde))
 		must(bus.PublishOrderShipped(ctx, ordersv1.OrderShippedSubject{OrderId: "o-1001"}, &ordersv1.OrderShipped{OrderId: "o-1001", Carrier: "ups"}))
 		must(bus.PublishOrderEvents(ctx, ordersv1.OrderEventsSubject{OrderId: "o-1001"}, &ordersv1.OrderCreated{OrderId: "o-1001", Customer: "ann"}))
 		fmt.Println("produced 2")

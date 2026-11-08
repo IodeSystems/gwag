@@ -3,11 +3,13 @@ framing, for ./test.sh to check against Confluent's own serializer and
 deserializer and against the Go runtime. The Python twin of
 ../go-kafka/srinterop.
 
-    srinterop.py produce SHIPPED_TOPIC EVENTS_TOPIC
+    srinterop.py produce SHIPPED_TOPIC EVENTS_TOPIC [lookup|latest]
     srinterop.py consume SHIPPED_TOPIC EVENTS_TOPIC N
 
 KAFKA_BROKERS and SR_URL name the broker and the registry. produce
-registers orders.proto under <topic>-value on first publish (own).
+registers orders.proto under <topic>-value on first publish (own);
+with lookup it only looks the schema up, with latest it frames with the
+subject's latest schema (use_latest).
 consume reads from the start of both topics and prints N lines; the
 records need not carry gwag headers.
 """
@@ -54,7 +56,12 @@ async def main() -> int:
     client = Client(Config(url=os.environ["SR_URL"]))
     try:
         if cmd == "produce":
-            bus = OrdersBus(backend, serde=Serde(client, auto_register=True))
+            mode = sys.argv[4] if len(sys.argv) > 4 else ""
+            if mode not in ("", "lookup", "latest"):
+                print(f"produce mode {mode!r}: want lookup or latest", file=sys.stderr)
+                return 2
+            serde = Serde(client, auto_register=mode == "", use_latest=mode == "latest")
+            bus = OrdersBus(backend, serde=serde)
             await bus.publish_order_shipped(
                 OrderShippedSubject(order_id="o-1001"), OrderShipped(order_id="o-1001", carrier="ups")
             )

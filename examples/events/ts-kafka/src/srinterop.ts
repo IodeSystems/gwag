@@ -3,13 +3,14 @@
 // serializer and deserializer and against the Go srinterop
 // (../../go-kafka/srinterop). Same output lines.
 //
-//   node src/srinterop.ts produce SHIPPED_TOPIC EVENTS_TOPIC [lookup]
+//   node src/srinterop.ts produce SHIPPED_TOPIC EVENTS_TOPIC [lookup|latest]
 //   node src/srinterop.ts consume SHIPPED_TOPIC EVENTS_TOPIC N
 //
 // KAFKA_BROKERS and SR_URL name the broker and the registry. produce
 // registers orders.proto under <topic>-value on first publish (own);
 // with "lookup" it only looks the schema up (the default serde) and
-// fails when it is not registered. consume reads from the start
+// fails when it is not registered; with "latest" it frames with the
+// subject's latest schema (useLatest). consume reads from the start
 // of both topics and prints N lines; the records need not carry gwag
 // headers.
 import { KafkaBackend, topicTable } from "@gwag/events-kafka";
@@ -18,7 +19,7 @@ import { OrdersBus } from "../../ts/src/gen/orders/v1/orders_events.ts";
 
 const [cmd, shipped, evs, arg] = process.argv.slice(2);
 if (!cmd || !shipped || !evs) {
-  console.error("usage: srinterop produce|consume SHIPPED_TOPIC EVENTS_TOPIC [N|lookup]");
+  console.error("usage: srinterop produce|consume SHIPPED_TOPIC EVENTS_TOPIC [N|lookup|latest]");
   process.exit(1);
 }
 const brokers = (process.env.KAFKA_BROKERS ?? "").split(",");
@@ -38,7 +39,7 @@ const registry = new RegistryClient({ url });
 
 try {
   if (cmd === "produce") {
-    const serde = new SchemaRegistrySerde(registry, { autoRegister: arg !== "lookup" });
+    const serde = new SchemaRegistrySerde(registry, arg === "latest" ? { useLatest: true } : { autoRegister: arg !== "lookup" });
     const bus = new OrdersBus(backend, { serde });
     await bus.publishOrderShipped({ orderId: "o-1001" }, { orderId: "o-1001", carrier: "ups" });
     await bus.publishOrderEvents({ orderId: "o-1001" }, { type: "orders.v1.OrderCreated", value: { orderId: "o-1001", customer: "ann" } });
