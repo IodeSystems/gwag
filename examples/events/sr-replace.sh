@@ -7,12 +7,18 @@
 #    framed with the Confluent registry's ids, written by the Go,
 #    Python and TypeScript serdes (AutoRegister) and by Confluent's own
 #    Python and Java serializers.
-# 2. A gateway (gwag up --schema-registry) imports the registry with
-#    `gwag schema import`. The Confluent registry is stopped.
-# 3. Pointed at gwag: the Go, Python and TypeScript serdes and
-#    Confluent's Python and Java deserializers read the old records
-#    (same ids), and the gwag serdes write new ones in lookup and
-#    latest mode with the imported ids. Writes are refused (READONLY).
+# 2. A gateway (gwag up --schema-registry) imports the registry into
+#    context .corp with `gwag schema import --into .corp`. The
+#    Confluent registry is stopped.
+# 3. Pointed at gwag's .corp context (/schema-registry/contexts/.corp):
+#    the Go, Python and TypeScript serdes and Confluent's Python and
+#    Java deserializers read the old records (same ids), and the gwag
+#    serdes write new ones in lookup and latest mode with the imported
+#    ids.
+# 4. A gwag-owned channel registers in the default context: its id is
+#    the same number as the id of a corp record (forced), and each
+#    record decodes as its own schema through its own URL. Writes
+#    need a token.
 #
 # Needs docker, go, uv, node >= 24 and pnpm. KAFKA_PORT (19092),
 # SR_PORT (18081) and GW_PORT (18090; the next three ports are used
@@ -100,23 +106,29 @@ echo "Confluent ids: $(for s in "${!want_id[@]}"; do printf '%s=%s ' "$s" "${wan
 echo "== gwag up --schema-registry; gwag schema import"
 "$ROOT/bin/gwag" up --addr "127.0.0.1:$GW_PORT" --control-plane "127.0.0.1:$((GW_PORT + 1))" \
   --nats-listen "127.0.0.1:$((GW_PORT + 2))" --nats-cluster "127.0.0.1:$((GW_PORT + 3))" \
-  --data-dir "$GWDIR" --no-context-write --shutdown-delay 0 --schema-registry >"$GWDIR/gwag.log" 2>&1 &
+  --data-dir "$GWDIR" --no-context-write --shutdown-delay 0 --schema-registry --schema-registry-writes >"$GWDIR/gwag.log" 2>&1 &
 GW_PID=$!
 GW="http://127.0.0.1:$GW_PORT/schema-registry"
+GW_CORP="$GW/contexts/.corp"
 for _ in $(seq 120); do
   curl -fsS "$GW/subjects" >/dev/null 2>&1 && break
   sleep 0.5
 done
 curl -fsS "$GW/subjects" >/dev/null || { cat "$GWDIR/gwag.log" >&2; exit 1; }
 TOKEN="$(cat "$GWDIR/admin-token")"
-out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --bearer "$TOKEN")"
+GW_AUTH="http://x:$TOKEN@127.0.0.1:$GW_PORT/schema-registry"
+out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --bearer "$TOKEN" 2>&1 || true)"
+expect "import needs a context" "$out" "--into CONTEXT"
+out="$(curl -sS -u "x:$TOKEN" -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' "$GW/gwag/import" -d '{"schemas":[],"versions":[]}')"
+expect "import into the default context refused" "$out" '"error_code":42205'
+out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
 echo "$out"
-expect "import" "$out" "versions added"
-out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --bearer "$TOKEN")"
+expect "import" "$out" "versions added" "/contexts/.corp"
+out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
 echo "$out"
 expect "import again" "$out" "0 schemas added, 0 versions added"
 for s in "${!want_id[@]}"; do
-  got="$(id_of "$GW" "$s")"
+  got="$(id_of "$GW_CORP" "$s")"
   if [[ "$got" == "${want_id[$s]}" ]]; then
     echo "ok   id preserved: $s-value id $got"
   else
@@ -125,14 +137,14 @@ for s in "${!want_id[@]}"; do
   fi
 done
 docker stop "$SRC" >/dev/null
-echo "== Confluent registry stopped; everything below uses $GW"
-export SR_URL="$GW"
+echo "== Confluent registry stopped; the corp topics use $GW_CORP"
+export SR_URL="$GW_CORP"
 
-out="$(curl -fsS "$GW/mode")"
-expect "mode" "$out" '"mode":"READONLY"'
-out="$(curl -sS -u "x:$TOKEN" -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' "$GW/subjects/new-value/versions" \
+out="$(curl -fsS "$GW/contexts")"
+expect "contexts" "$out" '[".",".corp"]'
+out="$(curl -sS -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' "$GW/subjects/new-value/versions" \
   -d '{"schemaType":"PROTOBUF","schema":"syntax = \"proto3\"; message N {}"}')"
-expect "register refused" "$out" '"error_code":42205'
+expect "register without a token refused" "$out" '"error_code":40101'
 
 echo "== old records decode against gwag"
 out="$(go_sr consume cf-shipped cf-events 2)"
@@ -160,8 +172,8 @@ expect "Confluent Python deserializer reads via gwag" "$out" \
   "confluent orders.v1.OrderCreated: order_id=o-1001 customer=ann"
 java_out=""
 for topic in go-shipped corp-orders; do
-  o="$(java_read "$topic" "$GW")"
-  echo "java kafka-protobuf-console-consumer $topic (registry $GW): $o"
+  o="$(java_read "$topic" "$GW_CORP")"
+  echo "java kafka-protobuf-console-consumer $topic (registry $GW_CORP): $o"
   java_out+="$o"$'\n'
 done
 expect "Confluent Java deserializer reads via gwag" "$java_out" \
@@ -190,5 +202,44 @@ for pair in "go_sr go-shipped go-events" "go_sr py-shipped py-events" "py_sr ts-
     fail=1
   fi
 done
+
+echo "== a gwag-owned channel in the default context, ids clashing with .corp's"
+# The default context holds the control plane schema (id 1). Burn ids
+# so the owned channel's orders.proto gets the id of the corp-orders
+# records (corp.orders.v1.Order in .corp): options.proto takes T-1,
+# orders.proto T.
+T="${want_id[corp-orders]}"
+cp_id="$(curl -fsS "$GW/subjects/gateway.controlplane.v1.ControlPlane/versions/latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
+expect "control plane is the first default-context schema" "id $cp_id" "id 1"
+for i in $(seq 2 $((T - 2))); do
+  curl -fsS -u "x:$TOKEN" -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' "$GW/subjects/gwag-filler-$i-value/versions" \
+    -d "{\"schemaType\":\"PROTOBUF\",\"schema\":\"syntax = \\\"proto3\\\"; package gwagfiller; message G$i {}\"}" >/dev/null
+done
+SR_URL="$GW_AUTH" go_sr produce own-shipped own-events
+own_id="$(id_of "$GW" own-shipped)"
+if [[ "$own_id" == "$T" ]]; then
+  echo "ok   own-shipped-value is default-context id $own_id, the id of corp-orders-value in .corp"
+else
+  echo "FAIL own-shipped-value id $own_id, want $T (to clash with corp-orders-value)" >&2
+  fail=1
+fi
+expect "default id $T is gwag's schema" "$(curl -fsS "$GW/schemas/ids/$T")" "package orders.v1"
+expect ".corp id $T is corp's schema" "$(curl -fsS "$GW_CORP/schemas/ids/$T")" "package corp.orders.v1"
+out="$(SR_URL="$GW" go_sr consume own-shipped own-events 2)"
+echo "$out"
+expect "Go reads the owned channel via $GW" "$out" "OrderShipped o-1001 via ups (key events.orders.o-1001.shipped, schema id $T,"
+out="$(SR_URL="$GW" py_sr consume own-shipped own-events 2)"
+expect "Python reads the owned channel via $GW" "$out" "OrderShipped o-1001 via ups (key events.orders.o-1001.shipped, schema id $T,"
+o="$(java_read own-shipped "$GW")"
+echo "java own-shipped (registry $GW): $o"
+expect "Confluent Java reads the owned channel via $GW" "$o" '{"orderId":"o-1001","carrier":"ups"}'
+o="$(java_read corp-orders "$GW_CORP")"
+echo "java corp-orders (registry $GW_CORP): $o"
+expect "Confluent Java reads corp id $T via $GW_CORP" "$o" '"orderId":"o-3001"'
+# Confluent's ?subject= rule: at the root URL, a subject only .corp
+# holds names .corp's id.
+o="$(java_read corp-orders "$GW")"
+echo "java corp-orders (registry $GW): $o"
+expect "Confluent Java reads corp id $T via $GW (subject in .corp only)" "$o" '"orderId":"o-3001"'
 
 if [[ $fail == 0 ]]; then echo PASS; else echo FAILED >&2; exit 1; fi
