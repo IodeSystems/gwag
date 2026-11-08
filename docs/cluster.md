@@ -497,7 +497,10 @@ JetStream stream of a named channel the whole time, and an app key
 created on green. Result: 33410 GraphQL calls, 0 failed; 4036 events
 acked, all in the stream, none twice; stable marks and the app key
 unchanged; every stream at R3 on green; level 0 until finalize, then 1
-with delete markers on. Not tested: a swap between two versions that
+with delete markers on. After each evacuation the test also checks that
+every bucket and stream is at R3 and on no evacuated node; with the
+evacuation record and buckets created at the cluster's count, that
+held in 3 of 3 runs. Not tested: a swap between two versions that
 both have feature levels (that is the next release), and a swap with
 `--cluster-replicas` other than `odd`.
 
