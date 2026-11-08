@@ -22,6 +22,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Side says which way gwag uses the topic.
+type Shadow_Side int32
+
+const (
+	// gwag reads the topic. The copy may leave fields out; every field
+	// it keeps must match the registry's (number, type, cardinality,
+	// enum values). A field the registry does not have is an error.
+	Shadow_CONSUMER Shadow_Side = 0
+	// gwag writes the topic. The registry's compatibility API must
+	// accept the copy at the subject's compatibility level.
+	Shadow_PRODUCER Shadow_Side = 1
+)
+
+// Enum value maps for Shadow_Side.
+var (
+	Shadow_Side_name = map[int32]string{
+		0: "CONSUMER",
+		1: "PRODUCER",
+	}
+	Shadow_Side_value = map[string]int32{
+		"CONSUMER": 0,
+		"PRODUCER": 1,
+	}
+)
+
+func (x Shadow_Side) Enum() *Shadow_Side {
+	p := new(Shadow_Side)
+	*p = x
+	return p
+}
+
+func (x Shadow_Side) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Shadow_Side) Descriptor() protoreflect.EnumDescriptor {
+	return file_gw_proto_ps_v1_options_proto_enumTypes[0].Descriptor()
+}
+
+func (Shadow_Side) Type() protoreflect.EnumType {
+	return &file_gw_proto_ps_v1_options_proto_enumTypes[0]
+}
+
+func (x Shadow_Side) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Shadow_Side.Descriptor instead.
+func (Shadow_Side) EnumDescriptor() ([]byte, []int) {
+	return file_gw_proto_ps_v1_options_proto_rawDescGZIP(), []int{1, 0}
+}
+
 // ChannelBinding is the proto-declarative payload-type binding the
 // gateway extracts at slot bake. A message whose options carry
 // `(gwag.ps.binding) = { pattern: "events.orders.*.update" }` declares
@@ -100,6 +152,101 @@ func (x *ChannelBinding) GetName() string {
 	return ""
 }
 
+// Shadow declares that a message is gwag's copy of a message another
+// team owns in a Confluent Schema Registry. `gwag schema check` reads
+// it and compares the two. The gateway and generated code ignore it.
+//
+//	option (gwag.ps.v1.shadow) = {
+//	  registry: "corp"          // a name; --registry corp=URL gives the URL
+//	  subject: "orders-value"
+//	  version: "latest"         // or "3"
+//	};
+//
+// The registry URL is not in the proto, so one proto serves every
+// environment.
+type Shadow struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Registry name. `gwag schema check --registry NAME=URL` maps it to
+	// a URL. Required.
+	Registry string `protobuf:"bytes,1,opt,name=registry,proto3" json:"registry,omitempty"`
+	// Schema Registry subject, e.g. "orders-value". Required.
+	Subject string `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
+	// Subject version: "latest" (default) or a number.
+	Version string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	// Full name of the registry message this message copies. Default:
+	// the registry message with the same simple name, else the schema's
+	// first message.
+	Message       string      `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Side          Shadow_Side `protobuf:"varint,5,opt,name=side,proto3,enum=gwag.ps.v1.Shadow_Side" json:"side,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Shadow) Reset() {
+	*x = Shadow{}
+	mi := &file_gw_proto_ps_v1_options_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Shadow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Shadow) ProtoMessage() {}
+
+func (x *Shadow) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_ps_v1_options_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Shadow.ProtoReflect.Descriptor instead.
+func (*Shadow) Descriptor() ([]byte, []int) {
+	return file_gw_proto_ps_v1_options_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Shadow) GetRegistry() string {
+	if x != nil {
+		return x.Registry
+	}
+	return ""
+}
+
+func (x *Shadow) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *Shadow) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *Shadow) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *Shadow) GetSide() Shadow_Side {
+	if x != nil {
+		return x.Side
+	}
+	return Shadow_CONSUMER
+}
+
 var file_gw_proto_ps_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -107,6 +254,14 @@ var file_gw_proto_ps_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Field:         51234,
 		Name:          "gwag.ps.v1.binding",
 		Tag:           "bytes,51234,opt,name=binding",
+		Filename:      "gw/proto/ps/v1/options.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
+		ExtensionType: (*Shadow)(nil),
+		Field:         51235,
+		Name:          "gwag.ps.v1.shadow",
+		Tag:           "bytes,51235,opt,name=shadow",
 		Filename:      "gw/proto/ps/v1/options.proto",
 	},
 }
@@ -120,6 +275,8 @@ var (
 	//
 	// optional gwag.ps.v1.ChannelBinding binding = 51234;
 	E_Binding = &file_gw_proto_ps_v1_options_proto_extTypes[0]
+	// optional gwag.ps.v1.Shadow shadow = 51235;
+	E_Shadow = &file_gw_proto_ps_v1_options_proto_extTypes[1]
 )
 
 var File_gw_proto_ps_v1_options_proto protoreflect.FileDescriptor
@@ -130,8 +287,18 @@ const file_gw_proto_ps_v1_options_proto_rawDesc = "" +
 	"gwag.ps.v1\x1a google/protobuf/descriptor.proto\">\n" +
 	"\x0eChannelBinding\x12\x18\n" +
 	"\apattern\x18\x01 \x01(\tR\apattern\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name:Z\n" +
-	"\abinding\x12\x1f.google.protobuf.MessageOptions\x18\xa2\x90\x03 \x01(\v2\x1a.gwag.ps.v1.ChannelBindingR\abinding\x88\x01\x01B4Z2github.com/iodesystems/gwag/v2/gw/proto/ps/v1;psv1b\x06proto3"
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xc3\x01\n" +
+	"\x06Shadow\x12\x1a\n" +
+	"\bregistry\x18\x01 \x01(\tR\bregistry\x12\x18\n" +
+	"\asubject\x18\x02 \x01(\tR\asubject\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12+\n" +
+	"\x04side\x18\x05 \x01(\x0e2\x17.gwag.ps.v1.Shadow.SideR\x04side\"\"\n" +
+	"\x04Side\x12\f\n" +
+	"\bCONSUMER\x10\x00\x12\f\n" +
+	"\bPRODUCER\x10\x01:Z\n" +
+	"\abinding\x12\x1f.google.protobuf.MessageOptions\x18\xa2\x90\x03 \x01(\v2\x1a.gwag.ps.v1.ChannelBindingR\abinding\x88\x01\x01:P\n" +
+	"\x06shadow\x12\x1f.google.protobuf.MessageOptions\x18\xa3\x90\x03 \x01(\v2\x12.gwag.ps.v1.ShadowR\x06shadow\x88\x01\x01B4Z2github.com/iodesystems/gwag/v2/gw/proto/ps/v1;psv1b\x06proto3"
 
 var (
 	file_gw_proto_ps_v1_options_proto_rawDescOnce sync.Once
@@ -145,19 +312,25 @@ func file_gw_proto_ps_v1_options_proto_rawDescGZIP() []byte {
 	return file_gw_proto_ps_v1_options_proto_rawDescData
 }
 
-var file_gw_proto_ps_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_gw_proto_ps_v1_options_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_gw_proto_ps_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_gw_proto_ps_v1_options_proto_goTypes = []any{
-	(*ChannelBinding)(nil),              // 0: gwag.ps.v1.ChannelBinding
-	(*descriptorpb.MessageOptions)(nil), // 1: google.protobuf.MessageOptions
+	(Shadow_Side)(0),                    // 0: gwag.ps.v1.Shadow.Side
+	(*ChannelBinding)(nil),              // 1: gwag.ps.v1.ChannelBinding
+	(*Shadow)(nil),                      // 2: gwag.ps.v1.Shadow
+	(*descriptorpb.MessageOptions)(nil), // 3: google.protobuf.MessageOptions
 }
 var file_gw_proto_ps_v1_options_proto_depIdxs = []int32{
-	1, // 0: gwag.ps.v1.binding:extendee -> google.protobuf.MessageOptions
-	0, // 1: gwag.ps.v1.binding:type_name -> gwag.ps.v1.ChannelBinding
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	1, // [1:2] is the sub-list for extension type_name
-	0, // [0:1] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: gwag.ps.v1.Shadow.side:type_name -> gwag.ps.v1.Shadow.Side
+	3, // 1: gwag.ps.v1.binding:extendee -> google.protobuf.MessageOptions
+	3, // 2: gwag.ps.v1.shadow:extendee -> google.protobuf.MessageOptions
+	1, // 3: gwag.ps.v1.binding:type_name -> gwag.ps.v1.ChannelBinding
+	2, // 4: gwag.ps.v1.shadow:type_name -> gwag.ps.v1.Shadow
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	3, // [3:5] is the sub-list for extension type_name
+	1, // [1:3] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_gw_proto_ps_v1_options_proto_init() }
@@ -170,13 +343,14 @@ func file_gw_proto_ps_v1_options_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gw_proto_ps_v1_options_proto_rawDesc), len(file_gw_proto_ps_v1_options_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   1,
-			NumExtensions: 1,
+			NumEnums:      1,
+			NumMessages:   2,
+			NumExtensions: 2,
 			NumServices:   0,
 		},
 		GoTypes:           file_gw_proto_ps_v1_options_proto_goTypes,
 		DependencyIndexes: file_gw_proto_ps_v1_options_proto_depIdxs,
+		EnumInfos:         file_gw_proto_ps_v1_options_proto_enumTypes,
 		MessageInfos:      file_gw_proto_ps_v1_options_proto_msgTypes,
 		ExtensionInfos:    file_gw_proto_ps_v1_options_proto_extTypes,
 	}.Build()

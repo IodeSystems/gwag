@@ -45,3 +45,44 @@ extend google.protobuf.MessageOptions {
   // one is gateway-internal so the in-house range is correct).
   optional ChannelBinding binding = 51234;
 }
+
+// Shadow declares that a message is gwag's copy of a message another
+// team owns in a Confluent Schema Registry. `gwag schema check` reads
+// it and compares the two. The gateway and generated code ignore it.
+//
+//   option (gwag.ps.v1.shadow) = {
+//     registry: "corp"          // a name; --registry corp=URL gives the URL
+//     subject: "orders-value"
+//     version: "latest"         // or "3"
+//   };
+//
+// The registry URL is not in the proto, so one proto serves every
+// environment.
+message Shadow {
+  // Registry name. `gwag schema check --registry NAME=URL` maps it to
+  // a URL. Required.
+  string registry = 1;
+  // Schema Registry subject, e.g. "orders-value". Required.
+  string subject = 2;
+  // Subject version: "latest" (default) or a number.
+  string version = 3;
+  // Full name of the registry message this message copies. Default:
+  // the registry message with the same simple name, else the schema's
+  // first message.
+  string message = 4;
+  // Side says which way gwag uses the topic.
+  enum Side {
+    // gwag reads the topic. The copy may leave fields out; every field
+    // it keeps must match the registry's (number, type, cardinality,
+    // enum values). A field the registry does not have is an error.
+    CONSUMER = 0;
+    // gwag writes the topic. The registry's compatibility API must
+    // accept the copy at the subject's compatibility level.
+    PRODUCER = 1;
+  }
+  Side side = 5;
+}
+
+extend google.protobuf.MessageOptions {
+  optional Shadow shadow = 51235;
+}

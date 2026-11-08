@@ -2,17 +2,17 @@
 // @generated from file gw/proto/ps/v1/options.proto (package gwag.ps.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenExtension, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { extDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenExtension, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, extDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { MessageOptions } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_descriptor } from "@bufbuild/protobuf/wkt";
-import type { Message } from "@bufbuild/protobuf";
+import type { Message, UnknownEnum } from "@bufbuild/protobuf";
 
 /**
  * Describes the file gw/proto/ps/v1/options.proto.
  */
 export const file_gw_proto_ps_v1_options: GenFile = /*@__PURE__*/
-  fileDesc("Chxndy9wcm90by9wcy92MS9vcHRpb25zLnByb3RvEgpnd2FnLnBzLnYxIi8KDkNoYW5uZWxCaW5kaW5nEg8KB3BhdHRlcm4YASABKAkSDAoEbmFtZRgCIAEoCTpXCgdiaW5kaW5nEh8uZ29vZ2xlLnByb3RvYnVmLk1lc3NhZ2VPcHRpb25zGKKQAyABKAsyGi5nd2FnLnBzLnYxLkNoYW5uZWxCaW5kaW5nUgdiaW5kaW5nQjRaMmdpdGh1Yi5jb20vaW9kZXN5c3RlbXMvZ3dhZy92Mi9ndy9wcm90by9wcy92MTtwc3YxYgZwcm90bzM", [file_google_protobuf_descriptor]);
+  fileDesc("Chxndy9wcm90by9wcy92MS9vcHRpb25zLnByb3RvEgpnd2FnLnBzLnYxIi8KDkNoYW5uZWxCaW5kaW5nEg8KB3BhdHRlcm4YASABKAkSDAoEbmFtZRgCIAEoCSKYAQoGU2hhZG93EhAKCHJlZ2lzdHJ5GAEgASgJEg8KB3N1YmplY3QYAiABKAkSDwoHdmVyc2lvbhgDIAEoCRIPCgdtZXNzYWdlGAQgASgJEiUKBHNpZGUYBSABKA4yFy5nd2FnLnBzLnYxLlNoYWRvdy5TaWRlIiIKBFNpZGUSDAoIQ09OU1VNRVIQABIMCghQUk9EVUNFUhABOlcKB2JpbmRpbmcSHy5nb29nbGUucHJvdG9idWYuTWVzc2FnZU9wdGlvbnMYopADIAEoCzIaLmd3YWcucHMudjEuQ2hhbm5lbEJpbmRpbmdSB2JpbmRpbmc6TQoGc2hhZG93Eh8uZ29vZ2xlLnByb3RvYnVmLk1lc3NhZ2VPcHRpb25zGKOQAyABKAsyEi5nd2FnLnBzLnYxLlNoYWRvd1IGc2hhZG93QjRaMmdpdGh1Yi5jb20vaW9kZXN5c3RlbXMvZ3dhZy92Mi9ndy9wcm90by9wcy92MTtwc3YxYgZwcm90bzM", [file_google_protobuf_descriptor]);
 
 /**
  * @generated from message gwag.ps.v1.ChannelBinding
@@ -37,8 +37,77 @@ export const ChannelBindingSchema: GenMessage<ChannelBinding> = /*@__PURE__*/
   messageDesc(file_gw_proto_ps_v1_options, 0);
 
 /**
+ * @generated from message gwag.ps.v1.Shadow
+ */
+export type Shadow = Message<"gwag.ps.v1.Shadow"> & {
+  /**
+   * @generated from field: string registry = 1;
+   */
+  registry: string;
+
+  /**
+   * @generated from field: string subject = 2;
+   */
+  subject: string;
+
+  /**
+   * @generated from field: string version = 3;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string message = 4;
+   */
+  message: string;
+
+  /**
+   * @generated from field: gwag.ps.v1.Shadow.Side side = 5;
+   */
+  side: Shadow_Side;
+};
+
+/**
+ * Describes the message gwag.ps.v1.Shadow.
+ * Use `create(ShadowSchema)` to create a new message.
+ */
+export const ShadowSchema: GenMessage<Shadow> = /*@__PURE__*/
+  messageDesc(file_gw_proto_ps_v1_options, 1);
+
+/**
+ * @generated from enum gwag.ps.v1.Shadow.Side
+ */
+export const Shadow_Side = {
+  /**
+   * @generated from enum value: CONSUMER = 0;
+   */
+  CONSUMER: 0,
+
+  /**
+   * @generated from enum value: PRODUCER = 1;
+   */
+  PRODUCER: 1,
+} as const;
+
+/**
+ * @generated from enum gwag.ps.v1.Shadow.Side
+ */
+export type Shadow_Side = (typeof Shadow_Side)[keyof typeof Shadow_Side] | UnknownEnum;
+
+/**
+ * Describes the enum gwag.ps.v1.Shadow.Side.
+ */
+export const Shadow_SideSchema: GenEnum<Shadow_Side> = /*@__PURE__*/
+  enumDesc(file_gw_proto_ps_v1_options, 1, 0);
+
+/**
  * @generated from extension: gwag.ps.v1.ChannelBinding binding = 51234;
  */
 export const binding: GenExtension<MessageOptions, ChannelBinding> = /*@__PURE__*/
   extDesc(file_gw_proto_ps_v1_options, 0);
+
+/**
+ * @generated from extension: gwag.ps.v1.Shadow shadow = 51235;
+ */
+export const shadow: GenExtension<MessageOptions, Shadow> = /*@__PURE__*/
+  extDesc(file_gw_proto_ps_v1_options, 1);
 
