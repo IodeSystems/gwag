@@ -165,7 +165,11 @@ func loadClusterLevel(ctx context.Context, js jetstream.JetStream, kv jetstream.
 	}
 	level := clusterLevelMax()
 	if peers, err := js.KeyValue(ctx, peersBucketName); err == nil {
-		entries, err := readPeerEntries(ctx, peers)
+		// Bounded: the key listing is a watch that waits for the
+		// stream without the client's default timeout.
+		kctx, cancel := kvCtx(ctx)
+		entries, err := readPeerEntries(kctx, peers)
+		cancel()
 		if err != nil {
 			return 0, err
 		}
@@ -219,7 +223,13 @@ func readPeerEntries(ctx context.Context, kv jetstream.KeyValue) ([]peerEntry, e
 	for _, k := range keys {
 		e, err := kv.Get(ctx, k)
 		if err != nil {
-			continue
+			// Gone since the listing: nothing to count. Any other
+			// error is not "no peer": skipping an old peer here
+			// would set a level it cannot run at.
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("peers %s: %w", k, err)
 		}
 		var pe peerEntry
 		if json.Unmarshal(e.Value(), &pe) == nil {
