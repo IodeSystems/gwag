@@ -1,0 +1,44 @@
+// gwag's own copy of corp.orders.v1.Order (a shadow). It keeps the
+// fields this service reads and carries a channel binding, so gwag gen
+// writes typed calls for it. `gwag schema check --registry corp=URL`
+// fails if a kept field no longer matches the registry.
+syntax = "proto3";
+
+package shop.v1;
+
+import "gw/proto/ps/v1/options.proto";
+
+option go_package = "github.com/iodesystems/gwag/v2/examples/events/go-kafka/corp/gen/shop/v1;shopv1";
+
+message Money {
+  int64 cents = 1;
+}
+
+message CorpOrder {
+  option (gwag.ps.v1.binding) = {
+    name: "CorpOrders"
+    pattern: "corp-orders"
+  };
+  option (gwag.ps.v1.shadow) = {
+    registry: "corp"
+    subject: "corp-orders-value"
+    message: "corp.orders.v1.Order"
+  };
+  string order_id = 1;
+  Money total = 2;
+}
+
+// What this service would write to the topic. The registry's
+// compatibility API judges it at the subject's level.
+message CorpOrderOut {
+  option (gwag.ps.v1.shadow) = {
+    registry: "corp"
+    subject: "corp-orders-value"
+    message: "corp.orders.v1.Order"
+    side: PRODUCER
+  };
+  string order_id = 1;
+  Money total = 2;
+  repeated string skus = 4;
+  string note = 5;
+}

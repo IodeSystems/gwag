@@ -1,0 +1,20 @@
+// Another team's proto, as their Schema Registry holds it: no gwag
+// options. Records on topic corp-orders, subject corp-orders-value.
+syntax = "proto3";
+
+package corp.orders.v1;
+
+import "corp/common/v1/money.proto";
+
+message Order {
+  string order_id = 1;
+  corp.common.v1.Money total = 2;
+  Status status = 3;
+  repeated string skus = 4;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    PLACED = 1;
+    SHIPPED = 2;
+  }
+}

@@ -1,0 +1,10 @@
+// Another team's proto, as their Schema Registry holds it. gwag does
+// not own it; ../../test.sh registers it with Confluent's serializer.
+syntax = "proto3";
+
+package corp.common.v1;
+
+message Money {
+  int64 cents = 1;
+  string currency = 2;
+}

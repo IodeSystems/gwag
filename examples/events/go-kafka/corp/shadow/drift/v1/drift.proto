@@ -1,0 +1,29 @@
+// Copies that no longer match corp-orders-value. ../../test.sh expects
+// `gwag schema check` to fail on each, with these reasons.
+syntax = "proto3";
+
+package drift.v1;
+
+import "gw/proto/ps/v1/options.proto";
+
+// Consumer side: total became a string, and a field the registry lacks.
+message Order {
+  option (gwag.ps.v1.shadow) = {
+    registry: "corp"
+    subject: "corp-orders-value"
+  };
+  string order_id = 1;
+  string total = 2;
+  string coupon = 9;
+}
+
+// Producer side: order_id changed type.
+message OrderOut {
+  option (gwag.ps.v1.shadow) = {
+    registry: "corp"
+    subject: "corp-orders-value"
+    message: "corp.orders.v1.Order"
+    side: PRODUCER
+  };
+  int64 order_id = 1;
+}

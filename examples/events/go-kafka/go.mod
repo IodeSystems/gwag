@@ -2,11 +2,15 @@ module github.com/iodesystems/gwag/v2/examples/events/go-kafka
 
 go 1.26.2
 
-require github.com/iodesystems/gwag/v2 v2.4.0
+require (
+	github.com/iodesystems/gwag/v2 v2.4.0
+	github.com/twmb/franz-go v1.21.7
+)
 
 require (
-	github.com/twmb/franz-go v1.21.7 // indirect
+	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 )
 
 require (
