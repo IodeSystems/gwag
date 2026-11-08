@@ -563,3 +563,4 @@ See [`CHANGELOG.md`](../CHANGELOG.md).
 - [`services.md`](./services.md) — registering services against a cluster.
 - [`operations.md`](./operations.md) — drain, replicas, metrics.
 - [`admin-auth.md`](./admin-auth.md) — admin roles on the control plane.
+- [`deploy.md`](./deploy.md) — `gwag deploy`: Compose, minikube, Kubernetes and ECS files.

@@ -109,7 +109,9 @@ the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
 Subcommands: `peer list/forget`, `services list`, `schema fetch/diff/check/push`,
 `sign`, `login/logout/context/use`, `gen` (typed event code for
-go / ts / python, see `docs/events.md`).
+go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
+(Compose, minikube, k8s and ECS files from `gw/deploy`; see `docs/deploy.md`),
+`probe` (HTTP health check for shell-less images).
 
 ## Architecture Essentials
 
