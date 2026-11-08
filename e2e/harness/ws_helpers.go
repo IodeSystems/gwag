@@ -59,6 +59,18 @@ func (g *Gateway) Publish(ctx context.Context, channel, payload string, tok Sign
 	return resp.Err()
 }
 
+// PublishTyped calls ps.pub with a payload_type: on a named channel
+// the gateway parses payload as the protojson of that message and
+// publishes the binary proto, which generated listeners decode.
+func (g *Gateway) PublishTyped(ctx context.Context, channel, payload, payloadType string, tok Signed) error {
+	q := fmt.Sprintf(`{ ps { pub(channel: %q, payload: %q, payload_type: %q, %s) { _void } } }`, channel, payload, payloadType, tok.Args())
+	resp, err := g.GraphQL(ctx, q, nil)
+	if err != nil {
+		return err
+	}
+	return resp.Err()
+}
+
 // WSFrame is one graphql-transport-ws message.
 type WSFrame struct {
 	ID      string          `json:"id,omitempty"`

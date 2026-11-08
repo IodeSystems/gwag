@@ -4,6 +4,7 @@
 //   interop.ts publish        # publish the six sample events
 //   interop.ts listen-shared     # group "shared": print one "shared <id>" line per delivery until SIGTERM
 //   interop.ts publish-many N    # publish N OrderShipped events
+//   interop.ts listen-group G    # group G, every channel: print one line per delivery until SIGTERM
 //
 // NATS_URL defaults to nats://127.0.0.1:4222. The Go counterpart is
 // examples/events/go-interop-ts; both print the same lines.
@@ -58,6 +59,30 @@ switch (mode) {
     await bus.publishAudit({ rest: "o-1002.refund" }, { actor: "support", action: "refund" });
     break;
   }
+  case "listen-group": {
+    // The e2e story (e2e/s11_typed_events_test.go) runs this against a
+    // gateway cluster. Same lines as "listen", printed as they arrive.
+    const group = arg;
+    if (!group) {
+      console.error("listen-group needs a group");
+      process.exit(2);
+    }
+    const out = (l: string) => void console.log(l);
+    await bus.onOrderEvents(group, {
+      OrderCreated: (s, m) => out(`OrderEvents ${s.orderId} created by ${m.customer}`),
+      OrderCancelled: (s, m) => out(`OrderEvents ${s.orderId} cancelled: ${m.reason}`),
+    });
+    await bus.onPayments(group, {
+      captured: (s, m) => out(`Payments ${s.region}/${s.p1} captured ${m.amountCents} for ${m.orderId}`),
+      refunded: (s, m) => out(`Payments ${s.region}/${s.p1} refunded ${m.amountCents}: ${m.reason}`),
+      note: (s, note) => out(`Payments ${s.region}/${s.p1} note ${note}`),
+    });
+    await bus.onOrderShipped(group, (s, m) => out(`OrderShipped ${s.orderId} via ${m.carrier}`));
+    await bus.onAudit(group, (s, m) => out(`Audit ${s.rest}: ${m.actor} ${m.action}`));
+    console.log("ready");
+    await new Promise<void>((resolve) => process.on("SIGTERM", resolve));
+    break;
+  }
   case "listen-shared": {
     await bus.onOrderShipped("shared", async (_s, m) => {
       await new Promise((r) => setTimeout(r, 5));
@@ -74,7 +99,7 @@ switch (mode) {
     break;
   }
   default:
-    console.error("usage: interop.ts listen | publish | listen-shared | publish-many N");
+    console.error("usage: interop.ts listen | publish | listen-shared | publish-many N | listen-group G");
     process.exit(2);
 }
 

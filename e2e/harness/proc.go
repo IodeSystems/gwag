@@ -5,6 +5,7 @@ package harness
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,12 +24,14 @@ type Proc struct {
 	Path string
 	Args []string
 
-	t   testing.TB
-	env *Env
+	t    testing.TB
+	env  *Env
+	opts ProcOpts
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
-	done    chan struct{} // closed when the current incarnation exits
+	stdin   io.WriteCloser // with ProcOpts.Stdin
+	done    chan struct{}  // closed when the current incarnation exits
 	state   *os.ProcessState
 	logBuf  bytes.Buffer
 	logFile *os.File
@@ -49,10 +52,29 @@ func (w logWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// ProcOpts are the less common settings of a process started with
+// StartWith.
+type ProcOpts struct {
+	// Dir is the working directory. Default the Env's temp directory.
+	Dir string
+	// Env is added to the test's environment ("K=V").
+	Env []string
+	// Stdin gives the process a pipe as stdin that stays open until
+	// CloseStdin or the process exits. Default /dev/null (a program
+	// that reads stdin to EOF sees EOF at once).
+	Stdin bool
+}
+
 // Start runs bin with args as a managed process named name. The test
 // fails if it cannot start. Every process is SIGKILLed when the test
 // ends; a failed test logs the tail of every process's output.
 func (e *Env) Start(name, bin string, args ...string) *Proc {
+	e.t.Helper()
+	return e.StartWith(name, ProcOpts{}, bin, args...)
+}
+
+// StartWith is Start with ProcOpts.
+func (e *Env) StartWith(name string, opts ProcOpts, bin string, args ...string) *Proc {
 	e.t.Helper()
 	e.mu.Lock()
 	for _, p := range e.procs {
@@ -61,7 +83,7 @@ func (e *Env) Start(name, bin string, args ...string) *Proc {
 			e.t.Fatalf("harness: process name %q already used", name)
 		}
 	}
-	p := &Proc{Name: name, Path: bin, Args: args, t: e.t, env: e}
+	p := &Proc{Name: name, Path: bin, Args: args, t: e.t, env: e, opts: opts}
 	e.procs = append(e.procs, p)
 	e.mu.Unlock()
 	f, err := os.Create(filepath.Join(e.logDir, name+".log"))
@@ -78,6 +100,19 @@ func (e *Env) Start(name, bin string, args ...string) *Proc {
 func (p *Proc) start() error {
 	cmd := exec.Command(p.Path, p.Args...)
 	cmd.Dir = p.env.dir
+	if p.opts.Dir != "" {
+		cmd.Dir = p.opts.Dir
+	}
+	if len(p.opts.Env) > 0 {
+		cmd.Env = append(os.Environ(), p.opts.Env...)
+	}
+	var stdin io.WriteCloser
+	if p.opts.Stdin {
+		var err error
+		if stdin, err = cmd.StdinPipe(); err != nil {
+			return err
+		}
+	}
 	cmd.Stdout = logWriter{p}
 	cmd.Stderr = logWriter{p}
 	cmd.SysProcAttr = sysProcAttr()
@@ -96,7 +131,7 @@ func (p *Proc) start() error {
 	}
 	done := make(chan struct{})
 	p.mu.Lock()
-	p.cmd, p.done, p.state = cmd, done, nil
+	p.cmd, p.done, p.state, p.stdin = cmd, done, nil, stdin
 	p.mu.Unlock()
 	go func() {
 		_ = cmd.Wait()
@@ -188,6 +223,18 @@ func (p *Proc) Restart() {
 	}
 	if err := p.start(); err != nil {
 		p.t.Fatalf("harness: restart %s: %v", p.Name, err)
+	}
+}
+
+// CloseStdin closes the stdin pipe of a process started with
+// ProcOpts.Stdin. No-op otherwise.
+func (p *Proc) CloseStdin() {
+	p.mu.Lock()
+	w := p.stdin
+	p.stdin = nil
+	p.mu.Unlock()
+	if w != nil {
+		_ = w.Close()
 	}
 }
 

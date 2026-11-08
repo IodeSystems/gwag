@@ -203,6 +203,9 @@ type GraphNode struct {
 // DesiredEdge is a declared dependency.
 type DesiredEdge struct {
 	ConsumerKind      string   `json:"consumerKind"` // service, external
+	EdgeKind          string   `json:"edgeKind"`     // rpc (depends), channel (subscribes)
+	Channel           string   `json:"channel"`      // channel edges: channel key
+	Group             string   `json:"group"`        // channel edges: consumer group
 	ConsumerNamespace string   `json:"consumerNamespace"`
 	ConsumerVersion   string   `json:"consumerVersion"`
 	Provider          string   `json:"provider"`
