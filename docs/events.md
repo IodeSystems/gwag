@@ -264,8 +264,9 @@ await bus.onPayments("ledger", { captured: async (s, m) => {}, refunded: async (
   plus `unknown`, which gets `(subject, raw)`.
 - Oneof: `XHandlers` has one optional key per case (protobuf-es
   property name) plus `unknown`.
-- `new OrdersBus(backend, { logf })` sets the logger for skipped
-  messages (default `console.warn`).
+- `new OrdersBus(backend, { logf, serde })` sets the logger for skipped
+  messages (default `console.warn`) and the wire format (default plain
+  proto; see [Schema Registry](#schema-registry-wire-format)).
 - 64-bit integers are `bigint`.
 
 ### Python
@@ -359,14 +360,15 @@ stop = await bus.on_payments("ledger", captured=on_captured, note=on_note)
 
 Body: proto binary. The format is the same in all three languages, so
 a Go publisher can feed a Python listener and the reverse. A Serde
-changes the body, not the headers: the Go runtime has Confluent
-Schema Registry framing ([below](#schema-registry-wire-format)).
+changes the body, not the headers: the Go and TypeScript runtimes have
+Confluent Schema Registry framing ([below](#schema-registry-wire-format)).
 
 ## Backends
 
 All three runtimes have the same three backends: JetStream, memory
-and Kafka. Kafka is a supported package in Go (`events/kafka`, see
-[Kafka](#kafka)) and an example to copy in TypeScript and Python.
+and Kafka. Kafka is a supported package in Go (`events/kafka`) and
+TypeScript (`@gwag/events-kafka`, see [Kafka](#kafka)) and an example
+to copy in Python.
 
 - **JetStream** — one stream per channel named
   `EV_<package with . as _>_<name>` (`EV_orders_v1_OrderEvents`),
@@ -384,15 +386,16 @@ and Kafka. Kafka is a supported package in Go (`events/kafka`, see
   consumer group `<stream>.<group>`, retries in process (the
   partition waits), DLQ topic `gwag.dlq.<stream>`. No dedup: Kafka
   does not drop a repeated `Gwag-Msg-Id`. Each `test.sh` runs against
-  `apache/kafka` in docker. Go changes all of this per channel; see
-  [Kafka](#kafka).
+  `apache/kafka` in docker. Go and TypeScript change all of this per
+  channel; see [Kafka](#kafka).
 
 | | Go | TypeScript | Python |
 |---|---|---|---|
 | JetStream | `jetstream.New(nc, jetstream.WithPrefetch(n))` | `new JetStreamBackend(nc, { prefetch?, logf? })` | `JetStreamBackend(nc, prefetch=16, logf=)` |
 | Memory | `memory.New()`, `DeadLetters()` | `new MemoryBackend()`, `deadLetters()` | `MemoryBackend()`, `dead_letters()` |
 | Backend suite | `events/eventstest.Run` | `runBackendSuite` from `@gwag/events/eventstest` | `gwag_events.testing.CHECKS` |
-| Kafka | [`events/kafka`](../events/kafka) (franz-go, own module); example [`go-kafka`](../examples/events/go-kafka) | example [`ts-kafka`](../examples/events/ts-kafka) (kafkajs) | example [`py-kafka`](../examples/events/py-kafka) (aiokafka) |
+| Kafka | [`events/kafka`](../events/kafka) (franz-go, own module); example [`go-kafka`](../examples/events/go-kafka) | [`ts/events-kafka/`](../ts/events-kafka) (`@gwag/events-kafka`, kafkajs); example [`ts-kafka`](../examples/events/ts-kafka) | example [`py-kafka`](../examples/events/py-kafka) (aiokafka) |
+| Schema Registry | [`events/schemaregistry`](../events/schemaregistry) | [`ts/events-schemaregistry/`](../ts/events-schemaregistry) (`@gwag/events-schemaregistry`) | |
 | Runtime | `events/` (`events/jetstream`, `events/memory`) | [`ts/events/`](../ts/events) | [`py/gwag-events/`](../py/gwag-events) |
 
 `nc` is a `*nats.Conn` (Go), a `@nats-io/transport-node` connection
@@ -417,7 +420,7 @@ the backend suite against any new backend.
 
 ## Schema Registry
 
-Go only for now. TypeScript and Python follow.
+Go and TypeScript for now. Python follows.
 
 A Kafka topic often has a schema in a Confluent Schema Registry. How
 gwag uses that schema depends on one question: **who produces the
@@ -439,7 +442,9 @@ takes the message type from the schema id and message index, so typed
 handlers and union dispatch work on them.
 
 The examples below are in [`examples/events/go-kafka`](../examples/events/go-kafka)
-and run against `cp-schema-registry` in `test.sh`.
+and [`examples/events/ts-kafka`](../examples/events/ts-kafka) and run
+against `cp-schema-registry` in `go-kafka/test.sh` and
+`ts-kafka/sr-test.sh`.
 
 ### Own
 
@@ -460,11 +465,23 @@ err := bus.PublishOrderEvents(ctx, ordersv1.OrderEventsSubject{OrderId: "o-1001"
     &ordersv1.OrderCreated{OrderId: "o-1001", Customer: "ann"})
 ```
 
+```ts
+import { KafkaBackend } from "@gwag/events-kafka";
+import { RegistryClient, SchemaRegistrySerde } from "@gwag/events-schemaregistry";
+
+const backend = new KafkaBackend(brokers);
+const registry = new RegistryClient({ url: "http://localhost:8081" });
+const bus = new OrdersBus(backend, { serde: new SchemaRegistrySerde(registry, { autoRegister: true }) });
+await bus.publishOrderEvents({ orderId: "o-1001" }, { type: "orders.v1.OrderCreated", value: { orderId: "o-1001", customer: "ann" } });
+```
+
 - The first publish of a file registers it under `<topic>-value`, and
   each import (here `gw/proto/ps/v1/options.proto`) under its import
   path as a reference. Later publishes use the cached id.
-- Without `AutoRegister` the serde only looks the schema up and the
-  publish fails when the subject does not hold it. Register from CI
+- Without `AutoRegister` (`autoRegister` in TypeScript) the serde only
+  looks the schema up and the publish fails when the subject does not
+  hold it. Go and TypeScript register the same bytes, so a schema one
+  registered is found by the other. Register from CI
   instead:
 
   ```bash
@@ -480,7 +497,7 @@ err := bus.PublishOrderEvents(ctx, ordersv1.OrderEventsSubject{OrderId: "o-1001"
 - The registry applies its compatibility level when a new version is
   registered: a publish or push of an incompatible change fails there.
 
-Example: `srinterop produce` and `consume`.
+Example: `srinterop produce` and `consume` (Go and TypeScript).
 
 ### Import
 
@@ -508,6 +525,10 @@ gwag gen --registry "$SR_URL" --subject corp-orders-value --import-dir imported 
   `--bind corp-orders-value=corp.orders.v1.Order,name=Orders,pattern=corp-orders`;
   a subject that is not `<topic>-value` needs `pattern`.
 - Registry protos rarely have `go_package`; give one with `--opt M...`.
+- For TypeScript the same command takes `--lang ts` and the options
+  from [TypeScript notes](#typescript-notes); the copy and its
+  references each get a `_pb.ts`, and the channel an `_events.ts`
+  (`examples/events/ts-kafka/corp/gen.sh`).
 - `gwag gen --lang go ... --import-dir imported` regenerates from the
   committed copy without the registry. `gwag gen --registry URL
   --import-dir imported` without `--subject` fetches the locked
@@ -524,8 +545,17 @@ stop, err := bus.OnOrder(ctx, "shop", func(ctx context.Context, _ corpordersv1.O
 })
 ```
 
+```ts
+const backend = new KafkaBackend(brokers, { topics: topicTable({ "corp.orders.v1.Order": { name: "corp-orders" } }) });
+const bus = new CorpOrdersValueBus(backend, { serde: new SchemaRegistrySerde(registry) });
+await bus.onOrder("shop", (_subject, m, raw) => {
+  console.log(Buffer.from(raw.key!).toString(), m.orderId); // record key, e.g. o-3001
+});
+```
+
 The pattern has no wildcards, so a record without `Gwag-*` headers gets
-the pattern as its subject; the record key is in `Message.Key`.
+the pattern as its subject; the record key is in `Message.Key`
+(`Message.key` in TypeScript).
 
 In CI:
 
@@ -538,7 +568,7 @@ has another id or another text, or is gone. A newer version upstream
 is a note, not a failure: the lock pins on purpose. To move, re-import
 with `--subject corp-orders-value@latest` and review the diff.
 
-Example: `corp import`.
+Example: `corp import` (Go), `corp/main.ts import` (TypeScript).
 
 ### Shadow
 
@@ -591,8 +621,14 @@ handlers get them:
 serde := sr.NewSerde(registry, sr.TypeNames(map[string]string{"corp.orders.v1.Order": "shop.v1.CorpOrder"}))
 ```
 
-Example: `corp shadow`, and `corp/shadow/drift/v1/drift.proto` for
-copies that fail.
+```ts
+const serde = new SchemaRegistrySerde(registry, { typeNames: { "corp.orders.v1.Order": "shop.v1.CorpOrder" } });
+```
+
+Example: `corp shadow` (Go), `corp/main.ts shadow` (TypeScript), and
+`corp/shadow/drift/v1/drift.proto` for copies that fail. TypeScript
+uses the Go example's shadow proto; `gwag schema check` is the same
+command for every language.
 
 ## Kafka
 
@@ -608,17 +644,35 @@ backend, err := kafka.New([]string{"localhost:9092"}, opts...)
 bus := ordersv1.NewBus(backend)
 ```
 
-| Option | Default |
-|---|---|
-| `WithTopics(mapper)` | topic per channel, named by its stream (`EV_orders_v1_OrderEvents`) |
-| `WithPartitions(n)`, `WithReplication(n)` | 3, 1, for topics the backend creates |
-| `WithClientOpts(kgo.Opt...)` | franz-go options for every client: SASL, TLS, client id, timeouts |
-| `WithProducer(*kgo.Client)` | publish through your client (`Close` leaves it open) |
+```ts
+import { KafkaBackend } from "@gwag/events-kafka";
 
-The producer is idempotent with `acks=all` (franz-go's defaults).
+const backend = new KafkaBackend(["localhost:9092"], opts);
+const bus = new OrdersBus(backend);
+```
 
-A mapper returns a `kafka.Topic` per channel; zero fields keep the
-default. `kafka.TopicTable` maps channel keys:
+| Go | TypeScript | Default |
+|---|---|---|
+| `WithTopics(mapper)` | `topics: topicTable({...})` or any `(ch) => Topic` | topic per channel, named by its stream (`EV_orders_v1_OrderEvents`) |
+| `WithPartitions(n)`, `WithReplication(n)` | `partitions`, `replication` | 3, 1, for topics the backend creates |
+| `WithClientOpts(kgo.Opt...)` | `client`: kafkajs options for every client (`ssl`, `sasl`, `clientId`, timeouts, `retry`) | SASL, TLS, client id, timeouts |
+| `WithProducer(*kgo.Client)` | none | publish through your client (`Close` leaves it open) |
+
+The producer is idempotent with `acks=all` (franz-go's defaults). In
+TypeScript it is kafkajs's idempotent producer with `acks: -1` and one
+request in flight, so a retried batch cannot overtake a later one.
+
+`@gwag/events-kafka` is private for now, like `@gwag/events`: depend on
+it by path (`"@gwag/events-kafka": "link:../gwag/ts/events-kafka"`). It
+brings `kafkajs` and `snappyjs`; `@gwag/events` has no Kafka
+dependency. kafkajs reads gzip only, and franz-go compresses with
+Snappy by default, so the package registers a Snappy codec to read
+what a Go service writes. LZ4 and ZSTD need your own codec in kafkajs's
+`CompressionCodecs`.
+
+A mapper returns a `kafka.Topic` (`Topic` in TypeScript) per channel;
+zero fields keep the default. `kafka.TopicTable` (`topicTable`) maps
+channel keys:
 
 ```go
 kafka.WithTopics(kafka.TopicTable(map[string]kafka.Topic{
@@ -633,6 +687,21 @@ kafka.WithTopics(kafka.TopicTable(map[string]kafka.Topic{
         Retry:       func(g string) string { return "orders.lifecycle.v1.retry." + g }, // default gwag.retry.<topic>.<group>
     },
 }))
+```
+
+```ts
+topics: topicTable({
+  "orders.v1.OrderEvents": {
+    name: "orders.lifecycle.v1",                         // default EV_orders_v1_OrderEvents
+    partitions: 12,
+    replication: 3,
+    key: (subject, m) => subject,                        // default: the subject
+    subject: (r) => String(r.key),                       // records from other producers
+    group: (g) => `shop-${g}`,                           // default <topic>.<group>
+    dlq: "orders.lifecycle.v1.dlq",                      // default gwag.dlq.<topic>
+    retry: (g) => `orders.lifecycle.v1.retry.${g}`,      // default gwag.retry.<topic>.<group>
+  },
+}),
 ```
 
 - When `Key` returns something other than the subject, the subject
@@ -651,13 +720,20 @@ backend, err := kafka.New(brokers, kafka.WithClientOpts(
 ))
 ```
 
+```ts
+const backend = new KafkaBackend(brokers, {
+  client: { ssl: true, sasl: { mechanism: "scram-sha-512", username: user, password: pass } },
+});
+```
+
 ### Retries
 
 Chosen per subscribe:
 
-- `kafka.RetryInProcess()` (default) — the subscriber retries with the
-  backoff; later records on that partition wait.
-- `kafka.RetryTopic()` — a failed record goes to the group's retry
+- `kafka.RetryInProcess()` (`retryInProcess()`; default) — the
+  subscriber retries with the backoff; later records on that partition
+  wait.
+- `kafka.RetryTopic()` (`retryTopic()`) — a failed record goes to the group's retry
   topic with `Gwag-Attempt` and `Gwag-Retry-At`, and the partition
   moves on. A second consumer delivers it again when due; after
   `MaxDeliver` failed deliveries it goes to the DLQ. Order per key is
@@ -668,11 +744,16 @@ Chosen per subscribe:
 stop, err := bus.OnOrderEvents(ctx, "billing", handlers, kafka.RetryTopic(), events.MaxDeliver(5))
 ```
 
+```ts
+const stop = await bus.onOrderEvents("billing", handlers, { ...retryTopic(), maxDeliver: 5 });
+```
+
 The backend creates the DLQ and retry topics at subscribe.
 
 ## Schema Registry wire format
 
-`schemaregistry.Serde` writes Confluent's protobuf framing as the body:
+`schemaregistry.Serde` (`SchemaRegistrySerde` in TypeScript) writes
+Confluent's protobuf framing as the body:
 
 | Bytes | Value |
 |---|---|
@@ -687,17 +768,24 @@ and adds `Gwag-Schema-Id` (in the handler only). A body that does not
 start with `0` is plain proto and passes through, so a topic can move
 to framing without a cut-over.
 
-| Option | Meaning |
-|---|---|
-| `sr.Config{URL, Username, Password, Token, TLS, HTTPClient}` | basic auth (also from URL user info), bearer token, TLS config |
-| `WithSubjectNameStrategy(s)` | `TopicNameStrategy` (default, `<topic>-value`), `RecordNameStrategy`, `TopicRecordNameStrategy` |
-| `AutoRegister()` | register on first publish (own) |
-| default | look up only; publish fails when not registered |
-| `UseLatest()` | frame with the subject's latest schema (Confluent's `use.latest.version`) |
-| `UseSchemaID(id)` | frame with a fixed id |
-| `Normalize()` | `normalize=true` on lookups and registrations |
-| `WithReferenceSubject(f)` | subject of an import; default the import path |
-| `TypeNames(map)` | registry type name to local type name (shadow) |
+| Go | TypeScript | Meaning |
+|---|---|---|
+| `sr.Config{URL, Username, Password, Token, TLS, HTTPClient}` | `new RegistryClient({ url, username, password, token, fetch })` | basic auth (also from URL user info), bearer token; Go: TLS config; TypeScript: your own `fetch` (an undici `dispatcher` for a custom CA) |
+| `WithSubjectNameStrategy(s)` | `subjectNameStrategy` | `TopicNameStrategy` (default, `<topic>-value`), `RecordNameStrategy`, `TopicRecordNameStrategy` (TypeScript: `topicNameStrategy`, `recordNameStrategy`, `topicRecordNameStrategy`) |
+| `AutoRegister()` | `autoRegister: true` | register on first publish (own) |
+| default | default | look up only; publish fails when not registered |
+| `UseLatest()` | `useLatest: true` | frame with the subject's latest schema (Confluent's `use.latest.version`) |
+| `UseSchemaID(id)` | `useSchemaId: id` | frame with a fixed id |
+| `Normalize()` | `normalize: true` | `normalize=true` on lookups and registrations |
+| `WithReferenceSubject(f)` | `referenceSubject` | subject of an import; default the import path |
+| `TypeNames(map)` | `typeNames` | registry type name to local type name (shadow) |
+
+TypeScript passes the serde to the bus: `new OrdersBus(backend, { serde })`.
+The serde needs the generated message schema, so publish through a
+generated bus; `core.publish` with only a type name fails. On delivery
+the message type comes from the schema id: the registry's
+`format=serialized` (base64 `FileDescriptorProto`), or the `.proto`
+text when the registry returns text.
 
 Schemas are registered as Confluent's own clients do: base64 of the
 `FileDescriptorProto`, imports as references. `google/protobuf/*`,
@@ -711,6 +799,10 @@ from the environment: `GWAG_REGISTRY_USERNAME` /
 Confluent's own code: the Java `kafka-protobuf-console-consumer` and
 the Python `ProtobufDeserializer` read what gwag writes, and gwag reads
 what the Python `ProtobufSerializer` writes.
+`examples/events/ts-kafka/sr-test.sh` does the same for TypeScript,
+adds the Java console producer, and checks that Go and TypeScript
+produce the same schema (one id, one version) and read each other's
+records.
 
 ## Reporting subscriptions to the gateway
 
@@ -749,11 +841,13 @@ example, runs the TypeScript tests, and then the Python checks.
 | Command | Runs |
 |---|---|
 | `examples/events/check.sh` | everything above; JetStream tests and Go-TypeScript interop need docker and are skipped without it |
-| `KAFKA=1 examples/events/check.sh` | also `go-kafka`, `ts-kafka` and `py-kafka` against `apache/kafka` (docker); `go-kafka` also starts `cp-schema-registry` and needs `uv` (`SR=0` skips that part) |
+| `KAFKA=1 examples/events/check.sh` | also `go-kafka`, `ts-kafka` and `py-kafka` against `apache/kafka` (docker); `go-kafka` and `ts-kafka/sr-test.sh` also start `cp-schema-registry` and need `uv` (`SR=0` skips that part of `go-kafka`) |
 | `PY=0 examples/events/check.sh` | skips Python |
 | `examples/events/py/check.sh` | `uv lock --check`, Python regen and drift check, `mypy --strict`, runtime and example tests on an embedded NATS (no docker), including Go-Python interop (`tests/test_interop.py`: Go to Python, Python to Go, one group split across both); `KAFKA=1` adds `py-kafka` |
 | `examples/events/interop.sh` | Go publisher into TypeScript listener, the reverse, and a Go and a TypeScript member of one group (docker) |
 | `ts/events/test.sh` | TypeScript runtime tests against NATS in docker |
+| `ts/events-kafka/test.sh` | `@gwag/events-kafka` tests against Kafka in docker |
+| `examples/events/ts-kafka/sr-test.sh` | `@gwag/events-schemaregistry` against Kafka and Schema Registry in docker: Go, Confluent (Java, Python) and TypeScript read each other; import and shadow |
 
 The Kafka scripts take `KAFKA_PORT` (default 19092 for Go and
 TypeScript, 19093 for Python) and refuse to start when it is in use.

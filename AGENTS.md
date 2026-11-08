@@ -44,10 +44,12 @@ Typed events:
 
 ```
 examples/events/check.sh               # regen + drift check, Go/TS/Python tests (docker for NATS parts)
-KAFKA=1 examples/events/check.sh       # also go-kafka (+ cp-schema-registry, uv), ts-kafka, py-kafka (docker)
+KAFKA=1 examples/events/check.sh       # also go-kafka (+ cp-schema-registry, uv), ts-kafka (+ sr-test.sh), py-kafka (docker)
 PY=0 examples/events/check.sh          # skip Python (needs uv)
 (cd events/kafka && go test ./...)     # own module; Kafka tests skip without KAFKA_BROKERS
 SR_URL=http://... go test ./events/schemaregistry/   # against a real registry (default: in-memory fake)
+(cd ts/events-kafka && pnpm test)      # @gwag/events-kafka (kafkajs); Kafka tests skip without KAFKA_BROKERS
+(cd ts/events-schemaregistry && pnpm test)  # @gwag/events-schemaregistry; SR_URL for a real registry
 ```
 
 No linter config (.golangci, etc.) — just `go vet`. No Makefile.

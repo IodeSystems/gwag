@@ -4,7 +4,7 @@
 # JetStream example.
 #
 #   examples/events/check.sh          # Go, JetStream (embedded NATS)
-#   KAFKA=1 examples/events/check.sh  # also go-kafka, ts-kafka and py-kafka (docker)
+#   KAFKA=1 examples/events/check.sh  # also go-kafka, ts-kafka (with Schema Registry) and py-kafka (docker)
 #   PY=0 examples/events/check.sh     # skip the Python checks
 #
 # Needs go; node >= 24 with pnpm for the TypeScript part; uv for the
@@ -78,6 +78,11 @@ echo "== typecheck + tests (ts/events, examples/events/ts)"
 (cd examples/events/ts && pnpm typecheck) || fail=1
 (cd examples/events/ts && pnpm test) || fail=1
 
+echo "== typecheck + tests (ts/events-kafka, ts/events-schemaregistry; no Kafka)"
+for d in ts/events-kafka ts/events-schemaregistry; do
+  (cd "$d" && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm test) || fail=1
+done
+
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   echo "== ts/events JetStream tests (docker)"
   ts/events/test.sh || fail=1
@@ -92,6 +97,8 @@ if [[ "${KAFKA:-}" == 1 ]]; then
   examples/events/go-kafka/test.sh || fail=1
   echo "== ts-kafka (docker)"
   examples/events/ts-kafka/test.sh || fail=1
+  echo "== ts-kafka Schema Registry, Go and Confluent interop (docker, uv)"
+  examples/events/ts-kafka/sr-test.sh || fail=1
 fi
 
 # Python: needs uv. PY=0 skips it. With KAFKA=1 it also runs py-kafka.
