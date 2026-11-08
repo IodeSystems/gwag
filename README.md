@@ -309,7 +309,7 @@ methods stay as per-subscriber gRPC streams. See
 
 **Typed event channels** — `gwag gen` writes typed publish / listen
 code for Go, TypeScript and Python from proto annotations, over NATS
-JetStream, memory or Kafka. See [`docs/events.md`](./docs/events.md).
+JetStream, memory or Kafka. See [`docs/events.md`](./docs/events.md); Kafka and Schema Registry in [`docs/events-kafka.md`](./docs/events-kafka.md).
 
 **Stability + release**:
 

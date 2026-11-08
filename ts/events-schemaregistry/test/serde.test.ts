@@ -226,3 +226,16 @@ test("client: basic auth from the URL, bearer token, not-found errors", async ()
     f.server.close();
   }
 });
+
+test("autoRegister, useLatest and useSchemaId are mutually exclusive", () => {
+  const c = registry();
+  const msg = "schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one";
+  for (const o of [
+    { autoRegister: true, useLatest: true },
+    { useSchemaId: 3, autoRegister: true },
+    { useLatest: true, useSchemaId: 3 },
+  ]) {
+    assert.throws(() => new SchemaRegistrySerde(c, o), { message: msg });
+  }
+  new SchemaRegistrySerde(c, { useLatest: true, autoRegister: false });
+});

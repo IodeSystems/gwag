@@ -86,6 +86,10 @@ export class SchemaRegistrySerde implements Serde {
   readonly #ids = new Map<string, Promise<Encoding>>();
 
   constructor(client: RegistryClient, opts: SerdeOptions = {}) {
+    const modes = [opts.autoRegister === true, opts.useLatest === true, opts.useSchemaId !== undefined];
+    if (modes.filter(Boolean).length > 1) {
+      throw new Error("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one");
+    }
     this.client = client;
     this.#o = opts;
     this.#strategy = opts.subjectNameStrategy ?? topicNameStrategy;

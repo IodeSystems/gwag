@@ -3,8 +3,8 @@
 // byte 0, a 4-byte big-endian schema id, the message-index array, then
 // the proto body. It uses net/http only.
 //
-// Who produces the topic decides how it is used (docs/events.md,
-// "Schema Registry"): own (gwag registers its protos), import (gwag
+// Who produces the topic decides how it is used (docs/events-kafka.md,
+// "Who produces the topic?"): own (gwag registers its protos), import (gwag
 // reads a pinned copy of another team's schema), shadow (gwag keeps its
 // own copy and `gwag schema check` compares it).
 //

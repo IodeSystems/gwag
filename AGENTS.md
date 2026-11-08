@@ -167,7 +167,7 @@ go / ts / python, see `docs/events.md`).
   --subject S[@V]` (import, lock file), `gwag gen --check-lock`,
   `gwag schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
   `gwag schema push --registry URL` (own). The bus is open: authorship
-  is the application's job. See `docs/events.md`.
+  is the application's job. See `docs/events.md` and `docs/events-kafka.md`.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`
   is `mcp`, the slot owns the live client (a subprocess for stdio).

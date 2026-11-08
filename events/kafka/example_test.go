@@ -44,6 +44,10 @@ func Example_saslTLS() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	core := events.NewCore(backend, events.WithSerde(sr.NewSerde(registry, sr.AutoRegister())))
+	serde, err := sr.NewSerde(registry, sr.AutoRegister())
+	if err != nil {
+		log.Fatal(err)
+	}
+	core := events.NewCore(backend, events.WithSerde(serde))
 	_ = core // ordersv1.NewBus(backend, events.WithSerde(...)) in a real service
 }

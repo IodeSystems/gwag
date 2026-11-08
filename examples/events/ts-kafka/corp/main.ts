@@ -1,6 +1,6 @@
 // Reads topic corp-orders, which another team produces with Confluent's
 // serializer (subject corp-orders-value, message corp.orders.v1.Order).
-// Two ways, one per row of docs/events.md "Who produces the topic?":
+// Two ways, one per row of docs/events-kafka.md "Who produces the topic?":
 //
 //   node corp/main.ts import TOPIC   # typed code from a pinned copy of the subject
 //   node corp/main.ts shadow TOPIC   # typed code from gwag's own copy, go-kafka/corp/shadow/shop/v1/order.proto
