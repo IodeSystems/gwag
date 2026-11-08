@@ -264,6 +264,33 @@ func idContext(ctx context.Context, st *Store, subject string, id int) (*Store, 
 	return st, nil
 }
 
+// readContext is the context a GET of one version of an unqualified
+// subject reads, as Confluent picks it at the root URL: the default
+// context when it holds the subject, else the first other context that
+// does. A reader pointed at the root URL then still resolves the
+// references of a schema it fetched from another context by id.
+func readContext(ctx context.Context, st *Store, subject string) *Store {
+	if !st.Default() {
+		return st
+	}
+	if _, err := st.Versions(ctx, subject, true); err == nil {
+		return st
+	}
+	names, err := st.Contexts(ctx)
+	if err != nil {
+		return st
+	}
+	for _, n := range names {
+		if n == st.Name() {
+			continue
+		}
+		if _, err := st.Context(n).Versions(ctx, subject, true); err == nil {
+			return st.Context(n)
+		}
+	}
+	return st
+}
+
 // route serves seg in context st. /contexts/{context}/... serves the
 // rest of the path in that context; a qualified subject (":.corp:s")
 // anywhere a subject goes names its own context.
@@ -548,12 +575,16 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 		writeJSON(w, 200, subs)
 		return nil
 	}
+	qualified := strings.HasPrefix(seg[0], ":")
 	st, subject, err := st.At(seg[0])
 	if err != nil {
 		return err
 	}
 	if subject == "" {
 		return errf(codeSubjectNotFound, "Subject '%s' not found.", seg[0])
+	}
+	if len(seg) >= 3 && get && !qualified {
+		st = readContext(ctx, st, subject)
 	}
 	if len(seg) == 1 {
 		switch r.Method {

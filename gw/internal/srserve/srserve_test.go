@@ -456,6 +456,15 @@ func TestImportContextKeepsOwnIDs(t *testing.T) {
 	if v, err := root.SubjectVersion(ctx, ":.corp:corp-value", "latest", ""); err != nil || v.ID != cid || !strings.Contains(v.Schema, "message Corp") {
 		t.Errorf("qualified subject: %+v %v", v, err)
 	}
+	// At the root URL, a version of a subject only .corp holds reads
+	// from .corp (Confluent's rule: a reader resolves the references of
+	// a schema it fetched by id); the version list does not.
+	if v, err := root.SubjectVersion(ctx, "corp-value", "latest", ""); err != nil || v.ID != cid || v.Subject != ":.corp:corp-value" {
+		t.Errorf("root read of a .corp subject: %+v %v", v, err)
+	}
+	if _, err := root.Versions(ctx, "corp-value", false); code(err) != 40401 {
+		t.Errorf("root version list of a .corp subject: %v", err)
+	}
 	// The default counter does not move above the import.
 	if nv, err := st.Register(ctx, "next-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"}); err != nil || nv.ID != 2 {
 		t.Errorf("next default id: %+v %v, want 2", nv, err)
