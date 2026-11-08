@@ -52,6 +52,7 @@ func TestSelfRegister_SendsManifest(t *testing.T) {
 				Depends:     []Dependency{{Service: "library", Lines: []string{"v1", "v2"}}},
 				Owner:       &Owner{Team: "orders", Contact: "#orders"},
 				Public:      true,
+				Subscribes:  []Subscription{{Channel: "billing.v1.Charges", Group: "orders"}},
 			},
 			{Namespace: "plain", OpenAPISpec: []byte(`{}`)},
 		},
@@ -78,8 +79,11 @@ func TestSelfRegister_SendsManifest(t *testing.T) {
 	if !b.GetPublic() {
 		t.Error("public=false, want true")
 	}
+	if sub := b.GetSubscribes(); len(sub) != 1 || sub[0].GetChannel() != "billing.v1.Charges" || sub[0].GetGroup() != "orders" {
+		t.Errorf("subscribes=%v", sub)
+	}
 	plain := req.GetServices()[1]
-	if len(plain.GetDepends()) != 0 || plain.GetOwner() != nil || plain.GetPublic() {
+	if len(plain.GetDepends()) != 0 || plain.GetOwner() != nil || plain.GetPublic() || len(plain.GetSubscribes()) != 0 {
 		t.Errorf("binding without manifest sent depends=%v owner=%v", plain.GetDepends(), plain.GetOwner())
 	}
 }

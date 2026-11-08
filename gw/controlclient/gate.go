@@ -46,12 +46,17 @@ func (s State) String() string {
 
 // DependencyStatus is one declared dependency and the accepted lines
 // that have a ready instance now (PresentLines; empty = missing).
+// Channel / Group are set when the dependency is a Subscription:
+// Service / Lines then name the line that declares the channel, and
+// are empty while no registered service declares it.
 //
 // Stability: stable
 type DependencyStatus struct {
 	Service      string
 	Lines        []string
 	PresentLines []string
+	Channel      string
+	Group        string
 }
 
 // BindingStatus is the gateway's start-gate state of one Service of
@@ -93,7 +98,7 @@ func (r *Registration) PresentLines(service string) []string {
 	seen := map[string]bool{}
 	for _, b := range r.bindings {
 		for _, d := range b.Depends {
-			if d.Service != service {
+			if d.Service != service || d.Channel != "" {
 				continue
 			}
 			for _, l := range d.PresentLines {
@@ -116,6 +121,8 @@ func bindingsFromProto(in []*cpv1.BindingStatus) []BindingStatus {
 				Service:      d.GetService(),
 				Lines:        append([]string(nil), d.GetLines()...),
 				PresentLines: append([]string(nil), d.GetPresentLines()...),
+				Channel:      d.GetChannel(),
+				Group:        d.GetGroup(),
 			})
 		}
 		out = append(out, bs)
@@ -153,7 +160,13 @@ func (r *Registration) waiting() string {
 		}
 		var miss []string
 		for _, d := range b.Depends {
-			if len(d.PresentLines) == 0 {
+			switch {
+			case len(d.PresentLines) > 0:
+			case d.Channel != "" && d.Service == "":
+				miss = append(miss, "channel "+d.Channel+" (not declared yet)")
+			case d.Channel != "":
+				miss = append(miss, "channel "+d.Channel+" ("+d.Service+"/"+strings.Join(d.Lines, "|")+")")
+			default:
 				miss = append(miss, d.Service+"("+strings.Join(d.Lines, "|")+")")
 			}
 		}

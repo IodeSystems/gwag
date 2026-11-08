@@ -139,6 +139,23 @@ type Service struct {
 	// Admin visibility only; calls through the gateway are not
 	// affected. Part of the service manifest. Default false.
 	Public bool
+
+	// Subscribes lists the event channels this binding listens on,
+	// each with its consumer group. Part of the service manifest: the
+	// gateway counts each one like a dependency on the service that
+	// declares the channel (start gate, sunset rule, dependency
+	// graph). Generated event code reports these. Optional.
+	Subscribes []Subscription
+}
+
+// Subscription names one event channel by its key ("<proto
+// package>.<channel name>", e.g. "orders.v1.OrderEvents") and the
+// consumer group the binding listens as.
+//
+// Stability: experimental
+type Subscription struct {
+	Channel string
+	Group   string
 }
 
 // Dependency names one provider service (its gateway namespace) and
@@ -176,6 +193,14 @@ func (s Service) manifestProto() ([]*cpv1.Dependency, *cpv1.Owner) {
 		owner = &cpv1.Owner{Team: s.Owner.Team, Contact: s.Owner.Contact}
 	}
 	return deps, owner
+}
+
+func (s Service) subscribesProto() []*cpv1.Subscription {
+	var out []*cpv1.Subscription
+	for _, sub := range s.Subscribes {
+		out = append(out, &cpv1.Subscription{Channel: sub.Channel, Group: sub.Group})
+	}
+	return out
 }
 
 // Options configures a SelfRegister call. A gateway address
@@ -505,6 +530,7 @@ func (r *Registration) register(ctx context.Context) error {
 			return fmt.Errorf("service %q: must set ProtoSource (or ProtoFS), OpenAPISpec, or GraphQLEndpoint", s.Namespace)
 		}
 		depends, owner := s.manifestProto()
+		subscribes := s.subscribesProto()
 		if hasGraphQL {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
 				Namespace:                 s.Namespace,
@@ -515,6 +541,7 @@ func (r *Registration) register(ctx context.Context) error {
 				Depends:                   depends,
 				Owner:                     owner,
 				Public:                    s.Public,
+				Subscribes:                subscribes,
 			})
 			continue
 		}
@@ -528,6 +555,7 @@ func (r *Registration) register(ctx context.Context) error {
 				Depends:                   depends,
 				Owner:                     owner,
 				Public:                    s.Public,
+				Subscribes:                subscribes,
 			})
 			continue
 		}
@@ -541,6 +569,7 @@ func (r *Registration) register(ctx context.Context) error {
 			Depends:                   depends,
 			Owner:                     owner,
 			Public:                    s.Public,
+			Subscribes:                subscribes,
 		})
 	}
 
