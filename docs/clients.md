@@ -103,6 +103,13 @@ any registered service whatever it speaks upstream. proto3 fields have
 no `required` in the spec, so every property is optional in the
 generated types.
 
+## Event code
+
+`gwag gen` writes typed publish and listen code for event channels
+declared with `(gwag.ps.v1.binding)`, in Go, TypeScript and Python. It
+reads `.proto` files, not the gateway's exports, and runs the
+generators your project pins. See [`events.md`](./events.md).
+
 ## Run the examples
 
 ```bash
