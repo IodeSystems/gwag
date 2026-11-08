@@ -802,7 +802,12 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
 
-	curR := int(t.currentR.Load())
+	// Compare with the replica count JetStream reports, not with this
+	// node's last applied raise: the raise may have been applied by
+	// another node.
+	t.replMu.Lock()
+	defer t.replMu.Unlock()
+	curR := t.syncReplicasLocked(ctx)
 	resp := &cpv1.ForgetPeerResponse{Removed: wasLive, NewReplicas: uint32(curR)}
 	if desired < curR {
 		if err := t.setReplicas(ctx, desired); err != nil {

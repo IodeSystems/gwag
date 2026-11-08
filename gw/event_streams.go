@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -32,7 +33,7 @@ import (
 const (
 	defaultEventStreamMaxAge = 7 * 24 * time.Hour
 	eventStreamDuplicates    = 2 * time.Minute
-	eventStreamCallTimeout   = 10 * time.Second
+	eventStreamCallTimeout   = 30 * time.Second
 )
 
 // WithEventStreamMaxAge sets how long the JetStream stream of a named
@@ -86,6 +87,7 @@ func (g *Gateway) ensureEventStreamsAsync(chs []*eventChannel) {
 		return
 	}
 	replicas := g.eventStreamReplicas()
+	pt := g.peers
 	st := &g.eventStreams
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -98,18 +100,17 @@ func (g *Gateway) ensureEventStreamsAsync(chs []*eventChannel) {
 			continue
 		}
 		st.known[name] = c.pattern
-		go g.ensureEventStream(cl.JS, name, c.pattern, replicas)
+		go g.ensureEventStream(cl.JS, pt, name, c.pattern, replicas)
 	}
 }
 
 // eventStreamReplicas is the replica count for a stream ensured now:
-// the policy for the live peers, or the count this node last applied
-// to the KV buckets when that is higher. currentR alone can lag: when
-// a cluster forms, every node raises the buckets at once, and a node
-// whose update gets no answer (NATS can leave some of several
-// concurrent identical stream requests unanswered) keeps the old
-// count until a later peer event. A stream ensured in that window
-// would get R1.
+// the policy for the live peers, or the KV buckets' replica count
+// (currentR) when that is higher. currentR alone lags behind a peer
+// join: it changes only once the bucket raise is applied, and a
+// stream ensured before that would get the old count. The raise
+// (setEventStreamReplicas) only covers the streams this node had
+// ensured when it started, so it would not correct that stream.
 // Caller holds g.mu.
 func (g *Gateway) eventStreamReplicas() int {
 	replicas := 1
@@ -125,19 +126,25 @@ func (g *Gateway) eventStreamReplicas() int {
 	return replicas
 }
 
-// ensureEventStream creates or updates one stream. It never lowers
-// the replica count of an existing stream (setEventStreamReplicas
-// does, on ForgetPeer). A failure is logged and forgotten, so the next
-// index rebuild retries.
-func (g *Gateway) ensureEventStream(js jetstream.JetStream, name, subject string, replicas int) {
+// ensureEventStream creates or updates one stream (applyStream: no
+// write when the stream already has the config). It never lowers the
+// replica count of an existing stream (setEventStreamReplicas does,
+// on ForgetPeer), nor below currentR when the stream is written: a
+// bucket raise can finish after replicas was chosen. A failure is
+// logged and forgotten, so the next index rebuild retries.
+func (g *Gateway) ensureEventStream(js jetstream.JetStream, pt *peerTracker, name, subject string, replicas int) {
 	ctx, cancel := context.WithTimeout(g.life, eventStreamCallTimeout)
 	defer cancel()
-	if s, err := js.Stream(ctx, name); err == nil {
-		if cur := s.CachedInfo().Config.Replicas; cur > replicas {
-			replicas = cur
+	_, err := applyStream(ctx, js, name, g.isJetStreamLeader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+		r := replicas
+		if pt != nil {
+			r = max(r, int(pt.currentR.Load()))
 		}
-	}
-	_, err := js.CreateOrUpdateStream(ctx, g.eventStreamConfig(name, subject, replicas))
+		if cur != nil {
+			r = max(r, cur.Replicas)
+		}
+		return g.eventStreamConfig(name, subject, r), true
+	})
 	if err == nil {
 		return
 	}
@@ -157,7 +164,8 @@ func (g *Gateway) ensureEventStream(js jetstream.JetStream, name, subject string
 
 // setEventStreamReplicas sets the replica count of every stream this
 // node ensured. Called with the KV bucket update (peerTracker
-// .setReplicas). Returns the first error.
+// .setReplicas). A stream deleted by hand is skipped; the next ensure
+// creates it. Returns the first error.
 func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetStream, r int) error {
 	st := &g.eventStreams
 	st.mu.Lock()
@@ -171,7 +179,10 @@ func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetSt
 	sort.Strings(names)
 	var firstErr error
 	for _, n := range names {
-		if _, err := js.UpdateStream(ctx, g.eventStreamConfig(n, subjects[n], r)); err != nil && firstErr == nil {
+		_, err := applyStream(ctx, js, n, g.isJetStreamLeader, func(*jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+			return g.eventStreamConfig(n, subjects[n], r), false
+		})
+		if err != nil && !errors.Is(err, errStreamMissing) && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %w", n, err)
 		}
 	}

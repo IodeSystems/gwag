@@ -86,7 +86,14 @@ type peerTracker struct {
 	externalsDone     chan struct{}
 	notificationsDone chan struct{}
 
+	// currentR is the managed buckets' replica count as last read
+	// from JetStream or applied by this node. replMu serialises the
+	// read-compare-write of a raise (reconcileReplicas) and a shrink
+	// (ForgetPeer).
 	currentR atomic.Int32
+	replMu   sync.Mutex
+	// reconciling is set while a kickReconcile goroutine runs.
+	reconciling atomic.Bool
 
 	rec *reconciler
 }
@@ -289,8 +296,23 @@ func (t *peerTracker) refreshLoop(ctx context.Context) {
 			_, _ = t.peers.Put(c, t.nodeID, t.self)
 			cancel()
 			missing = t.sweepPeers(ctx, missing)
+			t.kickReconcile(ctx)
 		}
 	}
+}
+
+// kickReconcile runs reconcileReplicas off the refresh loop, so a
+// slow raise never delays the peer refresh. Skipped while one is
+// running. It retries a raise that failed and picks up a replica
+// change another node made.
+func (t *peerTracker) kickReconcile(ctx context.Context) {
+	if !t.reconciling.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer t.reconciling.Store(false)
+		t.reconcileReplicas(ctx)
+	}()
 }
 
 // sweepPeers is the backstop for a peer delete the watch can no
@@ -364,61 +386,92 @@ func (t *peerTracker) watchLoop(ctx context.Context) {
 	}
 }
 
+// replicaBuckets is every managed KV bucket, by bucket name.
+var replicaBuckets = []string{
+	peersBucketName,
+	registryBucketName,
+	stableBucketName,
+	deprecatedBucketName,
+	mcpConfigBucketName,
+	drainBucketName,
+	externalDependentsBucketName,
+	notificationsBucketName,
+}
+
 // reconcileReplicas raises every managed bucket to the replica count
 // the cluster policy (WithClusterReplicas) gives for the live peers.
 // Strictly monotonic — never lowers; ForgetPeer is the only path that
 // shrinks (a peer is only dropped from the live set after its entry
 // expired, so a brief loss never shrinks). Idempotent if already at
-// target.
+// target. currentR is first set from the buckets' actual replica
+// count, so a raise another node applied (or one whose answer this
+// node never got) is not sent again.
 func (t *peerTracker) reconcileReplicas(ctx context.Context) {
+	t.replMu.Lock()
+	defer t.replMu.Unlock()
 	t.mu.Lock()
 	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
-	cur := int(t.currentR.Load())
+	cur := t.syncReplicasLocked(ctx)
 	if desired <= cur {
 		return
 	}
 	if err := t.setReplicas(ctx, desired); err != nil {
-		// Best-effort. Next peer change retries.
+		// Best-effort. The next peer change or refresh tick retries.
 		return
 	}
 	t.currentR.Store(int32(desired))
 }
 
-// setReplicas updates every cluster bucket. If one update fails we still
-// try the others; caller decides whether to retry.
+// syncReplicasLocked sets currentR to the lowest replica count of the
+// managed buckets as JetStream reports it, and returns it. On a read
+// error currentR is left as it is. Caller holds replMu.
+func (t *peerTracker) syncReplicasLocked(ctx context.Context) int {
+	if r, err := t.appliedReplicas(ctx); err == nil {
+		t.currentR.Store(int32(r))
+	}
+	return int(t.currentR.Load())
+}
+
+// appliedReplicas is the lowest configured replica count of the
+// managed buckets.
+func (t *peerTracker) appliedReplicas(ctx context.Context) (int, error) {
+	low := 0
+	for _, b := range replicaBuckets {
+		cfg, err := readStreamConfig(ctx, t.js, "KV_"+b)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", b, err)
+		}
+		if cfg == nil {
+			return 0, fmt.Errorf("%s: %w", b, errStreamMissing)
+		}
+		if low == 0 || cfg.Replicas < low {
+			low = cfg.Replicas
+		}
+	}
+	return low, nil
+}
+
+// setReplicas sets the replica count of every cluster bucket and
+// event stream (applyStream: no write when already there, one writer
+// per change, a lost answer verified by reading). If one fails we
+// still try the others; caller decides whether to retry. Only the
+// replica count changes; the rest of each bucket's config stays.
 func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var firstErr error
-	for _, b := range []struct {
-		name   string
-		ttl    time.Duration
-		marker bool
-	}{
-		{peersBucketName, t.peerTTL, true},
-		{registryBucketName, t.registryTTL, true},
-		{stableBucketName, stableTTL, false},
-		{deprecatedBucketName, deprecatedTTL, false},
-		{mcpConfigBucketName, mcpConfigTTL, false},
-		{drainBucketName, 0, false},
-		{externalDependentsBucketName, 0, false},
-		{notificationsBucketName, 0, false},
-	} {
-		cfg := jetstream.KeyValueConfig{
-			Bucket:   b.name,
-			Replicas: r,
-			TTL:      b.ttl,
-		}
-		if b.marker {
-			// Omitting it would ask the server to turn markers off,
-			// which it refuses ("message TTL status can not be
-			// disabled").
-			cfg.LimitMarkerTTL = b.ttl
-		}
-		_, err := t.js.UpdateKeyValue(c, cfg)
+	for _, b := range replicaBuckets {
+		_, err := applyStream(c, t.js, "KV_"+b, t.gw.isJetStreamLeader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+			if cur == nil {
+				return jetstream.StreamConfig{}, false
+			}
+			want := *cur
+			want.Replicas = r
+			return want, true
+		})
 		if err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("%s: %w", b.name, err)
+			firstErr = fmt.Errorf("%s: %w", b, err)
 		}
 	}
 	// Named-channel event streams follow the same policy.
