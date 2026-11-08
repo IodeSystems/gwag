@@ -107,6 +107,12 @@ func (b *Backend) Subscribe(ctx context.Context, ch events.Channel, group string
 	if err := b.ensureTopic(ctx, ch.Stream); err != nil {
 		return nil, err
 	}
+	// Create the DLQ topic now. A reader of gwag.dlq.<stream> that
+	// starts before the first dead letter would otherwise wait for a
+	// metadata refresh to find a topic created after it.
+	if err := b.ensureTopic(ctx, events.DLQSubject(ch.Stream)); err != nil {
+		return nil, err
+	}
 	reset := kgo.NewOffset().AtEnd()
 	if opts.DeliverAll {
 		reset = kgo.NewOffset().AtStart()
