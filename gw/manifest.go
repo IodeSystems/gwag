@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"strings"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
@@ -13,14 +14,33 @@ import (
 // cluster node stores the same copy on its slot. The zero value means
 // "no manifest" (old clients, boot-time AddProto).
 type serviceManifest struct {
-	Depends []manifestDependency `json:"depends,omitempty"`
-	Owner   *manifestOwner       `json:"owner,omitempty"`
-	Public  bool                 `json:"public,omitempty"`
+	Depends    []manifestDependency   `json:"depends,omitempty"`
+	Owner      *manifestOwner         `json:"owner,omitempty"`
+	Public     bool                   `json:"public,omitempty"`
+	Subscribes []manifestSubscription `json:"subscribes,omitempty"`
+
+	// ownChannels are the channel keys the binding's own proto
+	// declares. A subscription to one of them is satisfied by the
+	// binding itself (gateDepsLocked). Set by the control plane at
+	// Register; not replicated (only the owner node decides the gate).
+	ownChannels []string
 }
 
+// manifestDependency is one declared dependency. Channel / Group are
+// set only on the dependencies gateDepsLocked derives from
+// subscriptions; Service / Lines then name the slot that declares the
+// channel, or are empty while no slot declares it.
 type manifestDependency struct {
 	Service string   `json:"service"`
 	Lines   []string `json:"lines"`
+	Channel string   `json:"channel,omitempty"`
+	Group   string   `json:"group,omitempty"`
+}
+
+// manifestSubscription is one ServiceBinding.subscribes entry.
+type manifestSubscription struct {
+	Channel string `json:"channel"`
+	Group   string `json:"group,omitempty"`
 }
 
 type manifestOwner struct {
@@ -68,6 +88,21 @@ func manifestFromBinding(b *cpv1.ServiceBinding) (serviceManifest, error) {
 		m.Owner = &manifestOwner{Team: o.GetTeam(), Contact: o.GetContact()}
 	}
 	m.Public = b.GetPublic()
+	seenSub := map[manifestSubscription]bool{}
+	for _, sub := range b.GetSubscribes() {
+		ms := manifestSubscription{Channel: sub.GetChannel(), Group: sub.GetGroup()}
+		if ms.Channel == "" {
+			return serviceManifest{}, fmt.Errorf("subscribes: empty channel")
+		}
+		if !strings.Contains(ms.Channel, ".") {
+			return serviceManifest{}, fmt.Errorf("subscribes: channel %q: want <proto package>.<name>", ms.Channel)
+		}
+		if seenSub[ms] {
+			return serviceManifest{}, fmt.Errorf("subscribes: channel %q group %q listed twice", ms.Channel, ms.Group)
+		}
+		seenSub[ms] = true
+		m.Subscribes = append(m.Subscribes, ms)
+	}
 	return m, nil
 }
 
@@ -94,6 +129,58 @@ func (m serviceManifest) protoDepends() []*cpv1.Dependency {
 			Service: d.Service,
 			Lines:   append([]string(nil), d.Lines...),
 		})
+	}
+	return out
+}
+
+func (m serviceManifest) protoSubscribes() []*cpv1.Subscription {
+	if len(m.Subscribes) == 0 {
+		return nil
+	}
+	out := make([]*cpv1.Subscription, 0, len(m.Subscribes))
+	for _, s := range m.Subscribes {
+		out = append(out, &cpv1.Subscription{Channel: s.Channel, Group: s.Group})
+	}
+	return out
+}
+
+// channelDeclarerLocked returns the slot that declares the named
+// channel key. Caller holds g.mu.
+func (g *Gateway) channelDeclarerLocked(channel string) (poolKey, bool) {
+	for k, s := range g.slots {
+		for _, b := range s.channelBindings {
+			if b.Channel == channel {
+				return k, true
+			}
+		}
+	}
+	return poolKey{}, false
+}
+
+// gateDepsLocked is the dependency list the start gate, the cycle
+// check, the dependency graph and the sunset rule use for a binding at
+// self: its declared depends, plus one dependency per subscription
+// resolved to the slot that declares the channel (Lines = that slot's
+// version). A subscription to a channel no slot declares yet is a
+// dependency with no lines, so it is never met. A subscription to a
+// channel the binding declares itself is dropped. Caller holds g.mu.
+func (g *Gateway) gateDepsLocked(m serviceManifest, self poolKey) []manifestDependency {
+	if len(m.Subscribes) == 0 {
+		return m.Depends
+	}
+	out := append([]manifestDependency(nil), m.Depends...)
+	for _, sub := range m.Subscribes {
+		if containsString(m.ownChannels, sub.Channel) {
+			continue
+		}
+		d := manifestDependency{Channel: sub.Channel, Group: sub.Group}
+		if k, ok := g.channelDeclarerLocked(sub.Channel); ok {
+			if k == self {
+				continue
+			}
+			d.Service, d.Lines = k.namespace, []string{k.version}
+		}
+		out = append(out, d)
 	}
 	return out
 }

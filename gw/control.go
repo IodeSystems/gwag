@@ -339,8 +339,14 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
-		if _, err := extractChannelBindings(fd); err != nil {
+		bindings, err := extractChannelBindings(fd)
+		if err != nil {
 			return nil, fmt.Errorf("controlplane: %s/%s: %w", ns, ver, err)
+		}
+		for _, cb := range bindings {
+			if cb.Channel != "" && !containsString(manifest.ownChannels, cb.Channel) {
+				manifest.ownChannels = append(manifest.ownChannels, cb.Channel)
+			}
 		}
 		warnUnsupportedStreaming(cp.gw, ns, ver, fd)
 		prep = append(prep, preparedBinding{
@@ -991,6 +997,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			ReplicaCount:            uint32(replicaCount),
 			ManualDeprecationReason: s.deprecationReason,
 			Depends:                 s.manifest.protoDepends(),
+			Subscribes:              s.manifest.protoSubscribes(),
 			Owner:                   s.manifest.protoOwner(),
 			Instances:               cp.instanceStatusesLocked(insts[k]),
 			Public:                  cp.gw.isPublicLocked(k.namespace, s.manifest.Public),
@@ -1004,13 +1011,14 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			continue
 		}
 		out.Services = append(out.Services, &cpv1.ServiceInfo{
-			Namespace: k.namespace,
-			Version:   k.version,
-			HashHex:   hex.EncodeToString(l[0].hash[:]),
-			Depends:   l[0].manifest.protoDepends(),
-			Owner:     l[0].manifest.protoOwner(),
-			Instances: cp.instanceStatusesLocked(l),
-			Public:    cp.gw.isPublicLocked(k.namespace, l[0].manifest.Public),
+			Namespace:  k.namespace,
+			Version:    k.version,
+			HashHex:    hex.EncodeToString(l[0].hash[:]),
+			Depends:    l[0].manifest.protoDepends(),
+			Subscribes: l[0].manifest.protoSubscribes(),
+			Owner:      l[0].manifest.protoOwner(),
+			Instances:  cp.instanceStatusesLocked(l),
+			Public:     cp.gw.isPublicLocked(k.namespace, l[0].manifest.Public),
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {
@@ -1093,4 +1101,3 @@ func newRegID() string {
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
-
