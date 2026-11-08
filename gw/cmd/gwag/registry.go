@@ -118,11 +118,10 @@ func sha(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-var subjectFileRE = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
 // subjectPath is the file a subject's root schema is written to.
 func subjectPath(subject string) string {
-	return "registry/" + subjectFileRE.ReplaceAllString(subject, "_") + ".proto"
+	return sr.SubjectPath(subject)
 }
 
 // topicOf is the topic of a TopicNameStrategy subject.

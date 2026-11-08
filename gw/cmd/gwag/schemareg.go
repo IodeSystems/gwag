@@ -2,59 +2,17 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/iodesystems/gwag/v2/events"
 	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
 	"github.com/iodesystems/gwag/v2/gw/eventgen"
 )
-
-// shadowOpt is a (gwag.ps.v1.shadow) option.
-type shadowOpt struct {
-	registry, subject, version, message string
-	producer                            bool
-}
-
-const shadowExt = "gwag.ps.v1.shadow"
-
-// shadowOf reads (gwag.ps.v1.shadow) off md. Works for dynamicpb
-// option values (protocompile) and the generated type alike.
-func shadowOf(md protoreflect.MessageDescriptor) (shadowOpt, bool) {
-	var s shadowOpt
-	found := false
-	opts := md.Options()
-	if opts == nil {
-		return s, false
-	}
-	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
-		if !fd.IsExtension() || string(fd.FullName()) != shadowExt {
-			return true
-		}
-		m := v.Message()
-		get := func(name string) protoreflect.Value {
-			f := m.Descriptor().Fields().ByName(protoreflect.Name(name))
-			if f == nil {
-				return protoreflect.Value{}
-			}
-			return m.Get(f)
-		}
-		s.registry = get("registry").String()
-		s.subject = get("subject").String()
-		s.version = get("version").String()
-		s.message = get("message").String()
-		s.producer = get("side").Enum() == 1
-		found = true
-		return false
-	})
-	return s, found
-}
 
 func walkMessages(files []protoreflect.FileDescriptor, fn func(protoreflect.MessageDescriptor)) {
 	var walk func(protoreflect.MessageDescriptors)
@@ -129,21 +87,21 @@ func schemaCheckCmd(args []string, stdout, stderr io.Writer) int {
 	clients := map[string]*sr.Client{}
 	failed, checked := 0, 0
 	walkMessages(fds, func(md protoreflect.MessageDescriptor) {
-		s, ok := shadowOf(md)
+		s, ok := sr.ShadowOf(md)
 		if !ok {
 			return
 		}
 		checked++
 		lines, err := checkShadow(ctx, md, s, urls, clients)
 		side := "consumer"
-		if s.producer {
+		if s.Producer {
 			side = "producer"
 		}
-		version := s.version
+		version := s.Version
 		if version == "" {
 			version = "latest"
 		}
-		head := fmt.Sprintf("%s (%s) vs %s %s@%s", md.FullName(), side, s.registry, s.subject, version)
+		head := fmt.Sprintf("%s (%s) vs %s %s@%s", md.FullName(), side, s.Registry, s.Subject, version)
 		var fails []string
 		for _, l := range lines {
 			if !l.Warning {
@@ -178,92 +136,23 @@ func schemaCheckCmd(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func checkShadow(ctx context.Context, md protoreflect.MessageDescriptor, s shadowOpt, urls map[string]string, clients map[string]*sr.Client) ([]sr.Problem, error) {
-	if s.registry == "" || s.subject == "" {
+func checkShadow(ctx context.Context, md protoreflect.MessageDescriptor, s sr.Shadow, urls map[string]string, clients map[string]*sr.Client) ([]sr.Problem, error) {
+	if s.Registry == "" || s.Subject == "" {
 		return nil, fmt.Errorf("shadow option needs registry and subject")
 	}
-	u, ok := urls[s.registry]
+	u, ok := urls[s.Registry]
 	if !ok {
-		return nil, fmt.Errorf("no --registry %s=URL", s.registry)
+		return nil, fmt.Errorf("no --registry %s=URL", s.Registry)
 	}
-	c := clients[s.registry]
+	c := clients[s.Registry]
 	if c == nil {
 		var err error
 		if c, err = registryClient(u); err != nil {
 			return nil, err
 		}
-		clients[s.registry] = c
+		clients[s.Registry] = c
 	}
-	v, err := c.SubjectVersion(ctx, s.subject, s.version, "")
-	if err != nil {
-		return nil, err
-	}
-	tree, err := c.Tree(ctx, v, subjectPath(s.subject))
-	if err != nil {
-		return nil, err
-	}
-	fd, err := tree.Compile(ctx)
-	if err != nil {
-		return nil, err
-	}
-	target, err := shadowTarget(fd, md, s.message)
-	if err != nil {
-		return nil, err
-	}
-	if !s.producer {
-		return sr.CompareConsumer(md, target), nil
-	}
-	fdp, err := sr.ProducerCandidate(fd, target, md)
-	if err != nil {
-		return nil, err
-	}
-	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(fdp)
-	if err != nil {
-		return nil, err
-	}
-	cand := sr.Schema{Schema: base64.StdEncoding.EncodeToString(b), SchemaType: "PROTOBUF", References: v.References}
-	version := s.version
-	if version == "" {
-		version = "latest"
-	}
-	res, err := c.CheckCompatibility(ctx, s.subject, version, cand)
-	if err != nil {
-		return nil, err
-	}
-	level, _ := c.CompatibilityLevel(ctx, s.subject)
-	var out []sr.Problem
-	if !res.IsCompatible {
-		if len(res.Messages) == 0 {
-			res.Messages = []string{"not compatible"}
-		}
-		for _, m := range res.Messages {
-			// Verbose answers also echo the old schema and settings.
-			if strings.HasPrefix(m, "{oldSchema") || strings.HasPrefix(m, "{validateFields") {
-				continue
-			}
-			out = append(out, sr.Problem{Text: fmt.Sprintf("registry (%s): %s", level, m)})
-		}
-	}
-	return out, nil
-}
-
-// shadowTarget picks the registry message a shadow copies: the named
-// one, else the one with the same simple name, else the first.
-func shadowTarget(fd protoreflect.FileDescriptor, md protoreflect.MessageDescriptor, name string) (protoreflect.MessageDescriptor, error) {
-	if name != "" {
-		t := sr.FindMessage(fd, protoreflect.FullName(name))
-		if t == nil {
-			return nil, fmt.Errorf("registry schema has no message %s", name)
-		}
-		return t, nil
-	}
-	if t := fd.Messages().ByName(md.Name()); t != nil {
-		return t, nil
-	}
-	if fd.Messages().Len() == 0 {
-		return nil, fmt.Errorf("registry schema has no message")
-	}
-	return fd.Messages().Get(0), nil
+	return sr.CheckShadow(ctx, c, s, md)
 }
 
 // schemaPushCmd implements `gwag schema push`: register the protos of
