@@ -18,7 +18,8 @@ import (
 
 // target is one binary the harness can build.
 type target struct {
-	pkg  string   // package path relative to the repo root
+	dir  string   // module directory relative to the repo root; "" = the root module
+	pkg  string   // package path relative to dir
 	tags []string // build tags
 }
 
@@ -29,6 +30,8 @@ var targets = map[string]target{
 	"gateway": {pkg: "./examples/multi/cmd/gateway"},
 	"fixture": {pkg: "./e2e/fixture", tags: []string{"e2e"}},
 	"gwag":    {pkg: "./gw/cmd/gwag"},
+	// Its own module: franz-go stays out of the root go.mod.
+	"kafka-fixture": {dir: "e2e/kafka-fixture", pkg: "."},
 }
 
 var (
@@ -88,8 +91,8 @@ func RepoRoot() (string, error) {
 	return rootDir, rootErr
 }
 
-// Binary returns the path of a built binary: "gateway", "fixture" or
-// "gwag". The first call per name builds it; later calls reuse it.
+// Binary returns the path of a built binary: "gateway", "fixture",
+// "gwag" or "kafka-fixture". The first call per name builds it; later calls reuse it.
 func Binary(t testing.TB, name string) string {
 	t.Helper()
 	if binDir == "" {
@@ -123,7 +126,7 @@ func build(name string, tg target) (string, error) {
 	}
 	args = append(args, tg.pkg)
 	cmd := exec.Command("go", args...)
-	cmd.Dir = root
+	cmd.Dir = filepath.Join(root, tg.dir)
 	start := time.Now()
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go %v: %v\n%s", args, err, b)
