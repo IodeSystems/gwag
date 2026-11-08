@@ -127,6 +127,19 @@ confluent-kafka-python (`SchemaRegistryClient`) take a registry URL
 ending in `/contexts/.corp` and send every request under it. The gwag
 serdes do too.
 
+## Shadow check
+
+A message with `(gwag.ps.v1.shadow)` is gwag's copy of a message
+another team produces. When a service registers through the control
+plane, the gateway compares each such message with the subject the
+option names, in its own registry, and warns on a difference. The
+registration always succeeds. The option's `registry` names the
+context (`corp` is `.corp`); a subject only another non-default
+context holds is found there. Nothing is checked, and nothing
+warned, when the registry is off or no context holds the subject.
+The default context is not searched. Details, outputs and the metric:
+[events-kafka.md](./events-kafka.md#check-at-register).
+
 ## Import
 
 ```

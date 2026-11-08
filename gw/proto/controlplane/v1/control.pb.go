@@ -695,7 +695,12 @@ type RegisterResponse struct {
 	// order. A WAITING binding is not routable; it becomes READY (and
 	// routable) on its own when its dependencies are present. Empty
 	// from gateways that predate the start gate: treat as all READY.
-	Bindings      []*BindingStatus `protobuf:"bytes,3,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	Bindings []*BindingStatus `protobuf:"bytes,3,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	// Problems the gateway found that did not stop the registration:
+	// a message with (gwag.ps.v1.shadow) that differs from the subject
+	// it shadows in the gateway's own Schema Registry. One line each.
+	// Empty from gateways that predate the check. Log them.
+	Warnings      []string `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -747,6 +752,13 @@ func (x *RegisterResponse) GetTtlSeconds() uint32 {
 func (x *RegisterResponse) GetBindings() []*BindingStatus {
 	if x != nil {
 		return x.Bindings
+	}
+	return nil
+}
+
+func (x *RegisterResponse) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -2052,7 +2064,11 @@ type ServiceInfo struct {
 	// registration, or the gateway's public-services setting.
 	Public bool `protobuf:"varint,9,opt,name=public,proto3" json:"public,omitempty"`
 	// Manifest: ServiceBinding.subscribes of the latest registration.
-	Subscribes    []*Subscription `protobuf:"bytes,10,rep,name=subscribes,proto3" json:"subscribes,omitempty"`
+	Subscribes []*Subscription `protobuf:"bytes,10,rep,name=subscribes,proto3" json:"subscribes,omitempty"`
+	// Warnings of the latest Register of this (namespace, version) on
+	// this gateway: see RegisterResponse.warnings. Not replicated; a
+	// gateway that did not take the Register has none.
+	Warnings      []string `protobuf:"bytes,11,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2153,6 +2169,13 @@ func (x *ServiceInfo) GetPublic() bool {
 func (x *ServiceInfo) GetSubscribes() []*Subscription {
 	if x != nil {
 		return x.Subscribes
+	}
+	return nil
+}
+
+func (x *ServiceInfo) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -2814,12 +2837,13 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x05lines\x18\x02 \x03(\tR\x05lines\"5\n" +
 	"\x05Owner\x12\x12\n" +
 	"\x04team\x18\x01 \x01(\tR\x04team\x12\x18\n" +
-	"\acontact\x18\x02 \x01(\tR\acontact\"\xa0\x01\n" +
+	"\acontact\x18\x02 \x01(\tR\acontact\"\xbc\x01\n" +
 	"\x10RegisterResponse\x12'\n" +
 	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\rR\n" +
 	"ttlSeconds\x12B\n" +
-	"\bbindings\x18\x03 \x03(\v2&.gateway.controlplane.v1.BindingStatusR\bbindings\"\x97\x01\n" +
+	"\bbindings\x18\x03 \x03(\v2&.gateway.controlplane.v1.BindingStatusR\bbindings\x12\x1a\n" +
+	"\bwarnings\x18\x04 \x03(\tR\bwarnings\"\x97\x01\n" +
 	"\x10DependencyStatus\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05lines\x18\x02 \x03(\tR\x05lines\x12#\n" +
@@ -2907,7 +2931,7 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\venvironment\x18\x04 \x01(\tR\venvironment\x1a;\n" +
 	"\rStableVnEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03\"\xdc\x03\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01J\x04\b\x02\x10\x03\"\xf8\x03\n" +
 	"\vServiceInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x19\n" +
@@ -2921,7 +2945,8 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"subscribes\x18\n" +
 	" \x03(\v2%.gateway.controlplane.v1.SubscriptionR\n" +
-	"subscribes\"k\n" +
+	"subscribes\x12\x1a\n" +
+	"\bwarnings\x18\v \x03(\tR\bwarnings\"k\n" +
 	"\x1cSignSubscriptionTokenRequest\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +

@@ -205,9 +205,11 @@ diff.
 Advanced. Another team produces the topic, and you need gwag
 annotations on their message: fewer fields, your own package, your own
 channel binding. If you only need to read their topic, use
-[import](#import). The shadow message is not checked unless CI runs
-`gwag schema check`; a registry change after that run is not seen
-until the next one.
+[import](#import). `gwag schema check` compares the shadow with the
+registry in CI. A gateway whose own registry holds the imported
+subject also checks it when the service registers, as a warning
+([below](#check-at-register)). A registry change after either run is
+not seen until the next one.
 
 ```proto
 message CorpOrder {
@@ -265,6 +267,34 @@ The shadow proto is in `go-kafka/corp/shadow/shop/v1/order.proto`;
 `go-kafka/corp/shadow/drift/v1/drift.proto` is one that fails the
 check. TypeScript uses the Go example's shadow proto; `gwag schema
 check` is the same command for every language.
+
+#### Check at register
+
+With the gateway's Schema Registry on (`--schema-registry`) and the
+corp registry imported into a context (`gwag schema import --into
+.corp`), the gateway checks each shadow message of a service when the
+service registers through the control plane. The comparison is the
+one `gwag schema check` runs (`side` decides consumer or producer).
+
+- **Warn, never reject.** The registration succeeds. A difference
+  goes to the gateway log, to the metric
+  `shadow_check_total{outcome="mismatch"}`, to
+  `RegisterResponse.warnings` (log them in the client), and to
+  `ServiceInfo.warnings` (`GET /admin/services` `warnings`,
+  `gwag services list`).
+- **Lookup.** `registry` in the option is the context name: `corp` is
+  `.corp`. If that context holds `subject`, the gateway checks there.
+  If not, it tries the other non-default contexts in name order and
+  uses the first that holds the subject. The default context holds
+  gwag's own channels and is never searched. `version` and `message`
+  work as in `gwag schema check`.
+- **No check, no warning** when the registry is off, or no context
+  holds the subject (metric `outcome="not_found"`). The gateway reads
+  only its own registry; it never calls the corp registry.
+- **When.** At Register. A later import of a new subject version is
+  not seen until the service registers again. `ServiceInfo.warnings`
+  is the answer of the latest Register this gateway took; other
+  nodes of a cluster do not have it.
 
 ## One id space per producer
 

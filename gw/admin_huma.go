@@ -150,6 +150,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
 				Depends:                 adminDepends(s.GetDepends()),
 				Subscribes:              adminSubscriptions(s.GetSubscribes()),
+				Warnings:                append([]string{}, s.GetWarnings()...),
 				Owner:                   adminOwner(s.GetOwner()),
 				Drains:                  adminLineDrains(g, s.GetNamespace(), s.GetVersion()),
 				Instances:               adminInstances(s.GetInstances()),
@@ -980,6 +981,10 @@ type serviceInfo struct {
 	// registration: the event channels this line listens on. Never
 	// nil.
 	Subscribes []subscriptionInfo `json:"subscribes"`
+	// Warnings are the problems the latest Register on this gateway
+	// found and did not reject, e.g. a (gwag.ps.v1.shadow) message
+	// that differs from the subject it shadows. Never nil.
+	Warnings []string `json:"warnings"`
 	// Drains lists the instances on this line with a drain requested
 	// (instance_drain.go). Empty = none; the UI shows a chip per entry.
 	Drains []instanceDrainInfo `json:"drains"`
