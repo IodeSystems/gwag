@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package gateway.appkeyauth.v1;
+
+option go_package = "github.com/iodesystems/gwag/v2/gw/proto/appkeyauth/v1;appkeyauthv1";
+
+// AppKeyAuthorizer is the optional delegate the gateway asks about an
+// application key before it checks its own keys. Implement it in your
+// key service and register it under namespace "_app_key_auth" /
+// version v1.
+//
+// The gateway asks on every app-key check: control-plane Register,
+// Heartbeat, Deregister and DrainInstance when the gateway requires
+// app keys, and Schema Registry writes. OK accepts the key with the
+// namespaces the delegate names; the gateway then checks that they
+// cover the call. DENIED rejects without falling through. Anything
+// else (UNAVAILABLE, NOT_CONFIGURED, UNSPECIFIED, transport error)
+// falls through to the keys the gateway minted itself.
+service AppKeyAuthorizer {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+message AuthorizeRequest {
+  // The key the caller presented (the value after `Bearer `, or the
+  // basic-auth password on the Schema Registry).
+  string token = 1;
+
+  // What the key is used for: "register", "heartbeat", "deregister",
+  // "drain_instance" or "schema_registry_write".
+  string operation = 2;
+
+  // Namespaces the call touches, when the gateway knows them before
+  // asking (empty for Register, whose bindings are not parsed yet,
+  // and for Schema Registry writes). The gateway checks coverage
+  // itself; the delegate may use them to decide or to log.
+  repeated string namespaces = 3;
+
+  // Remote address of the caller (best effort; may be empty).
+  string remote_addr = 4;
+}
+
+message AuthorizeResponse {
+  AppKeyAuthCode code = 1;
+  // Optional, for operator logs. Never sent to the caller.
+  string reason = 2;
+  // With OK: the namespaces the key covers. The gateway allows the
+  // call only when they cover every namespace it touches.
+  repeated string namespaces = 3;
+  // With OK: when the key expires, unix milliseconds. 0 = unknown.
+  // Used for the expiry warning only; the delegate decides validity.
+  int64 expires_unix_ms = 4;
+  // With OK: an id for the key, for logs. Optional. Never the secret.
+  string key_id = 5;
+}
+
+enum AppKeyAuthCode {
+  APP_KEY_AUTH_CODE_UNSPECIFIED = 0;
+  // The key is valid; namespaces lists what it covers.
+  APP_KEY_AUTH_CODE_OK = 1;
+  // The key is not valid. The gateway rejects without checking its
+  // own keys.
+  APP_KEY_AUTH_CODE_DENIED = 2;
+  // The delegate cannot decide now. The gateway checks its own keys.
+  APP_KEY_AUTH_CODE_UNAVAILABLE = 3;
+  // The delegate is registered but has no policy. The gateway checks
+  // its own keys.
+  APP_KEY_AUTH_CODE_NOT_CONFIGURED = 4;
+}
