@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
 from app import listen_all, publish_all  # noqa: E402
 from proto_gen.orders.v1.orders_events import OrdersBus  # noqa: E402
 
-from gwag_kafka import KafkaBackend  # noqa: E402
+from gwag_events_kafka import KafkaBackend  # noqa: E402
 
 WANT = 7
 

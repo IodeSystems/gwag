@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Kafka Backend for the gwag Python events runtime (aiokafka). Not published."
 requires-python = ">=3.12"
 dependencies = [
-    "aiokafka==0.13.0",
+    "aiokafka[snappy,lz4,zstd]==0.13.0",
     "gwag-events",
 ]
 

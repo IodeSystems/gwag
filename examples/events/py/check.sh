@@ -6,7 +6,8 @@
 #
 #   examples/events/py/check.sh                  # embedded NATS from go-interop
 #   NATS_URL=nats://127.0.0.1:4222 examples/events/py/check.sh
-#   KAFKA=1 examples/events/py/check.sh          # also py-kafka (docker)
+#   KAFKA=1 examples/events/py/check.sh          # also py-kafka: Kafka backend tests and
+#                                                # Schema Registry interop (docker)
 #
 # Needs uv and go. Every tool is pinned in a pyproject.toml / uv.lock;
 # nothing is taken from PATH except uv itself.
@@ -25,9 +26,15 @@ fi
 
 echo "== uv lock --check"
 uv lock --check
-(cd "$ROOT/py/gwag-events" && uv lock --check)
+PKGS="gwag-events gwag-events-kafka gwag-events-schemaregistry"
+for p in $PKGS; do
+  (cd "$ROOT/py/$p" && uv lock --check)
+done
+(cd "$HERE/../py-kafka" && uv lock --check)
 uv sync --locked --quiet
-(cd "$ROOT/py/gwag-events" && uv sync --locked --quiet)
+for p in $PKGS; do
+  (cd "$ROOT/py/$p" && uv sync --locked --quiet)
+done
 
 echo "== gwag gen --lang python"
 (cd "$ROOT" && go run ./gw/cmd/gwag gen --lang python --module-dir examples/events/py \
@@ -42,7 +49,9 @@ if ! git diff --quiet -- "$HERE/proto_gen" || [[ -n "$(git ls-files --others --e
 fi
 
 echo "== mypy --strict"
-(cd "$ROOT/py/gwag-events" && uv run mypy src tests) || fail=1
+for p in $PKGS; do
+  (cd "$ROOT/py/$p" && uv run mypy src tests) || fail=1
+done
 uv run mypy || fail=1
 
 # One NATS server for every test below, unless the caller gave one.
@@ -64,11 +73,17 @@ echo "== NATS_URL=$NATS_URL"
 echo "== pytest py/gwag-events (memory + JetStream)"
 (cd "$ROOT/py/gwag-events" && uv run pytest -q) || fail=1
 
+# The Kafka backend tests skip without KAFKA_BROKERS (KAFKA=1 runs them
+# against docker below); the serde tests need no server.
+echo "== pytest py/gwag-events-schemaregistry, py/gwag-events-kafka (skipped without a broker)"
+(cd "$ROOT/py/gwag-events-schemaregistry" && uv run pytest -q) || fail=1
+(cd "$ROOT/py/gwag-events-kafka" && uv run pytest -q) || fail=1
+
 echo "== pytest examples/events/py (typed API, main.py, Go<->Python interop)"
 uv run pytest -q || fail=1
 
 if [[ "${KAFKA:-}" == 1 ]]; then
-  echo "== py-kafka (docker)"
+  echo "== py-kafka + Schema Registry (docker)"
   "$HERE/../py-kafka/test.sh" || fail=1
 fi
 
