@@ -85,12 +85,7 @@ func (g *Gateway) ensureEventStreamsAsync(chs []*eventChannel) {
 	if cl == nil || cl.JS == nil || len(chs) == 0 {
 		return
 	}
-	replicas := 1
-	if g.peers != nil {
-		if r := int(g.peers.currentR.Load()); r > replicas {
-			replicas = r
-		}
-	}
+	replicas := g.eventStreamReplicas()
 	st := &g.eventStreams
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -105,6 +100,29 @@ func (g *Gateway) ensureEventStreamsAsync(chs []*eventChannel) {
 		st.known[name] = c.pattern
 		go g.ensureEventStream(cl.JS, name, c.pattern, replicas)
 	}
+}
+
+// eventStreamReplicas is the replica count for a stream ensured now:
+// the policy for the live peers, or the count this node last applied
+// to the KV buckets when that is higher. currentR alone can lag: when
+// a cluster forms, every node raises the buckets at once, and a node
+// whose update gets no answer (NATS can leave some of several
+// concurrent identical stream requests unanswered) keeps the old
+// count until a later peer event. A stream ensured in that window
+// would get R1.
+// Caller holds g.mu.
+func (g *Gateway) eventStreamReplicas() int {
+	replicas := 1
+	if g.peers == nil {
+		return replicas
+	}
+	if r := int(g.peers.currentR.Load()); r > replicas {
+		replicas = r
+	}
+	if r := g.cfg.clusterReplicas.For(len(g.peers.LivePeers())); r > replicas {
+		replicas = r
+	}
+	return replicas
 }
 
 // ensureEventStream creates or updates one stream. It never lowers

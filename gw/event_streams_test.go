@@ -94,3 +94,37 @@ func TestEventStreams_ClusterReplicaPolicy(t *testing.T) {
 	}
 	waitStream(t, testCluster.a.JS, "EV_orders_v1_OrderEvents", func(c jetstream.StreamConfig) bool { return c.Replicas == 2 })
 }
+
+// TestEventStreams_ReplicasFollowPolicyWhileCurrentRLags: a node whose
+// own KV replica raise has not been answered yet (currentR still 1)
+// ensures streams at the policy for its live peers, not at R1. When
+// a cluster forms every node raises the KV buckets at once and NATS
+// leaves some of the identical requests unanswered, so currentR can
+// stay behind for a peer-refresh interval or more (e2e story S11).
+func TestEventStreams_ReplicasFollowPolicyWhileCurrentRLags(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		policy   ClusterReplicas
+		live     int
+		currentR int32
+		want     int
+	}{
+		{"lagging currentR, odd, 3 live", ClusterReplicasOdd, 3, 1, 3},
+		{"lagging currentR, auto, 2 live", ClusterReplicasAuto, 2, 1, 2},
+		{"odd, 2 live stays R1", ClusterReplicasOdd, 2, 1, 1},
+		{"never below currentR", ClusterReplicasOdd, 1, 3, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &Gateway{cfg: &config{clusterReplicas: tc.policy}}
+			p := &peerTracker{gw: g, live: map[string]struct{}{}}
+			for i := 0; i < tc.live; i++ {
+				p.live[string(rune('a'+i))] = struct{}{}
+			}
+			p.currentR.Store(tc.currentR)
+			g.peers = p
+			if got := g.eventStreamReplicas(); got != tc.want {
+				t.Errorf("eventStreamReplicas() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
