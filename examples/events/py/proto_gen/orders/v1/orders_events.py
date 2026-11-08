@@ -16,6 +16,7 @@ from gwag_events import (
     Channel,
     Core,
     Message,
+    Serde,
     Stop,
     SubscribeOptions,
     Subscription,
@@ -183,8 +184,10 @@ class OrdersBus:
     """Publishes and listens on the event channels declared in
     orders/v1/orders.proto."""
 
-    def __init__(self, backend: Backend, *, logf: Callable[[str], None] | None = None) -> None:
-        self._core = Core(backend, logf=logf)
+    def __init__(
+        self, backend: Backend, *, serde: Serde | None = None, logf: Callable[[str], None] | None = None
+    ) -> None:
+        self._core = Core(backend, serde=serde, logf=logf)
 
     @property
     def core(self) -> Core:

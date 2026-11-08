@@ -20,7 +20,7 @@ import (
 var pyReserved = map[string]bool{
 	"annotations": true, "Awaitable": true, "Callable": true, "Mapping": true, "Sequence": true,
 	"Any": true, "TypeAlias": true, "cast": true, "dataclass": true, "betterproto2": true,
-	"Backend": true, "Channel": true, "Core": true, "Message": true, "Stop": true,
+	"Backend": true, "Channel": true, "Core": true, "Message": true, "Serde": true, "Stop": true,
 	"SubscribeOptions": true, "Subscription": true, "message_from": true,
 	"register_file_descriptors": true,
 }
@@ -344,7 +344,7 @@ func (pf *pyFile_) render() string {
 	} else {
 		w.P("from gwag_events import (")
 	}
-	for _, n := range []string{"Backend", "Channel", "Core", "Message", "Stop", "SubscribeOptions", "Subscription", "message_from", "register_file_descriptors"} {
+	for _, n := range []string{"Backend", "Channel", "Core", "Message", "Serde", "Stop", "SubscribeOptions", "Subscription", "message_from", "register_file_descriptors"} {
 		if n == "message_from" && !needBP {
 			continue
 		}
@@ -516,8 +516,10 @@ func (pf *pyFile_) bus_(w *pyWriter) {
 	w.P("    \"\"\"Publishes and listens on the event channels declared in")
 	w.P("    ", pf.f.Path(), ".\"\"\"")
 	w.P()
-	w.P("    def __init__(self, backend: Backend, *, logf: Callable[[str], None] | None = None) -> None:")
-	w.P("        self._core = Core(backend, logf=logf)")
+	w.P("    def __init__(")
+	w.P("        self, backend: Backend, *, serde: Serde | None = None, logf: Callable[[str], None] | None = None")
+	w.P("    ) -> None:")
+	w.P("        self._core = Core(backend, serde=serde, logf=logf)")
 	w.P()
 	w.P("    @property")
 	w.P("    def core(self) -> Core:")
