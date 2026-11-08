@@ -30,12 +30,14 @@ Role by operation:
 | `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand` | 401 | yes | yes |
 | `putExternalDependent`, `deleteExternalDependent` | 401 | yes | yes |
 | `forgetPeer`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes |
+| `createAppKey`, `listAppKeys`, `revokeAppKey` (app keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes |
 
 A wrong bearer is 401 on every route, reads included, so a client
 learns at once that its token is stale. `GET /admin/whoami` returns
 the role (`anonymous`, `dev`, `admin`); the UI uses it for the role
 chip and to disable the controls a role cannot use. An admin route
 that is not in the table needs dev for GET and admin otherwise.
+`listAppKeys` is the one GET that needs admin.
 Routes you wrap in `AdminMiddleware` yourself keep the old rule:
 GET / HEAD / OPTIONS open, everything else admin.
 
@@ -127,7 +129,9 @@ crashes, mis-deploys, or DOS's cannot lock operators out — only an
 explicit `DENIED` short-circuits.
 
 Admin auth is unrelated to outbound auth to OpenAPI backends. For
-that, see below.
+that, see below. Services authenticate to the control plane with app
+keys, not admin tokens ([services.md](./services.md#app-keys)); the
+admin token is accepted there too.
 
 ## Outbound HTTP transport for OpenAPI dispatch
 

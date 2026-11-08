@@ -187,6 +187,12 @@ type sharedConn struct {
 }
 
 func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest) (*cpv1.RegisterResponse, error) {
+	// The key is checked before anything is compiled or introspected;
+	// its namespaces once the bindings name theirs.
+	caller, err := cp.gw.controlPlaneCaller(ctx, appKeyOpRegister)
+	if err != nil {
+		return nil, err
+	}
 	if req.GetAddr() == "" {
 		return nil, fmt.Errorf("controlplane: addr is required")
 	}
@@ -361,6 +367,14 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			timeoutMs:                 b.GetTimeoutMs(),
 			manifest:                  manifest,
 		})
+	}
+
+	var bindingNS []string
+	for _, p := range prep {
+		bindingNS = append(bindingNS, p.namespace)
+	}
+	if err := caller.cover(cp.gw, bindingNS); err != nil {
+		return nil, err
 	}
 
 	id := newRegID()
@@ -609,9 +623,22 @@ func (cp *controlPlane) deleteKVKeys(ctx context.Context, kv jetstream.KeyValue,
 }
 
 func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatRequest) (*cpv1.HeartbeatResponse, error) {
+	// With WithRequireAppKeys an expired or revoked key fails here, so
+	// the registration is not refreshed and drops at its TTL.
+	caller, err := cp.gw.controlPlaneCaller(ctx, appKeyOpHeartbeat)
+	if err != nil {
+		return nil, err
+	}
 	cp.mu.Lock()
 	reg, ok := cp.regs[req.GetRegistrationId()]
+	var lines []string
+	if ok {
+		lines = append(lines, reg.namespaces...)
+	}
 	cp.mu.Unlock()
+	if err := caller.cover(cp.gw, lineNamespaces(lines)); err != nil {
+		return nil, err
+	}
 	if !ok {
 		return &cpv1.HeartbeatResponse{Ok: false}, nil
 	}
@@ -645,8 +672,22 @@ func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatReques
 }
 
 func (cp *controlPlane) Deregister(ctx context.Context, req *cpv1.DeregisterRequest) (*cpv1.DeregisterResponse, error) {
+	caller, err := cp.gw.controlPlaneCaller(ctx, appKeyOpDeregister)
+	if err != nil {
+		return nil, err
+	}
 	cp.mu.Lock()
 	reg, ok := cp.regs[req.GetRegistrationId()]
+	var lines []string
+	if ok {
+		lines = append(lines, reg.namespaces...)
+	}
+	cp.mu.Unlock()
+	if err := caller.cover(cp.gw, lineNamespaces(lines)); err != nil {
+		return nil, err
+	}
+	cp.mu.Lock()
+	reg, ok = cp.regs[req.GetRegistrationId()]
 	if !ok {
 		cp.mu.Unlock()
 		return &cpv1.DeregisterResponse{}, nil
@@ -769,6 +810,9 @@ func (cp *controlPlane) ListPeers(ctx context.Context, _ *cpv1.ListPeersRequest)
 //   - the peer is the local node (forgetting yourself is nonsensical)
 //   - the peer is still alive (entry present in peers KV)
 func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequest) (*cpv1.ForgetPeerResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "forget_peer"); err != nil {
+		return nil, err
+	}
 	if req.GetNodeId() == "" {
 		return nil, fmt.Errorf("controlplane: node_id is required")
 	}
@@ -907,6 +951,9 @@ func (cp *controlPlane) SignSubscriptionToken(ctx context.Context, req *cpv1.Sig
 // local state and rebuilds. Either way, an admin_events_watchServices
 // frame is published so subscribers re-fetch.
 func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStableRequest) (*cpv1.RetractStableResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "retract_stable"); err != nil {
+		return nil, err
+	}
 	ns := req.GetNamespace()
 	target := int(req.GetTargetVN())
 	if ns == "" {

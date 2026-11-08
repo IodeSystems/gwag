@@ -27,7 +27,7 @@ accept a URL with a path.
 | Flag | Default | |
 |---|---|---|
 | `--schema-registry` | off | mount the API at `/schema-registry` |
-| `--schema-registry-writes` | off | let the admin token register schemas and set compatibility levels |
+| `--schema-registry-writes` | off | allow writes: dev and admin tokens and app keys register and delete schemas, the admin token sets compatibility levels |
 | `--schema-registry-strategy` | `topic` | subject of a channel's message: `topic` (`<topic>-value`), `record` (`<message>`), `topic-record` (`<topic>-<message>`) |
 | `--schema-registry-topic KEY=TOPIC` | `EV_<pkg>_<Name>` | Kafka topic of a channel (repeatable) |
 | `--schema-registry-first-id N` | 1 | lowest id gwag allocates |
@@ -114,21 +114,69 @@ named channels.
 ## Auth and writes
 
 - Reads need no token, like the schema export (`/api/schema/*`).
-- Writes (`POST /subjects/{s}/versions`, `PUT /config`) answer `42205`
-  (read-only) unless `--schema-registry-writes`. With it, only the
-  admin token writes: as the basic-auth password (the user name is
-  ignored; Confluent clients send `basic.auth.user.info=x:TOKEN`) or as
-  a bearer. No token: `40101`. The dev token: `40301`.
+- Writes (`POST /subjects/{s}/versions`, `DELETE /subjects/...`,
+  `PUT /config`) answer `42205` (read-only) unless
+  `--schema-registry-writes`. With it, the token goes as the basic-auth
+  password (the user name is ignored; Confluent clients send
+  `basic.auth.user.info=x:TOKEN`) or as a bearer:
+
+  | Token | Register, delete | `PUT /config`, `/gwag/import` |
+  |---|---|---|
+  | admin | every subject | yes |
+  | dev | every subject | `40301` |
+  | app key | the subjects of its namespaces' channels | `40301` |
+  | none, or an unknown, expired or revoked key | `40101` | `40101` |
+
+- An app key's subjects are, for every named channel a slot of one of
+  its namespaces declares, the subject of each channel message (by the
+  strategy above) and the subjects of the files those messages import
+  (by import path, well-known files excluded). An import file two
+  namespaces share, such as `gw/proto/ps/v1/options.proto`, belongs to
+  both. Other subjects, such as ones imported from the corp registry,
+  need the dev or admin token (`40301`). The namespace's slot must be
+  registered for its channels to count. App keys work here whether or
+  not the gateway runs with `--require-app-keys`. See
+  [services.md](./services.md#app-keys).
 - `GET /mode` answers `READONLY` or `READWRITE`.
 - The import endpoint needs the admin token, writes on or off.
+
+## Deletes
+
+As in Confluent, a delete is soft first:
+
+- `DELETE /subjects/{s}` soft-deletes every live version and answers
+  the version numbers (`[1,2]`). The versions stay readable with
+  `?deleted=true`. Again on a soft-deleted subject: `40404`.
+- `DELETE /subjects/{s}?permanent=true` removes the soft-deleted
+  versions, the subject and its compatibility level. On a subject with
+  live versions: `40405`.
+- `DELETE /subjects/{s}/versions/{v|latest}` soft-deletes one version
+  and answers its number; `?permanent=true` removes it. A soft-deleted
+  version deleted soft again: `40406`; a live version deleted
+  permanently: `40407`.
+- A delete is refused with `42206` while any schema, in a live or a
+  soft-deleted version, references the version (`references` naming
+  that subject and version), for every token, admin included. Delete
+  the referrer first, permanently.
+- A permanent delete also drops a schema id no subject version holds
+  any more: `GET /schemas/ids/{id}` then answers `40403`. Ids are not
+  reused. The next registration in a subject takes the number after
+  its highest remaining version, so a permanently deleted number can
+  come back.
+- gwag registers its channels' subjects again only when a channel's
+  file changes or the gateway restarts; a deleted channel subject
+  stays deleted until then.
 
 ## Endpoints
 
 Content type `application/vnd.schemaregistry.v1+json`; errors are
 `{"error_code", "message"}` with Confluent's codes (`40401` subject,
-`40402` version, `40403` schema not found; `40408` no subject-level
-config; `42201` invalid schema; `42202` invalid version; `42203`
-invalid level; `42205` read-only; `50003` store not ready).
+`40402` version, `40403` schema not found; `40404` / `40406` subject /
+version soft-deleted; `40405` / `40407` subject / version not
+soft-deleted first; `40408` no subject-level config; `42201` invalid
+schema; `42202` invalid version; `42203` invalid level; `42205`
+read-only; `42206` referenced; `40101` no valid token; `40301` token
+not allowed; `50003` store not ready).
 
 | Route | |
 |---|---|
@@ -141,6 +189,8 @@ invalid level; `42205` read-only; `50003` store not ready).
 | `GET /subjects/{s}/versions/{v}/schema`, `/referencedby` | |
 | `POST /subjects/{s}` | lookup: the version holding the schema; never registers |
 | `POST /subjects/{s}/versions` | register (writes only) |
+| `DELETE /subjects/{s}` | soft, or `?permanent=true` (writes only) |
+| `DELETE /subjects/{s}/versions/{v\|latest}` | soft, or `?permanent=true` (writes only) |
 | `GET /config`, `GET /config/{s}` | `?defaultToGlobal`; global default `BACKWARD` |
 | `PUT /config`, `PUT /config/{s}` | writes only |
 | `GET /mode`, `GET /mode/{s}` | |
@@ -149,8 +199,7 @@ invalid level; `42205` read-only; `50003` store not ready).
 | `GET /contexts` | `["."]` |
 | `POST /gwag/import` | admin token; body from `gwag schema import` |
 
-Not implemented: deletes (`DELETE /subjects/...`, answer `42205` or
-`405`), `PUT /mode`, schema contexts other than `.`, exporters, and
+Not implemented: `DELETE /config`, `PUT /mode`, schema contexts other than `.`, exporters, and
 compatibility checks of AVRO and JSON schemas (identical text only).
 
 ## Matching schemas

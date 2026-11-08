@@ -46,8 +46,11 @@ const ControlPlaneSubject = "gateway.controlplane.v1.ControlPlane"
 // (POST /gwag/import, admin token).
 //
 // The REST API is READONLY unless SchemaRegistryOptions.Writes; then
-// the admin token (basic-auth password or bearer) may register and set
-// compatibility levels. Reads need no token.
+// the dev and admin tokens (basic-auth password or bearer) may
+// register and delete schemas, an app key may register and delete the
+// subjects of its namespaces' channels (ownedSubjects), and the admin
+// token may set compatibility levels. A delete is refused while
+// another schema references the version. Reads need no token.
 
 const schemasBucketName = "gwag-schemas"
 
@@ -62,8 +65,10 @@ type SchemaRegistryOptions struct {
 	// Topics maps a channel key (orders.v1.OrderEvents) to its Kafka
 	// topic. Default: events.StreamName(key) (EV_orders_v1_OrderEvents).
 	Topics map[string]string
-	// Writes lets the admin token register schemas and set
-	// compatibility levels over the REST API (mode READWRITE).
+	// Writes turns on writes over the REST API (mode READWRITE): the
+	// dev and admin tokens register and delete schemas, an app key
+	// the subjects of its namespaces' channels, and the admin token
+	// sets compatibility levels.
 	Writes bool
 	// FirstID is the lowest schema id gwag allocates (default 1). Ids
 	// are always allocated above every id the registry holds, imported
@@ -102,8 +107,8 @@ func newSchemaRegistry(g *Gateway) *schemaRegistry {
 	}
 	strategy, _ := sr.StrategyByName(o.Strategy) // validated in New
 	r := &schemaRegistry{g: g, o: *o, strategy: strategy, kick: make(chan struct{}, 1), done: map[string]string{}}
-	r.public = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: o.Writes, Role: g.schemaRegistryRole})
-	r.internal = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: true, Role: func(*http.Request) srserve.Role { return srserve.RoleAdmin }})
+	r.public = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: o.Writes, Caller: g.schemaRegistryCaller})
+	r.internal = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: true, Caller: func(*http.Request) srserve.Caller { return srserve.Caller{Role: srserve.RoleAdmin} }})
 	if g.cfg.cluster == nil {
 		r.store.Store(srserve.NewStore(srserve.NewMemKV(), o.FirstID))
 		r.trigger() // the default subject
@@ -133,10 +138,12 @@ func (g *Gateway) SchemaRegistryHandler() http.Handler {
 	return g.sr.public
 }
 
-// schemaRegistryRole resolves the caller from a bearer token or the
+// schemaRegistryCaller resolves the caller from a bearer token or the
 // basic-auth password (Confluent clients send basic auth; the user
-// name is ignored).
-func (g *Gateway) schemaRegistryRole(r *http.Request) srserve.Role {
+// name is ignored): the admin or dev token (or an AdminAuthorizer
+// OK), else an app key. A minted app key skips the admin checks. App
+// keys work here whether or not WithRequireAppKeys is set.
+func (g *Gateway) schemaRegistryCaller(r *http.Request) srserve.Caller {
 	tok := bearerFromRequest(r)
 	if tok == "" {
 		if _, pw, ok := r.BasicAuth(); ok {
@@ -144,15 +151,76 @@ func (g *Gateway) schemaRegistryRole(r *http.Request) srserve.Role {
 		}
 	}
 	if tok == "" {
-		return srserve.RoleAnonymous
+		return srserve.Caller{}
 	}
-	switch g.adminRoleFromBearer(r.Context(), tok, r.Method, r.URL.Path) {
-	case adminRoleAdmin:
-		return srserve.RoleAdmin
-	case adminRoleDev:
-		return srserve.RoleOther
+	if _, minted := parseAppKey(tok); !minted {
+		switch g.adminRoleFromBearer(r.Context(), tok, r.Method, r.URL.Path) {
+		case adminRoleAdmin:
+			return srserve.Caller{Role: srserve.RoleAdmin}
+		case adminRoleDev:
+			return srserve.Caller{Role: srserve.RoleDev}
+		}
 	}
-	return srserve.RoleAnonymous
+	if isAdminPublicMethod(r.Method) {
+		return srserve.Caller{} // reads need no key; do not count them
+	}
+	grant, err := g.checkAppKey(r.Context(), tok, appKeyOpSchemaWrite, nil, r.RemoteAddr)
+	if err != nil {
+		g.recordAppKeyAuth(appKeyOpSchemaWrite, appKeyOutcome(err))
+		return srserve.Caller{}
+	}
+	return srserve.Caller{Role: srserve.RoleApp, Owns: func(subject string) bool {
+		ok := g.sr.ownedSubjects(grant.namespaces)[subject]
+		outcome := "ok"
+		if !ok {
+			outcome = "namespace_forbidden"
+		}
+		g.recordAppKeyAuth(appKeyOpSchemaWrite, outcome)
+		return ok
+	}}
+}
+
+// ownedSubjects is the set of subjects that belong to the named
+// channels of namespaces: each channel message's subject, and the
+// subjects of the files it imports (by import path, as the sync and
+// the serdes register them; well-known files excluded). An import
+// file two namespaces share belongs to both.
+func (r *schemaRegistry) ownedSubjects(namespaces []string) map[string]bool {
+	out := map[string]bool{}
+	idx := r.g.channelBindingIndex.Load()
+	if idx == nil {
+		return out
+	}
+	var imports func(fd protoreflect.FileDescriptor)
+	imports = func(fd protoreflect.FileDescriptor) {
+		imps := fd.Imports()
+		for i := 0; i < imps.Len(); i++ {
+			dep := imps.Get(i).FileDescriptor
+			if sr.Builtin(dep.Path()) || out[dep.Path()] {
+				continue
+			}
+			out[dep.Path()] = true
+			imports(dep)
+		}
+	}
+	for _, ch := range idx.channels {
+		if !containsString(namespaces, ch.namespace) {
+			continue
+		}
+		topic := r.o.Topics[ch.key]
+		if topic == "" {
+			topic = ch.streamName()
+		}
+		for _, t := range ch.types {
+			md := ch.descs[t]
+			if md == nil {
+				continue
+			}
+			out[r.strategy(topic, md)] = true
+			imports(md.ParentFile())
+		}
+	}
+	return out
 }
 
 // openSchemasBucket opens (creating at R1) the bucket. No TTL; one

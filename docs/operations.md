@@ -125,8 +125,8 @@ entry's delete marker, so routing has no gap.
 ## Cluster KV replicas
 
 The cluster keeps its state in JetStream KV buckets (peers, registry,
-stable, deprecated, mcp config, drain, external dependents, and
-`gwag-schemas` with `--schema-registry`). They start
+stable, deprecated, mcp config, drain, external dependents, app keys,
+and `gwag-schemas` with `--schema-registry`). They start
 at one replica. As peers join, each node raises every bucket to the
 count the replica policy gives for the live peers. Set the policy with
 `--cluster-replicas` (`gwag up`, example gateway) or
@@ -353,6 +353,9 @@ instance or line. Default sink only.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `admin_auth_total` | counter | `method`, `outcome`, `role` | Admin auth checks: `ok_delegate`, `ok_bearer`, `denied_delegate`, `denied_bearer`, `forbidden_role` (valid token, role too low for the route), `no_token_configured`. `role`: `admin`, `dev` or `anonymous`. A read without a bearer is not counted. |
+| `app_key_auth_total` | counter | `op`, `outcome` | App-key checks. `op`: `register`, `heartbeat`, `deregister`, `drain_instance`, `schema_registry_write`, or an operator RPC (`forget_peer`, `retract_stable`, `deprecate`, `undeprecate`). `outcome`: `ok`, `ok_admin`, `missing`, `invalid`, `expired`, `denied_delegate`, `namespace_forbidden`, `unavailable`, `admin_required`. Control-plane checks run only with `--require-app-keys`. Default sink only. |
+| `app_key_expiry_seconds` | gauge | `key_id` | Seconds until each key the gateway minted expires; negative once expired. Cluster-wide set, read at scrape. Default sink only. |
+| `app_keys_expiring` | gauge | none | Minted keys that expire within 7 days and have not expired. Default sink only. |
 | `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
 | `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
 | `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |

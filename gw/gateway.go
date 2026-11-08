@@ -208,6 +208,10 @@ type Gateway struct {
 	// externals holds the declared external dependents
 	// (external_dependents.go).
 	externals externalDependents
+	// appKeys is the standalone app-key store and the expiry warning
+	// state (app_keys.go).
+	appKeys       appKeys
+	appKeyMetrics *appKeyMetrics // nil unless the default Prometheus sink is in use
 	// declView and declSinks feed the declaration change sinks
 	// (declaration_sinks.go). declSinks is nil when none is configured.
 	declView  declarationView
@@ -318,6 +322,8 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
+	// requireAppKeys is WithRequireAppKeys (app_keys.go).
+	requireAppKeys bool
 	// devToken is the WithDevToken value; nil = generate (and persist
 	// under adminDataDir) at New.
 	devToken []byte
@@ -1500,7 +1506,9 @@ func New(opts ...Option) *Gateway {
 		g.tm = pm.traffic
 		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
+		g.appKeyMetrics = newAppKeyMetrics(g, pm)
 	}
+	go g.appKeyWarnLoop()
 	warnShortHexSecret("signer-secret", cfg.signerSecret)
 	warnShortHexSecret("subscribe-secret", cfg.subAuth.Secret)
 	for kid, sec := range cfg.subAuth.Secrets {

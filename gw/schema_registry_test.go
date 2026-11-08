@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,7 +116,6 @@ func TestSchemaRegistry_Writes(t *testing.T) {
 		code int
 	}{
 		{sr.Config{}, 40101},
-		{sr.Config{Token: g.DevTokenHex()}, 40301},
 		{sr.Config{Username: "u", Password: "wrong"}, 40101},
 	} {
 		_, err := srClient(t, url, tc.cfg).Register(ctx, "x-value", x, false)
@@ -124,11 +124,91 @@ func TestSchemaRegistry_Writes(t *testing.T) {
 			t.Errorf("%+v: %v, want %d", tc.cfg, err, tc.code)
 		}
 	}
-	for _, cfg := range []sr.Config{{Username: "u", Password: g.AdminTokenHex()}, {Token: g.AdminTokenHex()}} {
+	for _, cfg := range []sr.Config{{Token: g.DevTokenHex()}, {Username: "u", Password: g.AdminTokenHex()}, {Token: g.AdminTokenHex()}} {
 		id, err := srClient(t, url, cfg).Register(ctx, "x-value", x, false)
 		if err != nil || id != 1000 {
-			t.Errorf("admin register: %d %v", id, err)
+			t.Errorf("dev or admin register: %d %v", id, err)
 		}
+	}
+	// Compatibility levels stay admin only.
+	req, _ := http.NewRequest(http.MethodPut, url+"/config", strings.NewReader(`{"compatibility":"NONE"}`))
+	req.Header.Set("Authorization", "Bearer "+g.DevTokenHex())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("PUT /config as dev: %d", resp.StatusCode)
+	}
+}
+
+// An app key writes the subjects of its namespaces' channels (and
+// their imports), not others; an expired or revoked key is
+// anonymous. Works without WithRequireAppKeys.
+func TestSchemaRegistry_AppKeys(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{Writes: true}))
+	t.Cleanup(g.Close)
+	addOrdersProto(t, g)
+	url := srServer(t, g)
+	ctx := context.Background()
+	anon := srClient(t, url, sr.Config{})
+	waitSubject(t, anon, "EV_orders_v1_OrderEvents-value")
+	ordersID, ordersKey := mintKey(t, g, time.Hour, "orders")
+	_, billingKey := mintKey(t, g, time.Hour, "billing")
+	orders := srClient(t, url, sr.Config{Username: "svc", Password: ordersKey})
+	fd := ordersv1.File_orders_v1_orders_proto
+
+	if _, err := orders.EnsureFile(ctx, "EV_orders_v1_OrderEvents-value", fd, sr.RegisterOptions{Register: true}); err != nil {
+		t.Fatalf("app key on its channel subject: %v", err)
+	}
+	code := func(err error) int {
+		var e *sr.Error
+		if errors.As(err, &e) {
+			return e.Code
+		}
+		return 0
+	}
+	x := sr.Schema{Schema: `syntax = "proto3"; package x; message X {}`}
+	if _, err := orders.Register(ctx, "corp-imported-value", x, false); code(err) != 40301 {
+		t.Errorf("app key on a subject of no channel of its namespaces: %v", err)
+	}
+	if _, err := srClient(t, url, sr.Config{Token: billingKey}).EnsureFile(ctx, "EV_orders_v1_OrderEvents-value", fd, sr.RegisterOptions{Register: true}); code(err) != 40301 {
+		t.Errorf("another namespace's key: %v", err)
+	}
+	// The dev token adds the imported subject; the app key may not
+	// delete it, the dev token may.
+	if _, err := srClient(t, url, sr.Config{Token: g.DevTokenHex()}).Register(ctx, "corp-imported-value", x, false); err != nil {
+		t.Fatal(err)
+	}
+	del := func(tok, path string) int {
+		req, _ := http.NewRequest(http.MethodDelete, url+path, nil)
+		req.SetBasicAuth("u", tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := del(ordersKey, "/subjects/corp-imported-value"); c != http.StatusForbidden {
+		t.Errorf("app key deletes a foreign subject: %d", c)
+	}
+	if c := del(g.DevTokenHex(), "/subjects/corp-imported-value"); c != http.StatusOK {
+		t.Errorf("dev deletes an unreferenced subject: %d", c)
+	}
+	// Referenced: the channel subject references options.proto.
+	if c := del(ordersKey, "/subjects/gw%2Fproto%2Fps%2Fv1%2Foptions.proto/versions/1"); c != http.StatusUnprocessableEntity {
+		t.Errorf("app key deletes a referenced import: %d", c)
+	}
+	if c := del(ordersKey, "/subjects/EV_orders_v1_OrderEvents-value"); c != http.StatusOK {
+		t.Errorf("app key deletes its channel subject: %d", c)
+	}
+	if err := g.deleteAppKey(ctx, ordersID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orders.Register(ctx, "EV_orders_v1_OrderEvents-value", x, false); code(err) != 40101 {
+		t.Errorf("revoked key: %v", err)
 	}
 }
 

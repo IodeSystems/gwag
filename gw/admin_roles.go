@@ -130,11 +130,19 @@ var adminDevWriteOps = map[string]bool{
 	"mcpSchemaExpand":         true,
 }
 
+// adminAdminReadOps are the GET admin operations only the admin role
+// may call: the app-key list.
+var adminAdminReadOps = map[string]bool{
+	"listAppKeys": true,
+}
+
 // adminOpNeed is the role an admin operation needs. Operations not
 // listed above: GET needs dev, anything else admin — so a new route
 // is closed until someone opens it on purpose.
 func adminOpNeed(op *huma.Operation) adminRole {
 	switch {
+	case adminAdminReadOps[op.OperationID]:
+		return adminRoleAdmin
 	case adminAnonymousOps[op.OperationID]:
 		return adminRoleAnonymous
 	case adminDevWriteOps[op.OperationID], op.Method == http.MethodGet:

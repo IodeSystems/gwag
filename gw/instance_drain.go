@@ -708,6 +708,16 @@ func (g *Gateway) listInstanceDrains(line string) []instanceDrainStatus {
 
 // DrainInstance implements the control-plane RPC.
 func (cp *controlPlane) DrainInstance(ctx context.Context, req *cpv1.DrainInstanceRequest) (*cpv1.DrainInstanceResponse, error) {
+	caller, err := cp.gw.controlPlaneCaller(ctx, appKeyOpDrain)
+	if err != nil {
+		return nil, err
+	}
+	// An unknown instance checks the key only; drainInstance answers
+	// NotFound.
+	ns, _ := cp.gw.drainInstanceNamespaces(req.GetInstance())
+	if err := caller.cover(cp.gw, ns); err != nil {
+		return nil, err
+	}
 	st, err := cp.gw.drainInstance(ctx, req.GetInstance(), req.GetCancel())
 	if err != nil {
 		if errors.Is(err, errDrainUnknownInstance) {

@@ -22,23 +22,27 @@ import (
 
 const token = "admin-secret"
 
-func role(r *http.Request) srserve.Role {
+// Tokens: token is admin, "dev" is dev, "app" is an app key owning
+// the subjects that start with "app-".
+func caller(r *http.Request) srserve.Caller {
 	_, pw, ok := r.BasicAuth()
 	if !ok {
 		pw = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
 	switch pw {
-	case "":
-		return srserve.RoleAnonymous
 	case token:
-		return srserve.RoleAdmin
+		return srserve.Caller{Role: srserve.RoleAdmin}
+	case "dev":
+		return srserve.Caller{Role: srserve.RoleDev}
+	case "app":
+		return srserve.Caller{Role: srserve.RoleApp, Owns: func(s string) bool { return strings.HasPrefix(s, "app-") }}
 	}
-	return srserve.RoleOther
+	return srserve.Caller{}
 }
 
 func serve(t *testing.T, st *srserve.Store, writes bool) *httptest.Server {
 	t.Helper()
-	h := srserve.NewHandler(func() *srserve.Store { return st }, srserve.HandlerOptions{Writes: writes, Role: role})
+	h := srserve.NewHandler(func() *srserve.Store { return st }, srserve.HandlerOptions{Writes: writes, Caller: caller})
 	mux := http.NewServeMux()
 	mux.Handle("/sr/", http.StripPrefix("/sr", h))
 	s := httptest.NewServer(mux)
@@ -73,14 +77,14 @@ func TestRegisterAndRead(t *testing.T) {
 	s := serve(t, st, true)
 	admin := client(t, s.URL+"/sr", sr.Config{Username: "any", Password: token})
 	anon := client(t, s.URL+"/sr", sr.Config{})
-	other := client(t, s.URL+"/sr", sr.Config{Token: "dev"})
+	other := client(t, s.URL+"/sr", sr.Config{Token: "app"})
 
 	fd := ordersv1.File_orders_v1_orders_proto
 	if _, err := anon.EnsureFile(ctx, "orders-value", fd, sr.RegisterOptions{Register: true}); code(err) != 40101 {
 		t.Fatalf("anonymous register: %v", err)
 	}
 	if _, err := other.EnsureFile(ctx, "orders-value", fd, sr.RegisterOptions{Register: true}); code(err) != 40301 {
-		t.Fatalf("dev register: %v", err)
+		t.Fatalf("app key register of a subject it does not own: %v", err)
 	}
 	got, err := admin.EnsureFile(ctx, "orders-value", fd, sr.RegisterOptions{Register: true})
 	if err != nil {
