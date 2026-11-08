@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -186,6 +187,7 @@ func TestS13ReplicaSwap(t *testing.T) {
 	pub.waitAcked(t, 20, 30*time.Second)
 
 	// ---- blue leaves, one node at a time -----------------------------
+	var evacuated []string
 	for i, b := range blue {
 		id := b.NodeID(t)
 		lb.Pull(b)
@@ -193,7 +195,8 @@ func TestS13ReplicaSwap(t *testing.T) {
 		s13LogPlacement(t, js, "before evacuating "+b.Name)
 		ev := g1.Evacuate(t, id, false, 2*time.Minute)
 		t.Logf("%s evacuated (%s)", b.Name, ev.Name)
-		s13RequireOff(t, js, b.Name)
+		evacuated = append(evacuated, b.Name)
+		s13RequireR3Off(t, js, evacuated)
 		b.Proc.Stop(30 * time.Second)
 		f := g1.Forget(t, id, 2*time.Minute)
 		if !f.MetaRemoved || f.NewReplicas != 3 {
@@ -537,6 +540,23 @@ func s13RequireOff(t *testing.T, js jetstream.JetStream, node string) {
 		for _, n := range nodes {
 			if n == node {
 				t.Fatalf("%s still has a replica on %s after evacuation: %v", name, node, nodes)
+			}
+		}
+	}
+}
+
+// s13RequireR3Off fails unless every stream (gateway buckets, the
+// event stream) is at R3 on three servers, none of them in gone.
+// After the last evacuation that is the green nodes only.
+func s13RequireR3Off(t *testing.T, js jetstream.JetStream, gone []string) {
+	t.Helper()
+	for name, nodes := range s13Placement(t, js) {
+		if r := s13Replicas(t, js, name); r != 3 || len(nodes) != 3 {
+			t.Fatalf("%s at R%d on %v after evacuating %v", name, r, nodes, gone)
+		}
+		for _, n := range nodes {
+			if slices.Contains(gone, n) {
+				t.Fatalf("%s still has a replica on %s after evacuation: %v", name, n, nodes)
 			}
 		}
 	}
