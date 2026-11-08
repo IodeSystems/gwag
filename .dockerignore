@@ -28,3 +28,11 @@ ui/node_modules/
 **/*.pprof
 **/*.log
 docs/plan.md
+
+# Image build (Dockerfile at the repo root): keep credentials and VCS
+# state out of the context.
+.gw/
+.claude/
+**/node_modules/
+bin/.run/
+.git
