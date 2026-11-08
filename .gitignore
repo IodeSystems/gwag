@@ -6,6 +6,12 @@
 /bin/.run/
 .claude/
 
+# uv projects (py/, examples/events/py*): environments and tool caches.
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
 # `go build ./gw/cmd/gwag` from the repo root drops a `gwag` binary
 # here. Use `bin/gwag` (cached under bin/.run/) instead.
 /gwag
