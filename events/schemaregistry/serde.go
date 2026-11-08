@@ -2,6 +2,7 @@ package schemaregistry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -80,6 +81,7 @@ type Serde struct {
 	c         *Client
 	strategy  SubjectNameStrategy
 	mode      idMode
+	modes     int // count of mode options given
 	id        int
 	normalize bool
 	refSubj   func(string) string
@@ -111,21 +113,21 @@ func WithSubjectNameStrategy(s SubjectNameStrategy) SerdeOption {
 // the schema up and fails when it is not registered.
 //
 // Stability: experimental
-func AutoRegister() SerdeOption { return func(x *Serde) { x.mode = modeRegister } }
+func AutoRegister() SerdeOption { return func(x *Serde) { x.mode, x.modes = modeRegister, x.modes+1 } }
 
 // UseLatest frames with the subject's latest schema, without comparing
 // it to the local proto (Confluent's use.latest.version). The message
 // must exist in that schema under the same full name.
 //
 // Stability: experimental
-func UseLatest() SerdeOption { return func(x *Serde) { x.mode = modeLatest } }
+func UseLatest() SerdeOption { return func(x *Serde) { x.mode, x.modes = modeLatest, x.modes+1 } }
 
 // UseSchemaID frames every publish with schema id. The message must
 // exist in that schema under the same full name.
 //
 // Stability: experimental
 func UseSchemaID(id int) SerdeOption {
-	return func(x *Serde) { x.mode, x.id = modeID, id }
+	return func(x *Serde) { x.mode, x.id, x.modes = modeID, id, x.modes+1 }
 }
 
 // Normalize passes normalize=true to lookups and registrations.
@@ -151,15 +153,26 @@ func TypeNames(m map[string]string) SerdeOption {
 	return func(x *Serde) { x.typeNames = m }
 }
 
-// NewSerde returns a Serde over c.
+// ErrExclusiveModes is returned by NewSerde when more than one of
+// AutoRegister, UseLatest and UseSchemaID is given. The Go, TypeScript
+// and Python serdes reject the combination with this same text.
 //
 // Stability: experimental
-func NewSerde(c *Client, opts ...SerdeOption) *Serde {
+var ErrExclusiveModes = errors.New("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one")
+
+// NewSerde returns a Serde over c. It returns ErrExclusiveModes when
+// more than one of AutoRegister, UseLatest and UseSchemaID is given.
+//
+// Stability: experimental
+func NewSerde(c *Client, opts ...SerdeOption) (*Serde, error) {
 	s := &Serde{c: c, strategy: TopicNameStrategy}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.modes > 1 {
+		return nil, ErrExclusiveModes
+	}
+	return s, nil
 }
 
 // Subject returns the subject a publish of md to topic uses.

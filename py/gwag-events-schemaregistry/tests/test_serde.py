@@ -139,8 +139,17 @@ async def test_use_schema_id_and_latest() -> None:
 
 
 def test_options_are_exclusive() -> None:
-    with pytest.raises(ValueError):
-        _setup(auto_register=True, use_latest=True)
+    msg = "schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one"
+    client = Client(Config(url="http://sr.test", http_client=FakeRegistry().http_client()))
+    for kw in (
+        {"auto_register": True, "use_latest": True},
+        {"use_schema_id": 3, "auto_register": True},
+        {"use_latest": True, "use_schema_id": 3},
+    ):
+        with pytest.raises(ValueError) as e:
+            Serde(client, files=_files(), **kw)
+        assert str(e.value) == msg
+    Serde(client, files=_files(), use_latest=True)
 
 
 async def test_decode_without_gwag_headers() -> None:

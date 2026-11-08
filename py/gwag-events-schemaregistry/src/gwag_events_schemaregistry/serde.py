@@ -97,7 +97,7 @@ class Serde:
         files: Files = default_files,
     ) -> None:
         if sum([auto_register, use_latest, use_schema_id is not None]) > 1:
-            raise ValueError("schema registry: auto_register, use_latest and use_schema_id are exclusive")
+            raise ValueError("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one")
         self._c = client
         self._strategy = subject_name_strategy
         self._register = auto_register

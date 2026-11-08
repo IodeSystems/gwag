@@ -55,15 +55,19 @@ func main() {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
+	register, err := sr.NewSerde(client, sr.AutoRegister())
+	must(err)
+	lookup, err := sr.NewSerde(client)
+	must(err)
 	switch os.Args[1] {
 	case "produce":
-		bus := ordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client, sr.AutoRegister())))
+		bus := ordersv1.NewBus(backend, events.WithSerde(register))
 		must(bus.PublishOrderShipped(ctx, ordersv1.OrderShippedSubject{OrderId: "o-1001"}, &ordersv1.OrderShipped{OrderId: "o-1001", Carrier: "ups"}))
 		must(bus.PublishOrderEvents(ctx, ordersv1.OrderEventsSubject{OrderId: "o-1001"}, &ordersv1.OrderCreated{OrderId: "o-1001", Customer: "ann"}))
 		fmt.Println("produced 2")
 	case "consume":
 		n, _ := strconv.Atoi(os.Args[4])
-		consume(ctx, ordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client))), n)
+		consume(ctx, ordersv1.NewBus(backend, events.WithSerde(lookup)), n)
 	default:
 		log.Fatalf("unknown command %q", os.Args[1])
 	}

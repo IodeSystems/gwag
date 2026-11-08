@@ -72,7 +72,7 @@ func TestOwnAutoRegister(t *testing.T) {
 	ctx := context.Background()
 	b := memory.New()
 	defer b.Close()
-	bus := events.NewCore(topicBackend{b, topic}, events.WithSerde(sr.NewSerde(c, sr.AutoRegister())))
+	bus := events.NewCore(topicBackend{b, topic}, events.WithSerde(mustSerde(t, c, sr.AutoRegister())))
 	got := make(chan *events.Message, 1)
 	stop, err := bus.Subscribe(ctx, orderEvents, "g", func(ctx context.Context, segs []string, m *events.Message) error {
 		got <- m
@@ -108,7 +108,7 @@ func TestDecodeWithoutHeaders(t *testing.T) {
 	c := registry(t)
 	ctx := context.Background()
 	topic := "imp-" + events.NewID()[:8]
-	s := sr.NewSerde(c, sr.AutoRegister())
+	s := mustSerde(t, c, sr.AutoRegister())
 	out := &events.Message{Headers: map[string]string{}}
 	if err := s.Encode(ctx, orderEvents, topic, &ordersv1.OrderCreated{OrderId: "o-9", Customer: "bo"}, out); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestDecodeWithoutHeaders(t *testing.T) {
 		t.Fatalf("not framed: %v", out.Data[:6])
 	}
 	in := &events.Message{Headers: map[string]string{}, Data: out.Data}
-	if err := sr.NewSerde(c).Decode(ctx, orderEvents, topic, in); err != nil {
+	if err := mustSerde(t, c).Decode(ctx, orderEvents, topic, in); err != nil {
 		t.Fatal(err)
 	}
 	if in.Type() != "orders.v1.OrderCreated" {
@@ -129,13 +129,13 @@ func TestDecodeWithoutHeaders(t *testing.T) {
 	}
 	// TypeNames renames for a shadow copy.
 	in = &events.Message{Headers: map[string]string{}, Data: out.Data}
-	if err := sr.NewSerde(c, sr.TypeNames(map[string]string{"orders.v1.OrderCreated": "shop.v1.Created"})).Decode(ctx, orderEvents, topic, in); err != nil || in.Type() != "shop.v1.Created" {
+	if err := mustSerde(t, c, sr.TypeNames(map[string]string{"orders.v1.OrderCreated": "shop.v1.Created"})).Decode(ctx, orderEvents, topic, in); err != nil || in.Type() != "shop.v1.Created" {
 		t.Fatalf("renamed type %q: %v", in.Type(), err)
 	}
 	// Plain proto passes through.
 	plain, _ := proto.Marshal(&oc)
 	in = &events.Message{Headers: map[string]string{events.HeaderType: "orders.v1.OrderCreated"}, Data: plain}
-	if err := sr.NewSerde(c).Decode(ctx, orderEvents, topic, in); err != nil || !bytes.Equal(in.Data, plain) {
+	if err := mustSerde(t, c).Decode(ctx, orderEvents, topic, in); err != nil || !bytes.Equal(in.Data, plain) {
 		t.Fatalf("plain: %v", err)
 	}
 }
@@ -147,14 +147,14 @@ func TestLookupAndLatest(t *testing.T) {
 	ctx := context.Background()
 	topic := "look-" + events.NewID()[:8]
 	out := &events.Message{Headers: map[string]string{}}
-	err := sr.NewSerde(c).Encode(ctx, orderEvents, topic, &ordersv1.OrderCreated{}, out)
+	err := mustSerde(t, c).Encode(ctx, orderEvents, topic, &ordersv1.OrderCreated{}, out)
 	if !errors.Is(err, sr.ErrNotRegistered) {
 		t.Fatalf("lookup of unregistered: %v", err)
 	}
 	if _, err := c.EnsureFile(ctx, topic+"-value", (&ordersv1.OrderCreated{}).ProtoReflect().Descriptor().ParentFile(), sr.RegisterOptions{Register: true}); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []*sr.Serde{sr.NewSerde(c), sr.NewSerde(c, sr.UseLatest())} {
+	for _, s := range []*sr.Serde{mustSerde(t, c), mustSerde(t, c, sr.UseLatest())} {
 		if err := s.Encode(ctx, orderEvents, topic, &ordersv1.OrderCreated{}, out); err != nil {
 			t.Fatal(err)
 		}
@@ -162,7 +162,7 @@ func TestLookupAndLatest(t *testing.T) {
 			t.Fatalf("indexes %v: %v", idx, err)
 		}
 	}
-	if sub := sr.NewSerde(c, sr.WithSubjectNameStrategy(sr.TopicRecordNameStrategy)).Subject("t", (&ordersv1.OrderCreated{}).ProtoReflect().Descriptor()); sub != "t-orders.v1.OrderCreated" {
+	if sub := mustSerde(t, c, sr.WithSubjectNameStrategy(sr.TopicRecordNameStrategy)).Subject("t", (&ordersv1.OrderCreated{}).ProtoReflect().Descriptor()); sub != "t-orders.v1.OrderCreated" {
 		t.Fatalf("TopicRecordNameStrategy: %s", sub)
 	}
 }
@@ -202,3 +202,35 @@ type topicBackend struct {
 }
 
 func (b topicBackend) Topic(events.Channel) string { return b.topic }
+
+func mustSerde(t *testing.T, c *sr.Client, opts ...sr.SerdeOption) *sr.Serde {
+	t.Helper()
+	s, err := sr.NewSerde(c, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// More than one of AutoRegister, UseLatest, UseSchemaID is rejected,
+// whatever the order, with the text the TypeScript and Python serdes use.
+func TestExclusiveModes(t *testing.T) {
+	c, _ := sr.NewClient(sr.Config{URL: "http://127.0.0.1:1"})
+	for _, opts := range [][]sr.SerdeOption{
+		{sr.AutoRegister(), sr.UseLatest()},
+		{sr.UseSchemaID(3), sr.AutoRegister()},
+		{sr.UseLatest(), sr.UseSchemaID(3)},
+		{sr.AutoRegister(), sr.UseLatest(), sr.UseSchemaID(3)},
+	} {
+		s, err := sr.NewSerde(c, opts...)
+		if !errors.Is(err, sr.ErrExclusiveModes) || s != nil {
+			t.Fatalf("got %v, %v", s, err)
+		}
+	}
+	if got := sr.ErrExclusiveModes.Error(); got != "schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one" {
+		t.Fatalf("text %q", got)
+	}
+	if _, err := sr.NewSerde(c, sr.UseLatest(), sr.Normalize()); err != nil {
+		t.Fatal(err)
+	}
+}

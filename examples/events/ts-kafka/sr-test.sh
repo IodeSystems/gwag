@@ -5,7 +5,7 @@
 #
 #   examples/events/ts-kafka/sr-test.sh
 #
-# What it checks (docs/events.md, "Schema Registry"):
+# What it checks (docs/events-kafka.md, "Schema Registry options"):
 #   - the serde tests of ts/events-schemaregistry against a real registry;
 #   - Go and TypeScript read each other's records, and register and look
 #     up the same schema (same id, one version);

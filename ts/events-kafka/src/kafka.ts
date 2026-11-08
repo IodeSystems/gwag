@@ -1,6 +1,6 @@
 // @gwag/events-kafka: a Backend over Apache Kafka (kafkajs), in its
 // own package so @gwag/events carries no Kafka dependency. Same
-// mapping as events/kafka in Go (docs/events.md, "Kafka"):
+// mapping as events/kafka in Go (docs/events-kafka.md, "Kafka backend"):
 //
 //   - one topic per channel, named ch.stream (EV_<pkg>_<Name>),
 //     created with 3 partitions and replication 1 if missing;
