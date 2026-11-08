@@ -10,6 +10,7 @@ func (g *Gateway) subscriptionBroker() *subBroker {
 	defer g.mu.Unlock()
 	if g.broker == nil {
 		g.broker = newSubBroker(g.psBus)
+		g.broker.typed = g.decodeTypedEvent
 	}
 	return g.broker
 }

@@ -22,6 +22,11 @@ import (
 type subBroker struct {
 	bus gat.Bus
 
+	// typed decodes a message that carries a Gwag-Type header (a typed
+	// event: raw proto body) into the fanout payload. ok=false drops
+	// it. nil: such messages are decoded like any other.
+	typed func(channel string, header gat.Header, data []byte, outputDesc protoreflect.MessageDescriptor) (payload map[string]any, ok bool)
+
 	mu   sync.Mutex
 	subs map[string]*subFanout // subject → fanout
 }
@@ -30,6 +35,7 @@ type subFanout struct {
 	subject    string
 	outputDesc protoreflect.MessageDescriptor
 	unsub      func()
+	typed      func(string, gat.Header, []byte, protoreflect.MessageDescriptor) (map[string]any, bool)
 
 	mu       sync.Mutex
 	nextID   uint64
@@ -58,8 +64,15 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 			subject:    subject,
 			outputDesc: outputDesc,
 			targets:    map[uint64]chan any{},
+			typed:      b.typed,
 		}
-		unsub, err := b.bus.Subscribe(subject, f.deliver)
+		var unsub func()
+		var err error
+		if hb, ok := b.bus.(gat.HeaderBus); ok {
+			unsub, err = hb.SubscribeMsg(subject, f.deliverMsg)
+		} else {
+			unsub, err = b.bus.Subscribe(subject, f.deliver)
+		}
 		if err != nil {
 			b.mu.Unlock()
 			return nil, nil, fmt.Errorf("subscribe %s: %w", subject, err)
@@ -114,13 +127,29 @@ func (b *subBroker) acquire(subject string, outputDesc protoreflect.MessageDescr
 // release it once messageToMap has built the canonical payload (the
 // payload is the only thing fanned out — no consumer holds the
 // underlying message).
-func (f *subFanout) deliver(_ string, data []byte) {
-	event := acquireDynamicMessage(f.outputDesc)
-	defer releaseDynamicMessage(f.outputDesc, event)
-	if err := proto.Unmarshal(data, event); err != nil {
-		return
+func (f *subFanout) deliver(channel string, data []byte) {
+	f.deliverMsg(channel, nil, data)
+}
+
+// deliverMsg is deliver with headers: a message with a Gwag-Type
+// header goes through f.typed instead of the envelope decode.
+func (f *subFanout) deliverMsg(channel string, header gat.Header, data []byte) {
+	var payload map[string]any
+	if f.typed != nil && header.Get(EventHeaderType) != "" {
+		p, ok := f.typed(channel, header, data, f.outputDesc)
+		if !ok {
+			return
+		}
+		payload = p
+	} else {
+		event := acquireDynamicMessage(f.outputDesc)
+		if err := proto.Unmarshal(data, event); err != nil {
+			releaseDynamicMessage(f.outputDesc, event)
+			return
+		}
+		payload = messageToMap(event)
+		releaseDynamicMessage(f.outputDesc, event)
 	}
-	payload := messageToMap(event)
 
 	f.mu.Lock()
 	chans := make([]chan any, 0, len(f.targets))

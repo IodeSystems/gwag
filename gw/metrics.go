@@ -159,6 +159,7 @@ type prometheusMetrics struct {
 	pubNoBinding    prometheus.Counter
 	wsRejected      *prometheus.CounterVec
 	busDegraded     prometheus.Gauge
+	psSkipped       *prometheus.CounterVec
 	callerHeaders   []string
 	callerExtractor CallerIDExtractor
 	callerLimiter   *callerLimiter
@@ -239,7 +240,11 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		Name: p + "_pubsub_bus_degraded",
 		Help: "1 while this node's ps.pub/ps.sub run local-only because the cluster NATS connection is down; 0 otherwise (including single-node gateways).",
 	})
-	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected, busDegraded)
+	psSkipped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: p + "_pubsub_typed_skipped_total",
+		Help: "Typed event messages (Gwag-Type header) that ps.sub could not deliver. reason=unknown_type (no registered message has that name) | decode (the body is not that message).",
+	}, []string{"reason"})
+	reg.MustRegister(hist, dwell, backoff, depth, replicaDepth, streams, streamsTotal, signAuth, adminAuth, gqlSubFanout, gqlSubActive, reqDuration, reqSelf, pubNoBinding, wsRejected, busDegraded, psSkipped)
 	traffic := newTrafficMetrics(reg, p, reqDuration, reqSelf)
 	return &prometheusMetrics{
 		registry:     reg,
@@ -260,6 +265,7 @@ func newPrometheusMetrics(p string) *prometheusMetrics {
 		pubNoBinding: pubNoBinding,
 		wsRejected:   wsRejected,
 		busDegraded:  busDegraded,
+		psSkipped:    psSkipped,
 		traffic:      traffic,
 	}
 }
@@ -347,6 +353,12 @@ func (m *prometheusMetrics) setPubSubBusDegraded(degraded bool) {
 	} else {
 		m.busDegraded.Set(0)
 	}
+}
+
+// recordPubSubTypedSkip counts a typed event ps.sub dropped. Not on
+// the Metrics interface, for the same reason as setPubSubBusDegraded.
+func (m *prometheusMetrics) recordPubSubTypedSkip(reason string) {
+	m.psSkipped.WithLabelValues(reason).Inc()
 }
 
 // classifyError maps an error to a stable label value. gRPC status

@@ -253,6 +253,10 @@ type Gateway struct {
 	// across all slots. Rebuilt on every assembleLocked; atomic-
 	// swapped so the psPub hot path reads without g.mu.
 	channelBindingIndex atomic.Pointer[channelBindingIndex]
+
+	// typedSkipLog rate-limits the log line for typed events ps.sub
+	// drops (event_channels.go).
+	typedSkipLog skipLogger
 }
 
 // rejectedJoinSummary captures the most recent rejection plus a

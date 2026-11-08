@@ -50,7 +50,10 @@ func (g *Gateway) installPubSubSlot() error {
 // subject in cluster mode) named by the request's `channel` field. Wildcards are rejected — they're only
 // meaningful at subscribe time. The Event is proto-encoded so
 // subscribers' broker fan-out (which decodes against the Event
-// descriptor) sees a typed payload.
+// descriptor) sees a typed payload. On a named channel the payload is
+// published as a typed event instead (publishTyped): binary proto of
+// payload_type with the Gwag-Type / Gwag-Channel / Nats-Msg-Id
+// headers.
 //
 // Auth: the channel's tier is resolved via WithChannelAuth (first-
 // hit-wins for literal Pub channels; default is hmac). Open tier
@@ -67,13 +70,22 @@ func (g *Gateway) psPub(ctx context.Context, req protoreflect.ProtoMessage) (pro
 	if channel == "" {
 		return nil, fmt.Errorf("ps.pub: channel required")
 	}
-	if strings.ContainsAny(channel, "*>") {
+	if strings.ContainsAny(channel, "*>{}") {
 		return nil, fmt.Errorf("ps.pub: wildcards not valid on publish (channel=%q)", channel)
 	}
 	if err := g.checkChannelAuth(ctx, channel, false, hmacB64, ts); err != nil {
 		return nil, err
 	}
 	idx := g.channelBindingIndex.Load()
+	if c := idx.lookupChannel(channel); c != nil {
+		// Named channel: typed event (binary proto + headers), so
+		// generated listeners on the bus receive it.
+		payloadType := m.Get(fields.ByName("payload_type")).String()
+		if err := g.publishTyped(c, channel, payload, payloadType); err != nil {
+			return nil, err
+		}
+		return &psv1.PubResponse{}, nil
+	}
 	payloadType := idx.lookupPayloadType(channel)
 	if payloadType == "" {
 		g.cfg.metrics.RecordPubNoBinding()
@@ -121,6 +133,8 @@ func (g *Gateway) psSub(ctx context.Context, args map[string]any) (any, error) {
 	if channel == "" {
 		return nil, fmt.Errorf("ps.sub: channel required")
 	}
+	// A named segment ({orderId}) subscribes like `*`.
+	channel = normalizeSubject(channel)
 	hmacB64, _ := args["hmac"].(string)
 	ts, _ := asInt64(args["ts"])
 	wildcard := strings.ContainsAny(channel, "*>")
