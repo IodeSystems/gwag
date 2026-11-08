@@ -80,10 +80,16 @@ func TestS13ReplicaSwap(t *testing.T) {
 		})
 	}
 	js := s13JetStream(t, cluster.NATSURLs())
-	stableBefore := s13Bucket(t, js, "gwag-stable")
-	if stableBefore["orders"] == "" {
-		t.Fatalf("no stable mark for orders before the swap: %v", stableBefore)
-	}
+	// The registering node writes the stable mark asynchronously
+	// after the slot exists, so routing can come first.
+	var stableBefore map[string]string
+	harness.Eventually(t, 15*time.Second, "stable mark for orders before the swap", func() error {
+		stableBefore = s13Bucket(t, js, "gwag-stable")
+		if stableBefore["orders"] == "" {
+			return fmt.Errorf("no orders mark: %v", stableBefore)
+		}
+		return nil
+	})
 
 	lb := cluster.LB(t, harness.LBOpts{})
 	load := harness.StartLoad(t, harness.LoadOpts{Workers: 4, Interval: 10 * time.Millisecond},
