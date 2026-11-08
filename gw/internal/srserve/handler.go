@@ -23,17 +23,30 @@ type Role int
 
 const (
 	RoleAnonymous Role = iota
-	RoleOther          // authenticated, but not admin
+	// RoleApp is an app key: it may add and delete the subjects
+	// Caller.Owns accepts.
+	RoleApp
+	// RoleDev may add and delete any subject.
+	RoleDev
+	// RoleAdmin may also set compatibility levels and import.
 	RoleAdmin
 )
 
+// Caller is who sent a request.
+type Caller struct {
+	Role Role
+	// Owns reports whether a RoleApp caller may write subject. nil:
+	// none.
+	Owns func(subject string) bool
+}
+
 // HandlerOptions configures NewHandler.
 type HandlerOptions struct {
-	// Writes allows registration and config writes (mode READWRITE)
-	// for RoleAdmin. Without it the registry is READONLY.
+	// Writes allows registration, deletes and config writes (mode
+	// READWRITE). Without it the registry is READONLY.
 	Writes bool
-	// Role resolves the caller. nil: everyone is anonymous.
-	Role func(r *http.Request) Role
+	// Caller resolves the caller. nil: everyone is anonymous.
+	Caller func(r *http.Request) Caller
 }
 
 // NewHandler serves the REST API at its root (mount it with
@@ -136,29 +149,57 @@ type versionOut struct {
 	Schema     string         `json:"schema"`
 }
 
-func (h *handler) role(r *http.Request) Role {
-	if h.o.Role == nil {
-		return RoleAnonymous
+func (h *handler) caller(r *http.Request) Caller {
+	if h.o.Caller == nil {
+		return Caller{}
 	}
-	return h.o.Role(r)
+	return h.o.Caller(r)
 }
 
-// authorizeWrite applies the mode and the role to a write.
-func (h *handler) authorizeWrite(r *http.Request) error {
+func (h *handler) writable() error {
 	if !h.o.Writes {
 		return errf(codeOperationNotPermitted, "Subject is in read-only mode (gwag serves the registry READONLY; writes need the schema registry writes option)")
+	}
+	return nil
+}
+
+// authorizeWrite applies the mode and the admin role to a config or
+// mode write.
+func (h *handler) authorizeWrite(r *http.Request) error {
+	if err := h.writable(); err != nil {
+		return err
 	}
 	return h.authorizeAdmin(r)
 }
 
+// authorizeSubject applies the mode and the role to a write of
+// subject (register, delete): dev and admin may write any subject, an
+// app key the subjects it owns.
+func (h *handler) authorizeSubject(r *http.Request, subject string) error {
+	if err := h.writable(); err != nil {
+		return err
+	}
+	c := h.caller(r)
+	switch c.Role {
+	case RoleAdmin, RoleDev:
+		return nil
+	case RoleApp:
+		if c.Owns != nil && c.Owns(subject) {
+			return nil
+		}
+		return errf(codeForbidden, "User is denied operation on subject '%s': the app key's namespaces own no channel with this subject (other subjects need the gwag dev or admin token)", subject)
+	}
+	return errf(codeUnauthorized, "Unauthorized: send a gwag token (admin, dev or app key) as the basic-auth password or a bearer token")
+}
+
 func (h *handler) authorizeAdmin(r *http.Request) error {
-	switch h.role(r) {
+	switch h.caller(r).Role {
 	case RoleAdmin:
 		return nil
 	case RoleAnonymous:
 		return errf(codeUnauthorized, "Unauthorized: send the gwag admin token as the basic-auth password or a bearer token")
 	}
-	return errf(codeForbidden, "User is denied operation: writes need the gwag admin token")
+	return errf(codeForbidden, "User is denied operation: this needs the gwag admin token")
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -410,10 +451,15 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 			writeJSON(w, 200, versionOut{seg[0], v.Version, v.ID, typeField(rec), rec.References, rec.Schema})
 			return nil
 		case http.MethodDelete:
-			if err := h.authorizeWrite(r); err != nil {
+			if err := h.authorizeSubject(r, seg[0]); err != nil {
 				return err
 			}
-			return methodNotAllowed()
+			vs, err := st.DeleteSubject(ctx, seg[0], boolQ(r, "permanent"))
+			if err != nil {
+				return err
+			}
+			writeJSON(w, 200, vs)
+			return nil
 		}
 		return methodNotAllowed()
 	}
@@ -431,7 +477,7 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 			writeJSON(w, 200, vs)
 			return nil
 		case http.MethodPost:
-			if err := h.authorizeWrite(r); err != nil {
+			if err := h.authorizeSubject(r, subject); err != nil {
 				return err
 			}
 			in, err := readSchema(r)
@@ -452,10 +498,18 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 		return err
 	}
 	if r.Method == http.MethodDelete {
-		if err := h.authorizeWrite(r); err != nil {
+		if len(seg) != 3 {
+			return methodNotAllowed()
+		}
+		if err := h.authorizeSubject(r, subject); err != nil {
 			return err
 		}
-		return methodNotAllowed()
+		v, err := st.DeleteVersion(ctx, subject, version, boolQ(r, "permanent"))
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, v)
+		return nil
 	}
 	if !get {
 		return methodNotAllowed()

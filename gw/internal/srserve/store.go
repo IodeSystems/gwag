@@ -118,12 +118,17 @@ const (
 	codeSubjectNotFound       = 40401
 	codeVersionNotFound       = 40402
 	codeSchemaNotFound        = 40403
+	codeSubjectSoftDeleted    = 40404
+	codeSubjectNotSoftDeleted = 40405
+	codeVersionSoftDeleted    = 40406
+	codeVersionNotSoftDeleted = 40407
 	codeSubjectLevelNoConfig  = 40408
 	codeConflict              = 40901
 	codeInvalidSchema         = 42201
 	codeInvalidVersion        = 42202
 	codeInvalidCompatibility  = 42203
 	codeOperationNotPermitted = 42205
+	codeReferenceExists       = 42206
 	codeStore                 = 50001
 	codeNotReady              = 50003
 )
@@ -632,6 +637,204 @@ func (s *Store) SetConfig(ctx context.Context, subject, level string) error {
 	}
 	if _, err := s.kv.Put(ctx, key, []byte(level)); err != nil {
 		return storeErr(err)
+	}
+	return nil
+}
+
+// DeleteSubject deletes every version of subject, as Confluent's
+// DELETE /subjects/{subject}: soft (the versions stay readable with
+// ?deleted=true) unless permanent, which needs the soft delete first
+// and removes them. Returns the version numbers deleted. Refused
+// (42206) while another schema references one of them.
+func (s *Store) DeleteSubject(ctx context.Context, subject string, permanent bool) ([]int, error) {
+	for {
+		rec, rev, err := s.subject(ctx, subject)
+		if errors.Is(err, ErrNotFound) || (err == nil && len(rec.Versions) == 0) {
+			return nil, errf(codeSubjectNotFound, "Subject '%s' not found.", subject)
+		}
+		if err != nil {
+			return nil, storeErr(err)
+		}
+		live := rec.live(false)
+		var target []versionRec
+		switch {
+		case !permanent && len(live) == 0:
+			return nil, errf(codeSubjectSoftDeleted, "Subject '%s' was soft deleted.Set permanent=true to delete permanently", subject)
+		case !permanent:
+			target = live
+		case len(live) > 0:
+			return nil, errf(codeSubjectNotSoftDeleted, "Subject '%s' was not deleted first before being permanently deleted", subject)
+		default:
+			target = rec.live(true)
+		}
+		for _, v := range target {
+			if err := s.refuseReferenced(ctx, subject, v.Version); err != nil {
+				return nil, err
+			}
+		}
+		out := make([]int, 0, len(target))
+		for _, v := range target {
+			out = append(out, v.Version)
+		}
+		if permanent {
+			err = s.kv.Delete(ctx, subjKey(subject), rev)
+			if errors.Is(err, ErrConflict) {
+				continue
+			}
+			if err != nil {
+				return nil, storeErr(err)
+			}
+			if err := s.kv.Delete(ctx, cfgKey(subject), 0); err != nil {
+				return nil, storeErr(err)
+			}
+			if err := s.dropUnused(ctx, target); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+		for i := range rec.Versions {
+			rec.Versions[i].Deleted = true
+		}
+		b, _ := json.Marshal(rec)
+		_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+		if errors.Is(err, ErrConflict) {
+			continue
+		}
+		if err != nil {
+			return nil, storeErr(err)
+		}
+		return out, nil
+	}
+}
+
+// DeleteVersion deletes one version of subject (-1: the latest), as
+// Confluent's DELETE /subjects/{subject}/versions/{version}: soft
+// unless permanent, which needs the soft delete first. Returns the
+// version number. Refused (42206) while another schema references it.
+func (s *Store) DeleteVersion(ctx context.Context, subject string, version int, permanent bool) (int, error) {
+	for {
+		rec, rev, err := s.subject(ctx, subject)
+		if errors.Is(err, ErrNotFound) || (err == nil && len(rec.Versions) == 0) {
+			return 0, errf(codeSubjectNotFound, "Subject '%s' not found.", subject)
+		}
+		if err != nil {
+			return 0, storeErr(err)
+		}
+		var v versionRec
+		var ok bool
+		if version == -1 {
+			v, ok = rec.latest(permanent)
+		} else {
+			v, ok = rec.version(version, true)
+		}
+		if !ok {
+			return 0, errf(codeVersionNotFound, "Version %d not found.", version)
+		}
+		switch {
+		case !permanent && v.Deleted:
+			return 0, errf(codeVersionSoftDeleted, "Subject '%s' Version %d was soft deleted.Set permanent=true to delete permanently", subject, v.Version)
+		case permanent && !v.Deleted:
+			return 0, errf(codeVersionNotSoftDeleted, "Subject '%s' Version %d was not deleted first before being permanently deleted", subject, v.Version)
+		}
+		if err := s.refuseReferenced(ctx, subject, v.Version); err != nil {
+			return 0, err
+		}
+		var keep []versionRec
+		for _, x := range rec.Versions {
+			switch {
+			case x.Version != v.Version:
+				keep = append(keep, x)
+			case !permanent:
+				x.Deleted = true
+				keep = append(keep, x)
+			}
+		}
+		if permanent && len(keep) == 0 {
+			err = s.kv.Delete(ctx, subjKey(subject), rev)
+		} else {
+			rec.Versions = keep
+			b, _ := json.Marshal(rec)
+			_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+		}
+		if errors.Is(err, ErrConflict) {
+			continue
+		}
+		if err != nil {
+			return 0, storeErr(err)
+		}
+		if permanent {
+			if len(keep) == 0 {
+				if err := s.kv.Delete(ctx, cfgKey(subject), 0); err != nil {
+					return 0, storeErr(err)
+				}
+			}
+			if err := s.dropUnused(ctx, []versionRec{v}); err != nil {
+				return 0, err
+			}
+		}
+		return v.Version, nil
+	}
+}
+
+// refuseReferenced returns 42206 when a schema (in a live or a
+// soft-deleted version) references version of subject.
+func (s *Store) refuseReferenced(ctx context.Context, subject string, version int) error {
+	seen := map[int]bool{}
+	return s.walk(ctx, true, func(_ string, sv versionRec) error {
+		if seen[sv.ID] {
+			return nil
+		}
+		seen[sv.ID] = true
+		r, err := s.schema(ctx, sv.ID)
+		if err != nil {
+			return storeErr(err)
+		}
+		for _, ref := range r.References {
+			if ref.Subject == subject && ref.Version == version {
+				return errf(codeReferenceExists, "One or more references exist to the schema {magic=1,keytype=SCHEMA,subject=%s,version=%d}.", subject, version)
+			}
+		}
+		return nil
+	})
+}
+
+// dropUnused removes the schema ids of removed versions that no
+// subject version (live or soft-deleted) holds any more, with their
+// lookup keys. The id counter is not lowered: ids are not reused.
+func (s *Store) dropUnused(ctx context.Context, removed []versionRec) error {
+	ids := map[int]bool{}
+	for _, v := range removed {
+		ids[v.ID] = true
+	}
+	err := s.walk(ctx, true, func(_ string, sv versionRec) error {
+		delete(ids, sv.ID)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for id := range ids {
+		rec, err := s.schema(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return storeErr(err)
+		}
+		for _, k := range rec.Keys {
+			b, rev, err := s.kv.Get(ctx, hashKey(k))
+			if err == nil && string(b) == strconv.Itoa(id) {
+				if err := s.kv.Delete(ctx, hashKey(k), rev); err != nil && !errors.Is(err, ErrConflict) {
+					return storeErr(err)
+				}
+			}
+		}
+		if err := s.kv.Delete(ctx, idKey(id), 0); err != nil {
+			return storeErr(err)
+		}
+		s.mu.Lock()
+		delete(s.ids, id)
+		s.mu.Unlock()
 	}
 	return nil
 }

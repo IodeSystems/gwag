@@ -28,6 +28,9 @@ type KV interface {
 	Create(ctx context.Context, key string, val []byte) (uint64, error)
 	Update(ctx context.Context, key string, val []byte, rev uint64) (uint64, error)
 	Put(ctx context.Context, key string, val []byte) (uint64, error)
+	// Delete removes key. rev > 0: only while rev is its latest
+	// revision (else ErrConflict). A missing key is not an error.
+	Delete(ctx context.Context, key string, rev uint64) error
 	// Keys lists the keys that start with prefix (which ends in ".").
 	Keys(ctx context.Context, prefix string) ([]string, error)
 }
@@ -79,6 +82,17 @@ func (k *MemKV) Put(_ context.Context, key string, val []byte) (uint64, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.setLocked(key, val), nil
+}
+
+func (k *MemKV) Delete(_ context.Context, key string, rev uint64) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	e, ok := k.m[key]
+	if rev > 0 && (!ok || e.rev != rev) {
+		return ErrConflict
+	}
+	delete(k.m, key)
+	return nil
 }
 
 func (k *MemKV) setLocked(key string, val []byte) uint64 {
@@ -136,6 +150,18 @@ func (k JetStreamKV) Update(ctx context.Context, key string, val []byte, rev uin
 func (k JetStreamKV) Put(ctx context.Context, key string, val []byte) (uint64, error) {
 	rev, err := k.KV.Put(ctx, key, val)
 	return rev, jsErr(err)
+}
+
+func (k JetStreamKV) Delete(ctx context.Context, key string, rev uint64) error {
+	var opts []jetstream.KVDeleteOpt
+	if rev > 0 {
+		opts = append(opts, jetstream.LastRevision(rev))
+	}
+	err := jsErr(k.KV.Delete(ctx, key, opts...))
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (k JetStreamKV) Keys(ctx context.Context, prefix string) ([]string, error) {
