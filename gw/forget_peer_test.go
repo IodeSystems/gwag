@@ -80,17 +80,6 @@ func (f *forgetPeerFixture) putPeer(t *testing.T, nodeID, name string) {
 	f.gw.peers.mu.Unlock()
 }
 
-// expirePeer deletes the peers KV entry — simulates the TTL elapsing
-// after the peer stops refreshing.
-func (f *forgetPeerFixture) expirePeer(t *testing.T, nodeID string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := f.gw.peers.peers.Delete(ctx, nodeID); err != nil {
-		t.Fatalf("delete peer: %v", err)
-	}
-}
-
 func TestForgetPeer_AlivePeerRejected(t *testing.T) {
 	f := newForgetPeerFixture(t)
 	f.putPeer(t, "PEER_ALIVE_NODE_ID", "alive")
@@ -108,10 +97,14 @@ func TestForgetPeer_AlivePeerRejected(t *testing.T) {
 
 func TestForgetPeer_HappyPath(t *testing.T) {
 	f := newForgetPeerFixture(t)
-	f.putPeer(t, "PEER_DEAD_NODE_ID", "dead")
-	// Simulate TTL expiry — peer stops heartbeating, bucket auto-
-	// expires the entry. We delete directly to skip waiting 30s.
-	f.expirePeer(t, "PEER_DEAD_NODE_ID")
+	// The peer's KV entry has expired but this node's watch has not
+	// dropped it from the live set yet. Writing and deleting the KV
+	// entry here raced the watch loop (a late Put event re-added the
+	// peer after ForgetPeer), so the state is set directly: absent
+	// from KV, present in the live set.
+	f.gw.peers.mu.Lock()
+	f.gw.peers.live["PEER_DEAD_NODE_ID"] = struct{}{}
+	f.gw.peers.mu.Unlock()
 
 	resp, err := f.cp.ForgetPeer(context.Background(), &cpv1.ForgetPeerRequest{
 		NodeId: "PEER_DEAD_NODE_ID",
