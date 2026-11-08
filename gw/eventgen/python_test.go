@@ -108,6 +108,8 @@ message Deleted {
 		"#   gwag (devel)",
 		"# source: shop.proto",
 		"class ShopBus:",
+		"register_file_descriptors(\n    {\n        \"gwag/ps/v1/options.proto\": (",
+		"        \"shop.proto\": (",
 		"class PlainSubject:",
 		"    from_: str\n    camel_case: str\n    p1: str\n",
 		"async def publish_plain(",

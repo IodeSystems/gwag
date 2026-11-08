@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/pluginpb"
 
 	"github.com/iodesystems/gwag/v2/events"
+	"github.com/iodesystems/gwag/v2/events/schemaregistry"
 )
 
 // pyReserved are the module-level names the generated file imports or
@@ -21,6 +22,7 @@ var pyReserved = map[string]bool{
 	"Any": true, "TypeAlias": true, "cast": true, "dataclass": true, "betterproto2": true,
 	"Backend": true, "Channel": true, "Core": true, "Message": true, "Stop": true,
 	"SubscribeOptions": true, "Subscription": true, "message_from": true,
+	"register_file_descriptors": true,
 }
 
 // emitPython writes <package dir>/<file>_events.py next to
@@ -342,7 +344,7 @@ func (pf *pyFile_) render() string {
 	} else {
 		w.P("from gwag_events import (")
 	}
-	for _, n := range []string{"Backend", "Channel", "Core", "Message", "Stop", "SubscribeOptions", "Subscription", "message_from"} {
+	for _, n := range []string{"Backend", "Channel", "Core", "Message", "Stop", "SubscribeOptions", "Subscription", "message_from", "register_file_descriptors"} {
 		if n == "message_from" && !needBP {
 			continue
 		}
@@ -373,11 +375,59 @@ func (pf *pyFile_) render() string {
 		w.P("    ", pyQuote(e), ",")
 	}
 	w.P("]")
+	pf.descriptors(w)
 	for _, c := range pf.chans {
 		pf.channel(w, c)
 	}
 	pf.bus_(w)
 	return w.b.String()
+}
+
+// descriptors registers the serialized FileDescriptorProto of the file
+// and of each import a Schema Registry would hold as a reference,
+// imports first. betterproto2 messages carry no descriptor; the
+// Schema Registry Serde (gwag-events-schemaregistry) needs them to
+// register a schema and to find a message's index in its file. They
+// are the bytes the Go runtime registers, so both languages produce
+// the same schema.
+func (pf *pyFile_) descriptors(w *pyWriter) {
+	var files [][2]string
+	seen := map[string]bool{}
+	var visit func(fd protoreflect.FileDescriptor)
+	visit = func(fd protoreflect.FileDescriptor) {
+		if seen[fd.Path()] || schemaregistry.Builtin(fd.Path()) {
+			return
+		}
+		seen[fd.Path()] = true
+		imps := fd.Imports()
+		for i := 0; i < imps.Len(); i++ {
+			visit(imps.Get(i).FileDescriptor)
+		}
+		s, err := schemaregistry.SchemaOf(fd, nil)
+		if err != nil {
+			// SchemaOf marshals a descriptor the compiler built; it
+			// cannot fail on a valid one.
+			panic(err)
+		}
+		files = append(files, [2]string{fd.Path(), s.Schema})
+	}
+	visit(pf.f)
+	w.P()
+	w.P()
+	w.P("# Serialized FileDescriptorProtos for the Schema Registry serde.")
+	w.P("register_file_descriptors(")
+	w.P("    {")
+	for _, f := range files {
+		w.P("        ", pyQuote(f[0]), ": (")
+		for b := f[1]; len(b) > 0; {
+			n := min(len(b), 96)
+			w.P("            ", pyQuote(b[:n]))
+			b = b[n:]
+		}
+		w.P("        ),")
+	}
+	w.P("    }")
+	w.P(")")
 }
 
 func (pf *pyFile_) hasUnion() bool {

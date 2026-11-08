@@ -20,6 +20,7 @@ from gwag_events import (
     SubscribeOptions,
     Subscription,
     message_from,
+    register_file_descriptors,
 )
 
 from . import (
@@ -40,6 +41,39 @@ __all__ = [
     "OrderEventsEvent",
     "AuditSubject",
 ]
+
+
+# Serialized FileDescriptorProtos for the Schema Registry serde.
+register_file_descriptors(
+    {
+        "gw/proto/ps/v1/options.proto": (
+            "Chxndy9wcm90by9wcy92MS9vcHRpb25zLnByb3RvEgpnd2FnLnBzLnYxGiBnb29nbGUvcHJvdG9idWYvZGVzY3JpcHRvci5w"
+            "cm90byI+Cg5DaGFubmVsQmluZGluZxIYCgdwYXR0ZXJuGAEgASgJUgdwYXR0ZXJuEhIKBG5hbWUYAiABKAlSBG5hbWUiwwEK"
+            "BlNoYWRvdxIaCghyZWdpc3RyeRgBIAEoCVIIcmVnaXN0cnkSGAoHc3ViamVjdBgCIAEoCVIHc3ViamVjdBIYCgd2ZXJzaW9u"
+            "GAMgASgJUgd2ZXJzaW9uEhgKB21lc3NhZ2UYBCABKAlSB21lc3NhZ2USKwoEc2lkZRgFIAEoDjIXLmd3YWcucHMudjEuU2hh"
+            "ZG93LlNpZGVSBHNpZGUiIgoEU2lkZRIMCghDT05TVU1FUhAAEgwKCFBST0RVQ0VSEAE6VwoHYmluZGluZxIfLmdvb2dsZS5w"
+            "cm90b2J1Zi5NZXNzYWdlT3B0aW9ucxiikAMgASgLMhouZ3dhZy5wcy52MS5DaGFubmVsQmluZGluZ1IHYmluZGluZzpNCgZz"
+            "aGFkb3cSHy5nb29nbGUucHJvdG9idWYuTWVzc2FnZU9wdGlvbnMYo5ADIAEoCzISLmd3YWcucHMudjEuU2hhZG93UgZzaGFk"
+            "b3dCNFoyZ2l0aHViLmNvbS9pb2Rlc3lzdGVtcy9nd2FnL3YyL2d3L3Byb3RvL3BzL3YxO3BzdjFiBnByb3RvMw=="
+        ),
+        "orders/v1/orders.proto": (
+            "ChZvcmRlcnMvdjEvb3JkZXJzLnByb3RvEglvcmRlcnMudjEaHGd3L3Byb3RvL3BzL3YxL29wdGlvbnMucHJvdG8ieAoMT3Jk"
+            "ZXJTaGlwcGVkEhkKCG9yZGVyX2lkGAEgASgJUgdvcmRlcklkEhgKB2NhcnJpZXIYAiABKAlSB2NhcnJpZXI6M5KCGS8KH2V2"
+            "ZW50cy5vcmRlcnMue29yZGVySWR9LnNoaXBwZWQSDE9yZGVyU2hpcHBlZCLHAQoHUGF5bWVudBI4CghjYXB0dXJlZBgBIAEo"
+            "CzIaLm9yZGVycy52MS5QYXltZW50Q2FwdHVyZWRIAFIIY2FwdHVyZWQSOAoIcmVmdW5kZWQYAiABKAsyGi5vcmRlcnMudjEu"
+            "UGF5bWVudFJlZnVuZGVkSABSCHJlZnVuZGVkEhQKBG5vdGUYAyABKAlIAFIEbm90ZToqkoIZJgoaZXZlbnRzLnBheW1lbnRz"
+            "LntyZWdpb259LioSCFBheW1lbnRzQgYKBGtpbmQiTwoPUGF5bWVudENhcHR1cmVkEhkKCG9yZGVyX2lkGAEgASgJUgdvcmRl"
+            "cklkEiEKDGFtb3VudF9jZW50cxgCIAEoA1ILYW1vdW50Q2VudHMiZwoPUGF5bWVudFJlZnVuZGVkEhkKCG9yZGVyX2lkGAEg"
+            "ASgJUgdvcmRlcklkEiEKDGFtb3VudF9jZW50cxgCIAEoA1ILYW1vdW50Q2VudHMSFgoGcmVhc29uGAMgASgJUgZyZWFzb24i"
+            "ewoMT3JkZXJDcmVhdGVkEhkKCG9yZGVyX2lkGAEgASgJUgdvcmRlcklkEhoKCGN1c3RvbWVyGAIgASgJUghjdXN0b21lcjo0"
+            "koIZMAohZXZlbnRzLm9yZGVycy57b3JkZXJJZH0ubGlmZWN5Y2xlEgtPcmRlckV2ZW50cyJ5Cg5PcmRlckNhbmNlbGxlZBIZ"
+            "CghvcmRlcl9pZBgBIAEoCVIHb3JkZXJJZBIWCgZyZWFzb24YAiABKAlSBnJlYXNvbjo0koIZMAohZXZlbnRzLm9yZGVycy57"
+            "b3JkZXJJZH0ubGlmZWN5Y2xlEgtPcmRlckV2ZW50cyJXCgpBdWRpdEVudHJ5EhQKBWFjdG9yGAEgASgJUgVhY3RvchIWCgZh"
+            "Y3Rpb24YAiABKAlSBmFjdGlvbjobkoIZFwoOYXVkaXQub3JkZXJzLj4SBUF1ZGl0QkdaRWdpdGh1Yi5jb20vaW9kZXN5c3Rl"
+            "bXMvZ3dhZy92Mi9leGFtcGxlcy9ldmVudHMvZ2VuL29yZGVycy92MTtvcmRlcnN2MWIGcHJvdG8z"
+        ),
+    }
+)
 
 
 # Channel orders.v1.OrderShipped, pattern "events.orders.{orderId}.shipped".
