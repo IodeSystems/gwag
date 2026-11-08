@@ -1,4 +1,5 @@
 // Types shared by generated code and backends. Mirrors events/events.go.
+import type { DescMessage } from "@bufbuild/protobuf";
 import { parsePattern, type Pattern } from "./pattern.ts";
 
 /** Header names on every message. */
@@ -55,6 +56,8 @@ export interface Message {
   data: Uint8Array;
   /** 1-based delivery attempt. Set on receive. */
   delivery: number;
+  /** The backend's record key, where it has one (Kafka). Set on receive; undefined on NATS. */
+  key?: Uint8Array;
 }
 
 /** The proto full name of the body: the HeaderType value. */
@@ -105,6 +108,8 @@ export interface SubscribeOptions {
   backoffMs?: number[];
   /** How long a delivery may run before the backend redelivers it. Default 30s. */
   ackWaitMs?: number;
+  /** Backend-specific settings, keyed by the backend's own names (e.g. "kafka.retry"). Backends ignore keys they do not own. */
+  backend?: Record<string, unknown>;
 }
 
 /** SubscribeOptions with defaults applied; what a backend receives. */
@@ -113,6 +118,7 @@ export interface ResolvedSubscribeOptions {
   deliverAll: boolean;
   backoffMs: number[];
   ackWaitMs: number;
+  backend: Record<string, unknown>;
 }
 
 export function resolveSubscribeOptions(o: SubscribeOptions = {}): ResolvedSubscribeOptions {
@@ -121,6 +127,7 @@ export function resolveSubscribeOptions(o: SubscribeOptions = {}): ResolvedSubsc
     deliverAll: o.deliverAll ?? false,
     backoffMs: o.backoffMs ? [...o.backoffMs] : [1000, 5000, 30000],
     ackWaitMs: o.ackWaitMs ?? 30000,
+    backend: { ...o.backend },
   };
 }
 
@@ -162,4 +169,49 @@ export function canonicalHeaderKey(k: string): string {
     up = c === "-";
   }
   return out;
+}
+
+/**
+ * Turns a message into its wire body and back. Core calls it on every
+ * publish and every delivery, so any backend carries any wire format.
+ * The default, ProtoSerde, leaves the body plain proto binary. Mirrors
+ * events.Serde in Go; the one difference is that encode starts with
+ * out.data holding the plain proto body.
+ */
+export interface Serde {
+  /**
+   * Rewrites out.data (plain proto binary on entry) to the wire body.
+   * out already holds subject, id and the Gwag-Type / Gwag-Channel
+   * headers; encode may add headers. topic is the backend's name for
+   * the channel (Topics.topic, else ch.stream). type is the message
+   * schema, or only its full name when the caller published raw bytes.
+   */
+  encode(ch: Channel, topic: string, type: DescMessage | string, out: Message): Promise<void> | void;
+  /**
+   * Rewrites m.data to plain proto binary of the body message. When m
+   * has no Gwag-Type header (a record from a producer that is not
+   * gwag) decode sets it if the wire format names the type. m is a
+   * copy; the backend keeps the original for redelivery and dead
+   * letters.
+   */
+  decode(ch: Channel, topic: string, m: Message): Promise<void> | void;
+}
+
+/** The default Serde: the body is plain proto binary, nothing else. */
+export class ProtoSerde implements Serde {
+  encode(): void {}
+  decode(): void {}
+}
+
+/**
+ * Implemented by a backend whose name for a channel is not ch.stream
+ * (the Kafka backend's topic mapper). Core passes the name to the
+ * Serde, which may derive a schema subject from it.
+ */
+export interface Topics {
+  topic(ch: Channel): string;
+}
+
+export function hasTopics(b: object): b is Topics {
+  return typeof (b as Partial<Topics>).topic === "function";
 }
