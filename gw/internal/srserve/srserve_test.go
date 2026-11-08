@@ -375,3 +375,68 @@ func TestCompatibility(t *testing.T) {
 		t.Errorf("unset subject level %q %v", l, err)
 	}
 }
+
+// Reserved ids count down from ReservedTop, apart from the counter that
+// counts up from 1 and that an import raises: an import of a registry
+// with ids 1..n never meets a reserved schema, even one holding the
+// same text as a schema of the source.
+func TestReservedIDsSurviveImport(t *testing.T) {
+	ctx := context.Background()
+	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	own := sr.Schema{Schema: `syntax = "proto3"; package own.v1; message Own {}`, SchemaType: "PROTOBUF"}
+	v, err := st.RegisterReserved(ctx, "own.v1.Svc", own)
+	if err != nil || v.ID != srserve.ReservedTop || v.Version != 1 {
+		t.Fatalf("first reserved: %+v %v", v, err)
+	}
+	if again, err := st.RegisterReserved(ctx, "own.v1.Svc", own); err != nil || again != v {
+		t.Fatalf("same schema again: %+v %v", again, err)
+	}
+	second, err := st.RegisterReserved(ctx, "own.v1.Other", sr.Schema{Schema: `syntax = "proto3"; package own.v1; message Two {}`, SchemaType: "PROTOBUF"})
+	if err != nil || second.ID != srserve.ReservedTop-1 {
+		t.Fatalf("second reserved: %+v %v", second, err)
+	}
+	// The ordinary counter is untouched.
+	plain, err := st.Register(ctx, "plain-value", sr.Schema{Schema: `syntax = "proto3"; package p; message P {}`, SchemaType: "PROTOBUF"})
+	if err != nil || plain.ID != 1 {
+		t.Fatalf("ordinary register: %+v %v", plain, err)
+	}
+
+	// A source registry with ids from 1, one of them the text of a
+	// reserved schema.
+	src := srtest.New()
+	defer src.Close()
+	sc := client(t, src.URL, sr.Config{})
+	for i := 0; i < 4; i++ {
+		_, _ = sc.Register(ctx, "filler-value", sr.Schema{Schema: `syntax = "proto3"; package f; message F` + string(rune('a'+i)) + ` {}`, SchemaType: "PROTOBUF"}, false)
+	}
+	if _, err := sc.Register(ctx, "corp-copy-value", own, false); err != nil {
+		t.Fatal(err)
+	}
+	b := bundleFrom(t, sc)
+
+	st = srserve.NewStore(srserve.NewMemKV(), 1)
+	if _, err := st.RegisterReserved(ctx, "own.v1.Svc", own); err != nil {
+		t.Fatal(err)
+	}
+	s := serve(t, st, false)
+	status, res, body := postImport(t, s.URL, b, token)
+	if status != 200 || res.SchemasAdded != len(b.Schemas) {
+		t.Fatalf("import beside a reserved schema: %d %s", status, body)
+	}
+	gc := client(t, s.URL+"/sr", sr.Config{})
+	if got, err := gc.SubjectVersion(ctx, "own.v1.Svc", "latest", ""); err != nil || got.ID != srserve.ReservedTop {
+		t.Fatalf("reserved subject after import: %+v %v", got, err)
+	}
+	if _, err := gc.SubjectVersion(ctx, "corp-copy-value", "latest", ""); err != nil {
+		t.Fatalf("imported copy: %v", err)
+	}
+	// New ordinary ids go above the imported ones.
+	maxID := 0
+	for _, x := range b.Schemas {
+		maxID = max(maxID, x.ID)
+	}
+	nv, err := st.Register(ctx, "new-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"})
+	if err != nil || nv.ID != maxID+1 {
+		t.Fatalf("new id %d %v; imported max %d", nv.ID, err, maxID)
+	}
+}

@@ -16,7 +16,16 @@ import (
 
 	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
 	"github.com/iodesystems/gwag/v2/gw/internal/srserve"
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
+
+// ControlPlaneSubject is the Schema Registry subject that holds the
+// control plane's schema (gw/proto/controlplane/v1/control.proto, the
+// gRPC service gateway.controlplane.v1.ControlPlane). A service
+// generates its registration client from it. The subject is the
+// service's full name: a channel subject is a topic name or a message
+// name, never a service name, so it cannot collide with one.
+const ControlPlaneSubject = "gateway.controlplane.v1.ControlPlane"
 
 // Schema Registry.
 //
@@ -97,6 +106,7 @@ func newSchemaRegistry(g *Gateway) *schemaRegistry {
 	r.internal = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: true, Role: func(*http.Request) srserve.Role { return srserve.RoleAdmin }})
 	if g.cfg.cluster == nil {
 		r.store.Store(srserve.NewStore(srserve.NewMemKV(), o.FirstID))
+		r.trigger() // the default subject
 	}
 	go r.syncLoop()
 	return r
@@ -215,8 +225,12 @@ func (t handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // sync registers every named channel's message files (and their
 // imports) through the REST API, as the Go serde does.
 func (r *schemaRegistry) sync(ctx context.Context) error {
-	if r.store.Load() == nil {
+	store := r.store.Load()
+	if store == nil {
 		return nil // bindCluster triggers again
+	}
+	if err := r.registerControlPlane(ctx, store); err != nil {
+		return fmt.Errorf("control plane schema: %w", err)
 	}
 	idx := r.g.channelBindingIndex.Load()
 	if idx == nil {
@@ -243,6 +257,27 @@ func (r *schemaRegistry) sync(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// registerControlPlane registers control.proto under
+// ControlPlaneSubject with a reserved id. It registers again only when
+// the gateway's file differs from what it registered last.
+func (r *schemaRegistry) registerControlPlane(ctx context.Context, store *srserve.Store) error {
+	r.mu.Lock()
+	same := r.done[ControlPlaneSubject] == cpv1.ControlProto
+	r.mu.Unlock()
+	if same {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := store.RegisterReserved(cctx, ControlPlaneSubject, sr.Schema{SchemaType: "PROTOBUF", Schema: cpv1.ControlProto}); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.done[ControlPlaneSubject] = cpv1.ControlProto
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *schemaRegistry) register(ctx context.Context, c *sr.Client, subject string, fd protoreflect.FileDescriptor) error {

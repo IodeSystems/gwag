@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,13 +23,21 @@ import (
 //	cfg.<b64>       the subject's compatibility level
 //	config          the global compatibility level
 //	next            the highest id allocated or imported (decimal)
+//	nextres         the lowest reserved id allocated (decimal)
 //
 // <b64> is the subject in unpadded URL-safe base64: subjects may hold
 // any character, KV keys may not.
 const (
-	keyConfig = "config"
-	keyNext   = "next"
+	keyConfig  = "config"
+	keyNext    = "next"
+	keyNextRes = "nextres"
 )
+
+// ReservedTop is the first reserved id. Schemas gwag ships itself (the
+// control plane) take ids from here down, so they never meet the ids
+// of an imported registry or of the ordinary counter, which count up
+// from 1. A Confluent id is an int32.
+const ReservedTop = math.MaxInt32
 
 func idKey(id int) string           { return "id." + strconv.Itoa(id) }
 func hashKey(k string) string       { return "key." + k }
@@ -400,7 +409,29 @@ func (s *Store) Register(ctx context.Context, subject string, in sr.Schema) (ver
 	if v, ok, err := s.findInSubject(ctx, subject, want); err != nil || ok {
 		return v, err
 	}
-	id, err := s.idFor(ctx, want)
+	id, err := s.idFor(ctx, want, s.allocate)
+	if err != nil {
+		return versionRec{}, storeErr(err)
+	}
+	return s.addVersion(ctx, subject, id)
+}
+
+// RegisterReserved is Register with an id from the reserved range
+// (counting down from ReservedTop). For schemas gwag ships itself: an
+// import of another registry, whose ids count up from 1, can never
+// collide with them.
+func (s *Store) RegisterReserved(ctx context.Context, subject string, in sr.Schema) (versionRec, error) {
+	if subject == "" {
+		return versionRec{}, errf(codeInvalidSchema, "empty subject")
+	}
+	want, err := prepare(ctx, in, s.resolve)
+	if err != nil {
+		return versionRec{}, errf(codeInvalidSchema, "Invalid schema: %v", err)
+	}
+	if v, ok, err := s.findInSubject(ctx, subject, want); err != nil || ok {
+		return v, err
+	}
+	id, err := s.idFor(ctx, want, s.allocateReserved)
 	if err != nil {
 		return versionRec{}, storeErr(err)
 	}
@@ -429,12 +460,12 @@ func (s *Store) findInSubject(ctx context.Context, subject string, want *schemaR
 
 // idFor returns the id of the schema with want's key, allocating one
 // when there is none.
-func (s *Store) idFor(ctx context.Context, want *schemaRec) (int, error) {
+func (s *Store) idFor(ctx context.Context, want *schemaRec, allocate func(context.Context) (int, error)) (int, error) {
 	if id, ok, err := s.idByKey(ctx, want); err != nil || ok {
 		return id, err
 	}
 	for {
-		id, err := s.allocate(ctx)
+		id, err := allocate(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -509,6 +540,40 @@ func (s *Store) allocate(ctx context.Context) (int, error) {
 			_, err = s.kv.Create(ctx, keyNext, val)
 		} else {
 			_, err = s.kv.Update(ctx, keyNext, val, rev)
+		}
+		if errors.Is(err, ErrConflict) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+}
+
+// allocateReserved takes the next reserved id (ReservedTop, then one
+// lower each time) with a compare-and-set on the reserved counter.
+func (s *Store) allocateReserved(ctx context.Context) (int, error) {
+	for {
+		b, rev, err := s.kv.Get(ctx, keyNextRes)
+		id := ReservedTop
+		switch {
+		case errors.Is(err, ErrNotFound):
+			rev = 0
+		case err != nil:
+			return 0, err
+		default:
+			cur, err := strconv.Atoi(string(b))
+			if err != nil {
+				return 0, fmt.Errorf("nextres: %w", err)
+			}
+			id = cur - 1
+		}
+		val := []byte(strconv.Itoa(id))
+		if rev == 0 {
+			_, err = s.kv.Create(ctx, keyNextRes, val)
+		} else {
+			_, err = s.kv.Update(ctx, keyNextRes, val, rev)
 		}
 		if errors.Is(err, ErrConflict) {
 			continue

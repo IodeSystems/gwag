@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,7 +17,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
+	"github.com/iodesystems/gwag/v2/events/schemaregistry/srtest"
 	ordersv1 "github.com/iodesystems/gwag/v2/examples/events/gen/orders/v1"
+	"github.com/iodesystems/gwag/v2/gw/internal/srserve"
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
 // srServer mounts g's registry under /schema-registry.
@@ -284,4 +289,75 @@ func keys(m map[string]int) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// control.proto is a default subject, available before any service
+// registers, under a reserved id. An import of a registry with ids from
+// 1 (and a clashing owned channel registered by gwag) works beside it.
+func TestSchemaRegistry_ControlPlaneSubject(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{}))
+	t.Cleanup(g.Close)
+	url := srServer(t, g)
+	c := srClient(t, url, sr.Config{})
+	got := waitSubject(t, c, ControlPlaneSubject)
+	if got.ID != srserve.ReservedTop {
+		t.Errorf("id %d, want the reserved %d", got.ID, srserve.ReservedTop)
+	}
+	if got.Schema != cpv1.ControlProto {
+		t.Errorf("schema text differs from control.proto (%d vs %d bytes)", len(got.Schema), len(cpv1.ControlProto))
+	}
+	if got.SchemaType != "" && got.SchemaType != "PROTOBUF" {
+		t.Errorf("type %q", got.SchemaType)
+	}
+
+	// The documented curl.
+	resp, err := http.Get(url + "/subjects/" + ControlPlaneSubject + "/versions/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET latest: %d", resp.StatusCode)
+	}
+
+	// Import of a registry whose ids start at 1.
+	ctx := context.Background()
+	src := srtest.New()
+	defer src.Close()
+	sc := srClient(t, src.URL, sr.Config{})
+	for i := 0; i < 3; i++ {
+		if _, err := sc.Register(ctx, fmt.Sprintf("corp-%d-value", i), sr.Schema{SchemaType: "PROTOBUF", Schema: fmt.Sprintf(`syntax = "proto3"; package corp; message C%d {}`, i)}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := srserve.Export(ctx, sc, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(b)
+	req, _ := http.NewRequest(http.MethodPost, url+"/gwag/import", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+g.AdminTokenHex())
+	iresp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iresp.Body.Close()
+	if iresp.StatusCode != 200 {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(iresp.Body)
+		t.Fatalf("import beside the default subject: %d %s", iresp.StatusCode, buf.String())
+	}
+	imported, err := c.SubjectVersion(ctx, "corp-0-value", "latest", "")
+	if err != nil || imported.ID != 1 {
+		t.Errorf("imported id: %+v %v, want 1", imported, err)
+	}
+	if again, err := c.SubjectVersion(ctx, ControlPlaneSubject, "latest", ""); err != nil || again.ID != srserve.ReservedTop {
+		t.Errorf("default subject after import: %+v %v", again, err)
+	}
+	// Owned channels still register above the imported ids.
+	addOrdersProto(t, g)
+	evs := waitSubject(t, c, "EV_orders_v1_OrderEvents-value")
+	if evs.ID <= 3 || evs.ID >= srserve.ReservedTop-10 {
+		t.Errorf("channel id %d", evs.ID)
+	}
 }
