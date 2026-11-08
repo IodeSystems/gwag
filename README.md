@@ -80,14 +80,13 @@ deployment:
 With Docker, from a checkout (the first run builds the image):
 
 ```bash
-go build -o gwag ./gw/cmd/gwag                      # or download a release binary
-./gwag deploy up --platform docker-compose           # add --replicas 3 for a cluster
-./gwag deploy login --platform docker-compose        # saves the admin token to .gw/
+bin/gwag deploy up --platform docker-compose         # add --replicas 3 for a cluster
+bin/gwag deploy login --platform docker-compose      # saves the admin token to .gw/
 curl -s -X POST -H 'content-type: application/json' localhost:8080/api/graphql \
   -d '{"query":"{ __schema { queryType { name } } }"}'
 ```
 
-`gwag services list` and `gwag peer list` now work. Without Docker,
+`bin/gwag services list` and `bin/gwag peer list` now work. Without Docker,
 `bin/gwag up` runs one node as a process. Kubernetes, minikube and ECS
 files, replica rules and what is untested: [`docs/deploy.md`](./docs/deploy.md).
 
