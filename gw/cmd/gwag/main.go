@@ -688,9 +688,9 @@ func peerCmd(args []string) int {
 	fs := flag.NewFlagSet("peer "+verb, flag.ContinueOnError)
 	gwAddr := fs.String("gateway", "", "Gateway control-plane address (default: from .gw primary or localhost:50090)")
 	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
-	checkOnly := fs.Bool("check", false, "evacuate: only report the streams still on the peer")
+	checkOnly := fs.Bool("check", false, "evacuate: only report the streams still on the peer and, before the evacuation started, the streams that keep it from starting")
 	leave := fs.Bool("leave", false, "evacuate: once no stream is on the peer, remove it from the JetStream meta group (its JetStream turns off; stop it next)")
-	wait := fs.Duration("wait", 0, "evacuate: poll until done, up to this long (e.g. 2m)")
+	wait := fs.Duration("wait", 0, "evacuate: poll until done, up to this long (e.g. 2m); first wait for every stream to be at the cluster replica count")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [--context NAME] [args...]")
 		fs.PrintDefaults()

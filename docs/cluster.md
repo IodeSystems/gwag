@@ -460,21 +460,36 @@ at six nodes.
       gwag peer evacuate --gateway <green node> --wait 2m <blue NODE_ID>
       ```
 
-      It sends NATS `$JS.API.SERVER.EVACUATE` again every second until
-      no stream has a replica on the node, no stream is being moved, and
-      every replica is current, then prints `peer=<name> done=true`.
-      Exit code 3 means not done in time; run it again.
+      Precondition, enforced by the gateway: every gateway bucket and
+      event stream is at the cluster's replica count (the policy for the
+      live peers, R3 with `odd` and six nodes) and has a leader, all its
+      replicas placed and current, and no move in progress. Until then
+      the evacuation does not start: `EvacuatePeer` answers
+      `FailedPrecondition` (admin API 409) with one entry per stream
+      that is short, the gateway that answered starts the raise, and
+      `--wait` asks again every second. Without `--wait`, or when
+      `--wait` ends first, the command lists the streams and exits 3.
+      `--check` lists them too, next to the streams still on the node.
+      The reason: an evacuation holds every raise back until the node
+      is forgotten (next paragraph), so a stream that is short when it
+      starts stays short through the removal. An R1 bucket on the next
+      blue node to go is then a single copy.
+
+      Then it sends NATS `$JS.API.SERVER.EVACUATE` again every second
+      until no stream has a replica on the node, no stream is being
+      moved, and every replica is current, and prints `peer=<name>
+      done=true`. Exit code 3 means not done in time; run it again.
 
       The first call records the evacuation in the `gwag-cluster`
       bucket for 5 minutes (each call renews it). While it stands, no
       node of this version raises a replica count, because NATS can
       place a new replica on any online server, the evacuated one
-      included. A bucket or event stream created in that time can
-      still land on the node; the creating node sends the evacuation
-      again. The record goes with the forget in step 4, or expires.
-      Raises held back run after it. New buckets are created at the
-      cluster's replica count, so a green node does not add R1 buckets
-      that need a raise later.
+      included; a raise in progress stops at the next stream. A bucket
+      or event stream created in that time can still land on the node;
+      the creating node sends the evacuation again. The record goes
+      with the forget in step 4, or expires. Raises held back run after
+      it. New buckets are created at the cluster's replica count, so a
+      green node does not add R1 buckets that need a raise later.
    3. SIGTERM the blue node.
    4. When its peers entry has expired (30 s), forget it:
 

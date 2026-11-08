@@ -230,7 +230,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	// A bucket created during an evacuation can be placed on the
 	// node being evacuated.
 	kctx, kcancel := kvCtx(ctx)
-	evac, _, _ := getEvacuations(kctx, clusterKV)
+	evac, _, _ := getEvacuations(kctx, cl.Conn)
 	kcancel()
 	for _, b := range buckets {
 		g.moveOffEvacuating(ctx, cl.JS, "KV_"+b, evac.Peers)
@@ -496,7 +496,9 @@ func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
 	cur := t.syncReplicasLocked(ctx)
-	if desired <= cur {
+	// An event stream can be below the buckets: its raise failed in a
+	// setReplicas whose bucket raises went through.
+	if desired <= cur && !t.gw.eventStreamBelow(ctx, t.js, desired) {
 		return
 	}
 	if t.evacuating(ctx) {
@@ -506,7 +508,7 @@ func (t *peerTracker) reconcileReplicas(ctx context.Context) {
 		// Best-effort. The next peer change or refresh tick retries.
 		return
 	}
-	t.currentR.Store(int32(desired))
+	t.currentR.Store(int32(max(cur, desired)))
 }
 
 // syncReplicasLocked sets currentR to the lowest replica count of the
@@ -563,6 +565,12 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int, lower bool) error 
 	}
 	var firstErr error
 	for _, b := range t.buckets {
+		// A raise on a node that is not the meta leader takes seconds
+		// per bucket; an evacuation recorded meanwhile stops the rest
+		// (reconcileReplicas checked only before the first).
+		if !lower && t.evacuating(c) {
+			return errRaiseHeld
+		}
 		_, err := applyStream(c, t.js, "KV_"+b, leader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
 			if cur == nil {
 				return jetstream.StreamConfig{}, false
@@ -576,11 +584,18 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int, lower bool) error 
 		}
 	}
 	// Named-channel event streams follow the same policy.
+	if !lower && t.evacuating(c) {
+		return errRaiseHeld
+	}
 	if err := t.gw.setEventStreamReplicas(c, t.js, r, lower, leader); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
 }
+
+// errRaiseHeld: setReplicas stopped a raise because a node is being
+// evacuated (cluster_evacuate.go).
+var errRaiseHeld = errors.New("replica raise held: a node is being evacuated")
 
 // nextReplicas is the replica count setReplicas gives a bucket or
 // stream at cur.
@@ -602,13 +617,37 @@ func nextReplicas(cur, r int, lower bool) int {
 // (v2.11.0 raises its buckets by its own rules) and an operator with
 // the nats CLI already read and write. A second copy would drift
 // from them and need reconciling anyway.
+//
+// A failed read is retried for up to bootReplicaReadTimeout. A node
+// that has just joined the meta group does not answer stream info
+// until it is current with the meta leader (seen: a 3 s timeout right
+// after "JetStream is not current with the meta leader"). Taking 1 on
+// that error created every bucket the node adds at R1 in a cluster at
+// R3, and the raise that follows on a node that is not the meta
+// leader takes seconds per bucket.
 func bootReplicaTarget(ctx context.Context, js jetstream.JetStream) int {
-	cfg, err := readStreamConfig(ctx, js, "KV_"+peersBucketName)
-	if err != nil || cfg == nil || cfg.Replicas < 1 {
-		return 1
+	deadline := time.Now().Add(bootReplicaReadTimeout)
+	for {
+		cfg, err := readStreamConfig(ctx, js, "KV_"+peersBucketName)
+		if err == nil {
+			if cfg == nil || cfg.Replicas < 1 {
+				return 1
+			}
+			return cfg.Replicas
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			return 1
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
-	return cfg.Replicas
 }
+
+// bootReplicaReadTimeout bounds bootReplicaTarget's retries.
+const bootReplicaReadTimeout = 20 * time.Second
 
 // openKV creates bucket cfg at r replicas, or opens it when it exists
 // (its config, replicas included, stays as it is). When the cluster

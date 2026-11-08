@@ -30,13 +30,22 @@ func kvKeyGone(ctx context.Context, nc *nats.Conn, bucket, key string) (bool, er
 // kvLeaderGet returns key's value as the stream leader holds it. ok
 // is false when the key is absent (see kvKeyGone).
 func kvLeaderGet(ctx context.Context, nc *nats.Conn, bucket, key string) (val []byte, ok bool, err error) {
+	val, _, ok, err = kvLeaderEntry(ctx, nc, bucket, key)
+	return val, ok, err
+}
+
+// kvLeaderEntry is kvLeaderGet plus the revision of the key's last
+// message (its stream sequence), for a compare and set. rev is set
+// when that message is a delete too (ok false), and 0 when the key has
+// no message.
+func kvLeaderEntry(ctx context.Context, nc *nats.Conn, bucket, key string) (val []byte, rev uint64, ok bool, err error) {
 	req, err := json.Marshal(map[string]string{"last_by_subj": "$KV." + bucket + "." + key})
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	msg, err := nc.RequestWithContext(ctx, "$JS.API.STREAM.MSG.GET.KV_"+bucket, req)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", errKVLookup, err)
+		return nil, 0, false, fmt.Errorf("%w: %v", errKVLookup, err)
 	}
 	var resp struct {
 		Error *struct {
@@ -44,28 +53,29 @@ func kvLeaderGet(ctx context.Context, nc *nats.Conn, bucket, key string) (val []
 			ErrCode int `json:"err_code"`
 		} `json:"error"`
 		Message *struct {
+			Seq    uint64 `json:"seq"`
 			Header []byte `json:"hdrs"` // base64 in JSON; decoded by encoding/json
 			Data   []byte `json:"data"`
 		} `json:"message"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
-		return nil, false, fmt.Errorf("%w: %v", errKVLookup, err)
+		return nil, 0, false, fmt.Errorf("%w: %v", errKVLookup, err)
 	}
 	if resp.Error != nil {
 		// 10037: no message found.
 		if resp.Error.ErrCode == 10037 {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
-		return nil, false, fmt.Errorf("%w: api error %d/%d", errKVLookup, resp.Error.Code, resp.Error.ErrCode)
+		return nil, 0, false, fmt.Errorf("%w: api error %d/%d", errKVLookup, resp.Error.Code, resp.Error.ErrCode)
 	}
 	if resp.Message == nil {
-		return nil, false, errKVLookup
+		return nil, 0, false, errKVLookup
 	}
 	h := resp.Message.Header
 	if bytes.Contains(h, []byte("KV-Operation")) || bytes.Contains(h, []byte("Nats-Marker-Reason")) {
-		return nil, false, nil
+		return nil, resp.Message.Seq, false, nil
 	}
-	return resp.Message.Data, true, nil
+	return resp.Message.Data, resp.Message.Seq, true, nil
 }
 
 // kvLeaderKeys returns the keys that have a message in bucket, as

@@ -963,6 +963,10 @@ func (cp *controlPlane) EvacuatePeer(ctx context.Context, req *cpv1.EvacuatePeer
 	}
 	name, remaining, done, left, err := cp.gw.evacuatePeer(ctx, req.GetNodeId(), req.GetCheckOnly(), req.GetLeave())
 	if err != nil {
+		var notReady *evacuateNotReadyError
+		if errors.As(err, &notReady) {
+			return nil, notReady.status()
+		}
 		return nil, err
 	}
 	return &cpv1.EvacuatePeerResponse{Name: name, Remaining: remaining, Done: done, Left: left}, nil

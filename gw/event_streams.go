@@ -181,6 +181,24 @@ func (g *Gateway) ensureEventStream(js jetstream.JetStream, pt *peerTracker, nam
 	}
 }
 
+// eventStreamBelow reports whether a stream this node ensured is
+// configured below r replicas. A stream it cannot read counts as no.
+func (g *Gateway) eventStreamBelow(ctx context.Context, js jetstream.JetStream, r int) bool {
+	st := &g.eventStreams
+	st.mu.Lock()
+	names := make([]string, 0, len(st.known))
+	for n := range st.known {
+		names = append(names, n)
+	}
+	st.mu.Unlock()
+	for _, n := range names {
+		if cfg, err := readStreamConfig(ctx, js, n); err == nil && cfg != nil && cfg.Replicas < r {
+			return true
+		}
+	}
+	return false
+}
+
 // setEventStreamReplicas sets the replica count of every stream this
 // node ensured (every node ensures the stream of every registered
 // channel). Called with the KV bucket update (peerTracker

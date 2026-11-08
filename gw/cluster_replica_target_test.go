@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
@@ -251,7 +254,7 @@ func TestReplicas_EvacuationHoldsRaisesAndMovesCreates(t *testing.T) {
 		}
 		return nil
 	})
-	rec, _, err := getEvacuations(ctx, nodes[0].tracker().cluster)
+	rec, _, err := getEvacuations(ctx, nodes[0].cl.Conn)
 	if err != nil || rec.Peers[goneID].Name != "ev-d" {
 		t.Fatalf("evacuation record %+v err %v", rec, err)
 	}
@@ -319,7 +322,7 @@ func TestReplicas_EvacuationHoldsRaisesAndMovesCreates(t *testing.T) {
 		}
 		return nil
 	})
-	rec, _, err = getEvacuations(ctx, nodes[0].tracker().cluster)
+	rec, _, err = getEvacuations(ctx, nodes[0].cl.Conn)
 	if err != nil || len(rec.Peers) != 0 {
 		t.Fatalf("record after forget %+v err %v", rec, err)
 	}
@@ -329,6 +332,74 @@ func TestReplicas_EvacuationHoldsRaisesAndMovesCreates(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestReplicas_EvacuationWaitsForWholeStreams: an evacuation does not
+// start while a managed bucket is below the cluster's replica count:
+// it would hold the raise back until the node is forgotten. The
+// refusal is FailedPrecondition naming the bucket, writes no record,
+// and starts the raise; once the bucket is whole the evacuation runs.
+func TestReplicas_EvacuationWaitsForWholeStreams(t *testing.T) {
+	nodes := startReplNodes(t, []string{"wh-a", "wh-b", "wh-c", "wh-d"}, nil)
+	js := nodes[0].cl.JS
+	waitUntilErr(t, 60*time.Second, "buckets settled at R3", func() error { return settledAt(t, js, 3) })
+
+	gone := nodes[3]
+	goneID := gone.cl.NodeID
+	ctx := context.Background()
+	short := "KV_" + appKeysBucketName
+	if _, err := applyStream(ctx, js, short, func() bool { return true }, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
+		want := *cur
+		want.Replicas = 1
+		return want, true
+	}); err != nil {
+		t.Fatalf("lower %s: %v", short, err)
+	}
+
+	cp := nodes[0].gw.ControlPlane()
+	_, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: goneID})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("evacuate with %s at R1: %v, want FailedPrecondition", short, err)
+	}
+	var subjects []string
+	for _, d := range status.Convert(err).Details() {
+		if pf, ok := d.(*errdetails.PreconditionFailure); ok {
+			for _, v := range pf.GetViolations() {
+				subjects = append(subjects, v.GetSubject())
+			}
+		}
+	}
+	if !slices.Contains(subjects, short) {
+		t.Fatalf("violations %v do not name %s (%v)", subjects, short, err)
+	}
+	rec, _, err := getEvacuations(ctx, nodes[0].cl.Conn)
+	if err != nil || len(rec.Peers) != 0 {
+		t.Fatalf("record after a refused evacuation %+v err %v", rec, err)
+	}
+
+	// Polled as `gwag peer evacuate --wait` does: refused until the
+	// raise is applied, then evacuated.
+	waitUntilErr(t, 90*time.Second, "wh-d evacuated", func() error {
+		resp, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: goneID})
+		if err != nil {
+			return err
+		}
+		if !resp.GetDone() {
+			return fmt.Errorf("remaining %v", resp.GetRemaining())
+		}
+		return nil
+	})
+	if r := streamConfigOf(t, js, short).Replicas; r != 3 {
+		t.Fatalf("%s at R%d after the evacuation, want R3", short, r)
+	}
+	on, err := streamNodes(ctx, js, short)
+	if err != nil || slices.Contains(on, "wh-d") {
+		t.Fatalf("%s on %v err %v", short, on, err)
+	}
+	// Renewals of a started evacuation are not checked again.
+	if _, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: goneID}); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
 }
 
 // TestReplicas_ExpiredEvacuationNoLongerHolds: a record past its

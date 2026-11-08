@@ -185,6 +185,17 @@ Consequences:
   that time can still be placed on the node; the node that created it
   sends the evacuation again, and NATS moves it off. A raise that was
   held back runs on the next refresh tick after the record goes.
+- Because the record holds raises back, `EvacuatePeer` does not start
+  an evacuation while a gateway bucket or event stream is below the
+  policy count for the live peers, or has no leader, a replica missing
+  or not current, or a move in progress: it answers
+  `FailedPrecondition` (admin API 409) listing those streams and
+  starts the raise. `gwag peer evacuate --wait` asks again until they
+  are whole. A call that renews a started evacuation is not checked.
+- A booting node reads the count of `gwag-peers` for the buckets it
+  creates, and retries that read for up to 20 s: a node that has just
+  joined the meta group does not answer stream info until it is
+  current with the meta leader.
 
   The replica count is not stored separately: every node reads it from
   the buckets' stream config, which every gateway version and the

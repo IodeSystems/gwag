@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
@@ -47,11 +50,20 @@ func evacuatePeer(client cpv1.ControlPlaneClient, bearer, nodeID string, checkOn
 	}
 	// Each poll sends the evacuation again (unless --check): a replica
 	// count raise after the first one can place a replica back on the
-	// peer while it is still live.
+	// peer while it is still live. The gateway refuses to start while a
+	// stream is not whole (FailedPrecondition); that is polled too.
 	resp, err := call(checkOnly)
-	for err == nil && !resp.GetDone() && time.Now().Before(deadline) {
+	for (err == nil && !resp.GetDone() || evacuateNotReady(err)) && time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 		resp, err = call(checkOnly)
+	}
+	if evacuateNotReady(err) {
+		fmt.Fprintln(os.Stderr, "evacuation not started: these streams are not at the cluster's replica count with every replica current.")
+		fmt.Fprintln(os.Stderr, "An evacuation holds replica raises back until the peer is forgotten, so it waits for them. Run again, or with a longer --wait.")
+		for _, v := range notReadyStreams(err) {
+			fmt.Fprintf(os.Stderr, "  %s\n", v)
+		}
+		return 3
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "EvacuatePeer: %v\n", err)
@@ -65,6 +77,30 @@ func evacuatePeer(client cpv1.ControlPlaneClient, bearer, nodeID string, checkOn
 		return 3
 	}
 	return 0
+}
+
+// evacuateNotReady: the gateway did not start the evacuation because
+// a stream is not whole.
+func evacuateNotReady(err error) bool {
+	return err != nil && status.Code(err) == codes.FailedPrecondition
+}
+
+// notReadyStreams lists the streams of a FailedPrecondition answer as
+// "STREAM: reason", or the status message when it has no details.
+func notReadyStreams(err error) []string {
+	st := status.Convert(err)
+	var out []string
+	for _, d := range st.Details() {
+		if pf, ok := d.(*errdetails.PreconditionFailure); ok {
+			for _, v := range pf.GetViolations() {
+				out = append(out, v.GetSubject()+": "+v.GetDescription())
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = []string{st.Message()}
+	}
+	return out
 }
 
 // clusterCmd runs `gwag cluster ...`.

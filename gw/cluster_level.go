@@ -150,7 +150,7 @@ func openClusterBucket(ctx context.Context, js jetstream.JetStream, r int) (jets
 // joining a cluster of older nodes starts at their level, and a new
 // cluster starts at the highest level.
 func loadClusterLevel(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, kv jetstream.KeyValue, self string) (int, error) {
-	if rec, _, err := getClusterLevel(ctx, kv); err == nil {
+	if rec, _, err := getClusterLevel(ctx, nc); err == nil {
 		return rec.Level, nil
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return 0, err
@@ -176,7 +176,7 @@ func loadClusterLevel(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 		if !errors.Is(err, jetstream.ErrKeyExists) {
 			return 0, fmt.Errorf("cluster level: %w", err)
 		}
-		rec, _, err := getClusterLevel(ctx, kv)
+		rec, _, err := getClusterLevel(ctx, nc)
 		if err != nil {
 			return 0, err
 		}
@@ -185,19 +185,39 @@ func loadClusterLevel(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 	return level, nil
 }
 
-func getClusterLevel(ctx context.Context, kv jetstream.KeyValue) (clusterLevelRecord, uint64, error) {
-	e, err := kv.Get(ctx, clusterLevelKey)
-	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return clusterLevelRecord{}, 0, err
+// getClusterLevel reads the level record and its revision from the
+// stream leader (kvLeaderEntry), not with a direct get that a replica
+// behind the leader can answer with an older level, or without the
+// key. A bucket that was just created has no leader for a moment: a
+// failed lookup is retried for up to kvCallTimeout.
+func getClusterLevel(ctx context.Context, nc *nats.Conn) (clusterLevelRecord, uint64, error) {
+	var (
+		v   []byte
+		rev uint64
+		ok  bool
+		err error
+	)
+	deadline := time.Now().Add(kvCallTimeout)
+	for {
+		kctx, cancel := kvCtx(ctx)
+		v, rev, ok, err = kvLeaderEntry(kctx, nc, clusterBucketName, clusterLevelKey)
+		cancel()
+		if !errors.Is(err, errKVLookup) || ctx.Err() != nil || time.Now().After(deadline) {
+			break
 		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
 		return clusterLevelRecord{}, 0, fmt.Errorf("cluster level: %w", err)
+	}
+	if !ok {
+		return clusterLevelRecord{}, 0, jetstream.ErrKeyNotFound
 	}
 	var rec clusterLevelRecord
-	if err := json.Unmarshal(e.Value(), &rec); err != nil {
+	if err := json.Unmarshal(v, &rec); err != nil {
 		return clusterLevelRecord{}, 0, fmt.Errorf("cluster level: %w", err)
 	}
-	return rec, e.Revision(), nil
+	return rec, rev, nil
 }
 
 // readPeerEntries returns every entry of the peers bucket, as the
@@ -356,7 +376,7 @@ func (g *Gateway) finalizeClusterLevel(ctx context.Context, level int, dryRun bo
 	}
 	kctx, cancel := kvCtx(ctx)
 	defer cancel()
-	rec, rev, err := getClusterLevel(kctx, t.cluster)
+	rec, rev, err := getClusterLevel(kctx, t.gw.cfg.cluster.Conn)
 	if err != nil {
 		return finalizeResult{}, err
 	}

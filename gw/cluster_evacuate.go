@@ -11,7 +11,11 @@ import (
 	"time"
 
 	natsd "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // JetStream server APIs used to move a node out of the cluster.
@@ -131,6 +135,113 @@ func streamsOnPeer(ctx context.Context, js jetstream.JetStream, name string) ([]
 	return out, nil
 }
 
+// streamOfEntry is the stream name of a "STREAM: reason" entry.
+func streamOfEntry(e string) string {
+	name, _, _ := strings.Cut(e, ": ")
+	return name
+}
+
+// replicaTarget is the replica count the policy gives for the live
+// peers, as reconcileReplicas raises to.
+func (t *peerTracker) replicaTarget() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.gw.cfg.clusterReplicas.For(len(t.live))
+}
+
+// streamsBelowTarget lists every stream the gateway manages (its KV
+// buckets and named-channel event streams) whose replica group is not
+// whole at target replicas: configured below target, short of its
+// configured count, without a leader, being moved, or with a replica
+// that is not current. Each entry is "STREAM: reason". Streams the
+// gateway does not manage are left out: it does not raise them.
+func (t *peerTracker) streamsBelowTarget(ctx context.Context, target int) ([]string, error) {
+	managed := map[string]bool{}
+	for _, b := range t.buckets {
+		managed["KV_"+b] = true
+	}
+	st := &t.gw.eventStreams
+	st.mu.Lock()
+	for n := range st.known {
+		managed[n] = true
+	}
+	st.mu.Unlock()
+	var out []string
+	lister := t.js.ListStreams(ctx)
+	for info := range lister.Info() {
+		if !managed[info.Config.Name] {
+			continue
+		}
+		var why []string
+		if r := info.Config.Replicas; r < target {
+			why = append(why, fmt.Sprintf("R%d, cluster target R%d", r, target))
+		}
+		if ci := info.Cluster; ci != nil {
+			placed := len(ci.Replicas)
+			if ci.Leader == "" {
+				why = append(why, "no leader")
+			} else {
+				placed++
+			}
+			if ci.Desired != nil {
+				why = append(why, "moving")
+			}
+			if placed < info.Config.Replicas {
+				why = append(why, fmt.Sprintf("%d of %d replicas placed", placed, info.Config.Replicas))
+			}
+			for _, r := range ci.Replicas {
+				if !r.Current {
+					why = append(why, r.Name+" not current")
+				}
+			}
+		}
+		if len(why) > 0 {
+			out = append(out, info.Config.Name+": "+strings.Join(why, ", "))
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// evacuateNotReadyError: EvacuatePeer did not start the evacuation
+// of Peer because Streams are not whole at Target replicas. The
+// control plane answers FailedPrecondition (admin API 409).
+type evacuateNotReadyError struct {
+	Peer    string
+	Target  int
+	Streams []string
+}
+
+func (e *evacuateNotReadyError) Error() string {
+	return fmt.Sprintf("cluster: evacuation of %s not started: %d stream(s) not at R%d with every replica current, and an evacuation holds raises back until the node is forgotten; try again once they are (gwag peer evacuate --wait does): %s",
+		e.Peer, len(e.Streams), e.Target, strings.Join(e.Streams, "; "))
+}
+
+// status is the FailedPrecondition answer, with one
+// PreconditionFailure violation per stream (subject: the stream,
+// description: why it is not whole).
+func (e *evacuateNotReadyError) status() error {
+	st := status.New(codes.FailedPrecondition, e.Error())
+	pf := &errdetails.PreconditionFailure{}
+	for _, s := range e.Streams {
+		name, why, _ := strings.Cut(s, ": ")
+		pf.Violations = append(pf.Violations, &errdetails.PreconditionFailure_Violation{
+			Type: evacuateViolationType, Subject: name, Description: why,
+		})
+	}
+	if withDetails, err := st.WithDetails(pf); err == nil {
+		st = withDetails
+	}
+	return st.Err()
+}
+
+// evacuateViolationType is the PreconditionFailure violation type of
+// a stream that keeps an evacuation from starting.
+const evacuateViolationType = "STREAM_NOT_WHOLE"
+
 // evacuatePeer implements the EvacuatePeer RPC.
 func (g *Gateway) evacuatePeer(ctx context.Context, nodeID string, checkOnly, leave bool) (name string, remaining []string, done, left bool, err error) {
 	g.mu.Lock()
@@ -139,20 +250,48 @@ func (g *Gateway) evacuatePeer(ctx context.Context, nodeID string, checkOnly, le
 	if t == nil {
 		return "", nil, false, false, errors.New("cluster: not configured or not started")
 	}
+	// Asked of the stream leader, as ForgetPeer does: a direct get can
+	// be answered by a replica that is behind.
 	kctx, cancel := kvCtx(ctx)
-	e, err := t.peers.Get(kctx, nodeID)
+	v, ok, err := kvLeaderGet(kctx, g.cfg.cluster.Conn, peersBucketName, nodeID)
 	cancel()
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return "", nil, false, false, fmt.Errorf("cluster: peer %s is not live; a stopped peer is removed with ForgetPeer", nodeID)
-		}
 		return "", nil, false, false, fmt.Errorf("cluster: peer lookup: %w", err)
 	}
+	if !ok {
+		return "", nil, false, false, fmt.Errorf("cluster: peer %s is not live; a stopped peer is removed with ForgetPeer", nodeID)
+	}
 	var pe peerEntry
-	if err := json.Unmarshal(e.Value(), &pe); err != nil || pe.Name == "" {
+	if err := json.Unmarshal(v, &pe); err != nil || pe.Name == "" {
 		return "", nil, false, false, fmt.Errorf("cluster: peer %s has no server name", nodeID)
 	}
 	name = pe.Name
+	// An evacuation holds every replica raise back until the node is
+	// forgotten. One that starts with a stream below the cluster's
+	// replica count, or with a replica that is not current, leaves
+	// that stream short until then: an R1 stream on the next node to
+	// go has a single copy. The first call is refused until every
+	// stream is whole; a call that renews a recorded evacuation is not
+	// checked again (its moves make streams not current for a while).
+	kctx, cancel = kvCtx(ctx)
+	evac, err := t.evacuations(kctx)
+	cancel()
+	if err != nil {
+		return name, nil, false, false, fmt.Errorf("cluster: read evacuation record: %w", err)
+	}
+	var short []string
+	if _, started := evac[nodeID]; !started {
+		target := t.replicaTarget()
+		if short, err = t.streamsBelowTarget(ctx, target); err != nil {
+			return name, nil, false, false, fmt.Errorf("cluster: list streams: %w", err)
+		}
+		if len(short) > 0 && !checkOnly {
+			// Raise what is short now, if no other evacuation holds
+			// raises back; the caller tries again.
+			t.kickReconcile(g.life)
+			return name, nil, false, false, &evacuateNotReadyError{Peer: name, Target: target, Streams: short}
+		}
+	}
 	if !checkOnly {
 		// Recorded first, so no raise starts after the evacuation.
 		kctx, cancel := kvCtx(ctx)
@@ -168,6 +307,21 @@ func (g *Gateway) evacuatePeer(ctx context.Context, nodeID string, checkOnly, le
 	remaining, err = streamsOnPeer(ctx, t.js, name)
 	if err != nil {
 		return name, nil, false, false, fmt.Errorf("cluster: list streams: %w", err)
+	}
+	// A check before the evacuation starts reports what would refuse
+	// it too, one entry per stream.
+	if len(short) > 0 {
+		listed := map[string]bool{}
+		for _, s := range short {
+			listed[streamOfEntry(s)] = true
+		}
+		for _, r := range remaining {
+			if !listed[streamOfEntry(r)] {
+				short = append(short, r)
+			}
+		}
+		sort.Strings(short)
+		remaining = short
 	}
 	done = len(remaining) == 0
 	if leave && done {
@@ -286,17 +440,21 @@ type evacuatingPeer struct {
 }
 
 // getEvacuations reads the record with expired entries removed, and
-// its revision (0 when the key is absent).
-func getEvacuations(ctx context.Context, kv jetstream.KeyValue) (evacuationRecord, uint64, error) {
+// its revision (0 when the key has no message). It asks the stream
+// leader (kvLeaderEntry): a direct get can be answered by a replica
+// that is behind, which shows a record that was cleared, misses one
+// that was written, or gives an old revision that every compare and
+// set then loses.
+func getEvacuations(ctx context.Context, nc *nats.Conn) (evacuationRecord, uint64, error) {
 	rec := evacuationRecord{Peers: map[string]evacuatingPeer{}}
-	e, err := kv.Get(ctx, clusterEvacuationsKey)
-	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return rec, 0, nil
-	}
+	v, rev, ok, err := kvLeaderEntry(ctx, nc, clusterBucketName, clusterEvacuationsKey)
 	if err != nil {
 		return rec, 0, fmt.Errorf("evacuations: %w", err)
 	}
-	if err := json.Unmarshal(e.Value(), &rec); err != nil {
+	if !ok {
+		return rec, rev, nil
+	}
+	if err := json.Unmarshal(v, &rec); err != nil {
 		return rec, 0, fmt.Errorf("evacuations: %w", err)
 	}
 	if rec.Peers == nil {
@@ -308,14 +466,15 @@ func getEvacuations(ctx context.Context, kv jetstream.KeyValue) (evacuationRecor
 			delete(rec.Peers, id)
 		}
 	}
-	return rec, e.Revision(), nil
+	return rec, rev, nil
 }
 
-// updateEvacuations applies change to the record with compare and
-// set, reading again when another node wrote it in between.
-func updateEvacuations(ctx context.Context, kv jetstream.KeyValue, change func(map[string]evacuatingPeer)) error {
+// updateEvacuations applies change to the record in kv (the
+// gwag-cluster bucket) with compare and set, reading again when
+// another node wrote it in between.
+func updateEvacuations(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, change func(map[string]evacuatingPeer)) error {
 	for attempt := 0; ; attempt++ {
-		rec, rev, err := getEvacuations(ctx, kv)
+		rec, rev, err := getEvacuations(ctx, nc)
 		if err != nil {
 			return err
 		}
@@ -342,21 +501,21 @@ func updateEvacuations(ctx context.Context, kv jetstream.KeyValue, change func(m
 func (t *peerTracker) markEvacuating(ctx context.Context, nodeID, name string) error {
 	until := time.Now().Add(evacuationTTL).UnixMilli()
 	by := t.gw.cfg.cluster.Server.Name()
-	return updateEvacuations(ctx, t.cluster, func(m map[string]evacuatingPeer) {
+	return updateEvacuations(ctx, t.gw.cfg.cluster.Conn, t.cluster, func(m map[string]evacuatingPeer) {
 		m[nodeID] = evacuatingPeer{Name: name, UntilUnixMs: until, SetBy: by}
 	})
 }
 
 // clearEvacuating drops the record of nodeID, if any.
 func (t *peerTracker) clearEvacuating(ctx context.Context, nodeID string) error {
-	rec, _, err := getEvacuations(ctx, t.cluster)
+	rec, _, err := getEvacuations(ctx, t.gw.cfg.cluster.Conn)
 	if err != nil {
 		return err
 	}
 	if _, ok := rec.Peers[nodeID]; !ok {
 		return nil
 	}
-	return updateEvacuations(ctx, t.cluster, func(m map[string]evacuatingPeer) { delete(m, nodeID) })
+	return updateEvacuations(ctx, t.gw.cfg.cluster.Conn, t.cluster, func(m map[string]evacuatingPeer) { delete(m, nodeID) })
 }
 
 // evacuations returns the active records. A read error is returned
@@ -364,7 +523,7 @@ func (t *peerTracker) clearEvacuating(ctx context.Context, nodeID string) error 
 func (t *peerTracker) evacuations(ctx context.Context) (map[string]evacuatingPeer, error) {
 	kctx, cancel := kvCtx(ctx)
 	defer cancel()
-	rec, _, err := getEvacuations(kctx, t.cluster)
+	rec, _, err := getEvacuations(kctx, t.gw.cfg.cluster.Conn)
 	if err != nil {
 		return nil, err
 	}

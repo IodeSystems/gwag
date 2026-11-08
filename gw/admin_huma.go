@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -110,6 +111,18 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	}, func(ctx context.Context, in *evacuateIn) (*evacuateOut, error) {
 		resp, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: in.NodeID, CheckOnly: in.Body.CheckOnly, Leave: in.Body.Leave})
 		if err != nil {
+			if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
+				// One error per stream that is not whole.
+				var details []error
+				for _, d := range st.Details() {
+					if pf, ok := d.(*errdetails.PreconditionFailure); ok {
+						for _, v := range pf.GetViolations() {
+							details = append(details, &huma.ErrorDetail{Location: v.GetSubject(), Message: v.GetDescription()})
+						}
+					}
+				}
+				return nil, huma.Error409Conflict(st.Message(), details...)
+			}
 			return nil, err
 		}
 		out := &evacuateOut{}
