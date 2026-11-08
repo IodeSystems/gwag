@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { channel, Core, newID, resolveSubscribeOptions, type Message } from "@gwag/events";
 import { Kafka, logLevel } from "kafkajs";
 import { KafkaBackend, retryTopic, topicTable } from "../src/kafka.ts";
+import { snappyCompress, snappyDecompress } from "../src/snappy.ts";
 
 const enc = new TextEncoder();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -31,6 +32,23 @@ test("topic names and defaults need no broker", () => {
   const rec = { topic: "t", partition: 0, offset: "0", key: Buffer.from("o-1"), value: null, headers: {} };
   assert.equal(d.subject(rec), "corp-orders", "literal pattern");
   assert.equal(b.topicOf(ch).subject(rec), "o-1", "wildcard pattern: the key");
+});
+
+test("snappy: raw blocks and xerial framing both decode", () => {
+  const body = Buffer.from("order o-1001 shipped via ups ".repeat(40));
+  const raw = snappyCompress(body);
+  assert.ok(raw.length < body.length);
+  assert.deepEqual(snappyDecompress(raw), body);
+  const xerial = Buffer.concat([
+    Buffer.from([0x82, 0x53, 0x4e, 0x41, 0x50, 0x50, 0x59, 0x00, 0, 0, 0, 1, 0, 0, 0, 1]),
+    ...[body.subarray(0, 500), body.subarray(500)].flatMap((part) => {
+      const c = snappyCompress(part);
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(c.length);
+      return [len, c];
+    }),
+  ]);
+  assert.deepEqual(snappyDecompress(xerial), body);
 });
 
 test("resolved options carry the retry mode", () => {

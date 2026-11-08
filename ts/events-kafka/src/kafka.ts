@@ -32,7 +32,9 @@ import {
   type SubscribeOptions,
   type Topics,
 } from "@gwag/events";
+
 import { Kafka, logLevel, Partitioners, type Consumer, type IHeaders, type KafkaConfig, type Producer } from "kafkajs";
+import { installSnappy } from "./snappy.ts";
 
 /** Headers this backend adds. */
 export const HeaderSubject = "Gwag-Subject";
@@ -198,6 +200,7 @@ export class KafkaBackend implements Backend, Topics {
   #closed = false;
 
   constructor(brokers: string[], opts: KafkaBackendOptions = {}) {
+    installSnappy();
     const base: KafkaConfig = { clientId: "gwag-events", brokers, logLevel: logLevel.NOTHING, ...opts.client };
     this.#kafka = new Kafka(base);
     this.#partitions = opts.partitions ?? 3;

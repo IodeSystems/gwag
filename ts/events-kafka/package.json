@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@gwag/events": "link:../events",
-    "kafkajs": "2.2.4"
+    "kafkajs": "2.2.4",
+    "snappyjs": "0.7.0"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
