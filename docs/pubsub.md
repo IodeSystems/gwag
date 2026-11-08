@@ -426,6 +426,6 @@ now belongs to `ps_sub` via `WithChannelAuth`.
 ## See also
 
 - [`docs/architecture.md`](./architecture.md) — IR layer, slot model, cluster reconciler
-- [`docs/events.md`](./events.md) — typed event code (`gwag gen`) for Go, TypeScript and Python; backends, groups, dead letters
+- [`docs/events.md`](./events.md) — typed event code (`gwag gen`) for Go, TypeScript and Python; JetStream, groups, dead letters. [`events-kafka.md`](./events-kafka.md) — Kafka, Schema Registry
 - [`docs/cluster.md`](./cluster.md) — NATS / JetStream KV that backs the broker
 - [`docs/admin-auth.md`](./admin-auth.md) — `AdminAuthorizer` delegate pattern that `ChannelAuthDelegate` mirrors
