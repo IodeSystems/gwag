@@ -94,7 +94,7 @@ export class OrdersBus {
 
   /** Publishes msg on channel orders.v1.OrderShipped. */
   publishOrderShipped(subject: OrderShippedSubject, msg: pb.MessageInitShape<typeof OrderShippedSchema>, opts?: ev.PublishOptions): Promise<void> {
-    return this.core.publish(orderShippedChannel, orderShippedSegments(subject), "orders.v1.OrderShipped", pb.toBinary(OrderShippedSchema, pb.create(OrderShippedSchema, msg)), opts);
+    return this.core.publish(orderShippedChannel, orderShippedSegments(subject), OrderShippedSchema, pb.toBinary(OrderShippedSchema, pb.create(OrderShippedSchema, msg)), opts);
   }
 
   /**
@@ -123,7 +123,7 @@ export class OrdersBus {
 
   /** Publishes msg on channel orders.v1.Payments. */
   publishPayments(subject: PaymentsSubject, msg: pb.MessageInitShape<typeof PaymentSchema>, opts?: ev.PublishOptions): Promise<void> {
-    return this.core.publish(paymentsChannel, paymentsSegments(subject), "orders.v1.Payment", pb.toBinary(PaymentSchema, pb.create(PaymentSchema, msg)), opts);
+    return this.core.publish(paymentsChannel, paymentsSegments(subject), PaymentSchema, pb.toBinary(PaymentSchema, pb.create(PaymentSchema, msg)), opts);
   }
 
   /**
@@ -177,9 +177,9 @@ export class OrdersBus {
   publishOrderEvents(subject: OrderEventsSubject, event: OrderEventsEventInit, opts?: ev.PublishOptions): Promise<void> {
     switch (event.type) {
       case "orders.v1.OrderCreated":
-        return this.core.publish(orderEventsChannel, orderEventsSegments(subject), event.type, pb.toBinary(OrderCreatedSchema, pb.create(OrderCreatedSchema, event.value)), opts);
+        return this.core.publish(orderEventsChannel, orderEventsSegments(subject), OrderCreatedSchema, pb.toBinary(OrderCreatedSchema, pb.create(OrderCreatedSchema, event.value)), opts);
       case "orders.v1.OrderCancelled":
-        return this.core.publish(orderEventsChannel, orderEventsSegments(subject), event.type, pb.toBinary(OrderCancelledSchema, pb.create(OrderCancelledSchema, event.value)), opts);
+        return this.core.publish(orderEventsChannel, orderEventsSegments(subject), OrderCancelledSchema, pb.toBinary(OrderCancelledSchema, pb.create(OrderCancelledSchema, event.value)), opts);
     }
   }
 
@@ -219,7 +219,7 @@ export class OrdersBus {
 
   /** Publishes msg on channel orders.v1.Audit. */
   publishAudit(subject: AuditSubject, msg: pb.MessageInitShape<typeof AuditEntrySchema>, opts?: ev.PublishOptions): Promise<void> {
-    return this.core.publish(auditChannel, auditSegments(subject), "orders.v1.AuditEntry", pb.toBinary(AuditEntrySchema, pb.create(AuditEntrySchema, msg)), opts);
+    return this.core.publish(auditChannel, auditSegments(subject), AuditEntrySchema, pb.toBinary(AuditEntrySchema, pb.create(AuditEntrySchema, msg)), opts);
   }
 
   /**

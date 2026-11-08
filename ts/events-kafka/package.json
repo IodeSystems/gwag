@@ -1,0 +1,27 @@
+{
+  "name": "@gwag/events-kafka",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Apache Kafka backend (kafkajs) for @gwag/events",
+  "type": "module",
+  "packageManager": "pnpm@11.0.8",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./src/kafka.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@gwag/events": "link:../events",
+    "kafkajs": "2.2.4",
+    "snappyjs": "0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "5.9.3"
+  }
+}

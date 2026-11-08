@@ -404,7 +404,7 @@ func (g *tsGen) plainOrWhole(c *Channel, N, chVar, segFn, subFn, subjectT, pub, 
 	m := &g.methods
 	fmt.Fprintf(m, "\n  /** Publishes msg on channel %s. */\n", c.Key)
 	fmt.Fprintf(m, "  %s(subject: %s, msg: pb.MessageInitShape<typeof %s>, opts?: ev.PublishOptions): Promise<void> {\n", pub, subjectT, schema)
-	fmt.Fprintf(m, "    return this.core.publish(%s, %s(subject), %s, pb.toBinary(%s, pb.create(%s, msg)), opts);\n  }\n", chVar, segFn, fqn, schema, schema)
+	fmt.Fprintf(m, "    return this.core.publish(%s, %s(subject), %s, pb.toBinary(%s, pb.create(%s, msg)), opts);\n  }\n", chVar, segFn, schema, schema, schema)
 	listen := on
 	if c.Kind == KindOneof {
 		listen = on + "Message"
@@ -518,7 +518,7 @@ func (g *tsGen) union(c *Channel, N, chVar, segFn, subFn, subjectT, pub, on, wha
 	fmt.Fprintf(x, "\n  /** Publishes event on channel %s. */\n", c.Key)
 	fmt.Fprintf(x, "  %s(subject: %s, event: %s, opts?: ev.PublishOptions): Promise<void> {\n    switch (event.type) {\n", "publish"+N, subjectT, eventInit)
 	for _, m := range ms {
-		fmt.Fprintf(x, "      case %s:\n        return this.core.publish(%s, %s(subject), event.type, pb.toBinary(%s, pb.create(%s, event.value)), opts);\n", m.fqn, chVar, segFn, m.schema, m.schema)
+		fmt.Fprintf(x, "      case %s:\n        return this.core.publish(%s, %s(subject), %s, pb.toBinary(%s, pb.create(%s, event.value)), opts);\n", m.fqn, chVar, segFn, m.schema, m.schema, m.schema)
 	}
 	fmt.Fprintf(x, "    }\n  }\n")
 	fmt.Fprintf(x, "\n  /**\n   * Listens on channel %s as group. h is a map with one handler per type,\n   * or one function that gets every known type as a tagged event. One\n   * consumer per (channel, group) carries every type. Resolving acks;\n   * throwing redelivers.\n   */\n", c.Key)
