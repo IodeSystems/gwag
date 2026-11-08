@@ -66,6 +66,7 @@ func upCmd(args []string) int {
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	requireAppKeys := fs.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY; mint with 'gwag key create'), operator RPCs the admin token. Default off: the control plane is open")
+	adminTokenFile := fs.String("admin-token-file", "", "Read the admin bearer token (hex) from this file instead of generating one in the data dir. Env GWAG_ADMIN_TOKEN works the same when the flag is empty. Use it to hand every node of a deployment one platform-managed secret")
 	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
@@ -130,6 +131,14 @@ func upCmd(args []string) int {
 		gateway.WithAdminDataDir(dir),
 		gateway.WithEnvironment(*environment),
 		gateway.WithPublicServices(strings.Split(*publicServices, ",")...),
+	}
+	tokOpt, err := adminTokenOption(*adminTokenFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "--admin-token-file: %v\n", err)
+		return 2
+	}
+	if tokOpt != nil {
+		gwOpts = append(gwOpts, tokOpt)
 	}
 	if *insecureSubscribe {
 		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())
@@ -224,7 +233,11 @@ func upCmd(args []string) int {
 	}
 
 	token := gw.AdminTokenHex()
-	if path := gw.AdminTokenPath(); path != "" {
+	if tokOpt != nil {
+		// Supplied from a platform secret: keep it out of the logs.
+		log.Printf("admin token = (supplied; not logged)")
+		log.Printf("dev token   = (not logged; persisted to %s)", gw.DevTokenPath())
+	} else if path := gw.AdminTokenPath(); path != "" {
 		log.Printf("admin token = %s  (persisted to %s)", token, path)
 		log.Printf("dev token   = %s  (persisted to %s)", gw.DevTokenHex(), gw.DevTokenPath())
 	} else {
