@@ -418,6 +418,9 @@ func servicesCmd(args []string) int {
 	for _, s := range resp.GetServices() {
 		fmt.Printf("%-20s %-6s %-66s %d\n",
 			s.GetNamespace(), s.GetVersion(), s.GetHashHex(), s.GetReplicaCount())
+		for _, w := range s.GetWarnings() {
+			fmt.Printf("  warning: %s\n", w)
+		}
 	}
 	return 0
 }

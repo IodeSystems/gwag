@@ -378,6 +378,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	if err := caller.cover(cp.gw, bindingNS); err != nil {
 		return nil, err
 	}
+	// Shadow messages are checked against gwag's registry. A
+	// difference is a warning; the registration goes on.
+	shadowWarn := cp.gw.checkShadows(ctx, prep)
 
 	id := newRegID()
 
@@ -477,6 +480,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			RegistrationId: id,
 			TtlSeconds:     uint32(ttl / time.Second),
 			Bindings:       statuses,
+			Warnings:       cp.gw.noteShadowWarnings(prep, shadowWarn),
 		}, nil
 	}
 
@@ -569,6 +573,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		RegistrationId: id,
 		TtlSeconds:     uint32(ttl / time.Second),
 		Bindings:       statuses,
+		Warnings:       cp.gw.noteShadowWarnings(prep, shadowWarn),
 	}, nil
 }
 
@@ -1112,6 +1117,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			Owner:                   s.manifest.protoOwner(),
 			Instances:               cp.instanceStatusesLocked(insts[k]),
 			Public:                  cp.gw.isPublicLocked(k.namespace, s.manifest.Public),
+			Warnings:                cp.gw.shadowWarn.get(k),
 		})
 		delete(insts, k)
 	}
@@ -1130,6 +1136,7 @@ func (cp *controlPlane) ListServices(ctx context.Context, _ *cpv1.ListServicesRe
 			Owner:      l[0].manifest.protoOwner(),
 			Instances:  cp.instanceStatusesLocked(l),
 			Public:     cp.gw.isPublicLocked(k.namespace, l[0].manifest.Public),
+			Warnings:   cp.gw.shadowWarn.get(k),
 		})
 	}
 	if len(cp.gw.stableVN) > 0 {

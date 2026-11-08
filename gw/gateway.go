@@ -219,6 +219,11 @@ type Gateway struct {
 	// state (app_keys.go).
 	appKeys       appKeys
 	appKeyMetrics *appKeyMetrics // nil unless the default Prometheus sink is in use
+	// shadowMetrics counts shadow checks (shadow_check.go); nil
+	// unless the default Prometheus sink is in use. shadowWarn holds
+	// the warnings of the latest Register of each line.
+	shadowMetrics *shadowMetrics
+	shadowWarn    shadowWarnings
 	// declView and declSinks feed the declaration change sinks
 	// (declaration_sinks.go). declSinks is nil when none is configured.
 	declView  declarationView
@@ -1519,6 +1524,7 @@ func New(opts ...Option) *Gateway {
 		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
 		g.appKeyMetrics = newAppKeyMetrics(g, pm)
+		g.shadowMetrics = newShadowMetrics(pm)
 	}
 	go g.appKeyWarnLoop()
 	warnShortHexSecret("signer-secret", cfg.signerSecret)

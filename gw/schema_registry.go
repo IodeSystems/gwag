@@ -99,6 +99,12 @@ type schemaRegistry struct {
 	done map[string]string
 }
 
+// internalHTTP is a client that sends requests straight to the
+// registry's internal handler (admin role, no network).
+func (r *schemaRegistry) internalHTTP() *http.Client {
+	return &http.Client{Transport: handlerTransport{r.internal}}
+}
+
 func newSchemaRegistry(g *Gateway) *schemaRegistry {
 	o := g.cfg.schemaRegistry
 	if o == nil {

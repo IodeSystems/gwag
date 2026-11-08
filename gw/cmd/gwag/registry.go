@@ -118,7 +118,6 @@ func sha(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-
 // subjectPath is the file a subject's root schema is written to.
 func subjectPath(subject string) string {
 	return sr.SubjectPath(subject)
