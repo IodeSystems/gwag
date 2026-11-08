@@ -720,7 +720,7 @@ func dispatchOpenAPIRaw(
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
+	resp, err := doUpstreamHTTP(client, req)
 	// Whatever the outcome, multipart Upload readers we opened for
 	// this dispatch are ours to close.
 	closeUploads(closeups)

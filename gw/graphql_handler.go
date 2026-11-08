@@ -83,8 +83,12 @@ func (g *Gateway) graphqlRequestDone(ctx context.Context) {
 	accum := dispatchAccumulatorFromContext(ctx)
 	total := time.Since(accum.start)
 	dispatchSum := time.Duration(accum.Sum.Load())
-	g.recordRequest(accum.rec, "graphql", total, total-dispatchSum)
-	g.logRequestLine("graphql", HTTPRequestFromContext(ctx).URL.Path, total, dispatchSum, int(accum.Count.Load()))
+	if !isReplaying(ctx) {
+		// A replay (replay verification on green) is not client
+		// traffic: no request metrics, no request log line.
+		g.recordRequest(accum.rec, "graphql", total, total-dispatchSum)
+		g.logRequestLine("graphql", HTTPRequestFromContext(ctx).URL.Path, total, dispatchSum, int(accum.Count.Load()))
+	}
 	oteltrace.SpanFromContext(ctx).End()
 }
 

@@ -131,9 +131,11 @@ var adminDevWriteOps = map[string]bool{
 }
 
 // adminAdminReadOps are the GET admin operations only the admin role
-// may call: the app-key list.
+// may call: the app-key list, and the replay diffs (they carry client
+// and upstream payload values).
 var adminAdminReadOps = map[string]bool{
-	"listAppKeys": true,
+	"listAppKeys":     true,
+	"listReplayDiffs": true,
 }
 
 // adminOpNeed is the role an admin operation needs. Operations not

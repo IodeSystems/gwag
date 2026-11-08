@@ -389,6 +389,7 @@ instance or line. Default sink only.
 | `app_key_expiry_seconds` | gauge | `key_id` | Seconds until each key the gateway minted expires; negative once expired. Cluster-wide set, read at scrape. Default sink only. |
 | `app_keys_expiring` | gauge | none | Minted keys that expire within 7 days and have not expired. Default sink only. |
 | `shadow_check_total` | counter | `outcome` | Shadow checks at Register (`(gwag.ps.v1.shadow)` message vs its subject in the gateway's registry): `match`, `mismatch` (also logged and returned as a warning), `not_found` (no context holds the subject), `error` (the check could not run). Not counted with the registry off. Default sink only. |
+| `replay_verify_total` | counter | `outcome` | Replay verifications of recorded requests (`WithReplayVerify`, blue side): `match`, `diff`, `unverifiable` (green would make an upstream call blue did not), `dropped` (queue full, over the size caps, or not recordable), `error` (green could not be asked or could not run it). Default sink only. See [`cutover.md`](./cutover.md). |
 | `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
 | `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
 | `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |

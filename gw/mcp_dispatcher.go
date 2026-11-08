@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -38,11 +39,53 @@ func (d *mcpDispatcher) Dispatch(ctx context.Context, args map[string]any) (any,
 	if len(args) > 0 {
 		req.Params.Arguments = args
 	}
+	if s := replaySessionFrom(ctx); s != nil {
+		return d.replayCall(ctx, s, args, req)
+	}
 	res, err := d.client.CallTool(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: tools/call %s: %w", d.toolName, err)
 	}
 	return mcpResultToAny(res)
+}
+
+// replayCall records (blue) or replays (green) one tools/call. The
+// recorded response body is the CallToolResult JSON; a transport
+// error is kept as text.
+func (d *mcpDispatcher) replayCall(ctx context.Context, s *replaySession, args map[string]any, req mcp.CallToolRequest) (any, error) {
+	rc := s.begin(replayKey{replayKindMCP, d.namespace, d.version, d.toolName})
+	msg := replayMCPRequest(d.toolName, args)
+	if s.replay {
+		leg, err := s.match(rc.key, msg, nil)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: tools/call %s: %w", d.toolName, err)
+		}
+		if leg.Response.Error != "" {
+			return nil, errors.New(leg.Response.Error)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(leg.Response.Body, &out); err != nil {
+			return nil, fmt.Errorf("mcp: decode recorded tool result: %w", err)
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		return out, nil
+	}
+	defer rc.commit()
+	res, err := d.client.CallTool(ctx, req)
+	if err != nil {
+		err = fmt.Errorf("mcp: tools/call %s: %w", d.toolName, err)
+		rc.set("", msg, ReplayMessage{Error: err.Error()})
+		return nil, err
+	}
+	out, err := mcpResultToAny(res)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := json.Marshal(out)
+	rc.set("", msg, ReplayMessage{Body: body})
+	return out, nil
 }
 
 // mcpResultToAny converts a CallToolResult to the JSON-shaped map the

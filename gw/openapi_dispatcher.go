@@ -106,6 +106,20 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 		return nil, Reject(CodeInvalidArgument, "openapi: "+err.Error())
 	}
 	src := d.src
+	if s := replaySessionFrom(ctx); s != nil {
+		op := d.label
+		if d.op != nil && d.op.OperationID != "" {
+			op = d.op.OperationID
+		}
+		rc := s.begin(replayKey{replayKindOpenAPI, d.ns, d.ver, op})
+		ctx = withReplayCall(ctx, rc)
+		if s.replay {
+			// Green: build against the base URL blue used; the
+			// replay call answers in doUpstreamHTTP.
+			return dispatchOpenAPIRaw(ctx, d.method, s.target(rc.key), d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, nil, src.uploadStore)
+		}
+		defer rc.commit()
+	}
 	r := src.pickReplica()
 	if r == nil {
 		return nil, Reject(CodeInternal, fmt.Sprintf("openapi: no live replicas for %s/%s", d.ns, d.ver))
@@ -124,6 +138,9 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 		var probe *httpConnProbe
 		if attempt+1 < maxUpstreamAttempts && src.replicaCount() > attempt+1 && httpClientTraceable(r.httpClient) {
 			probe, attemptCtx = acquireHTTPConnProbe(callCtx)
+		}
+		if rc := replayCallFrom(ctx); rc != nil {
+			rc.target = r.baseURL
 		}
 		r.inflight.Add(1)
 		respBytes, err := dispatchOpenAPIRaw(attemptCtx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, src.uploadStore)
