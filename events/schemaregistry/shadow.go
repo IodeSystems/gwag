@@ -43,9 +43,26 @@ func CompareConsumer(shadow, reg protoreflect.MessageDescriptor) []Problem {
 	return c.out
 }
 
+// CompareShared checks the fields a and b have in common: each field
+// number both declare must agree in type, cardinality and (for enums)
+// the values both declare. A field or enum value only one side has is
+// not a problem; protobuf readers skip unknown fields. Nested messages
+// are compared the same way. Use it for evolution checks between two
+// versions of one schema (a is the newer).
+//
+// Stability: experimental
+func CompareShared(a, b protoreflect.MessageDescriptor) []Problem {
+	c := &comparer{seen: map[[2]protoreflect.FullName]bool{}, shared: true}
+	c.message("", a, b)
+	return c.out
+}
+
 type comparer struct {
 	out  []Problem
 	seen map[[2]protoreflect.FullName]bool
+	// shared: CompareShared (fields and enum values on one side only
+	// are fine).
+	shared bool
 }
 
 func (c *comparer) add(path string, warn bool, format string, args ...any) {
@@ -98,6 +115,9 @@ func (c *comparer) message(path string, shadow, reg protoreflect.MessageDescript
 		p := join(path, string(f.Name()))
 		rf := reg.Fields().ByNumber(f.Number())
 		if rf == nil {
+			if c.shared {
+				continue
+			}
 			c.add(p, false, "field %d is not in registry message %s", f.Number(), reg.FullName())
 			continue
 		}
@@ -139,6 +159,7 @@ func (c *comparer) field(p string, f, rf protoreflect.FieldDescriptor) {
 			v := vs.Get(i)
 			rv := re.Values().ByNumber(v.Number())
 			switch {
+			case rv == nil && c.shared:
 			case rv == nil:
 				c.add(p, false, "enum value %s = %d is not in registry enum %s", v.Name(), v.Number(), re.FullName())
 			case rv.Name() != v.Name():

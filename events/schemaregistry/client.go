@@ -105,6 +105,9 @@ const (
 	codeSubjectNotFound = 40401
 	codeVersionNotFound = 40402
 	codeSchemaNotFound  = 40403
+	// codeSubjectLevelConfigNotFound: GET /config/{subject} of a
+	// subject with no level of its own.
+	codeSubjectLevelConfigNotFound = 40408
 )
 
 // IsNotFound reports whether err is a registry "not found" (subject,
@@ -344,6 +347,75 @@ func (c *Client) CompatibilityLevel(ctx context.Context, subject string) (string
 		return "", err
 	}
 	return out.Level, nil
+}
+
+func deletedQuery(deleted bool) url.Values {
+	q := url.Values{}
+	if deleted {
+		q.Set("deleted", "true")
+	}
+	return q
+}
+
+// Subjects lists the registry's subjects. deleted includes
+// soft-deleted ones.
+//
+// Stability: experimental
+func (c *Client) Subjects(ctx context.Context, deleted bool) ([]string, error) {
+	var out []string
+	if err := c.do(ctx, http.MethodGet, "/subjects", deletedQuery(deleted), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Versions lists the version numbers of subject. deleted includes
+// soft-deleted ones.
+//
+// Stability: experimental
+func (c *Client) Versions(ctx context.Context, subject string, deleted bool) ([]int, error) {
+	var out []int
+	if err := c.do(ctx, http.MethodGet, "/subjects/"+seg(subject)+"/versions", deletedQuery(deleted), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Version returns version of subject, uncached. deleted also finds a
+// soft-deleted version. format as for SchemaByID.
+//
+// Stability: experimental
+func (c *Client) Version(ctx context.Context, subject string, version int, format string, deleted bool) (*Schema, error) {
+	q := deletedQuery(deleted)
+	if format != "" {
+		q.Set("format", format)
+	}
+	s := &Schema{}
+	if err := c.do(ctx, http.MethodGet, "/subjects/"+seg(subject)+"/versions/"+strconv.Itoa(version), q, nil, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Config returns the compatibility level set on subject, or the global
+// level when subject is "". A subject with no level of its own gives
+// "".
+//
+// Stability: experimental
+func (c *Client) Config(ctx context.Context, subject string) (string, error) {
+	path := "/config"
+	if subject != "" {
+		path += "/" + seg(subject)
+	}
+	var out struct {
+		Level string `json:"compatibilityLevel"`
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, nil, &out)
+	var e *Error
+	if subject != "" && errors.As(err, &e) && (e.Code == codeSubjectLevelConfigNotFound || e.Code == codeSubjectNotFound) {
+		return "", nil
+	}
+	return out.Level, err
 }
 
 func typeOr(t string) string {
