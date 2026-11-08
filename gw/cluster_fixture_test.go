@@ -182,8 +182,19 @@ func newSharedClusterNode(t *testing.T, cl *Cluster) *clusterNode {
 	// Start cluster tracking (creates KV buckets, watch loops, reconciler).
 	trkCtx, trkCancel := context.WithCancel(context.Background())
 	t.Cleanup(trkCancel)
-	if _, err := gw.startClusterTracking(trkCtx); err != nil {
-		t.Fatalf("startClusterTracking: %v", err)
+	// Retry like bootClusterTracking does: right after
+	// resetSharedCluster deletes the buckets, JetStream can briefly
+	// answer "no responders" for the recreated cluster bucket.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := gw.startClusterTracking(trkCtx)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("startClusterTracking: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return &clusterNode{
