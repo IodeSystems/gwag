@@ -266,10 +266,13 @@ class Client:
         for dep in info.dependency:
             if builtin(dep):
                 continue
+            ref_subj = ref_subject(dep)
             r = await self.ensure_file(
-                ref_subject(dep), dep, files=files, register=register, normalize=normalize, ref_subject=ref_subject
+                ref_subj, dep, files=files, register=register, normalize=normalize, ref_subject=ref_subject
             )
-            refs.append(Reference(dep, r.subject, r.version))
+            # The subject asked for, not the one answered: a registry URL
+            # with a context (/contexts/.corp) answers ":.corp:<subject>".
+            refs.append(Reference(dep, ref_subj, r.version))
         s = Schema(schema=base64.b64encode(info.raw).decode(), references=refs)
         if register:
             try:

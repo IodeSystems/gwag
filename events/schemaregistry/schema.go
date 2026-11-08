@@ -234,11 +234,14 @@ func (c *Client) EnsureFile(ctx context.Context, subject string, fd protoreflect
 		if Builtin(dep.Path()) {
 			continue
 		}
-		r, err := c.EnsureFile(ctx, o.RefSubject(dep.Path()), dep, o)
+		refSubj := o.RefSubject(dep.Path())
+		r, err := c.EnsureFile(ctx, refSubj, dep, o)
 		if err != nil {
 			return nil, err
 		}
-		refs = append(refs, Reference{Name: dep.Path(), Subject: r.Subject, Version: r.Version})
+		// The subject asked for, not the one answered: a registry
+		// URL with a context (/contexts/.corp) answers ":.corp:<subject>".
+		refs = append(refs, Reference{Name: dep.Path(), Subject: refSubj, Version: r.Version})
 	}
 	s, err := SchemaOf(fd, refs)
 	if err != nil {

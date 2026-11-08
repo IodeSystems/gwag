@@ -85,8 +85,11 @@ async function doEnsure(c: RegistryClient, subject: string, file: DescFile, o: R
   for (const dep of file.dependencies) {
     const path = dep.proto.name;
     if (builtin(path)) continue;
-    const r = await ensureFile(c, refSubject(path), dep, o);
-    refs.push({ name: path, subject: r.subject ?? "", version: r.version ?? 0 });
+    const refSubj = refSubject(path);
+    const r = await ensureFile(c, refSubj, dep, o);
+    // The subject asked for, not the one answered: a registry URL with
+    // a context (/contexts/.corp) answers ":.corp:<subject>".
+    refs.push({ name: path, subject: refSubj, version: r.version ?? 0 });
   }
   const s = schemaOf(file, refs);
   if (o.register) {
