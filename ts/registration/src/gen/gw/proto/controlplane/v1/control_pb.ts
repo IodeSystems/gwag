@@ -10,7 +10,7 @@ import type { Message, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file gw/proto/controlplane/v1/control.proto.
  */
 export const file_gw_proto_controlplane_v1_control: GenFile = /*@__PURE__*/
-  fileDesc("CiZndy9wcm90by9jb250cm9scGxhbmUvdjEvY29udHJvbC5wcm90bxIXZ2F0ZXdheS5jb250cm9scGxhbmUudjEihAEKD1JlZ2lzdGVyUmVxdWVzdBIMCgRhZGRyGAEgASgJEjkKCHNlcnZpY2VzGAIgAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUJpbmRpbmcSEwoLdHRsX3NlY29uZHMYAyABKA0SEwoLaW5zdGFuY2VfaWQYBCABKAkihAQKDlNlcnZpY2VCaW5kaW5nEhEKCW5hbWVzcGFjZRgBIAEoCRIUCgxwcm90b19zb3VyY2UYAiABKAwSUAoNcHJvdG9faW1wb3J0cxgDIAMoCzI5LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNlcnZpY2VCaW5kaW5nLlByb3RvSW1wb3J0c0VudHJ5Eg8KB3ZlcnNpb24YBCABKAkSFAoMb3BlbmFwaV9zcGVjGAUgASgMEhgKEGdyYXBocWxfZW5kcG9pbnQYBiABKAkSFwoPbWF4X2NvbmN1cnJlbmN5GAcgASgNEiQKHG1heF9jb25jdXJyZW5jeV9wZXJfaW5zdGFuY2UYCCABKA0SEgoKdGltZW91dF9tcxgJIAEoDRI0CgdkZXBlbmRzGAogAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgLIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEg4KBnB1YmxpYxgMIAEoCBI5CgpzdWJzY3JpYmVzGA0gAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uGjMKEVByb3RvSW1wb3J0c0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEiLgoMU3Vic2NyaXB0aW9uEg8KB2NoYW5uZWwYASABKAkSDQoFZ3JvdXAYAiABKAkiLAoKRGVwZW5kZW5jeRIPCgdzZXJ2aWNlGAEgASgJEg0KBWxpbmVzGAIgAygJIiYKBU93bmVyEgwKBHRlYW0YASABKAkSDwoHY29udGFjdBgCIAEoCSJ6ChBSZWdpc3RlclJlc3BvbnNlEhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCRITCgt0dGxfc2Vjb25kcxgCIAEoDRI4CghiaW5kaW5ncxgDIAMoCzImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkJpbmRpbmdTdGF0dXMiaQoQRGVwZW5kZW5jeVN0YXR1cxIPCgdzZXJ2aWNlGAEgASgJEg0KBWxpbmVzGAIgAygJEhUKDXByZXNlbnRfbGluZXMYAyADKAkSDwoHY2hhbm5lbBgEIAEoCRINCgVncm91cBgFIAEoCSKmAQoNQmluZGluZ1N0YXR1cxIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCRI1CgVzdGF0ZRgDIAEoDjImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkluc3RhbmNlU3RhdGUSOgoHZGVwZW5kcxgEIAMoCzIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcGVuZGVuY3lTdGF0dXMi0wEKDkluc3RhbmNlU3RhdHVzEhIKCnJlcGxpY2FfaWQYASABKAkSFwoPcmVnaXN0cmF0aW9uX2lkGAIgASgJEhMKC2luc3RhbmNlX2lkGAMgASgJEgwKBGFkZHIYBCABKAkSNQoFc3RhdGUYBSABKA4yJi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5JbnN0YW5jZVN0YXRlEjoKB2RlcGVuZHMYBiADKAsyKS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXBlbmRlbmN5U3RhdHVzIisKEEhlYXJ0YmVhdFJlcXVlc3QSFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJIlkKEUhlYXJ0YmVhdFJlc3BvbnNlEgoKAm9rGAEgASgIEjgKCGJpbmRpbmdzGAIgAygLMiYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuQmluZGluZ1N0YXR1cyIsChFEZXJlZ2lzdGVyUmVxdWVzdBIXCg9yZWdpc3RyYXRpb25faWQYASABKAkiFAoSRGVyZWdpc3RlclJlc3BvbnNlIhoKGExpc3RSZWdpc3RyYXRpb25zUmVxdWVzdCJZChlMaXN0UmVnaXN0cmF0aW9uc1Jlc3BvbnNlEjwKDXJlZ2lzdHJhdGlvbnMYASADKAsyJS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RyYXRpb24ikwEKDFJlZ2lzdHJhdGlvbhIXCg9yZWdpc3RyYXRpb25faWQYASABKAkSDAoEYWRkchgCIAEoCRITCgtpbnN0YW5jZV9pZBgDIAEoCRITCgt0dGxfc2Vjb25kcxgEIAEoDRIeChZsYXN0X2hlYXJ0YmVhdF91bml4X21zGAUgASgEEhIKCm5hbWVzcGFjZXMYBiADKAkiEgoQTGlzdFBlZXJzUmVxdWVzdCJBChFMaXN0UGVlcnNSZXNwb25zZRIsCgVwZWVycxgBIAMoCzIdLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlBlZXIiPQoEUGVlchIPCgdub2RlX2lkGAEgASgJEgwKBG5hbWUYAiABKAkSFgoOam9pbmVkX3VuaXhfbXMYAyABKAMiJAoRRm9yZ2V0UGVlclJlcXVlc3QSDwoHbm9kZV9pZBgBIAEoCSI7ChJGb3JnZXRQZWVyUmVzcG9uc2USDwoHcmVtb3ZlZBgBIAEoCBIUCgxuZXdfcmVwbGljYXMYAiABKA0iFQoTTGlzdFNlcnZpY2VzUmVxdWVzdCLqAQoUTGlzdFNlcnZpY2VzUmVzcG9uc2USNgoIc2VydmljZXMYASADKAsyJC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TZXJ2aWNlSW5mbxJOCglzdGFibGVfdm4YAyADKAsyOy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0U2VydmljZXNSZXNwb25zZS5TdGFibGVWbkVudHJ5EhMKC2Vudmlyb25tZW50GAQgASgJGi8KDVN0YWJsZVZuRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgNOgI4AUoECAIQAyLpAgoLU2VydmljZUluZm8SEQoJbmFtZXNwYWNlGAEgASgJEg8KB3ZlcnNpb24YAiABKAkSEAoIaGFzaF9oZXgYAyABKAkSFQoNcmVwbGljYV9jb3VudBgEIAEoDRIhChltYW51YWxfZGVwcmVjYXRpb25fcmVhc29uGAUgASgJEjQKB2RlcGVuZHMYBiADKAsyIy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXBlbmRlbmN5Ei0KBW93bmVyGAcgASgLMh4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuT3duZXISOgoJaW5zdGFuY2VzGAggAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSW5zdGFuY2VTdGF0dXMSDgoGcHVibGljGAkgASgIEjkKCnN1YnNjcmliZXMYCiADKAsyJS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TdWJzY3JpcHRpb24iUQocU2lnblN1YnNjcmlwdGlvblRva2VuUmVxdWVzdBIPCgdjaGFubmVsGAEgASgJEhMKC3R0bF9zZWNvbmRzGAIgASgDEgsKA2tpZBgDIAEoCSI9ChRSZXRyYWN0U3RhYmxlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSEgoKdGFyZ2V0X3ZfbhgCIAEoDSI7ChVSZXRyYWN0U3RhYmxlUmVzcG9uc2USEQoJcHJpb3Jfdl9uGAEgASgNEg8KB25ld192X24YAiABKA0iRgoQRGVwcmVjYXRlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIOCgZyZWFzb24YAyABKAkiEwoRRGVwcmVjYXRlUmVzcG9uc2UiOAoSVW5kZXByZWNhdGVSZXF1ZXN0EhEKCW5hbWVzcGFjZRgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJIisKE1VuZGVwcmVjYXRlUmVzcG9uc2USFAoMcHJpb3JfcmVhc29uGAEgASgJIpwBCh1TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXNwb25zZRI4CgRjb2RlGAEgASgOMiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaWJlQXV0aENvZGUSDAoEaG1hYxgCIAEoCRIWCg50aW1lc3RhbXBfdW5peBgDIAEoAxIOCgZyZWFzb24YBCABKAkSCwoDa2lkGAUgASgJIjgKFERyYWluSW5zdGFuY2VSZXF1ZXN0EhAKCGluc3RhbmNlGAEgASgJEg4KBmNhbmNlbBgCIAEoCCKrAQoVRHJhaW5JbnN0YW5jZVJlc3BvbnNlEhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCRITCgtpbnN0YW5jZV9pZBgCIAEoCRIyCgVzdGF0ZRgDIAEoDjIjLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRyYWluU3RhdGUSDwoHcmVhc29ucxgEIAMoCRIQCghpbmZsaWdodBgFIAEoDRINCgVsaW5lcxgGIAMoCSqCAQoNSW5zdGFuY2VTdGF0ZRIeChpJTlNUQU5DRV9TVEFURV9VTlNQRUNJRklFRBAAEhgKFElOU1RBTkNFX1NUQVRFX1JFQURZEAESGgoWSU5TVEFOQ0VfU1RBVEVfV0FJVElORxACEhsKF0lOU1RBTkNFX1NUQVRFX0RFR1JBREVEEAMq9wIKEVN1YnNjcmliZUF1dGhDb2RlEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5TUEVDSUZJRUQQABIaChZTVUJTQ1JJQkVfQVVUSF9DT0RFX09LEAESHwobU1VCU0NSSUJFX0FVVEhfQ09ERV9UT09fT0xEEAISHwobU1VCU0NSSUJFX0FVVEhfQ09ERV9UT09fTkVXEAMSKgomU1VCU0NSSUJFX0FVVEhfQ09ERV9TSUdOQVRVUkVfTUlTTUFUQ0gQBBIhCh1TVUJTQ1JJQkVfQVVUSF9DT0RFX01BTEZPUk1FRBAFEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5LTk9XTl9LSUQQBhIeChpTVUJTQ1JJQkVfQVVUSF9DT0RFX0RFTklFRBAHEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5BVkFJTEFCTEUQCBImCiJTVUJTQ1JJQkVfQVVUSF9DT0RFX05PVF9DT05GSUdVUkVEEAkqkwEKCkRyYWluU3RhdGUSGwoXRFJBSU5fU1RBVEVfVU5TUEVDSUZJRUQQABIXChNEUkFJTl9TVEFURV9TRVJWSU5HEAESGAoURFJBSU5fU1RBVEVfRFJBSU5JTkcQAhIXChNEUkFJTl9TVEFURV9CTE9DS0VEEAMSHAoYRFJBSU5fU1RBVEVfU0FGRV9UT19TVE9QEAQypQoKDENvbnRyb2xQbGFuZRJfCghSZWdpc3RlchIoLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlZ2lzdGVyUmVxdWVzdBopLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlZ2lzdGVyUmVzcG9uc2USYgoJSGVhcnRiZWF0EikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSGVhcnRiZWF0UmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkhlYXJ0YmVhdFJlc3BvbnNlEmUKCkRlcmVnaXN0ZXISKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXJlZ2lzdGVyUmVxdWVzdBorLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcmVnaXN0ZXJSZXNwb25zZRJ6ChFMaXN0UmVnaXN0cmF0aW9ucxIxLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RSZWdpc3RyYXRpb25zUmVxdWVzdBoyLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RSZWdpc3RyYXRpb25zUmVzcG9uc2USYgoJTGlzdFBlZXJzEikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFBlZXJzUmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RQZWVyc1Jlc3BvbnNlEmUKCkZvcmdldFBlZXISKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5Gb3JnZXRQZWVyUmVxdWVzdBorLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkZvcmdldFBlZXJSZXNwb25zZRJrCgxMaXN0U2VydmljZXMSLC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0U2VydmljZXNSZXF1ZXN0Gi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVzcG9uc2UShgEKFVNpZ25TdWJzY3JpcHRpb25Ub2tlbhI1LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNpZ25TdWJzY3JpcHRpb25Ub2tlblJlcXVlc3QaNi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXNwb25zZRJuCg1SZXRyYWN0U3RhYmxlEi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmV0cmFjdFN0YWJsZVJlcXVlc3QaLi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZXRyYWN0U3RhYmxlUmVzcG9uc2USYgoJRGVwcmVjYXRlEikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwcmVjYXRlUmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcHJlY2F0ZVJlc3BvbnNlEmgKC1VuZGVwcmVjYXRlEisuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuVW5kZXByZWNhdGVSZXF1ZXN0GiwuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuVW5kZXByZWNhdGVSZXNwb25zZRJuCg1EcmFpbkluc3RhbmNlEi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRHJhaW5JbnN0YW5jZVJlcXVlc3QaLi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EcmFpbkluc3RhbmNlUmVzcG9uc2VCSFpGZ2l0aHViLmNvbS9pb2Rlc3lzdGVtcy9nd2FnL3YyL2d3L3Byb3RvL2NvbnRyb2xwbGFuZS92MTtjb250cm9scGxhbmV2MWIGcHJvdG8z");
+  fileDesc("CiZndy9wcm90by9jb250cm9scGxhbmUvdjEvY29udHJvbC5wcm90bxIXZ2F0ZXdheS5jb250cm9scGxhbmUudjEihAEKD1JlZ2lzdGVyUmVxdWVzdBIMCgRhZGRyGAEgASgJEjkKCHNlcnZpY2VzGAIgAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUJpbmRpbmcSEwoLdHRsX3NlY29uZHMYAyABKA0SEwoLaW5zdGFuY2VfaWQYBCABKAkihAQKDlNlcnZpY2VCaW5kaW5nEhEKCW5hbWVzcGFjZRgBIAEoCRIUCgxwcm90b19zb3VyY2UYAiABKAwSUAoNcHJvdG9faW1wb3J0cxgDIAMoCzI5LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNlcnZpY2VCaW5kaW5nLlByb3RvSW1wb3J0c0VudHJ5Eg8KB3ZlcnNpb24YBCABKAkSFAoMb3BlbmFwaV9zcGVjGAUgASgMEhgKEGdyYXBocWxfZW5kcG9pbnQYBiABKAkSFwoPbWF4X2NvbmN1cnJlbmN5GAcgASgNEiQKHG1heF9jb25jdXJyZW5jeV9wZXJfaW5zdGFuY2UYCCABKA0SEgoKdGltZW91dF9tcxgJIAEoDRI0CgdkZXBlbmRzGAogAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgLIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEg4KBnB1YmxpYxgMIAEoCBI5CgpzdWJzY3JpYmVzGA0gAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uGjMKEVByb3RvSW1wb3J0c0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEiLgoMU3Vic2NyaXB0aW9uEg8KB2NoYW5uZWwYASABKAkSDQoFZ3JvdXAYAiABKAkiLAoKRGVwZW5kZW5jeRIPCgdzZXJ2aWNlGAEgASgJEg0KBWxpbmVzGAIgAygJIiYKBU93bmVyEgwKBHRlYW0YASABKAkSDwoHY29udGFjdBgCIAEoCSJ6ChBSZWdpc3RlclJlc3BvbnNlEhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCRITCgt0dGxfc2Vjb25kcxgCIAEoDRI4CghiaW5kaW5ncxgDIAMoCzImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkJpbmRpbmdTdGF0dXMiaQoQRGVwZW5kZW5jeVN0YXR1cxIPCgdzZXJ2aWNlGAEgASgJEg0KBWxpbmVzGAIgAygJEhUKDXByZXNlbnRfbGluZXMYAyADKAkSDwoHY2hhbm5lbBgEIAEoCRINCgVncm91cBgFIAEoCSKmAQoNQmluZGluZ1N0YXR1cxIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCRI1CgVzdGF0ZRgDIAEoDjImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkluc3RhbmNlU3RhdGUSOgoHZGVwZW5kcxgEIAMoCzIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcGVuZGVuY3lTdGF0dXMi0wEKDkluc3RhbmNlU3RhdHVzEhIKCnJlcGxpY2FfaWQYASABKAkSFwoPcmVnaXN0cmF0aW9uX2lkGAIgASgJEhMKC2luc3RhbmNlX2lkGAMgASgJEgwKBGFkZHIYBCABKAkSNQoFc3RhdGUYBSABKA4yJi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5JbnN0YW5jZVN0YXRlEjoKB2RlcGVuZHMYBiADKAsyKS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXBlbmRlbmN5U3RhdHVzIisKEEhlYXJ0YmVhdFJlcXVlc3QSFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJIlkKEUhlYXJ0YmVhdFJlc3BvbnNlEgoKAm9rGAEgASgIEjgKCGJpbmRpbmdzGAIgAygLMiYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuQmluZGluZ1N0YXR1cyIsChFEZXJlZ2lzdGVyUmVxdWVzdBIXCg9yZWdpc3RyYXRpb25faWQYASABKAkiFAoSRGVyZWdpc3RlclJlc3BvbnNlIhoKGExpc3RSZWdpc3RyYXRpb25zUmVxdWVzdCJZChlMaXN0UmVnaXN0cmF0aW9uc1Jlc3BvbnNlEjwKDXJlZ2lzdHJhdGlvbnMYASADKAsyJS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RyYXRpb24ikwEKDFJlZ2lzdHJhdGlvbhIXCg9yZWdpc3RyYXRpb25faWQYASABKAkSDAoEYWRkchgCIAEoCRITCgtpbnN0YW5jZV9pZBgDIAEoCRITCgt0dGxfc2Vjb25kcxgEIAEoDRIeChZsYXN0X2hlYXJ0YmVhdF91bml4X21zGAUgASgEEhIKCm5hbWVzcGFjZXMYBiADKAkiEgoQTGlzdFBlZXJzUmVxdWVzdCKVAQoRTGlzdFBlZXJzUmVzcG9uc2USLAoFcGVlcnMYASADKAsyHS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5QZWVyEhQKDGFjdGl2ZV9sZXZlbBgCIAEoDRITCgttZXRhX2xlYWRlchgDIAEoCRIRCgltZXRhX3NpemUYBCABKA0SFAoMbWV0YV9vZmZsaW5lGAUgAygJInQKBFBlZXISDwoHbm9kZV9pZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDmpvaW5lZF91bml4X21zGAMgASgDEg8KB3ZlcnNpb24YBCABKAkSEQoJbWluX2xldmVsGAUgASgNEhEKCW1heF9sZXZlbBgGIAEoDSIkChFGb3JnZXRQZWVyUmVxdWVzdBIPCgdub2RlX2lkGAEgASgJIlEKEkZvcmdldFBlZXJSZXNwb25zZRIPCgdyZW1vdmVkGAEgASgIEhQKDG5ld19yZXBsaWNhcxgCIAEoDRIUCgxtZXRhX3JlbW92ZWQYAyABKAgiOAoWRmluYWxpemVDbHVzdGVyUmVxdWVzdBINCgVsZXZlbBgBIAEoDRIPCgdkcnlfcnVuGAIgASgIIlkKF0ZpbmFsaXplQ2x1c3RlclJlc3BvbnNlEhYKDnByZXZpb3VzX2xldmVsGAEgASgNEhQKDGFjdGl2ZV9sZXZlbBgCIAEoDRIQCghibG9ja2VycxgDIAMoCSJJChNFdmFjdWF0ZVBlZXJSZXF1ZXN0Eg8KB25vZGVfaWQYASABKAkSEgoKY2hlY2tfb25seRgCIAEoCBINCgVsZWF2ZRgDIAEoCCJTChRFdmFjdWF0ZVBlZXJSZXNwb25zZRIMCgRuYW1lGAEgASgJEhEKCXJlbWFpbmluZxgCIAMoCRIMCgRkb25lGAMgASgIEgwKBGxlZnQYBCABKAgiFQoTTGlzdFNlcnZpY2VzUmVxdWVzdCLqAQoUTGlzdFNlcnZpY2VzUmVzcG9uc2USNgoIc2VydmljZXMYASADKAsyJC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TZXJ2aWNlSW5mbxJOCglzdGFibGVfdm4YAyADKAsyOy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0U2VydmljZXNSZXNwb25zZS5TdGFibGVWbkVudHJ5EhMKC2Vudmlyb25tZW50GAQgASgJGi8KDVN0YWJsZVZuRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgNOgI4AUoECAIQAyLpAgoLU2VydmljZUluZm8SEQoJbmFtZXNwYWNlGAEgASgJEg8KB3ZlcnNpb24YAiABKAkSEAoIaGFzaF9oZXgYAyABKAkSFQoNcmVwbGljYV9jb3VudBgEIAEoDRIhChltYW51YWxfZGVwcmVjYXRpb25fcmVhc29uGAUgASgJEjQKB2RlcGVuZHMYBiADKAsyIy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXBlbmRlbmN5Ei0KBW93bmVyGAcgASgLMh4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuT3duZXISOgoJaW5zdGFuY2VzGAggAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSW5zdGFuY2VTdGF0dXMSDgoGcHVibGljGAkgASgIEjkKCnN1YnNjcmliZXMYCiADKAsyJS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TdWJzY3JpcHRpb24iUQocU2lnblN1YnNjcmlwdGlvblRva2VuUmVxdWVzdBIPCgdjaGFubmVsGAEgASgJEhMKC3R0bF9zZWNvbmRzGAIgASgDEgsKA2tpZBgDIAEoCSI9ChRSZXRyYWN0U3RhYmxlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSEgoKdGFyZ2V0X3ZfbhgCIAEoDSI7ChVSZXRyYWN0U3RhYmxlUmVzcG9uc2USEQoJcHJpb3Jfdl9uGAEgASgNEg8KB25ld192X24YAiABKA0iRgoQRGVwcmVjYXRlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIOCgZyZWFzb24YAyABKAkiEwoRRGVwcmVjYXRlUmVzcG9uc2UiOAoSVW5kZXByZWNhdGVSZXF1ZXN0EhEKCW5hbWVzcGFjZRgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJIisKE1VuZGVwcmVjYXRlUmVzcG9uc2USFAoMcHJpb3JfcmVhc29uGAEgASgJIpwBCh1TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXNwb25zZRI4CgRjb2RlGAEgASgOMiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaWJlQXV0aENvZGUSDAoEaG1hYxgCIAEoCRIWCg50aW1lc3RhbXBfdW5peBgDIAEoAxIOCgZyZWFzb24YBCABKAkSCwoDa2lkGAUgASgJIjgKFERyYWluSW5zdGFuY2VSZXF1ZXN0EhAKCGluc3RhbmNlGAEgASgJEg4KBmNhbmNlbBgCIAEoCCKrAQoVRHJhaW5JbnN0YW5jZVJlc3BvbnNlEhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCRITCgtpbnN0YW5jZV9pZBgCIAEoCRIyCgVzdGF0ZRgDIAEoDjIjLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRyYWluU3RhdGUSDwoHcmVhc29ucxgEIAMoCRIQCghpbmZsaWdodBgFIAEoDRINCgVsaW5lcxgGIAMoCSqCAQoNSW5zdGFuY2VTdGF0ZRIeChpJTlNUQU5DRV9TVEFURV9VTlNQRUNJRklFRBAAEhgKFElOU1RBTkNFX1NUQVRFX1JFQURZEAESGgoWSU5TVEFOQ0VfU1RBVEVfV0FJVElORxACEhsKF0lOU1RBTkNFX1NUQVRFX0RFR1JBREVEEAMq9wIKEVN1YnNjcmliZUF1dGhDb2RlEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5TUEVDSUZJRUQQABIaChZTVUJTQ1JJQkVfQVVUSF9DT0RFX09LEAESHwobU1VCU0NSSUJFX0FVVEhfQ09ERV9UT09fT0xEEAISHwobU1VCU0NSSUJFX0FVVEhfQ09ERV9UT09fTkVXEAMSKgomU1VCU0NSSUJFX0FVVEhfQ09ERV9TSUdOQVRVUkVfTUlTTUFUQ0gQBBIhCh1TVUJTQ1JJQkVfQVVUSF9DT0RFX01BTEZPUk1FRBAFEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5LTk9XTl9LSUQQBhIeChpTVUJTQ1JJQkVfQVVUSF9DT0RFX0RFTklFRBAHEiMKH1NVQlNDUklCRV9BVVRIX0NPREVfVU5BVkFJTEFCTEUQCBImCiJTVUJTQ1JJQkVfQVVUSF9DT0RFX05PVF9DT05GSUdVUkVEEAkqkwEKCkRyYWluU3RhdGUSGwoXRFJBSU5fU1RBVEVfVU5TUEVDSUZJRUQQABIXChNEUkFJTl9TVEFURV9TRVJWSU5HEAESGAoURFJBSU5fU1RBVEVfRFJBSU5JTkcQAhIXChNEUkFJTl9TVEFURV9CTE9DS0VEEAMSHAoYRFJBSU5fU1RBVEVfU0FGRV9UT19TVE9QEAQyiAwKDENvbnRyb2xQbGFuZRJfCghSZWdpc3RlchIoLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlZ2lzdGVyUmVxdWVzdBopLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlZ2lzdGVyUmVzcG9uc2USYgoJSGVhcnRiZWF0EikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSGVhcnRiZWF0UmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkhlYXJ0YmVhdFJlc3BvbnNlEmUKCkRlcmVnaXN0ZXISKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXJlZ2lzdGVyUmVxdWVzdBorLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcmVnaXN0ZXJSZXNwb25zZRJ6ChFMaXN0UmVnaXN0cmF0aW9ucxIxLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RSZWdpc3RyYXRpb25zUmVxdWVzdBoyLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RSZWdpc3RyYXRpb25zUmVzcG9uc2USYgoJTGlzdFBlZXJzEikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFBlZXJzUmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RQZWVyc1Jlc3BvbnNlEmUKCkZvcmdldFBlZXISKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5Gb3JnZXRQZWVyUmVxdWVzdBorLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkZvcmdldFBlZXJSZXNwb25zZRJrCgxMaXN0U2VydmljZXMSLC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0U2VydmljZXNSZXF1ZXN0Gi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVzcG9uc2UShgEKFVNpZ25TdWJzY3JpcHRpb25Ub2tlbhI1LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNpZ25TdWJzY3JpcHRpb25Ub2tlblJlcXVlc3QaNi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXNwb25zZRJuCg1SZXRyYWN0U3RhYmxlEi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmV0cmFjdFN0YWJsZVJlcXVlc3QaLi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZXRyYWN0U3RhYmxlUmVzcG9uc2USYgoJRGVwcmVjYXRlEikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwcmVjYXRlUmVxdWVzdBoqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcHJlY2F0ZVJlc3BvbnNlEmgKC1VuZGVwcmVjYXRlEisuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuVW5kZXByZWNhdGVSZXF1ZXN0GiwuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuVW5kZXByZWNhdGVSZXNwb25zZRJuCg1EcmFpbkluc3RhbmNlEi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRHJhaW5JbnN0YW5jZVJlcXVlc3QaLi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EcmFpbkluc3RhbmNlUmVzcG9uc2USdAoPRmluYWxpemVDbHVzdGVyEi8uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRmluYWxpemVDbHVzdGVyUmVxdWVzdBowLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkZpbmFsaXplQ2x1c3RlclJlc3BvbnNlEmsKDEV2YWN1YXRlUGVlchIsLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkV2YWN1YXRlUGVlclJlcXVlc3QaLS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5FdmFjdWF0ZVBlZXJSZXNwb25zZUJIWkZnaXRodWIuY29tL2lvZGVzeXN0ZW1zL2d3YWcvdjIvZ3cvcHJvdG8vY29udHJvbHBsYW5lL3YxO2NvbnRyb2xwbGFuZXYxYgZwcm90bzM");
 
 /**
  * @generated from message gateway.controlplane.v1.RegisterRequest
@@ -654,6 +654,33 @@ export type ListPeersResponse = Message<"gateway.controlplane.v1.ListPeersRespon
    * @generated from field: repeated gateway.controlplane.v1.Peer peers = 1;
    */
   peers: Peer[];
+
+  /**
+   * The cluster's active feature level (gwag-cluster KV bucket).
+   *
+   * @generated from field: uint32 active_level = 2;
+   */
+  activeLevel: number;
+
+  /**
+   * The JetStream meta group as the answering node sees it: the
+   * leader's server name, the group size, and the members it reports
+   * offline. A member stays in the group after its node stops, until
+   * ForgetPeer removes it; quorum is size/2+1.
+   *
+   * @generated from field: string meta_leader = 3;
+   */
+  metaLeader: string;
+
+  /**
+   * @generated from field: uint32 meta_size = 4;
+   */
+  metaSize: number;
+
+  /**
+   * @generated from field: repeated string meta_offline = 5;
+   */
+  metaOffline: string[];
 };
 
 /**
@@ -688,6 +715,28 @@ export type Peer = Message<"gateway.controlplane.v1.Peer"> & {
    * @generated from field: int64 joined_unix_ms = 3;
    */
   joinedUnixMs: bigint;
+
+  /**
+   * Binary version of the gateway (Go module version, or "devel").
+   * Empty for a gateway older than feature levels.
+   *
+   * @generated from field: string version = 4;
+   */
+  version: string;
+
+  /**
+   * Feature levels the peer's binary can run at: it refuses a
+   * cluster whose active level is outside [min_level, max_level].
+   * Both 0 for a gateway older than feature levels.
+   *
+   * @generated from field: uint32 min_level = 5;
+   */
+  minLevel: number;
+
+  /**
+   * @generated from field: uint32 max_level = 6;
+   */
+  maxLevel: number;
 };
 
 /**
@@ -733,6 +782,15 @@ export type ForgetPeerResponse = Message<"gateway.controlplane.v1.ForgetPeerResp
    * @generated from field: uint32 new_replicas = 2;
    */
   newReplicas: number;
+
+  /**
+   * True if the peer was removed from the JetStream meta group (or
+   * was no longer in it). False when this node does not know the
+   * peer's server name, or a live peer has the same name.
+   *
+   * @generated from field: bool meta_removed = 3;
+   */
+  metaRemoved: boolean;
 };
 
 /**
@@ -741,6 +799,138 @@ export type ForgetPeerResponse = Message<"gateway.controlplane.v1.ForgetPeerResp
  */
 export const ForgetPeerResponseSchema: GenMessage<ForgetPeerResponse> = /*@__PURE__*/
   messageDesc(file_gw_proto_controlplane_v1_control, 20);
+
+/**
+ * @generated from message gateway.controlplane.v1.FinalizeClusterRequest
+ */
+export type FinalizeClusterRequest = Message<"gateway.controlplane.v1.FinalizeClusterRequest"> & {
+  /**
+   * Level to raise to. 0 = the highest level the answering gateway's
+   * binary supports.
+   *
+   * @generated from field: uint32 level = 1;
+   */
+  level: number;
+
+  /**
+   * Report what would happen; change nothing.
+   *
+   * @generated from field: bool dry_run = 2;
+   */
+  dryRun: boolean;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.FinalizeClusterRequest.
+ * Use `create(FinalizeClusterRequestSchema)` to create a new message.
+ */
+export const FinalizeClusterRequestSchema: GenMessage<FinalizeClusterRequest> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 21);
+
+/**
+ * @generated from message gateway.controlplane.v1.FinalizeClusterResponse
+ */
+export type FinalizeClusterResponse = Message<"gateway.controlplane.v1.FinalizeClusterResponse"> & {
+  /**
+   * @generated from field: uint32 previous_level = 1;
+   */
+  previousLevel: number;
+
+  /**
+   * @generated from field: uint32 active_level = 2;
+   */
+  activeLevel: number;
+
+  /**
+   * Peers that block the raise, one line each ("n2 v2.11.0 max 0").
+   * Empty when the raise was applied or is possible.
+   *
+   * @generated from field: repeated string blockers = 3;
+   */
+  blockers: string[];
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.FinalizeClusterResponse.
+ * Use `create(FinalizeClusterResponseSchema)` to create a new message.
+ */
+export const FinalizeClusterResponseSchema: GenMessage<FinalizeClusterResponse> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 22);
+
+/**
+ * @generated from message gateway.controlplane.v1.EvacuatePeerRequest
+ */
+export type EvacuatePeerRequest = Message<"gateway.controlplane.v1.EvacuatePeerRequest"> & {
+  /**
+   * Node id from ListPeers. The peer must be live.
+   *
+   * @generated from field: string node_id = 1;
+   */
+  nodeId: string;
+
+  /**
+   * Do not send the evacuation; report what is left.
+   *
+   * @generated from field: bool check_only = 2;
+   */
+  checkOnly: boolean;
+
+  /**
+   * Once no stream has a replica on the peer, also remove it from the
+   * JetStream meta group.
+   *
+   * @generated from field: bool leave = 3;
+   */
+  leave: boolean;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.EvacuatePeerRequest.
+ * Use `create(EvacuatePeerRequestSchema)` to create a new message.
+ */
+export const EvacuatePeerRequestSchema: GenMessage<EvacuatePeerRequest> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 23);
+
+/**
+ * @generated from message gateway.controlplane.v1.EvacuatePeerResponse
+ */
+export type EvacuatePeerResponse = Message<"gateway.controlplane.v1.EvacuatePeerResponse"> & {
+  /**
+   * The peer's server name.
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * Streams that still have a replica on the peer, or a replica that
+   * is not current yet, as "STREAM: reason".
+   *
+   * @generated from field: repeated string remaining = 2;
+   */
+  remaining: string[];
+
+  /**
+   * No stream has a replica on the peer and every replica is current.
+   *
+   * @generated from field: bool done = 3;
+   */
+  done: boolean;
+
+  /**
+   * The peer was removed from the JetStream meta group.
+   *
+   * @generated from field: bool left = 4;
+   */
+  left: boolean;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.EvacuatePeerResponse.
+ * Use `create(EvacuatePeerResponseSchema)` to create a new message.
+ */
+export const EvacuatePeerResponseSchema: GenMessage<EvacuatePeerResponse> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 24);
 
 /**
  * @generated from message gateway.controlplane.v1.ListServicesRequest
@@ -753,7 +943,7 @@ export type ListServicesRequest = Message<"gateway.controlplane.v1.ListServicesR
  * Use `create(ListServicesRequestSchema)` to create a new message.
  */
 export const ListServicesRequestSchema: GenMessage<ListServicesRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 21);
+  messageDesc(file_gw_proto_controlplane_v1_control, 25);
 
 /**
  * @generated from message gateway.controlplane.v1.ListServicesResponse
@@ -792,7 +982,7 @@ export type ListServicesResponse = Message<"gateway.controlplane.v1.ListServices
  * Use `create(ListServicesResponseSchema)` to create a new message.
  */
 export const ListServicesResponseSchema: GenMessage<ListServicesResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 22);
+  messageDesc(file_gw_proto_controlplane_v1_control, 26);
 
 /**
  * @generated from message gateway.controlplane.v1.ServiceInfo
@@ -881,7 +1071,7 @@ export type ServiceInfo = Message<"gateway.controlplane.v1.ServiceInfo"> & {
  * Use `create(ServiceInfoSchema)` to create a new message.
  */
 export const ServiceInfoSchema: GenMessage<ServiceInfo> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 23);
+  messageDesc(file_gw_proto_controlplane_v1_control, 27);
 
 /**
  * @generated from message gateway.controlplane.v1.SignSubscriptionTokenRequest
@@ -922,7 +1112,7 @@ export type SignSubscriptionTokenRequest = Message<"gateway.controlplane.v1.Sign
  * Use `create(SignSubscriptionTokenRequestSchema)` to create a new message.
  */
 export const SignSubscriptionTokenRequestSchema: GenMessage<SignSubscriptionTokenRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 24);
+  messageDesc(file_gw_proto_controlplane_v1_control, 28);
 
 /**
  * @generated from message gateway.controlplane.v1.RetractStableRequest
@@ -952,7 +1142,7 @@ export type RetractStableRequest = Message<"gateway.controlplane.v1.RetractStabl
  * Use `create(RetractStableRequestSchema)` to create a new message.
  */
 export const RetractStableRequestSchema: GenMessage<RetractStableRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 25);
+  messageDesc(file_gw_proto_controlplane_v1_control, 29);
 
 /**
  * @generated from message gateway.controlplane.v1.RetractStableResponse
@@ -979,7 +1169,7 @@ export type RetractStableResponse = Message<"gateway.controlplane.v1.RetractStab
  * Use `create(RetractStableResponseSchema)` to create a new message.
  */
 export const RetractStableResponseSchema: GenMessage<RetractStableResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 26);
+  messageDesc(file_gw_proto_controlplane_v1_control, 30);
 
 /**
  * @generated from message gateway.controlplane.v1.DeprecateRequest
@@ -1014,7 +1204,7 @@ export type DeprecateRequest = Message<"gateway.controlplane.v1.DeprecateRequest
  * Use `create(DeprecateRequestSchema)` to create a new message.
  */
 export const DeprecateRequestSchema: GenMessage<DeprecateRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 27);
+  messageDesc(file_gw_proto_controlplane_v1_control, 31);
 
 /**
  * Empty on success; the RPC error carries refusal details (slot
@@ -1030,7 +1220,7 @@ export type DeprecateResponse = Message<"gateway.controlplane.v1.DeprecateRespon
  * Use `create(DeprecateResponseSchema)` to create a new message.
  */
 export const DeprecateResponseSchema: GenMessage<DeprecateResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 28);
+  messageDesc(file_gw_proto_controlplane_v1_control, 32);
 
 /**
  * @generated from message gateway.controlplane.v1.UndeprecateRequest
@@ -1052,7 +1242,7 @@ export type UndeprecateRequest = Message<"gateway.controlplane.v1.UndeprecateReq
  * Use `create(UndeprecateRequestSchema)` to create a new message.
  */
 export const UndeprecateRequestSchema: GenMessage<UndeprecateRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 29);
+  messageDesc(file_gw_proto_controlplane_v1_control, 33);
 
 /**
  * @generated from message gateway.controlplane.v1.UndeprecateResponse
@@ -1074,7 +1264,7 @@ export type UndeprecateResponse = Message<"gateway.controlplane.v1.UndeprecateRe
  * Use `create(UndeprecateResponseSchema)` to create a new message.
  */
 export const UndeprecateResponseSchema: GenMessage<UndeprecateResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 30);
+  messageDesc(file_gw_proto_controlplane_v1_control, 34);
 
 /**
  * @generated from message gateway.controlplane.v1.SignSubscriptionTokenResponse
@@ -1126,7 +1316,7 @@ export type SignSubscriptionTokenResponse = Message<"gateway.controlplane.v1.Sig
  * Use `create(SignSubscriptionTokenResponseSchema)` to create a new message.
  */
 export const SignSubscriptionTokenResponseSchema: GenMessage<SignSubscriptionTokenResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 31);
+  messageDesc(file_gw_proto_controlplane_v1_control, 35);
 
 /**
  * @generated from message gateway.controlplane.v1.DrainInstanceRequest
@@ -1154,7 +1344,7 @@ export type DrainInstanceRequest = Message<"gateway.controlplane.v1.DrainInstanc
  * Use `create(DrainInstanceRequestSchema)` to create a new message.
  */
 export const DrainInstanceRequestSchema: GenMessage<DrainInstanceRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 32);
+  messageDesc(file_gw_proto_controlplane_v1_control, 36);
 
 /**
  * @generated from message gateway.controlplane.v1.DrainInstanceResponse
@@ -1203,7 +1393,7 @@ export type DrainInstanceResponse = Message<"gateway.controlplane.v1.DrainInstan
  * Use `create(DrainInstanceResponseSchema)` to create a new message.
  */
 export const DrainInstanceResponseSchema: GenMessage<DrainInstanceResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 33);
+  messageDesc(file_gw_proto_controlplane_v1_control, 37);
 
 /**
  * InstanceState is the start-gate state of one registered instance
@@ -1564,6 +1754,35 @@ export const ControlPlane: GenService<{
     methodKind: "unary";
     input: typeof DrainInstanceRequestSchema;
     output: typeof DrainInstanceResponseSchema;
+  },
+  /**
+   * FinalizeCluster raises the cluster's active feature level (the
+   * contract step of an upgrade). Refused while a live peer cannot
+   * run at the new level. The level never goes down: a binary that
+   * cannot run at the raised level is refused by the cluster, so
+   * rolling back to it is possible only before this call.
+   *
+   * @generated from rpc gateway.controlplane.v1.ControlPlane.FinalizeCluster
+   */
+  finalizeCluster: {
+    methodKind: "unary";
+    input: typeof FinalizeClusterRequestSchema;
+    output: typeof FinalizeClusterResponseSchema;
+  },
+  /**
+   * EvacuatePeer moves every JetStream stream replica off a live
+   * peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+   * without leaving a stream short of replicas. Call again with
+   * check_only to poll. With leave, a peer that holds no replica is
+   * also removed from the JetStream meta group (its JetStream turns
+   * off); stop it next.
+   *
+   * @generated from rpc gateway.controlplane.v1.ControlPlane.EvacuatePeer
+   */
+  evacuatePeer: {
+    methodKind: "unary";
+    input: typeof EvacuatePeerRequestSchema;
+    output: typeof EvacuatePeerResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_gw_proto_controlplane_v1_control, 0);

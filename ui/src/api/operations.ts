@@ -206,7 +206,14 @@ export const PeersQuery = graphql(`
           nodeId
           name
           joinedUnixMs
+          version
+          minLevel
+          maxLevel
         }
+        activeLevel
+        metaLeader
+        metaSize
+        metaOffline
       }
     }
   }

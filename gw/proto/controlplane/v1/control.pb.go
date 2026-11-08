@@ -1377,8 +1377,17 @@ func (*ListPeersRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListPeersResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Peers         []*Peer                `protobuf:"bytes,1,rep,name=peers,proto3" json:"peers,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Peers []*Peer                `protobuf:"bytes,1,rep,name=peers,proto3" json:"peers,omitempty"`
+	// The cluster's active feature level (gwag-cluster KV bucket).
+	ActiveLevel uint32 `protobuf:"varint,2,opt,name=active_level,json=activeLevel,proto3" json:"active_level,omitempty"`
+	// The JetStream meta group as the answering node sees it: the
+	// leader's server name, the group size, and the members it reports
+	// offline. A member stays in the group after its node stops, until
+	// ForgetPeer removes it; quorum is size/2+1.
+	MetaLeader    string   `protobuf:"bytes,3,opt,name=meta_leader,json=metaLeader,proto3" json:"meta_leader,omitempty"`
+	MetaSize      uint32   `protobuf:"varint,4,opt,name=meta_size,json=metaSize,proto3" json:"meta_size,omitempty"`
+	MetaOffline   []string `protobuf:"bytes,5,rep,name=meta_offline,json=metaOffline,proto3" json:"meta_offline,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1420,6 +1429,34 @@ func (x *ListPeersResponse) GetPeers() []*Peer {
 	return nil
 }
 
+func (x *ListPeersResponse) GetActiveLevel() uint32 {
+	if x != nil {
+		return x.ActiveLevel
+	}
+	return 0
+}
+
+func (x *ListPeersResponse) GetMetaLeader() string {
+	if x != nil {
+		return x.MetaLeader
+	}
+	return ""
+}
+
+func (x *ListPeersResponse) GetMetaSize() uint32 {
+	if x != nil {
+		return x.MetaSize
+	}
+	return 0
+}
+
+func (x *ListPeersResponse) GetMetaOffline() []string {
+	if x != nil {
+		return x.MetaOffline
+	}
+	return nil
+}
+
 type Peer struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Stable cluster identifier — what ForgetPeer takes.
@@ -1428,7 +1465,15 @@ type Peer struct {
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Unix milliseconds when the peer first registered (this generation).
 	// Used to detect re-joins after a forget.
-	JoinedUnixMs  int64 `protobuf:"varint,3,opt,name=joined_unix_ms,json=joinedUnixMs,proto3" json:"joined_unix_ms,omitempty"`
+	JoinedUnixMs int64 `protobuf:"varint,3,opt,name=joined_unix_ms,json=joinedUnixMs,proto3" json:"joined_unix_ms,omitempty"`
+	// Binary version of the gateway (Go module version, or "devel").
+	// Empty for a gateway older than feature levels.
+	Version string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	// Feature levels the peer's binary can run at: it refuses a
+	// cluster whose active level is outside [min_level, max_level].
+	// Both 0 for a gateway older than feature levels.
+	MinLevel      uint32 `protobuf:"varint,5,opt,name=min_level,json=minLevel,proto3" json:"min_level,omitempty"`
+	MaxLevel      uint32 `protobuf:"varint,6,opt,name=max_level,json=maxLevel,proto3" json:"max_level,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1484,6 +1529,27 @@ func (x *Peer) GetJoinedUnixMs() int64 {
 	return 0
 }
 
+func (x *Peer) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *Peer) GetMinLevel() uint32 {
+	if x != nil {
+		return x.MinLevel
+	}
+	return 0
+}
+
+func (x *Peer) GetMaxLevel() uint32 {
+	if x != nil {
+		return x.MaxLevel
+	}
+	return 0
+}
+
 type ForgetPeerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
@@ -1535,7 +1601,11 @@ type ForgetPeerResponse struct {
 	Removed bool `protobuf:"varint,1,opt,name=removed,proto3" json:"removed,omitempty"`
 	// Replica count after the forget. If unchanged, the cluster was
 	// already at this size or below.
-	NewReplicas   uint32 `protobuf:"varint,2,opt,name=new_replicas,json=newReplicas,proto3" json:"new_replicas,omitempty"`
+	NewReplicas uint32 `protobuf:"varint,2,opt,name=new_replicas,json=newReplicas,proto3" json:"new_replicas,omitempty"`
+	// True if the peer was removed from the JetStream meta group (or
+	// was no longer in it). False when this node does not know the
+	// peer's server name, or a live peer has the same name.
+	MetaRemoved   bool `protobuf:"varint,3,opt,name=meta_removed,json=metaRemoved,proto3" json:"meta_removed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1584,6 +1654,267 @@ func (x *ForgetPeerResponse) GetNewReplicas() uint32 {
 	return 0
 }
 
+func (x *ForgetPeerResponse) GetMetaRemoved() bool {
+	if x != nil {
+		return x.MetaRemoved
+	}
+	return false
+}
+
+type FinalizeClusterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Level to raise to. 0 = the highest level the answering gateway's
+	// binary supports.
+	Level uint32 `protobuf:"varint,1,opt,name=level,proto3" json:"level,omitempty"`
+	// Report what would happen; change nothing.
+	DryRun        bool `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FinalizeClusterRequest) Reset() {
+	*x = FinalizeClusterRequest{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalizeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalizeClusterRequest) ProtoMessage() {}
+
+func (x *FinalizeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalizeClusterRequest.ProtoReflect.Descriptor instead.
+func (*FinalizeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *FinalizeClusterRequest) GetLevel() uint32 {
+	if x != nil {
+		return x.Level
+	}
+	return 0
+}
+
+func (x *FinalizeClusterRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+type FinalizeClusterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviousLevel uint32                 `protobuf:"varint,1,opt,name=previous_level,json=previousLevel,proto3" json:"previous_level,omitempty"`
+	ActiveLevel   uint32                 `protobuf:"varint,2,opt,name=active_level,json=activeLevel,proto3" json:"active_level,omitempty"`
+	// Peers that block the raise, one line each ("n2 v2.11.0 max 0").
+	// Empty when the raise was applied or is possible.
+	Blockers      []string `protobuf:"bytes,3,rep,name=blockers,proto3" json:"blockers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FinalizeClusterResponse) Reset() {
+	*x = FinalizeClusterResponse{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalizeClusterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalizeClusterResponse) ProtoMessage() {}
+
+func (x *FinalizeClusterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalizeClusterResponse.ProtoReflect.Descriptor instead.
+func (*FinalizeClusterResponse) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *FinalizeClusterResponse) GetPreviousLevel() uint32 {
+	if x != nil {
+		return x.PreviousLevel
+	}
+	return 0
+}
+
+func (x *FinalizeClusterResponse) GetActiveLevel() uint32 {
+	if x != nil {
+		return x.ActiveLevel
+	}
+	return 0
+}
+
+func (x *FinalizeClusterResponse) GetBlockers() []string {
+	if x != nil {
+		return x.Blockers
+	}
+	return nil
+}
+
+type EvacuatePeerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Node id from ListPeers. The peer must be live.
+	NodeId string `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// Do not send the evacuation; report what is left.
+	CheckOnly bool `protobuf:"varint,2,opt,name=check_only,json=checkOnly,proto3" json:"check_only,omitempty"`
+	// Once no stream has a replica on the peer, also remove it from the
+	// JetStream meta group.
+	Leave         bool `protobuf:"varint,3,opt,name=leave,proto3" json:"leave,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EvacuatePeerRequest) Reset() {
+	*x = EvacuatePeerRequest{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EvacuatePeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EvacuatePeerRequest) ProtoMessage() {}
+
+func (x *EvacuatePeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EvacuatePeerRequest.ProtoReflect.Descriptor instead.
+func (*EvacuatePeerRequest) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *EvacuatePeerRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *EvacuatePeerRequest) GetCheckOnly() bool {
+	if x != nil {
+		return x.CheckOnly
+	}
+	return false
+}
+
+func (x *EvacuatePeerRequest) GetLeave() bool {
+	if x != nil {
+		return x.Leave
+	}
+	return false
+}
+
+type EvacuatePeerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The peer's server name.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Streams that still have a replica on the peer, or a replica that
+	// is not current yet, as "STREAM: reason".
+	Remaining []string `protobuf:"bytes,2,rep,name=remaining,proto3" json:"remaining,omitempty"`
+	// No stream has a replica on the peer and every replica is current.
+	Done bool `protobuf:"varint,3,opt,name=done,proto3" json:"done,omitempty"`
+	// The peer was removed from the JetStream meta group.
+	Left          bool `protobuf:"varint,4,opt,name=left,proto3" json:"left,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EvacuatePeerResponse) Reset() {
+	*x = EvacuatePeerResponse{}
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EvacuatePeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EvacuatePeerResponse) ProtoMessage() {}
+
+func (x *EvacuatePeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EvacuatePeerResponse.ProtoReflect.Descriptor instead.
+func (*EvacuatePeerResponse) Descriptor() ([]byte, []int) {
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *EvacuatePeerResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EvacuatePeerResponse) GetRemaining() []string {
+	if x != nil {
+		return x.Remaining
+	}
+	return nil
+}
+
+func (x *EvacuatePeerResponse) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *EvacuatePeerResponse) GetLeft() bool {
+	if x != nil {
+		return x.Left
+	}
+	return false
+}
+
 type ListServicesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1592,7 +1923,7 @@ type ListServicesRequest struct {
 
 func (x *ListServicesRequest) Reset() {
 	*x = ListServicesRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[21]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1604,7 +1935,7 @@ func (x *ListServicesRequest) String() string {
 func (*ListServicesRequest) ProtoMessage() {}
 
 func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[21]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1617,7 +1948,7 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{21}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{25}
 }
 
 type ListServicesResponse struct {
@@ -1641,7 +1972,7 @@ type ListServicesResponse struct {
 
 func (x *ListServicesResponse) Reset() {
 	*x = ListServicesResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[22]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1653,7 +1984,7 @@ func (x *ListServicesResponse) String() string {
 func (*ListServicesResponse) ProtoMessage() {}
 
 func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[22]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1666,7 +1997,7 @@ func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{22}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListServicesResponse) GetServices() []*ServiceInfo {
@@ -1728,7 +2059,7 @@ type ServiceInfo struct {
 
 func (x *ServiceInfo) Reset() {
 	*x = ServiceInfo{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[23]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1740,7 +2071,7 @@ func (x *ServiceInfo) String() string {
 func (*ServiceInfo) ProtoMessage() {}
 
 func (x *ServiceInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[23]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1753,7 +2084,7 @@ func (x *ServiceInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceInfo.ProtoReflect.Descriptor instead.
 func (*ServiceInfo) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{23}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ServiceInfo) GetNamespace() string {
@@ -1848,7 +2179,7 @@ type SignSubscriptionTokenRequest struct {
 
 func (x *SignSubscriptionTokenRequest) Reset() {
 	*x = SignSubscriptionTokenRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[24]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1860,7 +2191,7 @@ func (x *SignSubscriptionTokenRequest) String() string {
 func (*SignSubscriptionTokenRequest) ProtoMessage() {}
 
 func (x *SignSubscriptionTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[24]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1873,7 +2204,7 @@ func (x *SignSubscriptionTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignSubscriptionTokenRequest.ProtoReflect.Descriptor instead.
 func (*SignSubscriptionTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{24}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SignSubscriptionTokenRequest) GetChannel() string {
@@ -1913,7 +2244,7 @@ type RetractStableRequest struct {
 
 func (x *RetractStableRequest) Reset() {
 	*x = RetractStableRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[25]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1925,7 +2256,7 @@ func (x *RetractStableRequest) String() string {
 func (*RetractStableRequest) ProtoMessage() {}
 
 func (x *RetractStableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[25]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1938,7 +2269,7 @@ func (x *RetractStableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetractStableRequest.ProtoReflect.Descriptor instead.
 func (*RetractStableRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{25}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RetractStableRequest) GetNamespace() string {
@@ -1968,7 +2299,7 @@ type RetractStableResponse struct {
 
 func (x *RetractStableResponse) Reset() {
 	*x = RetractStableResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[26]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1980,7 +2311,7 @@ func (x *RetractStableResponse) String() string {
 func (*RetractStableResponse) ProtoMessage() {}
 
 func (x *RetractStableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[26]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1993,7 +2324,7 @@ func (x *RetractStableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetractStableResponse.ProtoReflect.Descriptor instead.
 func (*RetractStableResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{26}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RetractStableResponse) GetPriorVN() uint32 {
@@ -2026,7 +2357,7 @@ type DeprecateRequest struct {
 
 func (x *DeprecateRequest) Reset() {
 	*x = DeprecateRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[27]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2038,7 +2369,7 @@ func (x *DeprecateRequest) String() string {
 func (*DeprecateRequest) ProtoMessage() {}
 
 func (x *DeprecateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[27]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2051,7 +2382,7 @@ func (x *DeprecateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeprecateRequest.ProtoReflect.Descriptor instead.
 func (*DeprecateRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{27}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DeprecateRequest) GetNamespace() string {
@@ -2083,7 +2414,7 @@ type DeprecateResponse struct {
 
 func (x *DeprecateResponse) Reset() {
 	*x = DeprecateResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[28]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2095,7 +2426,7 @@ func (x *DeprecateResponse) String() string {
 func (*DeprecateResponse) ProtoMessage() {}
 
 func (x *DeprecateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[28]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2108,7 +2439,7 @@ func (x *DeprecateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeprecateResponse.ProtoReflect.Descriptor instead.
 func (*DeprecateResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{28}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{32}
 }
 
 type UndeprecateRequest struct {
@@ -2121,7 +2452,7 @@ type UndeprecateRequest struct {
 
 func (x *UndeprecateRequest) Reset() {
 	*x = UndeprecateRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[29]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2133,7 +2464,7 @@ func (x *UndeprecateRequest) String() string {
 func (*UndeprecateRequest) ProtoMessage() {}
 
 func (x *UndeprecateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[29]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2146,7 +2477,7 @@ func (x *UndeprecateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndeprecateRequest.ProtoReflect.Descriptor instead.
 func (*UndeprecateRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{29}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UndeprecateRequest) GetNamespace() string {
@@ -2176,7 +2507,7 @@ type UndeprecateResponse struct {
 
 func (x *UndeprecateResponse) Reset() {
 	*x = UndeprecateResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[30]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2188,7 +2519,7 @@ func (x *UndeprecateResponse) String() string {
 func (*UndeprecateResponse) ProtoMessage() {}
 
 func (x *UndeprecateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[30]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2201,7 +2532,7 @@ func (x *UndeprecateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndeprecateResponse.ProtoReflect.Descriptor instead.
 func (*UndeprecateResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{30}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UndeprecateResponse) GetPriorReason() string {
@@ -2234,7 +2565,7 @@ type SignSubscriptionTokenResponse struct {
 
 func (x *SignSubscriptionTokenResponse) Reset() {
 	*x = SignSubscriptionTokenResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2246,7 +2577,7 @@ func (x *SignSubscriptionTokenResponse) String() string {
 func (*SignSubscriptionTokenResponse) ProtoMessage() {}
 
 func (x *SignSubscriptionTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[31]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2259,7 +2590,7 @@ func (x *SignSubscriptionTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignSubscriptionTokenResponse.ProtoReflect.Descriptor instead.
 func (*SignSubscriptionTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{31}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SignSubscriptionTokenResponse) GetCode() SubscribeAuthCode {
@@ -2311,7 +2642,7 @@ type DrainInstanceRequest struct {
 
 func (x *DrainInstanceRequest) Reset() {
 	*x = DrainInstanceRequest{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2323,7 +2654,7 @@ func (x *DrainInstanceRequest) String() string {
 func (*DrainInstanceRequest) ProtoMessage() {}
 
 func (x *DrainInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[32]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2336,7 +2667,7 @@ func (x *DrainInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainInstanceRequest.ProtoReflect.Descriptor instead.
 func (*DrainInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{32}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DrainInstanceRequest) GetInstance() string {
@@ -2371,7 +2702,7 @@ type DrainInstanceResponse struct {
 
 func (x *DrainInstanceResponse) Reset() {
 	*x = DrainInstanceResponse{}
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[33]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2383,7 +2714,7 @@ func (x *DrainInstanceResponse) String() string {
 func (*DrainInstanceResponse) ProtoMessage() {}
 
 func (x *DrainInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[33]
+	mi := &file_gw_proto_controlplane_v1_control_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2396,7 +2727,7 @@ func (x *DrainInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainInstanceResponse.ProtoReflect.Descriptor instead.
 func (*DrainInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{33}
+	return file_gw_proto_controlplane_v1_control_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DrainInstanceResponse) GetRegistrationId() string {
@@ -2531,18 +2862,44 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"namespaces\x18\x06 \x03(\tR\n" +
 	"namespaces\"\x12\n" +
-	"\x10ListPeersRequest\"H\n" +
+	"\x10ListPeersRequest\"\xcc\x01\n" +
 	"\x11ListPeersResponse\x123\n" +
-	"\x05peers\x18\x01 \x03(\v2\x1d.gateway.controlplane.v1.PeerR\x05peers\"Y\n" +
+	"\x05peers\x18\x01 \x03(\v2\x1d.gateway.controlplane.v1.PeerR\x05peers\x12!\n" +
+	"\factive_level\x18\x02 \x01(\rR\vactiveLevel\x12\x1f\n" +
+	"\vmeta_leader\x18\x03 \x01(\tR\n" +
+	"metaLeader\x12\x1b\n" +
+	"\tmeta_size\x18\x04 \x01(\rR\bmetaSize\x12!\n" +
+	"\fmeta_offline\x18\x05 \x03(\tR\vmetaOffline\"\xad\x01\n" +
 	"\x04Peer\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12$\n" +
-	"\x0ejoined_unix_ms\x18\x03 \x01(\x03R\fjoinedUnixMs\",\n" +
+	"\x0ejoined_unix_ms\x18\x03 \x01(\x03R\fjoinedUnixMs\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1b\n" +
+	"\tmin_level\x18\x05 \x01(\rR\bminLevel\x12\x1b\n" +
+	"\tmax_level\x18\x06 \x01(\rR\bmaxLevel\",\n" +
 	"\x11ForgetPeerRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"Q\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"t\n" +
 	"\x12ForgetPeerResponse\x12\x18\n" +
 	"\aremoved\x18\x01 \x01(\bR\aremoved\x12!\n" +
-	"\fnew_replicas\x18\x02 \x01(\rR\vnewReplicas\"\x15\n" +
+	"\fnew_replicas\x18\x02 \x01(\rR\vnewReplicas\x12!\n" +
+	"\fmeta_removed\x18\x03 \x01(\bR\vmetaRemoved\"G\n" +
+	"\x16FinalizeClusterRequest\x12\x14\n" +
+	"\x05level\x18\x01 \x01(\rR\x05level\x12\x17\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRun\"\x7f\n" +
+	"\x17FinalizeClusterResponse\x12%\n" +
+	"\x0eprevious_level\x18\x01 \x01(\rR\rpreviousLevel\x12!\n" +
+	"\factive_level\x18\x02 \x01(\rR\vactiveLevel\x12\x1a\n" +
+	"\bblockers\x18\x03 \x03(\tR\bblockers\"c\n" +
+	"\x13EvacuatePeerRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
+	"\n" +
+	"check_only\x18\x02 \x01(\bR\tcheckOnly\x12\x14\n" +
+	"\x05leave\x18\x03 \x01(\bR\x05leave\"p\n" +
+	"\x14EvacuatePeerResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tremaining\x18\x02 \x03(\tR\tremaining\x12\x12\n" +
+	"\x04done\x18\x03 \x01(\bR\x04done\x12\x12\n" +
+	"\x04left\x18\x04 \x01(\bR\x04left\"\x15\n" +
 	"\x13ListServicesRequest\"\x97\x02\n" +
 	"\x14ListServicesResponse\x12@\n" +
 	"\bservices\x18\x01 \x03(\v2$.gateway.controlplane.v1.ServiceInfoR\bservices\x12X\n" +
@@ -2626,8 +2983,7 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\x13DRAIN_STATE_SERVING\x10\x01\x12\x18\n" +
 	"\x14DRAIN_STATE_DRAINING\x10\x02\x12\x17\n" +
 	"\x13DRAIN_STATE_BLOCKED\x10\x03\x12\x1c\n" +
-	"\x18DRAIN_STATE_SAFE_TO_STOP\x10\x042\xa5\n" +
-	"\n" +
+	"\x18DRAIN_STATE_SAFE_TO_STOP\x10\x042\x88\f\n" +
 	"\fControlPlane\x12_\n" +
 	"\bRegister\x12(.gateway.controlplane.v1.RegisterRequest\x1a).gateway.controlplane.v1.RegisterResponse\x12b\n" +
 	"\tHeartbeat\x12).gateway.controlplane.v1.HeartbeatRequest\x1a*.gateway.controlplane.v1.HeartbeatResponse\x12e\n" +
@@ -2642,7 +2998,9 @@ const file_gw_proto_controlplane_v1_control_proto_rawDesc = "" +
 	"\rRetractStable\x12-.gateway.controlplane.v1.RetractStableRequest\x1a..gateway.controlplane.v1.RetractStableResponse\x12b\n" +
 	"\tDeprecate\x12).gateway.controlplane.v1.DeprecateRequest\x1a*.gateway.controlplane.v1.DeprecateResponse\x12h\n" +
 	"\vUndeprecate\x12+.gateway.controlplane.v1.UndeprecateRequest\x1a,.gateway.controlplane.v1.UndeprecateResponse\x12n\n" +
-	"\rDrainInstance\x12-.gateway.controlplane.v1.DrainInstanceRequest\x1a..gateway.controlplane.v1.DrainInstanceResponseBHZFgithub.com/iodesystems/gwag/v2/gw/proto/controlplane/v1;controlplanev1b\x06proto3"
+	"\rDrainInstance\x12-.gateway.controlplane.v1.DrainInstanceRequest\x1a..gateway.controlplane.v1.DrainInstanceResponse\x12t\n" +
+	"\x0fFinalizeCluster\x12/.gateway.controlplane.v1.FinalizeClusterRequest\x1a0.gateway.controlplane.v1.FinalizeClusterResponse\x12k\n" +
+	"\fEvacuatePeer\x12,.gateway.controlplane.v1.EvacuatePeerRequest\x1a-.gateway.controlplane.v1.EvacuatePeerResponseBHZFgithub.com/iodesystems/gwag/v2/gw/proto/controlplane/v1;controlplanev1b\x06proto3"
 
 var (
 	file_gw_proto_controlplane_v1_control_proto_rawDescOnce sync.Once
@@ -2657,7 +3015,7 @@ func file_gw_proto_controlplane_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_gw_proto_controlplane_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_gw_proto_controlplane_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_gw_proto_controlplane_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_gw_proto_controlplane_v1_control_proto_goTypes = []any{
 	(InstanceState)(0),                    // 0: gateway.controlplane.v1.InstanceState
 	(SubscribeAuthCode)(0),                // 1: gateway.controlplane.v1.SubscribeAuthCode
@@ -2683,25 +3041,29 @@ var file_gw_proto_controlplane_v1_control_proto_goTypes = []any{
 	(*Peer)(nil),                          // 21: gateway.controlplane.v1.Peer
 	(*ForgetPeerRequest)(nil),             // 22: gateway.controlplane.v1.ForgetPeerRequest
 	(*ForgetPeerResponse)(nil),            // 23: gateway.controlplane.v1.ForgetPeerResponse
-	(*ListServicesRequest)(nil),           // 24: gateway.controlplane.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),          // 25: gateway.controlplane.v1.ListServicesResponse
-	(*ServiceInfo)(nil),                   // 26: gateway.controlplane.v1.ServiceInfo
-	(*SignSubscriptionTokenRequest)(nil),  // 27: gateway.controlplane.v1.SignSubscriptionTokenRequest
-	(*RetractStableRequest)(nil),          // 28: gateway.controlplane.v1.RetractStableRequest
-	(*RetractStableResponse)(nil),         // 29: gateway.controlplane.v1.RetractStableResponse
-	(*DeprecateRequest)(nil),              // 30: gateway.controlplane.v1.DeprecateRequest
-	(*DeprecateResponse)(nil),             // 31: gateway.controlplane.v1.DeprecateResponse
-	(*UndeprecateRequest)(nil),            // 32: gateway.controlplane.v1.UndeprecateRequest
-	(*UndeprecateResponse)(nil),           // 33: gateway.controlplane.v1.UndeprecateResponse
-	(*SignSubscriptionTokenResponse)(nil), // 34: gateway.controlplane.v1.SignSubscriptionTokenResponse
-	(*DrainInstanceRequest)(nil),          // 35: gateway.controlplane.v1.DrainInstanceRequest
-	(*DrainInstanceResponse)(nil),         // 36: gateway.controlplane.v1.DrainInstanceResponse
-	nil,                                   // 37: gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
-	nil,                                   // 38: gateway.controlplane.v1.ListServicesResponse.StableVnEntry
+	(*FinalizeClusterRequest)(nil),        // 24: gateway.controlplane.v1.FinalizeClusterRequest
+	(*FinalizeClusterResponse)(nil),       // 25: gateway.controlplane.v1.FinalizeClusterResponse
+	(*EvacuatePeerRequest)(nil),           // 26: gateway.controlplane.v1.EvacuatePeerRequest
+	(*EvacuatePeerResponse)(nil),          // 27: gateway.controlplane.v1.EvacuatePeerResponse
+	(*ListServicesRequest)(nil),           // 28: gateway.controlplane.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),          // 29: gateway.controlplane.v1.ListServicesResponse
+	(*ServiceInfo)(nil),                   // 30: gateway.controlplane.v1.ServiceInfo
+	(*SignSubscriptionTokenRequest)(nil),  // 31: gateway.controlplane.v1.SignSubscriptionTokenRequest
+	(*RetractStableRequest)(nil),          // 32: gateway.controlplane.v1.RetractStableRequest
+	(*RetractStableResponse)(nil),         // 33: gateway.controlplane.v1.RetractStableResponse
+	(*DeprecateRequest)(nil),              // 34: gateway.controlplane.v1.DeprecateRequest
+	(*DeprecateResponse)(nil),             // 35: gateway.controlplane.v1.DeprecateResponse
+	(*UndeprecateRequest)(nil),            // 36: gateway.controlplane.v1.UndeprecateRequest
+	(*UndeprecateResponse)(nil),           // 37: gateway.controlplane.v1.UndeprecateResponse
+	(*SignSubscriptionTokenResponse)(nil), // 38: gateway.controlplane.v1.SignSubscriptionTokenResponse
+	(*DrainInstanceRequest)(nil),          // 39: gateway.controlplane.v1.DrainInstanceRequest
+	(*DrainInstanceResponse)(nil),         // 40: gateway.controlplane.v1.DrainInstanceResponse
+	nil,                                   // 41: gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
+	nil,                                   // 42: gateway.controlplane.v1.ListServicesResponse.StableVnEntry
 }
 var file_gw_proto_controlplane_v1_control_proto_depIdxs = []int32{
 	4,  // 0: gateway.controlplane.v1.RegisterRequest.services:type_name -> gateway.controlplane.v1.ServiceBinding
-	37, // 1: gateway.controlplane.v1.ServiceBinding.proto_imports:type_name -> gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
+	41, // 1: gateway.controlplane.v1.ServiceBinding.proto_imports:type_name -> gateway.controlplane.v1.ServiceBinding.ProtoImportsEntry
 	6,  // 2: gateway.controlplane.v1.ServiceBinding.depends:type_name -> gateway.controlplane.v1.Dependency
 	7,  // 3: gateway.controlplane.v1.ServiceBinding.owner:type_name -> gateway.controlplane.v1.Owner
 	5,  // 4: gateway.controlplane.v1.ServiceBinding.subscribes:type_name -> gateway.controlplane.v1.Subscription
@@ -2713,8 +3075,8 @@ var file_gw_proto_controlplane_v1_control_proto_depIdxs = []int32{
 	10, // 10: gateway.controlplane.v1.HeartbeatResponse.bindings:type_name -> gateway.controlplane.v1.BindingStatus
 	18, // 11: gateway.controlplane.v1.ListRegistrationsResponse.registrations:type_name -> gateway.controlplane.v1.Registration
 	21, // 12: gateway.controlplane.v1.ListPeersResponse.peers:type_name -> gateway.controlplane.v1.Peer
-	26, // 13: gateway.controlplane.v1.ListServicesResponse.services:type_name -> gateway.controlplane.v1.ServiceInfo
-	38, // 14: gateway.controlplane.v1.ListServicesResponse.stable_vn:type_name -> gateway.controlplane.v1.ListServicesResponse.StableVnEntry
+	30, // 13: gateway.controlplane.v1.ListServicesResponse.services:type_name -> gateway.controlplane.v1.ServiceInfo
+	42, // 14: gateway.controlplane.v1.ListServicesResponse.stable_vn:type_name -> gateway.controlplane.v1.ListServicesResponse.StableVnEntry
 	6,  // 15: gateway.controlplane.v1.ServiceInfo.depends:type_name -> gateway.controlplane.v1.Dependency
 	7,  // 16: gateway.controlplane.v1.ServiceInfo.owner:type_name -> gateway.controlplane.v1.Owner
 	11, // 17: gateway.controlplane.v1.ServiceInfo.instances:type_name -> gateway.controlplane.v1.InstanceStatus
@@ -2727,26 +3089,30 @@ var file_gw_proto_controlplane_v1_control_proto_depIdxs = []int32{
 	16, // 24: gateway.controlplane.v1.ControlPlane.ListRegistrations:input_type -> gateway.controlplane.v1.ListRegistrationsRequest
 	19, // 25: gateway.controlplane.v1.ControlPlane.ListPeers:input_type -> gateway.controlplane.v1.ListPeersRequest
 	22, // 26: gateway.controlplane.v1.ControlPlane.ForgetPeer:input_type -> gateway.controlplane.v1.ForgetPeerRequest
-	24, // 27: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
-	27, // 28: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:input_type -> gateway.controlplane.v1.SignSubscriptionTokenRequest
-	28, // 29: gateway.controlplane.v1.ControlPlane.RetractStable:input_type -> gateway.controlplane.v1.RetractStableRequest
-	30, // 30: gateway.controlplane.v1.ControlPlane.Deprecate:input_type -> gateway.controlplane.v1.DeprecateRequest
-	32, // 31: gateway.controlplane.v1.ControlPlane.Undeprecate:input_type -> gateway.controlplane.v1.UndeprecateRequest
-	35, // 32: gateway.controlplane.v1.ControlPlane.DrainInstance:input_type -> gateway.controlplane.v1.DrainInstanceRequest
-	8,  // 33: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
-	13, // 34: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
-	15, // 35: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
-	17, // 36: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
-	20, // 37: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
-	23, // 38: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
-	25, // 39: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
-	34, // 40: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:output_type -> gateway.controlplane.v1.SignSubscriptionTokenResponse
-	29, // 41: gateway.controlplane.v1.ControlPlane.RetractStable:output_type -> gateway.controlplane.v1.RetractStableResponse
-	31, // 42: gateway.controlplane.v1.ControlPlane.Deprecate:output_type -> gateway.controlplane.v1.DeprecateResponse
-	33, // 43: gateway.controlplane.v1.ControlPlane.Undeprecate:output_type -> gateway.controlplane.v1.UndeprecateResponse
-	36, // 44: gateway.controlplane.v1.ControlPlane.DrainInstance:output_type -> gateway.controlplane.v1.DrainInstanceResponse
-	33, // [33:45] is the sub-list for method output_type
-	21, // [21:33] is the sub-list for method input_type
+	28, // 27: gateway.controlplane.v1.ControlPlane.ListServices:input_type -> gateway.controlplane.v1.ListServicesRequest
+	31, // 28: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:input_type -> gateway.controlplane.v1.SignSubscriptionTokenRequest
+	32, // 29: gateway.controlplane.v1.ControlPlane.RetractStable:input_type -> gateway.controlplane.v1.RetractStableRequest
+	34, // 30: gateway.controlplane.v1.ControlPlane.Deprecate:input_type -> gateway.controlplane.v1.DeprecateRequest
+	36, // 31: gateway.controlplane.v1.ControlPlane.Undeprecate:input_type -> gateway.controlplane.v1.UndeprecateRequest
+	39, // 32: gateway.controlplane.v1.ControlPlane.DrainInstance:input_type -> gateway.controlplane.v1.DrainInstanceRequest
+	24, // 33: gateway.controlplane.v1.ControlPlane.FinalizeCluster:input_type -> gateway.controlplane.v1.FinalizeClusterRequest
+	26, // 34: gateway.controlplane.v1.ControlPlane.EvacuatePeer:input_type -> gateway.controlplane.v1.EvacuatePeerRequest
+	8,  // 35: gateway.controlplane.v1.ControlPlane.Register:output_type -> gateway.controlplane.v1.RegisterResponse
+	13, // 36: gateway.controlplane.v1.ControlPlane.Heartbeat:output_type -> gateway.controlplane.v1.HeartbeatResponse
+	15, // 37: gateway.controlplane.v1.ControlPlane.Deregister:output_type -> gateway.controlplane.v1.DeregisterResponse
+	17, // 38: gateway.controlplane.v1.ControlPlane.ListRegistrations:output_type -> gateway.controlplane.v1.ListRegistrationsResponse
+	20, // 39: gateway.controlplane.v1.ControlPlane.ListPeers:output_type -> gateway.controlplane.v1.ListPeersResponse
+	23, // 40: gateway.controlplane.v1.ControlPlane.ForgetPeer:output_type -> gateway.controlplane.v1.ForgetPeerResponse
+	29, // 41: gateway.controlplane.v1.ControlPlane.ListServices:output_type -> gateway.controlplane.v1.ListServicesResponse
+	38, // 42: gateway.controlplane.v1.ControlPlane.SignSubscriptionToken:output_type -> gateway.controlplane.v1.SignSubscriptionTokenResponse
+	33, // 43: gateway.controlplane.v1.ControlPlane.RetractStable:output_type -> gateway.controlplane.v1.RetractStableResponse
+	35, // 44: gateway.controlplane.v1.ControlPlane.Deprecate:output_type -> gateway.controlplane.v1.DeprecateResponse
+	37, // 45: gateway.controlplane.v1.ControlPlane.Undeprecate:output_type -> gateway.controlplane.v1.UndeprecateResponse
+	40, // 46: gateway.controlplane.v1.ControlPlane.DrainInstance:output_type -> gateway.controlplane.v1.DrainInstanceResponse
+	25, // 47: gateway.controlplane.v1.ControlPlane.FinalizeCluster:output_type -> gateway.controlplane.v1.FinalizeClusterResponse
+	27, // 48: gateway.controlplane.v1.ControlPlane.EvacuatePeer:output_type -> gateway.controlplane.v1.EvacuatePeerResponse
+	35, // [35:49] is the sub-list for method output_type
+	21, // [21:35] is the sub-list for method input_type
 	21, // [21:21] is the sub-list for extension type_name
 	21, // [21:21] is the sub-list for extension extendee
 	0,  // [0:21] is the sub-list for field type_name
@@ -2763,7 +3129,7 @@ func file_gw_proto_controlplane_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gw_proto_controlplane_v1_control_proto_rawDesc), len(file_gw_proto_controlplane_v1_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   36,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

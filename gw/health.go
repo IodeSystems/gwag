@@ -13,6 +13,9 @@ import (
 //     yet replayed the service registry from JetStream KV (see
 //     registry sync below).
 //   - 503 + JSON, status "draining", when Drain has been called.
+//   - 503 + JSON, status "incompatible", on a cluster node whose
+//     binary cannot run at the cluster's active feature level
+//     (cluster_level.go); "error" says why.
 //
 // Registry sync: a cluster node learns its services from the registry
 // KV bucket. Until the reconciler's watch has delivered every existing
@@ -43,6 +46,9 @@ func (g *Gateway) HealthHandler() http.Handler {
 		case g.draining.Load():
 			status = "draining"
 			code = http.StatusServiceUnavailable
+		case g.clusterLevelErr.Load() != nil:
+			status = "incompatible"
+			code = http.StatusServiceUnavailable
 		case g.registrySync.Load() == registrySyncPending:
 			status = "starting"
 			code = http.StatusServiceUnavailable
@@ -53,6 +59,10 @@ func (g *Gateway) HealthHandler() http.Handler {
 		}
 		if g.cfg.cluster != nil {
 			body["node_id"] = g.cfg.cluster.NodeID
+			body["cluster_level"] = g.clusterLevel.Load()
+		}
+		if e := g.clusterLevelErr.Load(); e != nil {
+			body["error"] = *e
 		}
 		mode := g.pubSubBusMode()
 		body["pubsub"] = mode

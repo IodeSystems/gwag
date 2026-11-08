@@ -79,6 +79,21 @@ service ControlPlane {
   // request reaches every node, and SAFE_TO_STOP means every live
   // node has stopped routing and has no request in flight to it.
   rpc DrainInstance(DrainInstanceRequest) returns (DrainInstanceResponse);
+
+  // FinalizeCluster raises the cluster's active feature level (the
+  // contract step of an upgrade). Refused while a live peer cannot
+  // run at the new level. The level never goes down: a binary that
+  // cannot run at the raised level is refused by the cluster, so
+  // rolling back to it is possible only before this call.
+  rpc FinalizeCluster(FinalizeClusterRequest) returns (FinalizeClusterResponse);
+
+  // EvacuatePeer moves every JetStream stream replica off a live
+  // peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+  // without leaving a stream short of replicas. Call again with
+  // check_only to poll. With leave, a peer that holds no replica is
+  // also removed from the JetStream meta group (its JetStream turns
+  // off); stop it next.
+  rpc EvacuatePeer(EvacuatePeerRequest) returns (EvacuatePeerResponse);
 }
 
 message RegisterRequest {
@@ -343,6 +358,17 @@ message ListPeersRequest {}
 
 message ListPeersResponse {
   repeated Peer peers = 1;
+
+  // The cluster's active feature level (gwag-cluster KV bucket).
+  uint32 active_level = 2;
+
+  // The JetStream meta group as the answering node sees it: the
+  // leader's server name, the group size, and the members it reports
+  // offline. A member stays in the group after its node stops, until
+  // ForgetPeer removes it; quorum is size/2+1.
+  string meta_leader = 3;
+  uint32 meta_size = 4;
+  repeated string meta_offline = 5;
 }
 
 message Peer {
@@ -355,6 +381,16 @@ message Peer {
   // Unix milliseconds when the peer first registered (this generation).
   // Used to detect re-joins after a forget.
   int64 joined_unix_ms = 3;
+
+  // Binary version of the gateway (Go module version, or "devel").
+  // Empty for a gateway older than feature levels.
+  string version = 4;
+
+  // Feature levels the peer's binary can run at: it refuses a
+  // cluster whose active level is outside [min_level, max_level].
+  // Both 0 for a gateway older than feature levels.
+  uint32 min_level = 5;
+  uint32 max_level = 6;
 }
 
 message ForgetPeerRequest {
@@ -369,6 +405,56 @@ message ForgetPeerResponse {
   // Replica count after the forget. If unchanged, the cluster was
   // already at this size or below.
   uint32 new_replicas = 2;
+
+  // True if the peer was removed from the JetStream meta group (or
+  // was no longer in it). False when this node does not know the
+  // peer's server name, or a live peer has the same name.
+  bool meta_removed = 3;
+}
+
+message FinalizeClusterRequest {
+  // Level to raise to. 0 = the highest level the answering gateway's
+  // binary supports.
+  uint32 level = 1;
+
+  // Report what would happen; change nothing.
+  bool dry_run = 2;
+}
+
+message FinalizeClusterResponse {
+  uint32 previous_level = 1;
+  uint32 active_level = 2;
+
+  // Peers that block the raise, one line each ("n2 v2.11.0 max 0").
+  // Empty when the raise was applied or is possible.
+  repeated string blockers = 3;
+}
+
+message EvacuatePeerRequest {
+  // Node id from ListPeers. The peer must be live.
+  string node_id = 1;
+
+  // Do not send the evacuation; report what is left.
+  bool check_only = 2;
+
+  // Once no stream has a replica on the peer, also remove it from the
+  // JetStream meta group.
+  bool leave = 3;
+}
+
+message EvacuatePeerResponse {
+  // The peer's server name.
+  string name = 1;
+
+  // Streams that still have a replica on the peer, or a replica that
+  // is not current yet, as "STREAM: reason".
+  repeated string remaining = 2;
+
+  // No stream has a replica on the peer and every replica is current.
+  bool done = 3;
+
+  // The peer was removed from the JetStream meta group.
+  bool left = 4;
 }
 
 message ListServicesRequest {}

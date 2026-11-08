@@ -17,7 +17,9 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
@@ -776,7 +778,13 @@ func (cp *controlPlane) ListPeers(ctx context.Context, _ *cpv1.ListPeersRequest)
 	if t == nil {
 		return &cpv1.ListPeersResponse{}, nil
 	}
-	out := &cpv1.ListPeersResponse{}
+	meta := cp.gw.jetStreamMeta()
+	out := &cpv1.ListPeersResponse{
+		ActiveLevel: uint32(cp.gw.clusterLevel.Load()),
+		MetaLeader:  meta.Leader,
+		MetaSize:    uint32(meta.Size),
+		MetaOffline: meta.Offline,
+	}
 	kctx, cancel := kvCtx(ctx)
 	defer cancel()
 	keys, err := t.peers.Keys(kctx)
@@ -798,6 +806,9 @@ func (cp *controlPlane) ListPeers(ctx context.Context, _ *cpv1.ListPeersRequest)
 				NodeId:       pe.NodeID,
 				Name:         pe.Name,
 				JoinedUnixMs: pe.JoinedM,
+				Version:      pe.Version,
+				MinLevel:     uint32(pe.LevelMin),
+				MaxLevel:     uint32(pe.LevelMax),
 			})
 		}
 	}
@@ -853,6 +864,14 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	defer t.replMu.Unlock()
 	curR := t.syncReplicasLocked(ctx)
 	resp := &cpv1.ForgetPeerResponse{Removed: wasLive, NewReplicas: uint32(curR)}
+	// Leave the JetStream meta group first: its stream replicas move
+	// to live servers, and a stopped member no longer counts against
+	// the meta quorum.
+	metaRemoved, err := t.removeMetaPeer(ctx, req.GetNodeId())
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: remove from JetStream meta group: %w", err)
+	}
+	resp.MetaRemoved = metaRemoved
 	if desired < curR {
 		if err := t.setReplicas(ctx, desired); err != nil {
 			return nil, fmt.Errorf("controlplane: shrink replicas: %w", err)
@@ -861,6 +880,46 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 		resp.NewReplicas = uint32(desired)
 	}
 	return resp, nil
+}
+
+// FinalizeCluster raises the cluster feature level. See
+// cluster_level.go.
+func (cp *controlPlane) FinalizeCluster(ctx context.Context, req *cpv1.FinalizeClusterRequest) (*cpv1.FinalizeClusterResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "finalize_cluster"); err != nil {
+		return nil, err
+	}
+	res, err := cp.gw.finalizeClusterLevel(ctx, int(req.GetLevel()), req.GetDryRun())
+	resp := &cpv1.FinalizeClusterResponse{
+		PreviousLevel: uint32(res.Previous),
+		ActiveLevel:   uint32(res.Active),
+		Blockers:      res.Blockers,
+	}
+	if err != nil {
+		if errors.Is(err, errFinalizeBlocked) {
+			if req.GetDryRun() {
+				return resp, nil // the blockers are the answer
+			}
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+// EvacuatePeer moves JetStream stream replicas off a live peer. See
+// cluster_evacuate.go.
+func (cp *controlPlane) EvacuatePeer(ctx context.Context, req *cpv1.EvacuatePeerRequest) (*cpv1.EvacuatePeerResponse, error) {
+	if err := cp.gw.controlPlaneAdmin(ctx, "evacuate_peer"); err != nil {
+		return nil, err
+	}
+	if req.GetNodeId() == "" {
+		return nil, fmt.Errorf("controlplane: node_id is required")
+	}
+	name, remaining, done, left, err := cp.gw.evacuatePeer(ctx, req.GetNodeId(), req.GetCheckOnly(), req.GetLeave())
+	if err != nil {
+		return nil, err
+	}
+	return &cpv1.EvacuatePeerResponse{Name: name, Remaining: remaining, Done: done, Left: left}, nil
 }
 
 // authorizerNamespace is the legacy SubscriptionAuthorizer delegate

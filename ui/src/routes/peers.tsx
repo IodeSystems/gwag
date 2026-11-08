@@ -14,6 +14,9 @@ interface Peer {
   nodeId?: string | null;
   name?: string | null;
   joinedUnixMs?: unknown;
+  version?: string | null;
+  minLevel?: unknown;
+  maxLevel?: unknown;
 }
 
 function Peers() {
@@ -35,9 +38,17 @@ function Peers() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const peers: Peer[] = (data?.admin?.listPeers?.peers ?? []).filter(
+  const list = data?.admin?.listPeers;
+  const peers: Peer[] = (list?.peers ?? []).filter(
     (p): p is NonNullable<typeof p> => p != null,
   );
+  const offline = (list?.metaOffline ?? []).filter((n) => n != null);
+  const subtitle = list
+    ? `Gateways in this cluster. Feature level ${Number(list.activeLevel ?? 0)}.` +
+      (Number(list.metaSize ?? 0) > 0
+        ? ` JetStream meta: leader ${list.metaLeader ?? '-'}, size ${Number(list.metaSize)}, offline ${offline.length > 0 ? offline.join(', ') : 'none'}.`
+        : '')
+    : 'Gateways in this cluster.';
 
   const columns: Column<Peer>[] = [
     { id: 'nodeId', header: 'Node ID', mono: true, cell: (p) => p.nodeId },
@@ -47,6 +58,12 @@ function Peers() {
       header: 'Joined',
       cell: (p) =>
         p.joinedUnixMs ? new Date(Number(p.joinedUnixMs)).toLocaleString() : '',
+    },
+    { id: 'version', header: 'Version', mono: true, cell: (p) => p.version || 'no level support' },
+    {
+      id: 'levels',
+      header: 'Levels',
+      cell: (p) => `${Number(p.minLevel ?? 0)}-${Number(p.maxLevel ?? 0)}`,
     },
     {
       id: 'action',
@@ -70,7 +87,7 @@ function Peers() {
   ];
 
   return (
-    <Page title="Peers" subtitle="Gateways in this cluster.">
+    <Page title="Peers" subtitle={subtitle}>
       <Panel flush>
         {error ? (
           <EmptyState compact title="Failed to load peers" description={error.message} />

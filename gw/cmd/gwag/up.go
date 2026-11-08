@@ -54,6 +54,7 @@ func upCmd(args []string) int {
 	environment := fs.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	pprofEnable := fs.Bool("pprof", false, "Mount net/http/pprof under /debug/pprof behind AdminMiddleware")
 	publicServices := fs.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
+	autoFinalize := fs.Bool("cluster-auto-finalize", false, "Raise the cluster feature level as soon as every live peer supports a higher one, instead of waiting for gwag cluster finalize. Ends the rollback window without an operator step")
 	clusterReplicas := fs.String("cluster-replicas", "odd", "JetStream KV replica policy: odd (largest odd <= min(peers,3); 2 peers stay at R1), auto (min(peers,3)), or a fixed integer 1..5 capped at live peers")
 	declHook := fs.String("declarations-hook", "", "POST every external-dependent change to this URL. In a cluster the node that accepted the write sends it, once")
 	declHookSecret := fs.String("declarations-hook-secret", "", "HMAC-SHA256 key for --declarations-hook (the string's bytes; at least 32 bytes and 128 bits of estimated entropy, else refused; make one with `gwag secret gen`): X-Gwag-Signature over X-Gwag-Timestamp + \".\" + body")
@@ -132,6 +133,9 @@ func upCmd(args []string) int {
 	}
 	if *insecureSubscribe {
 		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())
+	}
+	if *autoFinalize {
+		gwOpts = append(gwOpts, gateway.WithClusterAutoFinalize())
 	}
 	if *signerSecret != "" {
 		secret, err := hex.DecodeString(*signerSecret)

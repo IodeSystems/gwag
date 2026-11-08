@@ -7,7 +7,8 @@ reconciler on each node watches the registry and dials every service
 it sees.
 
 This page covers running a 3-node cluster, what a load balancer should
-probe, what happens when a node dies, and rolling upgrades. Health
+probe, what happens when a node dies, feature levels, and upgrades
+(rolling restart, replica swap, rollback). Health
 states, drain mechanics and the replica table are in
 [`operations.md`](./operations.md); this page links there instead of
 repeating them.
@@ -67,15 +68,22 @@ $ curl -s -w ' %{http_code}\n' localhost:18080/api/health
 {"active_streams":0,"node_id":"NAIW5CIN...","pubsub":"nats","status":"serving"}
  200
 
-$ gwag peer list --gateway localhost:50090
-NODE_ID                                                    NAME       JOINED
-NAIW5CINQ3LSRVPLGRZKCEFAPCANIH5G4YNWL3KHXPBGPPER7PUW2G7K   n1         2026-11-07T15:16:00-08:00
-NBCMQ6KJFAI2MM2YRKDJO3S3EVHEBVPK5N7CJHW2UY5KSR63SF4SITNM   n3         2026-11-07T15:16:00-08:00
-ND4CWNE52RNBG3FYOV34EKIJL4DVHUUSBGBKWYSSJT63YCZ42DKPA55Y   n2         2026-11-07T15:16:00-08:00
+$ gwag peer list --gateway localhost:51091     # a later run, ports 2808x/5109x
+NODE_ID                                                    NAME       JOINED                     LEVELS  VERSION
+NABY6XWLRI3IKXKG2LHVZWJPKKARA22NQFY4ITZYDFNEH7QO7VXXSZBS   n3         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+NBLJNPKR57EMPKU2PPDRPQ6SRGRUGH4AACJFFLQSVLWY2AEBWXVCWJ2K   n1         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+NCQS4OY6UGUBQWJ7TXP2ODGVJDQ45NJKZL4IS5E3LLPQNEBUFBH7RQ2F   n2         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+
+cluster feature level: 1
+jetstream meta: leader=n1 size=3 offline=none
 
 $ curl -s localhost:18080/api/metrics | grep '^go_api_gateway_cluster_peers'
 go_api_gateway_cluster_peers 3
 ```
+
+This version's health body also carries `"cluster_level":1` on
+cluster nodes. LEVELS, VERSION and the two lines under the table are
+explained in [Feature levels](#feature-levels).
 
 The example gateway takes the same shape. A runnable version is
 [`examples/multi/run-cluster.sh`](../examples/multi/run-cluster.sh).
@@ -92,6 +100,22 @@ A node with no `--nats-peer` runs standalone JetStream at one replica,
 and cannot be scaled out later. To get a cluster, start every node,
 the first one included, with at least one peer entry. Listing all the
 other nodes on each node, as above, needs no designated seed.
+
+A node started with `--nats-peer` entries does not run alone while
+those peers are down. NATS sizes the JetStream meta group from the
+route list (at least 2), so one node has no quorum: there is no meta
+leader and every JetStream call fails with `JetStream system
+temporarily unavailable` (503, err_code 10008). The gateway stays
+`starting`. Measured on nats-server v2.15.2: a node started with two
+peers that were not up had no leader after 20 s; when the second node
+started, a leader was elected within 0.2 s and buckets could be
+created; with the third, a bucket went from R1 to R3.
+
+So there is no "single node, then 3" path. Start the first node with
+its future peers listed and start a second node before the first has
+to serve. A node already running without `--nats-peer` keeps its state
+in a standalone JetStream; restarting it with peers is not tested, and
+the gateway has no state export or import.
 
 ### Embedded in Go
 
@@ -149,6 +173,7 @@ you choose). It answers:
 | 200 | `serving` | Take traffic. |
 | 503 | `starting` | Cluster node that has not replayed the registry from JetStream KV. Its schema would miss services. It turns ready on its own; there is no timeout. |
 | 503 | `draining` | SIGTERM or `Drain` received. Pull the node. |
+| 503 | `incompatible` | The binary cannot run at the cluster's feature level; `error` says why. See [Feature levels](#feature-levels). |
 
 Observed on a node sent SIGTERM (default `--shutdown-delay 5s`, probe
 every 0.5 s):
@@ -216,12 +241,17 @@ ForgetPeer: rpc error: code = Unknown desc = controlplane: peer NBCMQ6KJ...SITNM
 and for an expired one:
 
 ```
-$ gwag peer forget NAIW5CIN...PUW2G7K --gateway localhost:50091
-removed=false new_replicas=1
+$ gwag peer forget NBLJNPKR...WCWJ2K --gateway localhost:51094
+removed=false new_replicas=3 meta_removed=true
 ```
 
-`removed=false` here: the peers entry had already expired, so there was
-nothing to delete. `new_replicas=1` is the consequence to plan for.
+(Four nodes, one stopped.) `removed=false` here: the peers entry had
+already expired, so there was nothing to delete. `meta_removed=true`:
+the peer also left the JetStream meta group, so its stream replicas
+are placed on live nodes and it no longer counts in the meta quorum
+(`false` when this node never saw the peer's name, or a live node has
+the same name). `new_replicas` is the consequence to plan for: with 3
+nodes left it stays 3; with 2 left, `odd` gives 1.
 The replica count never drops by itself when a peer is lost; `forget`
 re-applies the policy to the remaining peers. Under `odd`, 2 remaining
 nodes give R1, so the buckets move to one node and lose their
@@ -230,12 +260,99 @@ Replace the lost node first if you want to stay at R3. A node that
 restarts gets a new node ID; its old ID expires within 30 s and needs
 no `forget`.
 
-## Rolling upgrade
+## Feature levels
+
+Nodes of two versions run side by side during an upgrade. A change to
+state the nodes share (a KV value format, a bucket or stream config)
+can break the older ones, so such a change is gated on the cluster's
+feature level, an integer in the `gwag-cluster` KV bucket.
+
+- Each binary runs at a range of levels and publishes it, with its
+  version, in its peers entry. This version: 0-1. A gateway older than
+  feature levels (v2.11.0 and before) publishes none and counts as
+  0-0.
+- A new cluster starts at the highest level its first node supports. A
+  node of this version that joins nodes without level support starts
+  the cluster at 0.
+- A node whose range does not contain the active level does not start
+  cluster tracking. Its `/api/health` answers 503 with
+  `"status":"incompatible"` and an `"error"` that names both levels,
+  and it logs the same line on every retry. A gateway older than
+  feature levels cannot check, so it must not be started once the level
+  was raised.
+- The level goes up only by an operator call, and never goes down.
+
+Level 1 turns subject delete markers on for `gwag-registry` and
+`gwag-peers`. NATS refuses a replica-count update without markers on a
+bucket that has them, and v2.11.0 sends such updates. At level 0 an
+expired key leaves each node by the sweeps, 30-45 s after it expired,
+instead of by its marker.
+
+```
+$ gwag peer list --gateway localhost:51094
+NODE_ID                                                    NAME       JOINED                     LEVELS  VERSION
+NABY6XWLRI3IKXKG2LHVZWJPKKARA22NQFY4ITZYDFNEH7QO7VXXSZBS   n3         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+NBZNX6HUN4CEB3OUTDNINIFH6X5PD5XA2YMLKHW7WKX3YFZFLOMED5J2   n4         2026-11-08T05:56:33-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+NCQS4OY6UGUBQWJ7TXP2ODGVJDQ45NJKZL4IS5E3LLPQNEBUFBH7RQ2F   n2         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
+
+cluster feature level: 1
+jetstream meta: leader=n2 size=3 offline=none
+```
+
+A v2.11.0 node shows `0-0  (no level support)`. The `jetstream meta`
+line is the answering node's view of the JetStream meta group: its
+leader, its size, and members it reports offline. A stopped node stays
+a member until it is forgotten. The meta group needs size/2+1 members
+up for any stream create or replica change. The same data is in
+`GET /api/admin/peers` (`version`, `minLevel`, `maxLevel`,
+`activeLevel`, `metaLeader`, `metaSize`, `metaOffline`), on the admin
+UI peers page, and in the metric
+`cluster_feature_level{kind="active"|"min"|"max"}`.
+
+### Raising the level
+
+```
+gwag cluster finalize --gateway <node> [--level N] [--dry-run]
+```
+
+Without `--level` it raises to the highest level the answering node's
+binary supports. It is refused (`FailedPrecondition`, admin API 409)
+while a live peer's maximum is below the target; the error lists each
+one as `NAME VERSION max N`. `--dry-run` prints the same list and
+changes nothing. Admin API: `POST /api/admin/cluster/finalize`, body
+`{"level": N, "dryRun": true}`.
+
+`--cluster-auto-finalize` (`gwag up`, example gateway;
+`gateway.WithClusterAutoFinalize()`) raises the level on its own as
+soon as every live peer supports a higher one. It is off by default
+and I recommend leaving it off: the raise ends the rollback window, and
+"every live peer" does not count a node that is restarting at that
+moment. Use it where nobody would roll back anyway (development, a
+cluster that is only ever replaced).
+
+### Adding a level (contributors)
+
+`gw/cluster_level.go`: append a `clusterFeature{Level: N+1, Name,
+Apply}` to `clusterFeatures`, gate the new writes on
+`g.clusterFeatureOn(N+1)`, and keep reading the old format. `Apply`
+converts existing state when the level is reached; it runs on every
+node and must be idempotent. `applyDeleteMarkers` (level 1) is the
+example. Raise `clusterLevelMin` only when the reader of the old format
+is removed. Add a CHANGELOG Migration entry that says which release
+must finalize first.
+
+## Upgrades
+
+Two ways: restart the nodes in place, one at a time, or swap in new
+nodes and remove the old ones (replica swap). Both run two versions
+side by side for a while and end with `gwag cluster finalize`.
+
+### Rolling restart
 
 One node at a time. With `odd` and 3 nodes (R3), never take down two.
 
 1. Check all nodes are up: `gwag peer list --gateway <any>` shows 3,
-   every `/api/health` is 200.
+   `jetstream meta: ... offline=none`, every `/api/health` is 200.
 2. Send SIGTERM to the node. It reports `draining`, waits
    `--shutdown-delay`, finishes in-flight requests, closes. Services
    registered on it move to another address through `GatewayAddrs`
@@ -243,27 +360,131 @@ One node at a time. With `odd` and 3 nodes (R3), never take down two.
 3. Start the new binary with the same flags and the same data
    directory.
 4. Wait for `/api/health` to return 200. The node reports `starting`
-   until it replays the registry.
+   until it replays the registry, and `incompatible` if its binary
+   cannot run at the cluster's level: put the old binary back.
 5. Confirm `gwag peer list` shows 3 and `cluster_peers` is 3 on every
    node, then move to the next.
+6. When every node runs the new binary, `gwag cluster finalize`.
 
 Tested: n2 was stopped with SIGTERM and restarted (health 200 again
 after about a second, three peers listed), then n1 after a `kill -9`
-(new node ID, three peers, queries answered). Not tested: swapping in a
-different binary version.
+(new node ID, three peers, queries answered). Not tested: a rolling
+restart from v2.11.0 to this version. A v2.11.0 gateway has no
+graceful drain: SIGTERM cuts its in-flight requests, so take it out of
+the load balancer first.
+
+### Replica swap
+
+Three new ("green") nodes join three old ("blue") ones, JetStream moves
+every replica onto green, and blue is removed. Six nodes run for a
+while, so plan for the extra hosts. The replica policy `odd` keeps R3
+at six nodes.
+
+1. Check blue as in the rolling restart, step 1.
+2. Start green nodes one at a time. Give each a new `--node-name` and
+   data directory, and list every running node in `--nats-peer`. Before
+   starting the next, wait until `gwag peer list --gateway <new node>`
+   lists every node and shows `jetstream meta: leader=<a blue node or
+   an earlier green one> size=<running nodes>`.
+
+   Do not start several new nodes at once. Fresh JetStream servers that
+   start together can elect a meta leader among themselves: with three
+   fresh nodes started together and the three blue routes, that
+   happened in 6 of 8 runs; with all six routes listed, in 2 of 3
+   (nats-server v2.15.2, in-process). The fresh group won, and the blue
+   buckets disappeared from the meta view (`stream not found`). Started
+   one at a time, the new node joined the blue group in every run (7
+   in-process runs, and every e2e run, which checks it).
+3. Put green into the load balancer once each answers 200.
+4. Give the services the green control planes (`GatewayAddrs` in
+   `controlclient`), so a registration on a blue node moves to green
+   when blue stops answering.
+5. For each blue node, one at a time:
+   1. Take it out of the load balancer and wait for its in-flight
+      requests.
+   2. Move its replicas to the other nodes:
+
+      ```
+      gwag peer evacuate --gateway <green node> --wait 2m <blue NODE_ID>
+      ```
+
+      It sends NATS `$JS.API.SERVER.EVACUATE` again every second until
+      no stream has a replica on the node and every replica is current,
+      then prints `peer=<name> done=true`. It resends because a replica
+      raise in between (a new bucket going from R1 to R3) can place a
+      replica back on the node. Exit code 3 means not done in time; run
+      it again.
+   3. SIGTERM the blue node.
+   4. When its peers entry has expired (30 s), forget it:
+
+      ```
+      $ gwag peer forget --gateway <green node> <blue NODE_ID>
+      removed=false new_replicas=3 meta_removed=true
+      ```
+
+      `meta_removed=true`: the node left the JetStream meta group
+      (`$JS.API.SERVER.REMOVE`). Until then a stopped node still counts
+      in the meta quorum: with six members, three stopped blue nodes
+      leave no quorum, and stream creates and replica changes fail.
+   5. Check `gwag peer list` on a green node: one node fewer, `jetstream
+      meta: ... offline=none`.
+
+   One at a time also matters for placement: an evacuated node is kept
+   out of a stream only until that stream is back at full size, so a
+   later evacuation can pick a blue node that has not been removed yet.
+6. `gwag cluster finalize --gateway <green node>`. It is refused while
+   any blue node is live.
+
+`gwag peer evacuate` and the meta removal need a node of this version:
+the JetStream server APIs answer only in the NATS system account, and
+only this version's nodes have a system account user (a random
+password, used in-process). Blue nodes running v2.11.0 cannot do either.
+
+Tested: `TestS13ReplicaSwap` (e2e): blue on v2.11.0, green at HEAD,
+four load workers through a health-checking load balancer, a service
+registered on b1 that moves to green, events published into a
+JetStream stream of a named channel the whole time, and an app key
+created on green. Result: 33410 GraphQL calls, 0 failed; 4036 events
+acked, all in the stream, none twice; stable marks and the app key
+unchanged; every stream at R3 on green; level 0 until finalize, then 1
+with delete markers on. Not tested: a swap between two versions that
+both have feature levels (that is the next release), and a swap with
+`--cluster-replicas` other than `odd`.
+
+### Rollback window
+
+Before `gwag cluster finalize`, the old binary can come back:
+
+- Rolling restart: restart nodes with the old binary, same way.
+- Replica swap: remove the green nodes the way step 5 removes blue
+  ones. The last node of the new version leaves the meta group itself,
+  because the old nodes cannot remove it:
+
+  ```
+  gwag peer evacuate --gateway <last green> --leave --wait 2m <its NODE_ID>
+  ```
+
+  `--leave` removes it from the meta group once no stream is on it
+  (`left=true`); its JetStream turns off, so stop it right after.
+
+After the raise, a binary whose maximum is below the new level reports
+`incompatible` and does not join. A v2.11.0 binary cannot check and
+would run against buckets it cannot update: do not start one.
+
+Tested: `TestS13bRollbackBeforeFinalize` (e2e): two HEAD nodes joined
+a v2.11.0 cluster and were removed (g2 forgotten through g1, g1 with
+`--leave`) under load: 20934 calls, 0 failed; level still 0; streams
+back on blue only; a stream create on the blue cluster worked
+afterwards (meta quorum); a new service registered on a blue node and
+every blue node routed it.
 
 ### Mixed versions
 
-A rolling upgrade runs mixed versions for a while. The CHANGELOG
-Migration entries under `Unreleased` list what to know; read them before
-an upgrade across those changes. Two affect clusters:
+The CHANGELOG Migration entries under `Unreleased` list what to know
+before an upgrade across them. For clusters:
 
-- Once a node of the new version has turned delete markers on for the
-  `gwag-registry` and `gwag-peers` buckets, an older node's
-  replica-count update of those buckets is refused by NATS. The older
-  node logs nothing and retries on the next peer change. The buckets
-  stay at the replica count the newer nodes set. Upgrade every node
-  before relying on an older node to raise replicas.
+- Delete markers on `gwag-registry` and `gwag-peers` are level 1; see
+  above.
 - A 2-node cluster now runs R1, not R2. Existing buckets at R2 stay
   until `ForgetPeer` or a fixed policy changes them.
 

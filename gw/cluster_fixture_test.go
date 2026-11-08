@@ -140,6 +140,7 @@ func resetSharedCluster(t *testing.T) {
 			externalDependentsBucketName,
 			notificationsBucketName,
 			appKeysBucketName,
+			clusterBucketName,
 		} {
 			kv, err := cl.JS.KeyValue(jsCtx, bucket)
 			if err != nil {

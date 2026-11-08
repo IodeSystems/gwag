@@ -126,6 +126,11 @@ go / ts / python, see `docs/events.md`).
   Subscription types is the client-facing schema for events.
 - **Auto-internal**: namespaces starting with `_` are hidden from public schema.
 - **Cluster**: embedded NATS + JetStream KV. Reconcilers sync slots across nodes.
+- **Cluster feature levels** (`gw/cluster_level.go`): a change to shared
+  state (KV value format, bucket or stream config) that older nodes cannot
+  handle is a new `clusterFeature` level, gated on `g.clusterFeatureOn(L)`;
+  read old + new, write old until `gwag cluster finalize`. See
+  `docs/cluster.md#feature-levels`.
 - **Per-pool isolation is sacred** — no gateway-wide caps on unary dispatch
   beyond per-pool `MaxInflight`.
 - **Proto/gRPC is canonical** for service-to-service. GraphQL is client-facing;

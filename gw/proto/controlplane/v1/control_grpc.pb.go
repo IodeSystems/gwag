@@ -31,6 +31,8 @@ const (
 	ControlPlane_Deprecate_FullMethodName             = "/gateway.controlplane.v1.ControlPlane/Deprecate"
 	ControlPlane_Undeprecate_FullMethodName           = "/gateway.controlplane.v1.ControlPlane/Undeprecate"
 	ControlPlane_DrainInstance_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/DrainInstance"
+	ControlPlane_FinalizeCluster_FullMethodName       = "/gateway.controlplane.v1.ControlPlane/FinalizeCluster"
+	ControlPlane_EvacuatePeer_FullMethodName          = "/gateway.controlplane.v1.ControlPlane/EvacuatePeer"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -104,6 +106,19 @@ type ControlPlaneClient interface {
 	// request reaches every node, and SAFE_TO_STOP means every live
 	// node has stopped routing and has no request in flight to it.
 	DrainInstance(ctx context.Context, in *DrainInstanceRequest, opts ...grpc.CallOption) (*DrainInstanceResponse, error)
+	// FinalizeCluster raises the cluster's active feature level (the
+	// contract step of an upgrade). Refused while a live peer cannot
+	// run at the new level. The level never goes down: a binary that
+	// cannot run at the raised level is refused by the cluster, so
+	// rolling back to it is possible only before this call.
+	FinalizeCluster(ctx context.Context, in *FinalizeClusterRequest, opts ...grpc.CallOption) (*FinalizeClusterResponse, error)
+	// EvacuatePeer moves every JetStream stream replica off a live
+	// peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+	// without leaving a stream short of replicas. Call again with
+	// check_only to poll. With leave, a peer that holds no replica is
+	// also removed from the JetStream meta group (its JetStream turns
+	// off); stop it next.
+	EvacuatePeer(ctx context.Context, in *EvacuatePeerRequest, opts ...grpc.CallOption) (*EvacuatePeerResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -234,6 +249,26 @@ func (c *controlPlaneClient) DrainInstance(ctx context.Context, in *DrainInstanc
 	return out, nil
 }
 
+func (c *controlPlaneClient) FinalizeCluster(ctx context.Context, in *FinalizeClusterRequest, opts ...grpc.CallOption) (*FinalizeClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinalizeClusterResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_FinalizeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) EvacuatePeer(ctx context.Context, in *EvacuatePeerRequest, opts ...grpc.CallOption) (*EvacuatePeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EvacuatePeerResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_EvacuatePeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -305,6 +340,19 @@ type ControlPlaneServer interface {
 	// request reaches every node, and SAFE_TO_STOP means every live
 	// node has stopped routing and has no request in flight to it.
 	DrainInstance(context.Context, *DrainInstanceRequest) (*DrainInstanceResponse, error)
+	// FinalizeCluster raises the cluster's active feature level (the
+	// contract step of an upgrade). Refused while a live peer cannot
+	// run at the new level. The level never goes down: a binary that
+	// cannot run at the raised level is refused by the cluster, so
+	// rolling back to it is possible only before this call.
+	FinalizeCluster(context.Context, *FinalizeClusterRequest) (*FinalizeClusterResponse, error)
+	// EvacuatePeer moves every JetStream stream replica off a live
+	// peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+	// without leaving a stream short of replicas. Call again with
+	// check_only to poll. With leave, a peer that holds no replica is
+	// also removed from the JetStream meta group (its JetStream turns
+	// off); stop it next.
+	EvacuatePeer(context.Context, *EvacuatePeerRequest) (*EvacuatePeerResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -350,6 +398,12 @@ func (UnimplementedControlPlaneServer) Undeprecate(context.Context, *Undeprecate
 }
 func (UnimplementedControlPlaneServer) DrainInstance(context.Context, *DrainInstanceRequest) (*DrainInstanceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainInstance not implemented")
+}
+func (UnimplementedControlPlaneServer) FinalizeCluster(context.Context, *FinalizeClusterRequest) (*FinalizeClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FinalizeCluster not implemented")
+}
+func (UnimplementedControlPlaneServer) EvacuatePeer(context.Context, *EvacuatePeerRequest) (*EvacuatePeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EvacuatePeer not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -588,6 +642,42 @@ func _ControlPlane_DrainInstance_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_FinalizeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).FinalizeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_FinalizeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).FinalizeCluster(ctx, req.(*FinalizeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_EvacuatePeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EvacuatePeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).EvacuatePeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_EvacuatePeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).EvacuatePeer(ctx, req.(*EvacuatePeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -642,6 +732,14 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DrainInstance",
 			Handler:    _ControlPlane_DrainInstance_Handler,
+		},
+		{
+			MethodName: "FinalizeCluster",
+			Handler:    _ControlPlane_FinalizeCluster_Handler,
+		},
+		{
+			MethodName: "EvacuatePeer",
+			Handler:    _ControlPlane_EvacuatePeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

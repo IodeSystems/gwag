@@ -51,6 +51,8 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 | `TestS10AdminRoles` | three admin readers, public and private services |
 | `TestS11TypedEvents` | typed event channels on a 3-node cluster: streams, start gate and graph, Go group delivery, TypeScript and Python listeners, `ps_sub` / `ps.pub` bridge, dead letters, NATS node loss |
 | `TestS12KafkaEvents` | the same channels over Kafka with the Schema Registry serde, services registered on a 3-node cluster: start gate, graph and sunset, Go group, TypeScript and Python delivery, Confluent's Java deserializer reads the records, `gwag gen --registry` import of a Confluent-written topic, retry topic and DLQ, gateway node loss |
+| `TestS13ReplicaSwap` | replica swap upgrade under load: 3 nodes on the v2.11.0 gateway, 3 at HEAD join one at a time, each old node is evacuated, stopped and forgotten, then the cluster is finalized; no failed call, no lost event, state intact, every stream on the new nodes |
+| `TestS13bRollbackBeforeFinalize` | 2 HEAD nodes join a v2.11.0 cluster and leave again before finalize (the last with `evacuate --leave`); the old cluster keeps its level, streams and meta quorum |
 
 `TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
 and `pnpm` are on `PATH`, and the Python listener when `uv` is; it
@@ -124,6 +126,10 @@ env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless N
 env.Start(name, bin, args...) *Proc                  // any other process
 env.StartWith(name, ProcOpts{Dir, Env, Stdin}, bin, args...) *Proc   // with cwd, env, open stdin
 harness.Binary(t, "gateway"|"fixture"|"gwag"|"kafka-fixture") string
+harness.ReleaseBinary(t, "v2.11.0", "gateway") string  // built from a tag (archive of the tag), cached in the user cache dir (E2E_CACHE_DIR)
+GatewayOpts{Binary, Legacy}                          // run another binary; Legacy drops flags v2.11.0 lacks
+env.NamedCluster(names, opts) *Cluster · c.NewNode(opts) *Gateway · c.StartNode(g)   // allocate first, start later, one at a time
+lb.Add(g) · g.PeersView(ctx) · g.NodeID(t) · g.Evacuate(t, id, leave, timeout) · g.Forget(t, id, timeout) · g.Finalize(ctx, level, dryRun)
 harness.DockerAvailable() string                       // why not, or ""
 harness.StartKafkaStack(t) *KafkaStack                 // Kafka + Schema Registry in docker, free ports
   s.Brokers · s.SRURL · s.Name (Name:9094 inside the network) · s.Env() · s.Exec(ctx, args...)

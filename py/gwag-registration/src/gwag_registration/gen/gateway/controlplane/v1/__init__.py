@@ -16,6 +16,10 @@ __all__ = (
     "DrainInstanceRequest",
     "DrainInstanceResponse",
     "DrainState",
+    "EvacuatePeerRequest",
+    "EvacuatePeerResponse",
+    "FinalizeClusterRequest",
+    "FinalizeClusterResponse",
     "ForgetPeerRequest",
     "ForgetPeerResponse",
     "HeartbeatRequest",
@@ -442,6 +446,100 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class EvacuatePeerRequest(betterproto2.Message):
+    node_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    Node id from ListPeers. The peer must be live.
+    """
+
+    check_only: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    Do not send the evacuation; report what is left.
+    """
+
+    leave: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    Once no stream has a replica on the peer, also remove it from the
+    JetStream meta group.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "EvacuatePeerRequest", EvacuatePeerRequest
+)
+
+
+@dataclass(eq=False, repr=False)
+class EvacuatePeerResponse(betterproto2.Message):
+    name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    The peer's server name.
+    """
+
+    remaining: "list[str]" = betterproto2.field(
+        2, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    Streams that still have a replica on the peer, or a replica that
+    is not current yet, as "STREAM: reason".
+    """
+
+    done: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    No stream has a replica on the peer and every replica is current.
+    """
+
+    left: "bool" = betterproto2.field(4, betterproto2.TYPE_BOOL)
+    """
+    The peer was removed from the JetStream meta group.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "EvacuatePeerResponse", EvacuatePeerResponse
+)
+
+
+@dataclass(eq=False, repr=False)
+class FinalizeClusterRequest(betterproto2.Message):
+    level: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
+    """
+    Level to raise to. 0 = the highest level the answering gateway's
+    binary supports.
+    """
+
+    dry_run: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    Report what would happen; change nothing.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "FinalizeClusterRequest", FinalizeClusterRequest
+)
+
+
+@dataclass(eq=False, repr=False)
+class FinalizeClusterResponse(betterproto2.Message):
+    previous_level: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
+
+    active_level: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
+
+    blockers: "list[str]" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    Peers that block the raise, one line each ("n2 v2.11.0 max 0").
+    Empty when the raise was applied or is possible.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "FinalizeClusterResponse", FinalizeClusterResponse
+)
+
+
+@dataclass(eq=False, repr=False)
 class ForgetPeerRequest(betterproto2.Message):
     node_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
 
@@ -463,6 +561,13 @@ class ForgetPeerResponse(betterproto2.Message):
     """
     Replica count after the forget. If unchanged, the cluster was
     already at this size or below.
+    """
+
+    meta_removed: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    True if the peer was removed from the JetStream meta group (or
+    was no longer in it). False when this node does not know the
+    peer's server name, or a live peer has the same name.
     """
 
 
@@ -551,6 +656,25 @@ default_message_pool.register_message(
 class ListPeersResponse(betterproto2.Message):
     peers: "list[Peer]" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+
+    active_level: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
+    """
+    The cluster's active feature level (gwag-cluster KV bucket).
+    """
+
+    meta_leader: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+    """
+    The JetStream meta group as the answering node sees it: the
+    leader's server name, the group size, and the members it reports
+    offline. A member stays in the group after its node stops, until
+    ForgetPeer removes it; quorum is size/2+1.
+    """
+
+    meta_size: "int" = betterproto2.field(4, betterproto2.TYPE_UINT32)
+
+    meta_offline: "list[str]" = betterproto2.field(
+        5, betterproto2.TYPE_STRING, repeated=True
     )
 
 
@@ -664,6 +788,21 @@ class Peer(betterproto2.Message):
     Unix milliseconds when the peer first registered (this generation).
     Used to detect re-joins after a forget.
     """
+
+    version: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
+    """
+    Binary version of the gateway (Go module version, or "devel").
+    Empty for a gateway older than feature levels.
+    """
+
+    min_level: "int" = betterproto2.field(5, betterproto2.TYPE_UINT32)
+    """
+    Feature levels the peer's binary can run at: it refuses a
+    cluster whose active level is outside [min_level, max_level].
+    Both 0 for a gateway older than feature levels.
+    """
+
+    max_level: "int" = betterproto2.field(6, betterproto2.TYPE_UINT32)
 
 
 default_message_pool.register_message("gateway.controlplane.v1", "Peer", Peer)
@@ -1445,6 +1584,57 @@ class ControlPlaneStub(betterproto2_grpclib.ServiceStub):
             metadata=metadata,
         )
 
+    async def finalize_cluster(
+        self,
+        message: "FinalizeClusterRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "FinalizeClusterResponse":
+        """
+        FinalizeCluster raises the cluster's active feature level (the
+        contract step of an upgrade). Refused while a live peer cannot
+        run at the new level. The level never goes down: a binary that
+        cannot run at the raised level is refused by the cluster, so
+        rolling back to it is possible only before this call.
+        """
+
+        return await self._unary_unary(
+            "/gateway.controlplane.v1.ControlPlane/FinalizeCluster",
+            message,
+            FinalizeClusterResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def evacuate_peer(
+        self,
+        message: "EvacuatePeerRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "EvacuatePeerResponse":
+        """
+        EvacuatePeer moves every JetStream stream replica off a live
+        peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+        without leaving a stream short of replicas. Call again with
+        check_only to poll. With leave, a peer that holds no replica is
+        also removed from the JetStream meta group (its JetStream turns
+        off); stop it next.
+        """
+
+        return await self._unary_unary(
+            "/gateway.controlplane.v1.ControlPlane/EvacuatePeer",
+            message,
+            EvacuatePeerResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
     """
@@ -1578,6 +1768,33 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
 
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
+    async def finalize_cluster(
+        self, message: "FinalizeClusterRequest"
+    ) -> "FinalizeClusterResponse":
+        """
+        FinalizeCluster raises the cluster's active feature level (the
+        contract step of an upgrade). Refused while a live peer cannot
+        run at the new level. The level never goes down: a binary that
+        cannot run at the raised level is refused by the cluster, so
+        rolling back to it is possible only before this call.
+        """
+
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def evacuate_peer(
+        self, message: "EvacuatePeerRequest"
+    ) -> "EvacuatePeerResponse":
+        """
+        EvacuatePeer moves every JetStream stream replica off a live
+        peer (NATS $JS.API.SERVER.EVACUATE), so the peer can be stopped
+        without leaving a stream short of replicas. Call again with
+        check_only to poll. With leave, a peer that holds no replica is
+        also removed from the JetStream meta group (its JetStream turns
+        off); stop it next.
+        """
+
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
     async def __rpc_register(
         self, stream: "grpclib.server.Stream[RegisterRequest, RegisterResponse]"
     ) -> None:
@@ -1678,6 +1895,23 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
         response = await self.drain_instance(request)
         await stream.send_message(response)
 
+    async def __rpc_finalize_cluster(
+        self,
+        stream: "grpclib.server.Stream[FinalizeClusterRequest, FinalizeClusterResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        assert request is not None
+        response = await self.finalize_cluster(request)
+        await stream.send_message(response)
+
+    async def __rpc_evacuate_peer(
+        self, stream: "grpclib.server.Stream[EvacuatePeerRequest, EvacuatePeerResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        assert request is not None
+        response = await self.evacuate_peer(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> "dict[str, grpclib.const.Handler]":
         return {
             "/gateway.controlplane.v1.ControlPlane/Register": grpclib.const.Handler(
@@ -1751,5 +1985,17 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 DrainInstanceRequest,
                 DrainInstanceResponse,
+            ),
+            "/gateway.controlplane.v1.ControlPlane/FinalizeCluster": grpclib.const.Handler(
+                self.__rpc_finalize_cluster,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                FinalizeClusterRequest,
+                FinalizeClusterResponse,
+            ),
+            "/gateway.controlplane.v1.ControlPlane/EvacuatePeer": grpclib.const.Handler(
+                self.__rpc_evacuate_peer,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                EvacuatePeerRequest,
+                EvacuatePeerResponse,
             ),
         }

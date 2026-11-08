@@ -119,6 +119,8 @@ var rolesMatrix = []roleCase{
 	{"deleteExternalDependent", "DELETE", "/admin/external-dependents/zeta", "", adminRoleDev},
 
 	{"forgetPeer", "POST", "/admin/peers/x/forget", "", adminRoleAdmin},
+	{"evacuatePeer", "POST", "/admin/peers/x/evacuate", `{}`, adminRoleAdmin},
+	{"finalizeCluster", "POST", "/admin/cluster/finalize", `{}`, adminRoleAdmin},
 	{"signSubscriptionToken", "POST", "/admin/sign", `{"channel":"a","ttlSeconds":60}`, adminRoleAdmin},
 	{"retractStable", "POST", "/admin/services/greeter/stable/retract", `{"targetVN":1}`, adminRoleAdmin},
 	{"deprecate", "POST", "/admin/services/greeter/v1/deprecate", `{"reason":"x"}`, adminRoleAdmin},

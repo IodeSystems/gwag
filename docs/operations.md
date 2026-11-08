@@ -8,7 +8,7 @@
 {"status":"serving","active_streams":0,"node_id":"NA..."}
 ```
 
-with HTTP 200 normally. It returns HTTP 503, same body shape, in two
+with HTTP 200 normally. It returns HTTP 503, same body shape, in three
 states:
 
 - `"status":"starting"`: a cluster node (`WithCluster` plus
@@ -25,6 +25,10 @@ states:
   after a timeout, because its schema would miss the cluster's
   services.
 - `"status":"draining"`: `gw.Drain(ctx)` has been called.
+- `"status":"incompatible"`: a cluster node whose binary cannot run at
+  the cluster's feature level; the body's `"error"` names both levels.
+  It stays so until it runs a binary that can
+  ([`cluster.md`](./cluster.md#feature-levels)).
 
 Wire `/health` to your load balancer's health check. It is the only
 endpoint: it answers both "is the process up" and "may it take
@@ -126,7 +130,9 @@ entry's delete marker, so routing has no gap.
 
 The cluster keeps its state in JetStream KV buckets (peers, registry,
 stable, deprecated, mcp config, drain, external dependents, app keys,
-and `gwag-schemas` with `--schema-registry`). They start
+notifications, `gwag-cluster` (the feature level, see
+[`cluster.md`](./cluster.md#feature-levels)), and `gwag-schemas` with
+`--schema-registry`). They start
 at one replica. As peers join, each node raises every bucket to the
 count the replica policy gives for the live peers. Set the policy with
 `--cluster-replicas` (`gwag up`, example gateway) or
@@ -327,6 +333,7 @@ Admin auth denials are already counted in `admin_auth_total`
 | `registrations_total` | counter | `kind`, `outcome` | Registrations seen by this node. `kind`: `proto`, `openapi`, `graphql`, `mcp`, `internalproto`. `outcome`: `created`, `joined` (another replica of an identical schema), `swapped` (`unstable` slot replaced), `rejected`. Includes the gateway's own pub/sub slot at boot. Default sink only. |
 | `registered_services` | gauge | `kind` | Registered services on this node, internal slots excluded (scrape time). Default sink only. |
 | `cluster_peers` | gauge | none | This node plus the distinct remote cluster nodes it has a live NATS route to; 0 when not clustered (scrape time). A killed peer drops within seconds; a restarted node (new node id) replaces its old id. Read from NATS route state, not the peers KV bucket, so `/api/admin/peers` can still list a dead peer for up to its 30s TTL after the gauge drops. Default sink only. |
+| `cluster_feature_level` | gauge | `kind` | Cluster nodes only. `kind=active`: the cluster's feature level as this node last read it; `min`, `max`: the levels this binary can run at. See [`cluster.md`](./cluster.md#feature-levels). Default sink only. |
 | `build_info` | gauge | `version`, `go_version` | Always 1. `version` is the module version from the build, `devel` when unknown. Default sink only. |
 
 The scrape-time gauges take the gateway's registry lock briefly; a

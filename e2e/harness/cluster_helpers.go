@@ -35,6 +35,7 @@ var ErrNoBackend = errors.New("lb: no healthy backend")
 // per node so a story can tell "failed on the node that was killed"
 // from "failed on a node that stayed up".
 type LB struct {
+	mu    sync.RWMutex // guards nodes (Add)
 	nodes []*lbNode
 	rr    atomic.Uint64
 	stop  chan struct{}
@@ -72,7 +73,7 @@ func (c *Cluster) LB(t testing.TB, opts LBOpts) *LB {
 	}
 	client := &http.Client{Timeout: time.Second}
 	probe := func() {
-		for _, n := range lb.nodes {
+		for _, n := range lb.backends() {
 			n.probeOK.Store(healthOK(client, n.gw))
 		}
 	}
@@ -95,6 +96,21 @@ func (c *Cluster) LB(t testing.TB, opts LBOpts) *LB {
 	return lb
 }
 
+// backends is a snapshot of the backend list.
+func (lb *LB) backends() []*lbNode {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+	return append([]*lbNode(nil), lb.nodes...)
+}
+
+// Add puts another node behind the LB. It gets calls once a probe
+// passes.
+func (lb *LB) Add(g *Gateway) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	lb.nodes = append(lb.nodes, &lbNode{gw: g})
+}
+
 // Close stops the health checker. Safe to call twice.
 func (lb *LB) Close() {
 	lb.once.Do(func() { close(lb.stop) })
@@ -112,7 +128,7 @@ func healthOK(c *http.Client, g *Gateway) bool {
 }
 
 func (lb *LB) node(g *Gateway) *lbNode {
-	for _, n := range lb.nodes {
+	for _, n := range lb.backends() {
 		if n.gw == g {
 			return n
 		}
@@ -130,8 +146,9 @@ func (lb *LB) InRotation(g *Gateway) bool {
 // func the caller must call with the call's outcome. nil = no node.
 func (lb *LB) Pick() (*Gateway, func(error)) {
 	start := int(lb.rr.Add(1))
-	for i := 0; i < len(lb.nodes); i++ {
-		n := lb.nodes[(start+i)%len(lb.nodes)]
+	nodes := lb.backends()
+	for i := 0; i < len(nodes); i++ {
+		n := nodes[(start+i)%len(nodes)]
 		if !n.probeOK.Load() || n.pulled.Load() {
 			continue
 		}
@@ -221,7 +238,7 @@ type NodeStats struct{ Sent, OK, Failed int64 }
 // Stats returns per-node call counts since the LB started.
 func (lb *LB) Stats() map[string]NodeStats {
 	out := map[string]NodeStats{}
-	for _, n := range lb.nodes {
+	for _, n := range lb.backends() {
 		out[n.gw.Name] = NodeStats{Sent: n.sent.Load(), OK: n.ok.Load(), Failed: n.failed.Load()}
 	}
 	return out
