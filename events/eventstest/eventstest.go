@@ -35,6 +35,9 @@ type Harness struct {
 	// NoDedup skips the dedup check, for backends without message-id
 	// dedup (Kafka).
 	NoDedup bool
+	// SubscribeOptions are added to every subscribe, e.g. a backend's
+	// retry mode. Optional.
+	SubscribeOptions []events.SubscribeOption
 }
 
 var (
@@ -82,7 +85,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func sub(t *testing.T, h Harness, c *events.Core, ch events.Channel, group string, fn func(ctx context.Context, segs []string, m *events.Message) error, opts ...events.SubscribeOption) {
 	t.Helper()
-	stop, err := c.Subscribe(context.Background(), ch, group, fn, opts...)
+	stop, err := c.Subscribe(context.Background(), ch, group, fn, append(append([]events.SubscribeOption(nil), h.SubscribeOptions...), opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

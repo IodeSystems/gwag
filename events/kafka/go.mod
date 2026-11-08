@@ -6,6 +6,7 @@ require (
 	github.com/iodesystems/gwag/v2 v2.4.0
 	github.com/twmb/franz-go v1.21.7
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -13,7 +14,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )
 
 replace github.com/iodesystems/gwag/v2 => ../..
