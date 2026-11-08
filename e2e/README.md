@@ -28,6 +28,29 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 - `*_test.go` here — the stories. `known_bugs_test.go` holds tests for
   open gateway bugs; they skip unless `E2E_KNOWN_BUGS=1`.
 
+## Stories
+
+| test | story |
+| --- | --- |
+| `TestS0HappyPath` | one gateway, a proto, an OpenAPI and a GraphQL service, every ingress, admin and metrics |
+| `TestS1RollingRelease` | provider and consumer move v1 → v2 under load |
+| `TestS2ColdFleetStart` | five services with a dependency DAG start in random order; a cycle is refused |
+| `TestS3InstanceCrash` | SIGKILL replicas one at a time under load |
+| `TestS4ClusterOps` | 3-node cluster behind an LB: node loss, registrations move |
+| `TestS4bSigtermInRotation` | SIGTERM a node still in the LB's rotation |
+| `TestS5Isolation` | a slow, then hung service backs up its own pool only |
+| `TestS6SchemaGovernance` | locked vN, mutable unstable, deprecation, schema export |
+| `TestS8SubscriptionFailover` | a `ps_sub` client moves to another node when its node dies |
+| `TestS9ExternalDependents` | an external customer declared through the admin API |
+| `TestS9bDeclarationSinks` | external-dependent changes to a webhook and a file per node |
+| `TestS10AdminRoles` | three admin readers, public and private services |
+| `TestS11TypedEvents` | typed event channels on a 3-node cluster: streams, start gate and graph, Go group delivery, TypeScript and Python listeners, `ps_sub` / `ps.pub` bridge, dead letters, NATS node loss |
+
+`TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
+and `pnpm` are on `PATH`, and the Python listener when `uv` is; it
+runs `pnpm install --frozen-lockfile` and `uv sync --locked` first.
+Without a tool, that step is skipped and says why.
+
 The gateway is `examples/multi/cmd/gateway`: it has the flags the
 stories need (backpressure caps, `--caller-id-public`, NATS cluster,
 `--admin-data-dir`) and is what `examples/multi/demo.sh` runs.
@@ -76,20 +99,26 @@ env.Cluster(n, GatewayOpts) *Cluster                 // n1..nN, waits for n peer
 env.ClusterWithNodeArgs(n, opts, func(name, dataDir) []string) *Cluster   // plus per-node flags
   c.Nodes []*Gateway; c.AddNode() *Gateway; c.Live(); c.WaitPeers(n, timeout)
   c.WaitStreamsReplicated(t, n, timeout[, buckets...])  // KV streams at n replicas, leader, current
+  c.WaitStreamReplicas(t, n, timeout, streams...)       // the same for any named stream
+  c.NATS(t, opts...) *nats.Conn · c.NATSURLs() · c.JetStream(t)   // clients on the nodes' NATS ports
   c.LB(t, LBOpts) · lb.WaitProbeFails(t, g, timeout)    // probe fails, pulled or not
 env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless NoWait
   FixtureOpts.FailoverGateways []*Gateway            // --gateway-alt per node
 env.Start(name, bin, args...) *Proc                  // any other process
+env.StartWith(name, ProcOpts{Dir, Env, Stdin}, bin, args...) *Proc   // with cwd, env, open stdin
 harness.Binary(t, "gateway"|"fixture"|"gwag") string
 
 Proc: Stop(timeout) code · Kill() · Restart() · Signal(sig) · WaitExit(timeout) code
       Running() · ExitCode() · PID() · WaitLog(substr, timeout) · Logs() · CurrentLogs()
+      CloseStdin()                                        // with ProcOpts.Stdin
 
 Gateway: BaseURL() · CPAddr() · Token() · Restart() · WaitReady() · Health(ctx)
          GraphQL(ctx, q, vars, opts...) (*GQLResponse, error) · MustGraphQL(t, q, vars)
          Post/Get(ctx, path, ..., opts...) · ControlPlane() cpv1.ControlPlaneClient
          Admin() *Admin · Scrape(ctx) / MustScrape(t) *Scrape · MCP(t) *mcpclient.Client
          WaitDeltas(t, before, name, []Want{{Labels, Delta}}, timeout) *Scrape
+         NATSURL() · Sign(ctx, channel, ttl) · Subscribe(t, query) *Subscription
+         Publish(ctx, channel, payload, tok) · PublishTyped(ctx, channel, payload, payloadType, tok)
 ReqOpt: Caller("orders/v1") · Header(k, v) · Bearer(tok)    // default X-Caller-Id: e2e
 
 Fixture: Echo(ctx, line, msg, opts...) (Echo, error)  // GraphQL; line "" = latest
