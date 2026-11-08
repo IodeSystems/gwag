@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +14,7 @@ import (
 	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
 )
 
-// Keys:
+// Keys of the default context ("."):
 //
 //	id.<n>          schemaRec of schema id n (immutable once written)
 //	key.<hex>       the first id holding a schema with that key
@@ -23,27 +22,29 @@ import (
 //	cfg.<b64>       the subject's compatibility level
 //	config          the global compatibility level
 //	next            the highest id allocated or imported (decimal)
-//	nextres         the lowest reserved id allocated (decimal)
 //
-// <b64> is the subject in unpadded URL-safe base64: subjects may hold
-// any character, KV keys may not.
+// Another context (".corp") has the same keys under
+// ctx.<b64 of the context name>. (config there is the context's
+// level). Each context is its own id space, as in Confluent: id 1 of
+// ".corp" and id 1 of "." are different schemas.
+//
+// <b64> is unpadded URL-safe base64: subjects and context names may
+// hold any character, KV keys may not.
 const (
-	keyConfig  = "config"
-	keyNext    = "next"
-	keyNextRes = "nextres"
+	keyConfig = "config"
+	keyNext   = "next"
+	ctxPrefix = "ctx."
 )
 
-// ReservedTop is the first reserved id. Schemas gwag ships itself (the
-// control plane) take ids from here down, so they never meet the ids
-// of an imported registry or of the ordinary counter, which count up
-// from 1. A Confluent id is an int32.
-const ReservedTop = math.MaxInt32
+// DefaultContext is the context of unqualified subjects.
+const DefaultContext = "."
 
-func idKey(id int) string           { return "id." + strconv.Itoa(id) }
-func hashKey(k string) string       { return "key." + k }
-func subjKey(subject string) string { return "subj." + b64(subject) }
-func cfgKey(subject string) string  { return "cfg." + b64(subject) }
-func b64(s string) string           { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+func (s *Store) key(k string) string           { return s.pfx + k }
+func (s *Store) idKey(id int) string           { return s.pfx + "id." + strconv.Itoa(id) }
+func (s *Store) hashKey(k string) string       { return s.pfx + "key." + k }
+func (s *Store) subjKey(subject string) string { return s.pfx + "subj." + b64(subject) }
+func (s *Store) cfgKey(subject string) string  { return s.pfx + "cfg." + b64(subject) }
+func b64(s string) string                      { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 
 type subjectRec struct {
 	Versions []versionRec `json:"versions"`
@@ -90,23 +91,102 @@ func (s *subjectRec) live(deleted bool) []versionRec {
 	return out
 }
 
-// Store is the registry state over a KV.
+// Store is the registry state of one context over a KV. Context
+// returns the store of another context over the same KV.
 type Store struct {
-	kv KV
-	// firstID is the lowest id Register allocates.
-	firstID int
-
-	mu  sync.Mutex
-	ids map[int]*schemaRec // cache; a schema id never changes
+	kv   KV
+	name string // context name: "." or ".corp"
+	pfx  string // key prefix: "" or "ctx.<b64>."
+	c    *storeCache
 }
 
-// NewStore returns a store over kv. Register allocates ids from
-// firstID up (at least 1), always above every id already held.
-func NewStore(kv KV, firstID int) *Store {
-	if firstID < 1 {
-		firstID = 1
+type storeCache struct {
+	mu  sync.Mutex
+	ids map[string]*schemaRec // by id key; a schema id never changes
+}
+
+// NewStore returns the default context's store over kv.
+func NewStore(kv KV) *Store {
+	return &Store{kv: kv, name: DefaultContext, c: &storeCache{ids: map[string]*schemaRec{}}}
+}
+
+// NormContext normalizes a context name as Confluent does ("corp" is
+// ".corp"; "" and "." are the default context). A name may not hold
+// ':' (it ends a qualified subject's context), '*' or '/'.
+func NormContext(name string) (string, error) {
+	if name == "" || name == DefaultContext {
+		return DefaultContext, nil
 	}
-	return &Store{kv: kv, firstID: firstID, ids: map[int]*schemaRec{}}
+	if !strings.HasPrefix(name, ".") {
+		name = "." + name
+	}
+	if strings.ContainsAny(name, ":*/") || name == ".." {
+		return "", errf(codeInvalidSubject, "Invalid context name %q", name)
+	}
+	return name, nil
+}
+
+// Context returns the store of context name (normalized and valid:
+// see NormContext).
+func (s *Store) Context(name string) *Store {
+	if name == "" || name == DefaultContext {
+		return &Store{kv: s.kv, name: DefaultContext, c: s.c}
+	}
+	return &Store{kv: s.kv, name: name, pfx: ctxPrefix + b64(name) + ".", c: s.c}
+}
+
+// Name is the context's name.
+func (s *Store) Name() string { return s.name }
+
+// Default reports whether this is the default context.
+func (s *Store) Default() bool { return s.name == DefaultContext }
+
+// Qualify returns subject as clients outside the context name it:
+// ":.corp:subject" in context .corp, subject in the default one.
+func (s *Store) Qualify(subject string) string {
+	if s.Default() {
+		return subject
+	}
+	return ":" + s.name + ":" + subject
+}
+
+// At splits a qualified subject (":.corp:s", ":.:s") into the store
+// of its context and the bare subject. An unqualified subject is in
+// s's context.
+func (s *Store) At(subject string) (*Store, string, error) {
+	if !strings.HasPrefix(subject, ":") {
+		return s, subject, nil
+	}
+	name, rest, ok := strings.Cut(subject[1:], ":")
+	if !ok {
+		return s, subject, nil
+	}
+	name, err := NormContext(name)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.Context(name), rest, nil
+}
+
+// Contexts lists "." and every context that holds a key, sorted.
+func (s *Store) Contexts(ctx context.Context) ([]string, error) {
+	keys, err := s.kv.Keys(ctx, ctxPrefix)
+	if err != nil {
+		return nil, storeErr(err)
+	}
+	seen := map[string]bool{DefaultContext: true}
+	out := []string{DefaultContext}
+	for _, k := range keys {
+		enc, _, _ := strings.Cut(strings.TrimPrefix(k, ctxPrefix), ".")
+		b, err := base64.RawURLEncoding.DecodeString(enc)
+		if err != nil || seen[string(b)] {
+			continue
+		}
+		seen[string(b)] = true
+		out = append(out, string(b))
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Error is a registry error with a Confluent error code.
@@ -135,6 +215,7 @@ const (
 	codeConflict              = 40901
 	codeInvalidSchema         = 42201
 	codeInvalidVersion        = 42202
+	codeInvalidSubject        = 42208
 	codeInvalidCompatibility  = 42203
 	codeOperationNotPermitted = 42205
 	codeReferenceExists       = 42206
@@ -182,31 +263,53 @@ func (s *Store) createOrSame(ctx context.Context, key string, val []byte) error 
 
 // schema returns schema id, or ErrNotFound.
 func (s *Store) schema(ctx context.Context, id int) (*schemaRec, error) {
-	s.mu.Lock()
-	r := s.ids[id]
-	s.mu.Unlock()
+	s.c.mu.Lock()
+	r := s.c.ids[s.idKey(id)]
+	s.c.mu.Unlock()
 	if r != nil {
 		return r, nil
 	}
 	r = &schemaRec{}
-	if _, err := s.getJSON(ctx, idKey(id), r); err != nil {
+	if _, err := s.getJSON(ctx, s.idKey(id), r); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	s.ids[id] = r
-	s.mu.Unlock()
+	s.c.mu.Lock()
+	s.c.ids[s.idKey(id)] = r
+	s.c.mu.Unlock()
 	return r, nil
 }
 
 func (s *Store) subject(ctx context.Context, subject string) (*subjectRec, uint64, error) {
 	rec := &subjectRec{}
-	rev, err := s.getJSON(ctx, subjKey(subject), rec)
+	rev, err := s.getJSON(ctx, s.subjKey(subject), rec)
 	return rec, rev, err
 }
 
-// resolve is the resolver over the store.
+// localRefs drops the qualifier of references to s's own context
+// (":.corp:x" is "x" in .corp), so a schema matches however a client
+// names them.
+func (s *Store) localRefs(refs []sr.Reference) []sr.Reference {
+	if len(refs) == 0 {
+		return refs
+	}
+	out := make([]sr.Reference, len(refs))
+	for i, r := range refs {
+		if at, subj, err := s.At(r.Subject); err == nil && at.name == s.name {
+			r.Subject = subj
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// resolve is the resolver over the store. A reference names a
+// subject of the same context, or a qualified one of another.
 func (s *Store) resolve(ctx context.Context, subject string, version int) (*schemaRec, error) {
-	_, rec, err := s.Version(ctx, subject, version, true)
+	st, subject, err := s.At(subject)
+	if err != nil {
+		return nil, err
+	}
+	_, rec, err := st.Version(ctx, subject, version, true)
 	return rec, err
 }
 
@@ -225,13 +328,13 @@ func (s *Store) SchemaByID(ctx context.Context, id int) (*schemaRec, error) {
 // Subjects lists the subjects with a live version (any version when
 // deleted), sorted.
 func (s *Store) Subjects(ctx context.Context, deleted bool) ([]string, error) {
-	keys, err := s.kv.Keys(ctx, "subj.")
+	keys, err := s.kv.Keys(ctx, s.pfx+"subj.")
 	if err != nil {
 		return nil, storeErr(err)
 	}
 	out := []string{}
 	for _, k := range keys {
-		b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(k, "subj."))
+		b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(k, s.pfx+"subj."))
 		if err != nil {
 			continue
 		}
@@ -375,6 +478,7 @@ func (s *Store) Lookup(ctx context.Context, subject string, in sr.Schema, delete
 	if err != nil {
 		return versionRec{}, nil, storeErr(err)
 	}
+	in.References = s.localRefs(in.References)
 	want, err := prepare(ctx, in, s.resolve)
 	if err != nil {
 		return versionRec{}, nil, errf(codeInvalidSchema, "Invalid schema: %v", err)
@@ -407,6 +511,7 @@ func (s *Store) Register(ctx context.Context, subject string, in sr.Schema) (ver
 	if subject == "" {
 		return versionRec{}, errf(codeInvalidSchema, "empty subject")
 	}
+	in.References = s.localRefs(in.References)
 	want, err := prepare(ctx, in, s.resolve)
 	if err != nil {
 		return versionRec{}, errf(codeInvalidSchema, "Invalid schema: %v", err)
@@ -414,29 +519,7 @@ func (s *Store) Register(ctx context.Context, subject string, in sr.Schema) (ver
 	if v, ok, err := s.findInSubject(ctx, subject, want); err != nil || ok {
 		return v, err
 	}
-	id, err := s.idFor(ctx, want, s.allocate)
-	if err != nil {
-		return versionRec{}, storeErr(err)
-	}
-	return s.addVersion(ctx, subject, id)
-}
-
-// RegisterReserved is Register with an id from the reserved range
-// (counting down from ReservedTop). For schemas gwag ships itself: an
-// import of another registry, whose ids count up from 1, can never
-// collide with them.
-func (s *Store) RegisterReserved(ctx context.Context, subject string, in sr.Schema) (versionRec, error) {
-	if subject == "" {
-		return versionRec{}, errf(codeInvalidSchema, "empty subject")
-	}
-	want, err := prepare(ctx, in, s.resolve)
-	if err != nil {
-		return versionRec{}, errf(codeInvalidSchema, "Invalid schema: %v", err)
-	}
-	if v, ok, err := s.findInSubject(ctx, subject, want); err != nil || ok {
-		return v, err
-	}
-	id, err := s.idFor(ctx, want, s.allocateReserved)
+	id, err := s.idFor(ctx, want)
 	if err != nil {
 		return versionRec{}, storeErr(err)
 	}
@@ -465,26 +548,26 @@ func (s *Store) findInSubject(ctx context.Context, subject string, want *schemaR
 
 // idFor returns the id of the schema with want's key, allocating one
 // when there is none.
-func (s *Store) idFor(ctx context.Context, want *schemaRec, allocate func(context.Context) (int, error)) (int, error) {
+func (s *Store) idFor(ctx context.Context, want *schemaRec) (int, error) {
 	if id, ok, err := s.idByKey(ctx, want); err != nil || ok {
 		return id, err
 	}
 	for {
-		id, err := allocate(ctx)
+		id, err := s.allocate(ctx)
 		if err != nil {
 			return 0, err
 		}
 		rec := *want
 		rec.ID = id
 		b, _ := json.Marshal(&rec)
-		err = s.createOrSame(ctx, idKey(id), b)
+		err = s.createOrSame(ctx, s.idKey(id), b)
 		if errors.Is(err, ErrConflict) {
 			continue // an import took the id
 		}
 		if err != nil {
 			return 0, err
 		}
-		_, err = s.kv.Create(ctx, hashKey(want.Keys[0]), []byte(strconv.Itoa(id)))
+		_, err = s.kv.Create(ctx, s.hashKey(want.Keys[0]), []byte(strconv.Itoa(id)))
 		if errors.Is(err, ErrConflict) {
 			// Another node registered the same schema meanwhile; use its
 			// id. Ours stays unused.
@@ -499,7 +582,7 @@ func (s *Store) idFor(ctx context.Context, want *schemaRec, allocate func(contex
 
 func (s *Store) idByKey(ctx context.Context, want *schemaRec) (int, bool, error) {
 	for _, k := range want.Keys {
-		b, _, err := s.kv.Get(ctx, hashKey(k))
+		b, _, err := s.kv.Get(ctx, s.hashKey(k))
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
@@ -527,7 +610,7 @@ func (s *Store) idByKey(ctx context.Context, want *schemaRec) (int, bool, error)
 // allocate takes the next id with a compare-and-set on the counter.
 func (s *Store) allocate(ctx context.Context) (int, error) {
 	for {
-		b, rev, err := s.kv.Get(ctx, keyNext)
+		b, rev, err := s.kv.Get(ctx, s.key(keyNext))
 		cur := 0
 		switch {
 		case errors.Is(err, ErrNotFound):
@@ -539,46 +622,12 @@ func (s *Store) allocate(ctx context.Context) (int, error) {
 				return 0, fmt.Errorf("next: %w", err)
 			}
 		}
-		id := max(cur+1, s.firstID)
+		id := cur + 1
 		val := []byte(strconv.Itoa(id))
 		if rev == 0 {
-			_, err = s.kv.Create(ctx, keyNext, val)
+			_, err = s.kv.Create(ctx, s.key(keyNext), val)
 		} else {
-			_, err = s.kv.Update(ctx, keyNext, val, rev)
-		}
-		if errors.Is(err, ErrConflict) {
-			continue
-		}
-		if err != nil {
-			return 0, err
-		}
-		return id, nil
-	}
-}
-
-// allocateReserved takes the next reserved id (ReservedTop, then one
-// lower each time) with a compare-and-set on the reserved counter.
-func (s *Store) allocateReserved(ctx context.Context) (int, error) {
-	for {
-		b, rev, err := s.kv.Get(ctx, keyNextRes)
-		id := ReservedTop
-		switch {
-		case errors.Is(err, ErrNotFound):
-			rev = 0
-		case err != nil:
-			return 0, err
-		default:
-			cur, err := strconv.Atoi(string(b))
-			if err != nil {
-				return 0, fmt.Errorf("nextres: %w", err)
-			}
-			id = cur - 1
-		}
-		val := []byte(strconv.Itoa(id))
-		if rev == 0 {
-			_, err = s.kv.Create(ctx, keyNextRes, val)
-		} else {
-			_, err = s.kv.Update(ctx, keyNextRes, val, rev)
+			_, err = s.kv.Update(ctx, s.key(keyNext), val, rev)
 		}
 		if errors.Is(err, ErrConflict) {
 			continue
@@ -593,7 +642,7 @@ func (s *Store) allocateReserved(ctx context.Context) (int, error) {
 // raiseNext sets the counter to at least id.
 func (s *Store) raiseNext(ctx context.Context, id int) error {
 	for {
-		b, rev, err := s.kv.Get(ctx, keyNext)
+		b, rev, err := s.kv.Get(ctx, s.key(keyNext))
 		cur := 0
 		switch {
 		case errors.Is(err, ErrNotFound):
@@ -608,9 +657,9 @@ func (s *Store) raiseNext(ctx context.Context, id int) error {
 		}
 		val := []byte(strconv.Itoa(id))
 		if rev == 0 {
-			_, err = s.kv.Create(ctx, keyNext, val)
+			_, err = s.kv.Create(ctx, s.key(keyNext), val)
 		} else {
-			_, err = s.kv.Update(ctx, keyNext, val, rev)
+			_, err = s.kv.Update(ctx, s.key(keyNext), val, rev)
 		}
 		if !errors.Is(err, ErrConflict) {
 			return err
@@ -637,9 +686,9 @@ func (s *Store) addVersion(ctx context.Context, subject string, id int) (version
 		rec.Versions = append(rec.Versions, v)
 		b, _ := json.Marshal(rec)
 		if errors.Is(err, ErrNotFound) {
-			_, err = s.kv.Create(ctx, subjKey(subject), b)
+			_, err = s.kv.Create(ctx, s.subjKey(subject), b)
 		} else {
-			_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+			_, err = s.kv.Update(ctx, s.subjKey(subject), b, rev)
 		}
 		if errors.Is(err, ErrConflict) {
 			continue
@@ -660,16 +709,17 @@ var levels = map[string]bool{
 // DefaultLevel is the global level when none is set (Confluent's).
 const DefaultLevel = "BACKWARD"
 
-// Config returns the level of subject ("" global). ok is false when
-// none is set there.
+// Config returns the level of subject ("": the context's level; in
+// the default context the global level, BACKWARD when none is set).
+// ok is false when none is set there.
 func (s *Store) Config(ctx context.Context, subject string) (string, bool, error) {
-	key := keyConfig
+	key := s.key(keyConfig)
 	if subject != "" {
-		key = cfgKey(subject)
+		key = s.cfgKey(subject)
 	}
 	b, _, err := s.kv.Get(ctx, key)
 	if errors.Is(err, ErrNotFound) {
-		if subject == "" {
+		if subject == "" && s.Default() {
 			return DefaultLevel, true, nil
 		}
 		return "", false, nil
@@ -680,25 +730,32 @@ func (s *Store) Config(ctx context.Context, subject string) (string, bool, error
 	return string(b), true, nil
 }
 
-// Level is the level that applies to subject: its own, else global.
+// Level is the level that applies to subject: its own, else the
+// context's, else the global one.
 func (s *Store) Level(ctx context.Context, subject string) (string, error) {
 	l, ok, err := s.Config(ctx, subject)
 	if err != nil || ok {
 		return l, err
 	}
-	l, _, err = s.Config(ctx, "")
+	if subject != "" && !s.Default() {
+		if l, ok, err = s.Config(ctx, ""); err != nil || ok {
+			return l, err
+		}
+	}
+	l, _, err = s.Context(DefaultContext).Config(ctx, "")
 	return l, err
 }
 
-// SetConfig sets the level of subject ("" global).
+// SetConfig sets the level of subject ("": the context's level, the
+// global one in the default context).
 func (s *Store) SetConfig(ctx context.Context, subject, level string) error {
 	level = strings.ToUpper(level)
 	if !levels[level] {
 		return errf(codeInvalidCompatibility, "Invalid compatibility level: %s", level)
 	}
-	key := keyConfig
+	key := s.key(keyConfig)
 	if subject != "" {
-		key = cfgKey(subject)
+		key = s.cfgKey(subject)
 	}
 	if _, err := s.kv.Put(ctx, key, []byte(level)); err != nil {
 		return storeErr(err)
@@ -742,14 +799,14 @@ func (s *Store) DeleteSubject(ctx context.Context, subject string, permanent boo
 			out = append(out, v.Version)
 		}
 		if permanent {
-			err = s.kv.Delete(ctx, subjKey(subject), rev)
+			err = s.kv.Delete(ctx, s.subjKey(subject), rev)
 			if errors.Is(err, ErrConflict) {
 				continue
 			}
 			if err != nil {
 				return nil, storeErr(err)
 			}
-			if err := s.kv.Delete(ctx, cfgKey(subject), 0); err != nil {
+			if err := s.kv.Delete(ctx, s.cfgKey(subject), 0); err != nil {
 				return nil, storeErr(err)
 			}
 			if err := s.dropUnused(ctx, target); err != nil {
@@ -761,7 +818,7 @@ func (s *Store) DeleteSubject(ctx context.Context, subject string, permanent boo
 			rec.Versions[i].Deleted = true
 		}
 		b, _ := json.Marshal(rec)
-		_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+		_, err = s.kv.Update(ctx, s.subjKey(subject), b, rev)
 		if errors.Is(err, ErrConflict) {
 			continue
 		}
@@ -815,11 +872,11 @@ func (s *Store) DeleteVersion(ctx context.Context, subject string, version int, 
 			}
 		}
 		if permanent && len(keep) == 0 {
-			err = s.kv.Delete(ctx, subjKey(subject), rev)
+			err = s.kv.Delete(ctx, s.subjKey(subject), rev)
 		} else {
 			rec.Versions = keep
 			b, _ := json.Marshal(rec)
-			_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+			_, err = s.kv.Update(ctx, s.subjKey(subject), b, rev)
 		}
 		if errors.Is(err, ErrConflict) {
 			continue
@@ -829,7 +886,7 @@ func (s *Store) DeleteVersion(ctx context.Context, subject string, version int, 
 		}
 		if permanent {
 			if len(keep) == 0 {
-				if err := s.kv.Delete(ctx, cfgKey(subject), 0); err != nil {
+				if err := s.kv.Delete(ctx, s.cfgKey(subject), 0); err != nil {
 					return 0, storeErr(err)
 				}
 			}
@@ -887,19 +944,19 @@ func (s *Store) dropUnused(ctx context.Context, removed []versionRec) error {
 			return storeErr(err)
 		}
 		for _, k := range rec.Keys {
-			b, rev, err := s.kv.Get(ctx, hashKey(k))
+			b, rev, err := s.kv.Get(ctx, s.hashKey(k))
 			if err == nil && string(b) == strconv.Itoa(id) {
-				if err := s.kv.Delete(ctx, hashKey(k), rev); err != nil && !errors.Is(err, ErrConflict) {
+				if err := s.kv.Delete(ctx, s.hashKey(k), rev); err != nil && !errors.Is(err, ErrConflict) {
 					return storeErr(err)
 				}
 			}
 		}
-		if err := s.kv.Delete(ctx, idKey(id), 0); err != nil {
+		if err := s.kv.Delete(ctx, s.idKey(id), 0); err != nil {
 			return storeErr(err)
 		}
-		s.mu.Lock()
-		delete(s.ids, id)
-		s.mu.Unlock()
+		s.c.mu.Lock()
+		delete(s.c.ids, s.idKey(id))
+		s.c.mu.Unlock()
 	}
 	return nil
 }

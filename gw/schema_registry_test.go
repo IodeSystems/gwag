@@ -106,7 +106,7 @@ func TestSchemaRegistry_OwnedChannels(t *testing.T) {
 }
 
 func TestSchemaRegistry_Writes(t *testing.T) {
-	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{Writes: true, FirstID: 1000}))
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{Writes: true}))
 	t.Cleanup(g.Close)
 	url := srServer(t, g)
 	ctx := context.Background()
@@ -124,10 +124,14 @@ func TestSchemaRegistry_Writes(t *testing.T) {
 			t.Errorf("%+v: %v, want %d", tc.cfg, err, tc.code)
 		}
 	}
+	first := 0
 	for _, cfg := range []sr.Config{{Token: g.DevTokenHex()}, {Username: "u", Password: g.AdminTokenHex()}, {Token: g.AdminTokenHex()}} {
 		id, err := srClient(t, url, cfg).Register(ctx, "x-value", x, false)
-		if err != nil || id != 1000 {
-			t.Errorf("dev or admin register: %d %v", id, err)
+		if first == 0 {
+			first = id
+		}
+		if err != nil || id != first {
+			t.Errorf("dev or admin register: %d %v, want %d", id, err, first)
 		}
 	}
 	// Compatibility levels stay admin only.
@@ -172,6 +176,11 @@ func TestSchemaRegistry_AppKeys(t *testing.T) {
 	x := sr.Schema{Schema: `syntax = "proto3"; package x; message X {}`}
 	if _, err := orders.Register(ctx, "corp-imported-value", x, false); code(err) != 40301 {
 		t.Errorf("app key on a subject of no channel of its namespaces: %v", err)
+	}
+	// Its channel subjects are default-context subjects only.
+	inCorp := srClient(t, url+"/contexts/.corp", sr.Config{Username: "svc", Password: ordersKey})
+	if _, err := inCorp.EnsureFile(ctx, "EV_orders_v1_OrderEvents-value", fd, sr.RegisterOptions{Register: true}); code(err) != 40301 {
+		t.Errorf("app key in context .corp: %v", err)
 	}
 	if _, err := srClient(t, url, sr.Config{Token: billingKey}).EnsureFile(ctx, "EV_orders_v1_OrderEvents-value", fd, sr.RegisterOptions{Register: true}); code(err) != 40301 {
 		t.Errorf("another namespace's key: %v", err)
@@ -372,16 +381,18 @@ func keys(m map[string]int) []string {
 }
 
 // control.proto is a default subject, available before any service
-// registers, under a reserved id. An import of a registry with ids from
-// 1 (and a clashing owned channel registered by gwag) works beside it.
+// registers, as an ordinary default-context schema. A registry imported
+// into .corp keeps its ids from 1, the same numbers as gwag's: each
+// context reads back its own schema by id, and gwag's channels keep
+// allocating in the default context.
 func TestSchemaRegistry_ControlPlaneSubject(t *testing.T) {
 	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{}))
 	t.Cleanup(g.Close)
 	url := srServer(t, g)
 	c := srClient(t, url, sr.Config{})
 	got := waitSubject(t, c, ControlPlaneSubject)
-	if got.ID != srserve.ReservedTop {
-		t.Errorf("id %d, want the reserved %d", got.ID, srserve.ReservedTop)
+	if got.ID != 1 {
+		t.Errorf("id %d, want 1 (the first default-context schema)", got.ID)
 	}
 	if got.Schema != cpv1.ControlProto {
 		t.Errorf("schema text differs from control.proto (%d vs %d bytes)", len(got.Schema), len(cpv1.ControlProto))
@@ -415,7 +426,7 @@ func TestSchemaRegistry_ControlPlaneSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(b)
-	req, _ := http.NewRequest(http.MethodPost, url+"/gwag/import", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, url+"/contexts/.corp/gwag/import", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+g.AdminTokenHex())
 	iresp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -425,19 +436,27 @@ func TestSchemaRegistry_ControlPlaneSubject(t *testing.T) {
 	if iresp.StatusCode != 200 {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(iresp.Body)
-		t.Fatalf("import beside the default subject: %d %s", iresp.StatusCode, buf.String())
+		t.Fatalf("import into .corp: %d %s", iresp.StatusCode, buf.String())
 	}
-	imported, err := c.SubjectVersion(ctx, "corp-0-value", "latest", "")
-	if err != nil || imported.ID != 1 {
-		t.Errorf("imported id: %+v %v, want 1", imported, err)
+	corp := srClient(t, url+"/contexts/.corp", sr.Config{})
+	imported, err := corp.SubjectVersion(ctx, "corp-0-value", "latest", "")
+	if err != nil || imported.ID != got.ID {
+		t.Errorf("imported id: %+v %v, want %d (the control plane's number, in another id space)", imported, err, got.ID)
 	}
-	if again, err := c.SubjectVersion(ctx, ControlPlaneSubject, "latest", ""); err != nil || again.ID != srserve.ReservedTop {
-		t.Errorf("default subject after import: %+v %v", again, err)
+	if s, err := corp.SchemaByID(ctx, got.ID, ""); err != nil || !strings.Contains(s.Schema, "message C0") {
+		t.Errorf(".corp id %d: %+v %v", got.ID, s, err)
 	}
-	// Owned channels still register above the imported ids.
+	if s, err := c.SchemaByID(ctx, got.ID, ""); err != nil || s.Schema != cpv1.ControlProto {
+		t.Errorf("default id %d is not control.proto after the import: %v", got.ID, err)
+	}
+	// Owned channels register in the default context, after the
+	// control plane.
 	addOrdersProto(t, g)
 	evs := waitSubject(t, c, "EV_orders_v1_OrderEvents-value")
-	if evs.ID <= 3 || evs.ID >= srserve.ReservedTop-10 {
+	if evs.ID <= got.ID {
 		t.Errorf("channel id %d", evs.ID)
+	}
+	if _, err := corp.SubjectVersion(ctx, "EV_orders_v1_OrderEvents-value", "latest", ""); !sr.IsNotFound(err) {
+		t.Errorf("channel subject in .corp: %v", err)
 	}
 }

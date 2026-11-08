@@ -20,12 +20,14 @@ import (
 const schemaRegistryPrefix = "/schema-registry"
 
 // schemaImportCmd implements `gwag schema import`: copy subjects,
-// versions, ids and compatibility levels from a registry into the
-// registry a gwag gateway serves, keeping the ids.
+// versions, ids and compatibility levels from a registry into a named
+// context of the registry a gwag gateway serves, keeping the ids. The
+// context is required: the default context is gwag's own id space.
 func schemaImportCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("schema import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	from := fs.String("from", "", "Source Schema Registry URL (required)")
+	into := fs.String("into", "", "Context of gwag's registry to import into, e.g. .corp (required; its own id space)")
 	to := fs.String("to", "", "gwag registry URL (default: .gw primary endpoint + "+schemaRegistryPrefix+")")
 	ctxName := fs.String("context", "", "Login name in .gw/credentials.json (default: primary)")
 	bearer := fs.String("bearer", "", "gwag admin token (default: from .gw)")
@@ -34,18 +36,27 @@ func schemaImportCmd(args []string, stdout, stderr io.Writer) int {
 	deleted := fs.Bool("include-deleted", false, "Also import soft-deleted subjects and versions (served as deleted)")
 	dry := fs.Bool("dry-run", false, "Read the source and print what would be sent; send nothing")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema import --from URL [--to URL] [--subject S]... [--include-deleted] [--dry-run]")
-		fmt.Fprintln(fs.Output(), "  Copies a registry into gwag's, keeping schema ids and versions, so records framed")
-		fmt.Fprintln(fs.Output(), "  with the source's ids decode against gwag. Safe to run again: it adds what is new.")
-		fmt.Fprintln(fs.Output(), "  Fails, writing nothing, when an id or version differs from what gwag holds.")
+		fmt.Fprintln(fs.Output(), "Usage: gwag schema import --from URL --into CONTEXT [--to URL] [--subject S]... [--include-deleted] [--dry-run]")
+		fmt.Fprintln(fs.Output(), "  Copies a registry into a context of gwag's (its own id space), keeping schema ids")
+		fmt.Fprintln(fs.Output(), "  and versions, so records framed with the source's ids decode against gwag at")
+		fmt.Fprintln(fs.Output(), "  <registry URL>/contexts/CONTEXT. Safe to run again: it adds what is new.")
+		fmt.Fprintln(fs.Output(), "  Fails, writing nothing, when an id or version differs from what the context holds.")
 		fmt.Fprintln(fs.Output(), "  Source auth: "+registryEnvHelp)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *from == "" || fs.NArg() > 0 {
+	if *from == "" || *into == "" || fs.NArg() > 0 {
 		fs.Usage()
+		return 2
+	}
+	intoCtx, err := srserve.NormContext(*into)
+	if err == nil && intoCtx == srserve.DefaultContext {
+		err = fmt.Errorf("the default context holds the ids gwag allocates; name another (e.g. .corp)")
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "schema import: --into %q: %v\n", *into, err)
 		return 2
 	}
 	login := resolveLogin(*ctxName)
@@ -80,6 +91,7 @@ func schemaImportCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "schema import: %v\n", err)
 		return 1
 	}
+	target += "/contexts/" + intoCtx
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target+"/gwag/import", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(stderr, "schema import: %v\n", err)
@@ -126,7 +138,6 @@ type schemaRegistryFlags struct {
 	on       *bool
 	writes   *bool
 	strategy *string
-	firstID  *int
 	topics   *stringListValue
 }
 
@@ -135,7 +146,6 @@ func addSchemaRegistryFlags(fs *flag.FlagSet) *schemaRegistryFlags {
 		on:       fs.Bool("schema-registry", false, "Serve a Confluent-compatible Schema Registry at "+schemaRegistryPrefix+" (reads open, READONLY unless --schema-registry-writes)"),
 		writes:   fs.Bool("schema-registry-writes", false, "Let the admin token register schemas and set compatibility over the registry API (basic-auth password or bearer)"),
 		strategy: fs.String("schema-registry-strategy", "topic", "Subject of a channel's message: topic (<topic>-value), record (<message>), topic-record (<topic>-<message>)"),
-		firstID:  fs.Int("schema-registry-first-id", 1, "Lowest schema id gwag allocates; set above the source registry's ids when channels register before `gwag schema import`"),
 		topics:   &stringListValue{},
 	}
 	fs.Var(f.topics, "schema-registry-topic", "Kafka topic of a channel, CHANNEL_KEY=TOPIC (repeatable; default EV_<pkg>_<Name>)")
@@ -147,7 +157,7 @@ func (f *schemaRegistryFlags) option() (gateway.Option, error) {
 	if !*f.on {
 		return nil, nil
 	}
-	o := gateway.SchemaRegistryOptions{Strategy: *f.strategy, Writes: *f.writes, FirstID: *f.firstID, Topics: map[string]string{}}
+	o := gateway.SchemaRegistryOptions{Strategy: *f.strategy, Writes: *f.writes, Topics: map[string]string{}}
 	for _, t := range f.topics.values {
 		k, v, ok := strings.Cut(t, "=")
 		if !ok || k == "" || v == "" {

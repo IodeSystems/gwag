@@ -48,7 +48,7 @@ func srDo(t *testing.T, method, u, tok, body string) (int, int, string) {
 // delete any subject, an app key only the ones it owns.
 func TestDeleteSubjectAndVersion(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV())
 	s := serve(t, st, true)
 	base := s.URL + "/sr"
 	dev := client(t, base, sr.Config{Token: "dev"})
@@ -120,7 +120,7 @@ func TestDeleteSubjectAndVersion(t *testing.T) {
 }
 
 func TestDeleteReadOnly(t *testing.T) {
-	s := serve(t, srserve.NewStore(srserve.NewMemKV(), 1), false)
+	s := serve(t, srserve.NewStore(srserve.NewMemKV()), false)
 	if status, code, _ := srDo(t, "DELETE", s.URL+"/sr/subjects/x", token, ""); status != 422 || code != 42205 {
 		t.Fatalf("delete on READONLY: %d %d", status, code)
 	}

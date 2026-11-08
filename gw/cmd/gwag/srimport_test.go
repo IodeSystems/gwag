@@ -34,18 +34,24 @@ func TestSchemaImportCmd(t *testing.T) {
 		code := schemaImportCmd(args, &out, &errb)
 		return code, out.String() + errb.String()
 	}
-	if code, out := run("--from", src.URL, "--to", to); code != 1 || !strings.Contains(out, "40101") {
+	if code, out := run("--from", src.URL, "--to", to, "--bearer", g.AdminTokenHex()); code != 2 || !strings.Contains(out, "--into") {
+		t.Fatalf("no --into: %d %s", code, out)
+	}
+	if code, out := run("--from", src.URL, "--to", to, "--into", ".", "--bearer", g.AdminTokenHex()); code != 2 || !strings.Contains(out, "default context") {
+		t.Fatalf("--into .: %d %s", code, out)
+	}
+	if code, out := run("--from", src.URL, "--to", to, "--into", ".corp"); code != 1 || !strings.Contains(out, "40101") {
 		t.Fatalf("no token: %d %s", code, out)
 	}
-	code, out := run("--from", src.URL, "--to", to, "--bearer", g.AdminTokenHex())
-	if code != 0 || !strings.Contains(out, "2 schemas added, 2 versions added") {
+	code, out := run("--from", src.URL, "--to", to, "--into", ".corp", "--bearer", g.AdminTokenHex())
+	if code != 0 || !strings.Contains(out, "2 schemas added, 2 versions added") || !strings.Contains(out, "/contexts/.corp") {
 		t.Fatalf("import: %d %s", code, out)
 	}
-	code, out = run("--from", src.URL, "--to", to, "--bearer", g.AdminTokenHex())
+	code, out = run("--from", src.URL, "--to", to, "--into", "corp", "--bearer", g.AdminTokenHex())
 	if code != 0 || !strings.Contains(out, "0 schemas added, 0 versions added, 2 unchanged") {
 		t.Fatalf("re-import: %d %s", code, out)
 	}
-	c, err := sr.NewClient(sr.Config{URL: to})
+	c, err := sr.NewClient(sr.Config{URL: to + "/contexts/.corp"})
 	if err != nil {
 		t.Fatal(err)
 	}

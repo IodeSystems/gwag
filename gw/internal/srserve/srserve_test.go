@@ -73,7 +73,7 @@ func code(err error) int {
 // the auth rules.
 func TestRegisterAndRead(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 100)
+	st := srserve.NewStore(srserve.NewMemKV())
 	s := serve(t, st, true)
 	admin := client(t, s.URL+"/sr", sr.Config{Username: "any", Password: token})
 	anon := client(t, s.URL+"/sr", sr.Config{})
@@ -90,8 +90,8 @@ func TestRegisterAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID < 100 || got.Version != 1 {
-		t.Fatalf("registered %+v; want id >= 100 (first id), version 1", got)
+	if got.ID < 1 || got.Version != 1 {
+		t.Fatalf("registered %+v; want version 1", got)
 	}
 	// Again: same id and version.
 	again, err := client(t, s.URL+"/sr", sr.Config{Username: "x", Password: token}).EnsureFile(ctx, "orders-value", fd, sr.RegisterOptions{Register: true})
@@ -151,7 +151,7 @@ func TestRegisterAndRead(t *testing.T) {
 
 func TestReadOnly(t *testing.T) {
 	ctx := context.Background()
-	s := serve(t, srserve.NewStore(srserve.NewMemKV(), 1), false)
+	s := serve(t, srserve.NewStore(srserve.NewMemKV()), false)
 	admin := client(t, s.URL+"/sr", sr.Config{Username: "u", Password: token})
 	_, err := admin.EnsureFile(ctx, "orders-value", ordersv1.File_orders_v1_orders_proto, sr.RegisterOptions{Register: true})
 	if code(err) != 42205 {
@@ -180,10 +180,16 @@ func bundleFrom(t *testing.T, src *sr.Client) srserve.Bundle {
 	return b
 }
 
-func postImport(t *testing.T, url string, b srserve.Bundle, tok string) (int, srserve.ImportResult, string) {
+// postImport sends b to the import endpoint of context into ("": the
+// root endpoint, the default context).
+func postImport(t *testing.T, url, into string, b srserve.Bundle, tok string) (int, srserve.ImportResult, string) {
 	t.Helper()
 	body, _ := json.Marshal(b)
-	req, _ := http.NewRequest(http.MethodPost, url+"/sr/gwag/import", bytes.NewReader(body))
+	path := "/sr/gwag/import"
+	if into != "" {
+		path = "/sr/contexts/" + into + "/gwag/import"
+	}
+	req, _ := http.NewRequest(http.MethodPost, url+path, bytes.NewReader(body))
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
@@ -218,22 +224,25 @@ func TestImportPreservesIDs(t *testing.T) {
 	}
 	srcID, _, _, _ := sr.Unframe(rec.Data)
 
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV())
 	s := serve(t, st, false)
 	b := bundleFrom(t, sc)
-	if code, _, body := postImport(t, s.URL, b, ""); code != 401 {
+	if code, _, body := postImport(t, s.URL, ".corp", b, ""); code != 401 {
 		t.Fatalf("anonymous import: %d %s", code, body)
 	}
-	status, res, body := postImport(t, s.URL, b, token)
+	if code, _, body := postImport(t, s.URL, "", b, token); code != 422 || !strings.Contains(body, "42205") {
+		t.Fatalf("import into the default context: %d %s", code, body)
+	}
+	status, res, body := postImport(t, s.URL, ".corp", b, token)
 	if status != 200 || res.SchemasAdded != len(b.Schemas) || len(res.Warnings) > 0 {
 		t.Fatalf("import: %d %s", status, body)
 	}
-	status, res, body = postImport(t, s.URL, b, token)
+	status, res, body = postImport(t, s.URL, "corp", b, token) // "corp" is ".corp"
 	if status != 200 || res.SchemasAdded != 0 || res.VersionsAdded != 0 {
 		t.Fatalf("re-import: %d %s", status, body)
 	}
 
-	gc := client(t, s.URL+"/sr", sr.Config{})
+	gc := client(t, s.URL+"/sr/contexts/.corp", sr.Config{})
 	got, err := gc.SubjectVersion(ctx, "corp-orders-value", "latest", "")
 	if err != nil || got.ID != srcID {
 		t.Fatalf("imported subject: %+v %v (source id %d)", got, err, srcID)
@@ -259,7 +268,7 @@ func TestImportPreservesIDs(t *testing.T) {
 	bad.Schemas = append([]srserve.ImportSchema(nil), b.Schemas...)
 	bad.Schemas[0].Schema = `syntax = "proto3"; package other; message X {}`
 	bad.Schemas[0].Serialized = ""
-	status, _, body = postImport(t, s.URL, bad, token)
+	status, _, body = postImport(t, s.URL, ".corp", bad, token)
 	if status != 409 || !strings.Contains(body, "40901") {
 		t.Fatalf("conflict: %d %s", status, body)
 	}
@@ -269,7 +278,7 @@ func TestImportPreservesIDs(t *testing.T) {
 	for _, x := range b.Schemas {
 		maxID = max(maxID, x.ID)
 	}
-	v, err := st.Register(ctx, "new-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"})
+	v, err := st.Context(".corp").Register(ctx, "new-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"})
 	if err != nil || v.ID <= maxID {
 		t.Fatalf("new id %d %v; imported max %d", v.ID, err, maxID)
 	}
@@ -279,7 +288,7 @@ func TestImportPreservesIDs(t *testing.T) {
 // versions without gaps or duplicates.
 func TestConcurrentRegister(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV())
 	schemas := []string{
 		`syntax = "proto3"; package c; message A {}`,
 		`syntax = "proto3"; package c; message B {}`,
@@ -319,7 +328,7 @@ func TestConcurrentRegister(t *testing.T) {
 // version with identical text, else the oldest equivalent one.
 func TestLookupPrefersIdenticalThenOldest(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV()).Context(".corp")
 	text := `syntax = "proto3"; package l; message M { string a = 1; }`
 	spaced := `syntax = "proto3";  package l;  message M { string a = 1; }`
 	other := `syntax = "proto3"; package l; message M { string a = 1; }` + "\n"
@@ -340,7 +349,7 @@ func TestLookupPrefersIdenticalThenOldest(t *testing.T) {
 
 func TestCompatibility(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV())
 	s := serve(t, st, false)
 	c := client(t, s.URL+"/sr", sr.Config{})
 	v1 := `syntax = "proto3"; package p; message M { string a = 1; int64 b = 2; } message Gone {}`
@@ -380,67 +389,165 @@ func TestCompatibility(t *testing.T) {
 	}
 }
 
-// Reserved ids count down from ReservedTop, apart from the counter that
-// counts up from 1 and that an import raises: an import of a registry
-// with ids 1..n never meets a reserved schema, even one holding the
-// same text as a schema of the source.
-func TestReservedIDsSurviveImport(t *testing.T) {
+func getJSON(t *testing.T, url string, out any) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET %s: %d", url, resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+}
+
+// Each context is its own id space, as in Confluent. A registry
+// imported into .corp keeps its ids (from 1); gwag's own schemas in the
+// default context keep theirs (from 1, too); each reads back, and
+// decodes a record, with its own id through its own URL.
+func TestImportContextKeepsOwnIDs(t *testing.T) {
 	ctx := context.Background()
-	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	st := srserve.NewStore(srserve.NewMemKV())
+	s := serve(t, st, true)
 	own := sr.Schema{Schema: `syntax = "proto3"; package own.v1; message Own {}`, SchemaType: "PROTOBUF"}
-	v, err := st.RegisterReserved(ctx, "own.v1.Svc", own)
-	if err != nil || v.ID != srserve.ReservedTop || v.Version != 1 {
-		t.Fatalf("first reserved: %+v %v", v, err)
-	}
-	if again, err := st.RegisterReserved(ctx, "own.v1.Svc", own); err != nil || again != v {
-		t.Fatalf("same schema again: %+v %v", again, err)
-	}
-	second, err := st.RegisterReserved(ctx, "own.v1.Other", sr.Schema{Schema: `syntax = "proto3"; package own.v1; message Two {}`, SchemaType: "PROTOBUF"})
-	if err != nil || second.ID != srserve.ReservedTop-1 {
-		t.Fatalf("second reserved: %+v %v", second, err)
-	}
-	// The ordinary counter is untouched.
-	plain, err := st.Register(ctx, "plain-value", sr.Schema{Schema: `syntax = "proto3"; package p; message P {}`, SchemaType: "PROTOBUF"})
-	if err != nil || plain.ID != 1 {
-		t.Fatalf("ordinary register: %+v %v", plain, err)
+	ov, err := st.Register(ctx, "own.v1.Svc", own)
+	if err != nil || ov.ID != 1 {
+		t.Fatalf("own register: %+v %v", ov, err)
 	}
 
-	// A source registry with ids from 1, one of them the text of a
-	// reserved schema.
+	// The source registry's ids start at 1 too; it also holds the text
+	// of gwag's schema, under another subject.
 	src := srtest.New()
 	defer src.Close()
 	sc := client(t, src.URL, sr.Config{})
-	for i := 0; i < 4; i++ {
-		_, _ = sc.Register(ctx, "filler-value", sr.Schema{Schema: `syntax = "proto3"; package f; message F` + string(rune('a'+i)) + ` {}`, SchemaType: "PROTOBUF"}, false)
+	cid, err := sc.Register(ctx, "corp-value", sr.Schema{Schema: `syntax = "proto3"; package corp.v1; message Corp {}`, SchemaType: "PROTOBUF"}, false)
+	if err != nil || cid != ov.ID {
+		t.Fatalf("source id %d %v: the test needs it to equal gwag's id %d", cid, err, ov.ID)
 	}
-	if _, err := sc.Register(ctx, "corp-copy-value", own, false); err != nil {
+	copyID, err := sc.Register(ctx, "corp-copy-value", own, false)
+	if err != nil {
 		t.Fatal(err)
 	}
 	b := bundleFrom(t, sc)
-
-	st = srserve.NewStore(srserve.NewMemKV(), 1)
-	if _, err := st.RegisterReserved(ctx, "own.v1.Svc", own); err != nil {
-		t.Fatal(err)
-	}
-	s := serve(t, st, false)
-	status, res, body := postImport(t, s.URL, b, token)
+	status, res, body := postImport(t, s.URL, ".corp", b, token)
 	if status != 200 || res.SchemasAdded != len(b.Schemas) {
-		t.Fatalf("import beside a reserved schema: %d %s", status, body)
+		t.Fatalf("import into .corp: %d %s", status, body)
 	}
-	gc := client(t, s.URL+"/sr", sr.Config{})
-	if got, err := gc.SubjectVersion(ctx, "own.v1.Svc", "latest", ""); err != nil || got.ID != srserve.ReservedTop {
-		t.Fatalf("reserved subject after import: %+v %v", got, err)
+
+	root := client(t, s.URL+"/sr", sr.Config{})
+	corp := client(t, s.URL+"/sr/contexts/.corp", sr.Config{})
+	if r, err := root.SchemaByID(ctx, 1, ""); err != nil || !strings.Contains(r.Schema, "message Own") {
+		t.Errorf("default id 1: %+v %v", r, err)
 	}
-	if _, err := gc.SubjectVersion(ctx, "corp-copy-value", "latest", ""); err != nil {
-		t.Fatalf("imported copy: %v", err)
+	if r, err := corp.SchemaByID(ctx, 1, ""); err != nil || !strings.Contains(r.Schema, "message Corp") {
+		t.Errorf(".corp id 1: %+v %v", r, err)
 	}
-	// New ordinary ids go above the imported ones.
-	maxID := 0
-	for _, x := range b.Schemas {
-		maxID = max(maxID, x.ID)
+	// The copy of gwag's text keeps the source's id.
+	if v, err := corp.SubjectVersion(ctx, "corp-copy-value", "latest", ""); err != nil || v.ID != copyID {
+		t.Errorf(".corp copy: %+v %v, want id %d", v, err, copyID)
 	}
-	nv, err := st.Register(ctx, "new-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"})
-	if err != nil || nv.ID != maxID+1 {
-		t.Fatalf("new id %d %v; imported max %d", nv.ID, err, maxID)
+	if _, err := corp.SubjectVersion(ctx, "own.v1.Svc", "latest", ""); code(err) != 40401 {
+		t.Errorf("default subject seen in .corp: %v", err)
+	}
+	// A qualified subject names its context from the root URL.
+	if v, err := root.SubjectVersion(ctx, ":.corp:corp-value", "latest", ""); err != nil || v.ID != cid || !strings.Contains(v.Schema, "message Corp") {
+		t.Errorf("qualified subject: %+v %v", v, err)
+	}
+	// The default counter does not move above the import.
+	if nv, err := st.Register(ctx, "next-value", sr.Schema{Schema: `syntax = "proto3"; package n; message N {}`, SchemaType: "PROTOBUF"}); err != nil || nv.ID != 2 {
+		t.Errorf("next default id: %+v %v, want 2", nv, err)
+	}
+
+	// Records framed with id 1 decode as each context's own schema.
+	for _, tc := range []struct {
+		c    *sr.Client
+		want string
+	}{{root, "own.v1.Own"}, {corp, "corp.v1.Corp"}} {
+		serde, err := sr.NewSerde(tc.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := events.Message{Data: sr.Frame(1, []int{0}, nil), Headers: map[string]string{}}
+		if err := serde.Decode(ctx, events.Channel{}, "t", &m); err != nil || m.Headers[events.HeaderType] != tc.want {
+			t.Errorf("%s: decode id 1: %v %v, want %s", tc.c.URL(), err, m.Headers, tc.want)
+		}
+	}
+
+	// Listings, as Confluent answers them.
+	var names []string
+	getJSON(t, s.URL+"/sr/contexts", &names)
+	if strings.Join(names, ",") != ".,.corp" {
+		t.Errorf("contexts %v", names)
+	}
+	for path, want := range map[string]string{
+		"/sr/subjects":                                    ":.corp:corp-copy-value,:.corp:corp-value,next-value,own.v1.Svc",
+		"/sr/subjects?subjectPrefix=own":                  "own.v1.Svc",
+		"/sr/subjects?subjectPrefix=:.corp:":              ":.corp:corp-copy-value,:.corp:corp-value",
+		"/sr/contexts/.corp/subjects":                     ":.corp:corp-copy-value,:.corp:corp-value",
+		"/sr/contexts/corp/subjects?subjectPrefix=corp-v": ":.corp:corp-value",
+		"/sr/contexts/.corp/schemas/ids/1/subjects":       ":.corp:corp-value",
+	} {
+		var got []string
+		getJSON(t, s.URL+path, &got)
+		if strings.Join(got, ",") != want {
+			t.Errorf("%s: %v, want %s", path, got, want)
+		}
+	}
+	// ?subject= picks the context of the id: the subject's, else the
+	// one of the URL.
+	for path, want := range map[string]string{
+		"/sr/schemas/ids/1":                         "message Own",
+		"/sr/schemas/ids/1?subject=corp-value":      "message Corp",
+		"/sr/schemas/ids/1?subject=:.corp:anything": "message Corp",
+		"/sr/schemas/ids/1?subject=own.v1.Svc":      "message Own",
+	} {
+		var got struct{ Schema string }
+		getJSON(t, s.URL+path, &got)
+		if !strings.Contains(got.Schema, want) {
+			t.Errorf("%s: %q, want %s", path, got.Schema, want)
+		}
+	}
+
+	// Writes: an app key writes only the default context, even a
+	// subject it owns; dev writes any context.
+	if _, err := client(t, s.URL+"/sr/contexts/.corp", sr.Config{Token: "app"}).Register(ctx, "app-x", own, false); code(err) != 40301 {
+		t.Errorf("app key write into .corp: %v", err)
+	}
+	if _, err := client(t, s.URL+"/sr", sr.Config{Token: "app"}).Register(ctx, ":.corp:app-x", own, false); code(err) != 40301 {
+		t.Errorf("app key write of a qualified .corp subject: %v", err)
+	}
+	if _, err := client(t, s.URL+"/sr", sr.Config{Token: "app"}).Register(ctx, "app-x", own, false); err != nil {
+		t.Errorf("app key write into the default context: %v", err)
+	}
+	if id, err := client(t, s.URL+"/sr/contexts/.corp", sr.Config{Token: "dev"}).Register(ctx, "app-x", own, false); err != nil || id != copyID {
+		t.Errorf("dev write into .corp: %d %v, want the .corp id %d of the same schema", id, err, copyID)
+	}
+
+	// Compatibility: a context's level applies to its subjects, the
+	// global level stays.
+	req, _ := http.NewRequest(http.MethodPut, s.URL+"/sr/contexts/.corp/config", strings.NewReader(`{"compatibility":"NONE"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("PUT context config: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	var lvl struct {
+		CompatibilityLevel string `json:"compatibilityLevel"`
+	}
+	getJSON(t, s.URL+"/sr/contexts/.corp/config", &lvl)
+	if lvl.CompatibilityLevel != "NONE" {
+		t.Errorf(".corp level %q, want NONE", lvl.CompatibilityLevel)
+	}
+	getJSON(t, s.URL+"/sr/config/:.corp:unset-value?defaultToGlobal=true", &lvl)
+	if lvl.CompatibilityLevel != "NONE" {
+		t.Errorf(".corp subject level %q, want NONE", lvl.CompatibilityLevel)
+	}
+	getJSON(t, s.URL+"/sr/config", &lvl)
+	if lvl.CompatibilityLevel != "BACKWARD" {
+		t.Errorf("global level %q, want BACKWARD", lvl.CompatibilityLevel)
 	}
 }

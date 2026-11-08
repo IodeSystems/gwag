@@ -56,6 +56,7 @@ func (s *Store) Compatible(ctx context.Context, subject string, version int, in 
 	if level == "NONE" {
 		return true, nil, nil
 	}
+	in.References = s.localRefs(in.References)
 	cand, err := prepare(ctx, in, s.resolve)
 	if err != nil {
 		return false, nil, errf(codeInvalidSchema, "Invalid schema: %v", err)

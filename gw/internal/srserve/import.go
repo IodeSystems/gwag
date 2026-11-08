@@ -53,12 +53,17 @@ type ImportResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Import copies b into the store, keeping ids and versions. Nothing is
-// written when a schema id or subject version the store already holds
-// differs from b's (an error naming every conflict). Importing the same
-// bundle again changes nothing.
+// Import copies b into the store's context, keeping ids and versions.
+// The default context is refused: it is gwag's own id space, and
+// another registry's ids would clash with it. Nothing is written when
+// a schema id or subject version the context already holds differs
+// from b's (an error naming every conflict). Importing the same bundle
+// again changes nothing.
 func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
 	var res ImportResult
+	if s.Default() {
+		return res, errf(codeOperationNotPermitted, "import into a named context (POST /contexts/.corp/gwag/import; gwag schema import --into .corp): the default context holds the ids gwag allocates")
+	}
 	byID := map[int]*ImportSchema{}
 	for i := range b.Schemas {
 		x := &b.Schemas[i]
@@ -74,6 +79,9 @@ func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
 	for _, v := range b.Versions {
 		if v.Subject == "" || v.Version < 1 {
 			return res, errf(codeInvalidVersion, "subject %q version %d: invalid", v.Subject, v.Version)
+		}
+		if strings.HasPrefix(v.Subject, ":") {
+			return res, errf(codeInvalidSubject, "subject %q: a bundle names subjects without a context", v.Subject)
 		}
 		if byID[v.ID] == nil {
 			return res, errf(codeSchemaNotFound, "subject %s version %d: schema id %d is not in the bundle", v.Subject, v.Version, v.ID)
@@ -174,14 +182,14 @@ func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
 		}
 		rec := recs[id]
 		val, _ := json.Marshal(rec)
-		if err := s.createOrSame(ctx, idKey(id), val); err != nil {
+		if err := s.createOrSame(ctx, s.idKey(id), val); err != nil {
 			if errors.Is(err, ErrConflict) {
 				return res, errf(codeConflict, "schema id %d was registered while importing; run the import again", id)
 			}
 			return res, storeErr(err)
 		}
 		for _, k := range rec.Keys {
-			if _, err := s.kv.Create(ctx, hashKey(k), []byte(fmt.Sprint(id))); err != nil && !errors.Is(err, ErrConflict) {
+			if _, err := s.kv.Create(ctx, s.hashKey(k), []byte(fmt.Sprint(id))); err != nil && !errors.Is(err, ErrConflict) {
 				return res, storeErr(err)
 			}
 		}
@@ -307,9 +315,9 @@ func (s *Store) mergeVersions(ctx context.Context, subject string, add []version
 		sort.Slice(rec.Versions, func(i, j int) bool { return rec.Versions[i].Version < rec.Versions[j].Version })
 		b, _ := json.Marshal(rec)
 		if missing {
-			_, err = s.kv.Create(ctx, subjKey(subject), b)
+			_, err = s.kv.Create(ctx, s.subjKey(subject), b)
 		} else {
-			_, err = s.kv.Update(ctx, subjKey(subject), b, rev)
+			_, err = s.kv.Update(ctx, s.subjKey(subject), b, rev)
 		}
 		if errors.Is(err, ErrConflict) {
 			continue

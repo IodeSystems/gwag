@@ -1,11 +1,13 @@
 package srserve
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -173,9 +175,9 @@ func (h *handler) authorizeWrite(r *http.Request) error {
 }
 
 // authorizeSubject applies the mode and the role to a write of
-// subject (register, delete): dev and admin may write any subject, an
-// app key the subjects it owns.
-func (h *handler) authorizeSubject(r *http.Request, subject string) error {
+// subject (register, delete) in context st: dev and admin may write
+// any subject, an app key the default-context subjects it owns.
+func (h *handler) authorizeSubject(r *http.Request, st *Store, subject string) error {
 	if err := h.writable(); err != nil {
 		return err
 	}
@@ -184,6 +186,9 @@ func (h *handler) authorizeSubject(r *http.Request, subject string) error {
 	case RoleAdmin, RoleDev:
 		return nil
 	case RoleApp:
+		if !st.Default() {
+			return errf(codeForbidden, "User is denied operation on subject '%s': an app key writes only subjects of the default context (context %s needs the gwag dev or admin token)", st.Qualify(subject), st.Name())
+		}
 		if c.Owns != nil && c.Owns(subject) {
 			return nil
 		}
@@ -222,6 +227,46 @@ var errNoRoute = errf(40400, "HTTP 404 Not Found")
 
 func methodNotAllowed() error { return &Error{Code: 40500, Message: "HTTP 405 Method Not Allowed"} }
 
+// idContext is the context whose schema id a ?subject= names, as
+// Confluent picks it: a qualified subject's context; else st when st
+// holds the subject; else another context with a version of the
+// subject holding id; else st.
+func idContext(ctx context.Context, st *Store, subject string, id int) (*Store, error) {
+	at, subj, err := st.At(subject)
+	if err != nil {
+		return nil, err
+	}
+	if at.Name() != st.Name() {
+		return at, nil
+	}
+	if _, err := st.Versions(ctx, subj, true); err == nil {
+		return st, nil
+	}
+	names, err := st.Contexts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range names {
+		if n == st.Name() {
+			continue
+		}
+		c := st.Context(n)
+		vs, err := c.IDVersions(ctx, id, true)
+		if err != nil {
+			continue
+		}
+		for _, v := range vs {
+			if v.Subject == subj {
+				return c, nil
+			}
+		}
+	}
+	return st, nil
+}
+
+// route serves seg in context st. /contexts/{context}/... serves the
+// rest of the path in that context; a qualified subject (":.corp:s")
+// anywhere a subject goes names its own context.
 func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg []string) error {
 	ctx := r.Context()
 	q := r.URL.Query()
@@ -250,6 +295,11 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 		if err != nil {
 			return errf(codeSchemaNotFound, "Schema %s not found", seg[2])
 		}
+		if s := q.Get("subject"); s != "" {
+			if st, err = idContext(ctx, st, s, id); err != nil {
+				return err
+			}
+		}
 		rec, err := st.SchemaByID(ctx, id)
 		if err != nil {
 			return err
@@ -269,6 +319,9 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 			if err != nil {
 				return err
 			}
+			for i := range vs {
+				vs[i].Subject = st.Qualify(vs[i].Subject)
+			}
 			writeJSON(w, 200, vs)
 		case n == 4 && seg[3] == "subjects":
 			vs, err := st.IDVersions(ctx, id, boolQ(r, "deleted"))
@@ -277,8 +330,8 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 			}
 			out := []string{}
 			for _, v := range vs {
-				if !containsStr(out, v.Subject) {
-					out = append(out, v.Subject)
+				if s := st.Qualify(v.Subject); !containsStr(out, s) {
+					out = append(out, s)
 				}
 			}
 			writeJSON(w, 200, out)
@@ -295,6 +348,10 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 		} else if n > 2 {
 			return errNoRoute
 		}
+		st, subject, err := st.At(subject)
+		if err != nil {
+			return err
+		}
 		switch r.Method {
 		case http.MethodGet:
 			l, ok, err := st.Config(ctx, subject)
@@ -302,14 +359,14 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 				return err
 			}
 			if !ok && boolQ(r, "defaultToGlobal") {
-				l, _, err = st.Config(ctx, "")
+				l, err = st.Level(ctx, subject)
 				ok = err == nil
 			}
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return errf(codeSubjectLevelNoConfig, "Subject '%s' does not have subject-level compatibility configured", subject)
+				return errf(codeSubjectLevelNoConfig, "Subject '%s' does not have subject-level compatibility configured", st.Qualify(subject))
 			}
 			writeJSON(w, 200, map[string]string{"compatibilityLevel": l})
 			return nil
@@ -370,7 +427,11 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 		if err != nil {
 			return err
 		}
-		ok, msgs, err := st.Compatible(ctx, seg[2], version, in)
+		st, subject, err := st.At(seg[2])
+		if err != nil {
+			return err
+		}
+		ok, msgs, err := st.Compatible(ctx, subject, version, in)
 		if err != nil {
 			return err
 		}
@@ -384,11 +445,28 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 		writeJSON(w, 200, out)
 		return nil
 	case "contexts":
-		if !get || n != 1 {
-			return errNoRoute
+		if !st.Default() {
+			return errNoRoute // no contexts inside a context
 		}
-		writeJSON(w, 200, []string{"."})
-		return nil
+		switch {
+		case n == 1:
+			if !get {
+				return methodNotAllowed()
+			}
+			names, err := st.Contexts(ctx)
+			if err != nil {
+				return err
+			}
+			writeJSON(w, 200, names)
+			return nil
+		case n == 2:
+			return methodNotAllowed() // as Confluent answers
+		}
+		name, err := NormContext(seg[1])
+		if err != nil {
+			return err
+		}
+		return h.route(w, r, st.Context(name), seg[2:])
 	case "gwag":
 		if n == 2 && seg[1] == "import" {
 			if r.Method != http.MethodPost {
@@ -412,49 +490,89 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 	return errNoRoute
 }
 
+// listSubjects answers GET /subjects in context st. In the default
+// context, with no subjectPrefix (or ":*:"), it lists every context's
+// subjects, as Confluent does; a qualified prefix (":.corp:") lists
+// that context's.
+func listSubjects(ctx context.Context, st *Store, prefix string, deleted bool) ([]string, error) {
+	stores := []*Store{st}
+	switch {
+	case prefix == ":*:" || (prefix == "" && st.Default()):
+		prefix = ""
+		if st.Default() {
+			names, err := st.Contexts(ctx)
+			if err != nil {
+				return nil, err
+			}
+			stores = stores[:0]
+			for _, n := range names {
+				stores = append(stores, st.Context(n))
+			}
+		}
+	default:
+		at, p, err := st.At(prefix)
+		if err != nil {
+			return nil, err
+		}
+		stores[0], prefix = at, p
+	}
+	out := []string{}
+	for _, s := range stores {
+		subs, err := s.Subjects(ctx, deleted)
+		if err != nil {
+			return nil, err
+		}
+		for _, sub := range subs {
+			if strings.HasPrefix(sub, prefix) {
+				out = append(out, s.Qualify(sub))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, seg []string) error {
 	ctx := r.Context()
 	q := r.URL.Query()
 	deleted := boolQ(r, "deleted")
 	get := r.Method == http.MethodGet || r.Method == http.MethodHead
-	switch len(seg) {
-	case 0:
+	if len(seg) == 0 {
 		if !get {
 			return methodNotAllowed()
 		}
-		subs, err := st.Subjects(ctx, deleted)
+		subs, err := listSubjects(ctx, st, q.Get("subjectPrefix"), deleted)
 		if err != nil {
 			return err
 		}
-		if p := q.Get("subjectPrefix"); p != "" && p != ":*:" {
-			out := []string{}
-			for _, s := range subs {
-				if strings.HasPrefix(s, p) {
-					out = append(out, s)
-				}
-			}
-			subs = out
-		}
 		writeJSON(w, 200, subs)
 		return nil
-	case 1:
+	}
+	st, subject, err := st.At(seg[0])
+	if err != nil {
+		return err
+	}
+	if subject == "" {
+		return errf(codeSubjectNotFound, "Subject '%s' not found.", seg[0])
+	}
+	if len(seg) == 1 {
 		switch r.Method {
 		case http.MethodPost:
 			in, err := readSchema(r)
 			if err != nil {
 				return err
 			}
-			v, rec, err := st.Lookup(ctx, seg[0], in, deleted)
+			v, rec, err := st.Lookup(ctx, subject, in, deleted)
 			if err != nil {
 				return err
 			}
-			writeJSON(w, 200, versionOut{seg[0], v.Version, v.ID, typeField(rec), rec.References, rec.Schema})
+			writeJSON(w, 200, versionOut{st.Qualify(subject), v.Version, v.ID, typeField(rec), rec.References, rec.Schema})
 			return nil
 		case http.MethodDelete:
-			if err := h.authorizeSubject(r, seg[0]); err != nil {
+			if err := h.authorizeSubject(r, st, subject); err != nil {
 				return err
 			}
-			vs, err := st.DeleteSubject(ctx, seg[0], boolQ(r, "permanent"))
+			vs, err := st.DeleteSubject(ctx, subject, boolQ(r, "permanent"))
 			if err != nil {
 				return err
 			}
@@ -463,7 +581,6 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 		}
 		return methodNotAllowed()
 	}
-	subject := seg[0]
 	if seg[1] != "versions" {
 		return errNoRoute
 	}
@@ -477,7 +594,7 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 			writeJSON(w, 200, vs)
 			return nil
 		case http.MethodPost:
-			if err := h.authorizeSubject(r, subject); err != nil {
+			if err := h.authorizeSubject(r, st, subject); err != nil {
 				return err
 			}
 			in, err := readSchema(r)
@@ -501,7 +618,7 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 		if len(seg) != 3 {
 			return methodNotAllowed()
 		}
-		if err := h.authorizeSubject(r, subject); err != nil {
+		if err := h.authorizeSubject(r, st, subject); err != nil {
 			return err
 		}
 		v, err := st.DeleteVersion(ctx, subject, version, boolQ(r, "permanent"))
@@ -520,7 +637,7 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, versionOut{subject, v.Version, v.ID, typeField(rec), rec.References, schemaBody(rec, q.Get("format"))})
+		writeJSON(w, 200, versionOut{st.Qualify(subject), v.Version, v.ID, typeField(rec), rec.References, schemaBody(rec, q.Get("format"))})
 	case len(seg) == 4 && seg[3] == "schema":
 		_, rec, err := st.Version(ctx, subject, version, deleted)
 		if err != nil {

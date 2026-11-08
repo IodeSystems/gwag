@@ -42,13 +42,17 @@ const ControlPlaneSubject = "gateway.controlplane.v1.ControlPlane"
 // it. The schema is schemaregistry.SchemaOf of the message's file, with
 // its imports registered under their import paths as references:
 // exactly what the Go serde's AutoRegister would send, so a serde in
-// lookup mode finds it. Existing ids come in with `gwag schema import`
-// (POST /gwag/import, admin token).
+// lookup mode finds it. These, and the control plane subject, are in
+// the default context: gwag's id space. Another registry's ids come in
+// with `gwag schema import` into a named context (POST
+// /contexts/{context}/gwag/import, admin token), its own id space, so
+// they never clash with gwag's.
 //
 // The REST API is READONLY unless SchemaRegistryOptions.Writes; then
 // the dev and admin tokens (basic-auth password or bearer) may
-// register and delete schemas, an app key may register and delete the
-// subjects of its namespaces' channels (ownedSubjects), and the admin
+// register and delete schemas in any context, an app key may register
+// and delete the default-context subjects of its namespaces' channels
+// (ownedSubjects), and the admin
 // token may set compatibility levels. A delete is refused while
 // another schema references the version. Reads need no token.
 
@@ -70,11 +74,6 @@ type SchemaRegistryOptions struct {
 	// the subjects of its namespaces' channels, and the admin token
 	// sets compatibility levels.
 	Writes bool
-	// FirstID is the lowest schema id gwag allocates (default 1). Ids
-	// are always allocated above every id the registry holds, imported
-	// ones included; set FirstID above the source registry's ids when
-	// gwag registers its channels before the import runs.
-	FirstID int
 }
 
 // WithSchemaRegistry turns on the served Schema Registry. See
@@ -110,7 +109,7 @@ func newSchemaRegistry(g *Gateway) *schemaRegistry {
 	r.public = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: o.Writes, Caller: g.schemaRegistryCaller})
 	r.internal = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: true, Caller: func(*http.Request) srserve.Caller { return srserve.Caller{Role: srserve.RoleAdmin} }})
 	if g.cfg.cluster == nil {
-		r.store.Store(srserve.NewStore(srserve.NewMemKV(), o.FirstID))
+		r.store.Store(srserve.NewStore(srserve.NewMemKV()))
 		r.trigger() // the default subject
 	}
 	go r.syncLoop()
@@ -243,7 +242,7 @@ func (r *schemaRegistry) bindCluster(kv jetstream.KeyValue) {
 	if r == nil {
 		return
 	}
-	r.store.Store(srserve.NewStore(srserve.JetStreamKV{KV: kv}, r.o.FirstID))
+	r.store.Store(srserve.NewStore(srserve.JetStreamKV{KV: kv}))
 	r.mu.Lock()
 	r.done = map[string]string{}
 	r.mu.Unlock()
@@ -328,8 +327,8 @@ func (r *schemaRegistry) sync(ctx context.Context) error {
 }
 
 // registerControlPlane registers control.proto under
-// ControlPlaneSubject with a reserved id. It registers again only when
-// the gateway's file differs from what it registered last.
+// ControlPlaneSubject in the default context. It registers again only
+// when the gateway's file differs from what it registered last.
 func (r *schemaRegistry) registerControlPlane(ctx context.Context, store *srserve.Store) error {
 	r.mu.Lock()
 	same := r.done[ControlPlaneSubject] == cpv1.ControlProto
@@ -339,7 +338,7 @@ func (r *schemaRegistry) registerControlPlane(ctx context.Context, store *srserv
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := store.RegisterReserved(cctx, ControlPlaneSubject, sr.Schema{SchemaType: "PROTOBUF", Schema: cpv1.ControlProto}); err != nil {
+	if _, err := store.Register(cctx, ControlPlaneSubject, sr.Schema{SchemaType: "PROTOBUF", Schema: cpv1.ControlProto}); err != nil {
 		return err
 	}
 	r.mu.Lock()
