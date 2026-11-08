@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+// Sample event channels for docs/events.md: one plain channel, one
+// oneof-shaped channel and one union of messages.
+package orders.v1;
+
+import "gw/proto/ps/v1/options.proto";
+
+option go_package = "github.com/iodesystems/gwag/v2/examples/events/gen/orders/v1;ordersv1";
+
+// Plain channel: one message type.
+message OrderShipped {
+  option (gwag.ps.v1.binding) = {
+    name: "OrderShipped"
+    pattern: "events.orders.{orderId}.shipped"
+  };
+  string order_id = 1;
+  string carrier = 2;
+}
+
+// Oneof channel: the message body is one oneof, so handlers can take
+// one case at a time. "*" is a positional segment (P1).
+message Payment {
+  option (gwag.ps.v1.binding) = {
+    name: "Payments"
+    pattern: "events.payments.{region}.*"
+  };
+  oneof kind {
+    PaymentCaptured captured = 1;
+    PaymentRefunded refunded = 2;
+    string note = 3;
+  }
+}
+
+message PaymentCaptured {
+  string order_id = 1;
+  int64 amount_cents = 2;
+}
+
+message PaymentRefunded {
+  string order_id = 1;
+  int64 amount_cents = 2;
+  string reason = 3;
+}
+
+// Union channel: messages sharing a name and pattern. Gwag-Type says
+// which one each message is.
+message OrderCreated {
+  option (gwag.ps.v1.binding) = {
+    name: "OrderEvents"
+    pattern: "events.orders.{orderId}.lifecycle"
+  };
+  string order_id = 1;
+  string customer = 2;
+}
+
+message OrderCancelled {
+  option (gwag.ps.v1.binding) = {
+    name: "OrderEvents"
+    pattern: "events.orders.{orderId}.lifecycle"
+  };
+  string order_id = 1;
+  string reason = 2;
+}
+
+// Audit channel with a trailing wildcard: Rest carries the tail.
+message AuditEntry {
+  option (gwag.ps.v1.binding) = {
+    name: "Audit"
+    pattern: "audit.orders.>"
+  };
+  string actor = 1;
+  string action = 2;
+}

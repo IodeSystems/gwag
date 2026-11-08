@@ -61,3 +61,5 @@ require (
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e // indirect
 )
+
+tool google.golang.org/protobuf/cmd/protoc-gen-go
