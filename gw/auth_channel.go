@@ -229,16 +229,17 @@ func (g *Gateway) verifyChannelHMAC(channel, hmacB64 string, ts int64) error {
 // subjectMatchesPattern reports whether the NATS-style `pattern`
 // (with optional `*` and `>` tokens) matches the literal `subject`.
 // It is gat.MatchChannel — one matcher shared by gat's buses and
-// gwag's channel auth / channel bindings.
+// gwag's channel auth / channel bindings. Named segments (`{x}`) in
+// pattern match like `*`.
 func subjectMatchesPattern(pattern, subject string) bool {
-	return gat.MatchChannel(pattern, subject)
+	return gat.MatchChannel(normalizeSubject(pattern), subject)
 }
 
 // patternsIntersect reports whether two NATS-style patterns share
 // any concrete subject. Used to decide which WithChannelAuth rules
 // are reachable from a wildcard Sub pattern.
 func patternsIntersect(a, b string) bool {
-	return tokensIntersect(strings.Split(a, "."), strings.Split(b, "."))
+	return tokensIntersect(strings.Split(normalizeSubject(a), "."), strings.Split(normalizeSubject(b), "."))
 }
 
 func tokensIntersect(a, b []string) bool {
@@ -263,7 +264,7 @@ func tokensIntersect(a, b []string) bool {
 // superset pattern. Used to decide whether the implicit default-HMAC
 // has to be folded into a wildcard Sub's strictest-wins computation.
 func patternCovers(authPat, subPat string) bool {
-	return tokensCover(strings.Split(authPat, "."), strings.Split(subPat, "."))
+	return tokensCover(strings.Split(normalizeSubject(authPat), "."), strings.Split(normalizeSubject(subPat), "."))
 }
 
 func tokensCover(a, b []string) bool {

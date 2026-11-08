@@ -61,7 +61,10 @@ message NoBinding {
 		t.Fatalf("compileProtoBytes: %v", err)
 	}
 
-	got := extractChannelBindings(fd)
+	got, err := extractChannelBindings(fd)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
 	sort.Slice(got, func(i, j int) bool { return got[i].Pattern < got[j].Pattern })
 	want := []ir.ChannelBinding{
 		{Pattern: "events.orders.*.update", MessageFQN: "example.events.v1.OrderUpdate"},
@@ -93,7 +96,7 @@ message Thing { string id = 1; }
 	if err != nil {
 		t.Fatalf("compileProtoBytes: %v", err)
 	}
-	if got := extractChannelBindings(fd); len(got) != 0 {
+	if got, err := extractChannelBindings(fd); err != nil || len(got) != 0 {
 		t.Errorf("expected no bindings, got %#v", got)
 	}
 }

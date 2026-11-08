@@ -1997,7 +1997,10 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	}
 	g.warnSubscribeDelegateDeprecated(e.namespace, e.version)
 	key := poolKey{namespace: e.namespace, version: e.version}
-	bindings := extractChannelBindings(e.file)
+	bindings, err := extractChannelBindings(e.file)
+	if err != nil {
+		return fmt.Errorf("gateway: %s/%s: %w", e.namespace, e.version, err)
+	}
 	existed, err := g.registerSlotLocked(slotKindProto, key, e.hash, e.maxConcurrency, e.maxConcurrencyPerInstance, bindings)
 	if err != nil {
 		return fmt.Errorf("gateway: %w", err)

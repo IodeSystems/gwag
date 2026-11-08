@@ -339,6 +339,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		if err != nil {
 			return nil, fmt.Errorf("controlplane: %w", err)
 		}
+		if _, err := extractChannelBindings(fd); err != nil {
+			return nil, fmt.Errorf("controlplane: %s/%s: %w", ns, ver, err)
+		}
 		warnUnsupportedStreaming(cp.gw, ns, ver, fd)
 		prep = append(prep, preparedBinding{
 			namespace:                 ns,
