@@ -248,17 +248,17 @@ type Mutation {
 }
 
 type PsQueryNamespace {
-  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  pub(channel: String, hmac: String, payload: String, payload_type: String, ts: String): Gwag_Ps_V1_PubResponse
   stable: PsStableQueryNamespace!
   v1: PsV1QueryNamespace!
 }
 
 type PsStableQueryNamespace {
-  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  pub(channel: String, hmac: String, payload: String, payload_type: String, ts: String): Gwag_Ps_V1_PubResponse
 }
 
 type PsV1QueryNamespace {
-  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  pub(channel: String, hmac: String, payload: String, payload_type: String, ts: String): Gwag_Ps_V1_PubResponse
 }
 
 type Query {
@@ -301,9 +301,16 @@ type Subscription {
 scalar Upload
 
 type admin_BindingInfo {
+  """Channel key <proto package>.<name>; empty for an unnamed binding. Several bindings with one key form a union channel."""
+  channel: String!
   messageFQN: String!
+  """Channel name; empty for an unnamed binding."""
+  name: String!
   namespace: String!
+  """As declared; named segments ({orderId}) match like *."""
   pattern: String!
+  """JetStream stream of a named channel in cluster mode (EV_...); empty for an unnamed binding."""
+  stream: String!
   version: String!
 }
 
@@ -366,6 +373,10 @@ type admin_DependencyInfo {
 }
 
 type admin_DependencyStatusInfo {
+  """Set when the dependency is a subscription: the channel key. service / lines then name the line that declares it (empty while none does)."""
+  channel: String!
+  """Consumer group of a subscription dependency."""
+  group: String!
   lines: [String!]
   presentLines: [String!]
   service: String!
@@ -497,10 +508,16 @@ type admin_GraphActiveEdge {
 }
 
 type admin_GraphDesiredEdge {
+  """Channel key of a channel edge, e.g. orders.v1.OrderEvents; empty for rpc edges."""
+  channel: String!
   """service: a registered line; external: a declared external dependent (consumerNamespace is its id, consumerVersion is empty)."""
   consumerKind: admin_GraphDesiredEdgeConsumerKind!
   consumerNamespace: String!
   consumerVersion: String!
+  """rpc: a declared dependency (depends); channel: a declared subscription (subscribes) to an event channel the provider declares."""
+  edgeKind: admin_GraphDesiredEdgeEdgeKind!
+  """Consumer group of a channel edge; empty for rpc edges."""
+  group: String!
   """Consumer instances that declare this dependency (0 = line manifest only)."""
   instanceCount: Long!
   """Accepted lines."""
@@ -508,7 +525,7 @@ type admin_GraphDesiredEdge {
   met: Boolean!
   """Accepted lines with a ready instance."""
   presentLines: [String!]
-  """Provider namespace."""
+  """Provider namespace. Empty on a channel edge while no line declares the channel."""
   provider: String!
 }
 
@@ -516,6 +533,12 @@ type admin_GraphDesiredEdge {
 enum admin_GraphDesiredEdgeConsumerKind {
   external
   service
+}
+
+"""rpc: a declared dependency (depends); channel: a declared subscription (subscribes) to an event channel the provider declares."""
+enum admin_GraphDesiredEdgeEdgeKind {
+  channel
+  rpc
 }
 
 type admin_GraphInstance {
@@ -890,6 +913,7 @@ type admin_ServiceInfo {
   public: Boolean!
   rejectedJoins: admin_RejectedJoinInfo
   replicaCount: Int!
+  subscribes: [admin_SubscriptionInfo!]
   version: String!
 }
 
@@ -942,6 +966,13 @@ type admin_SignOutBody {
 type admin_StableVNEntry {
   namespace: String!
   vN: Int!
+}
+
+type admin_SubscriptionInfo {
+  """Channel key: <proto package>.<channel name>."""
+  channel: String!
+  """Consumer group the line listens as."""
+  group: String!
 }
 
 type admin_UndeprecateOutBody {
