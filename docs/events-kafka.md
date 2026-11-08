@@ -454,10 +454,11 @@ through a generated bus; `core.publish` with only a type name fails.
 | `WithReferenceSubject(f)` | `referenceSubject` | `reference_subject=f` | subject of an import; default the import path |
 | `TypeNames(map)` | `typeNames` | `type_names={...}` | registry type name to local type name (shadow); decode only |
 
-`AutoRegister`, `UseLatest` and `UseSchemaID` are alternatives. Go
-takes the last one given. Python raises `ValueError` when more than one
-is set. TypeScript takes `useLatest` first, then `useSchemaId`, then
-`autoRegister`, and does not raise.
+`AutoRegister`, `UseLatest` and `UseSchemaID` are alternatives. Set at
+most one. A second one fails at construction with
+`schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one`:
+Go `NewSerde` returns `sr.ErrExclusiveModes`, TypeScript throws `Error`,
+Python raises `ValueError`.
 
 On decode, the message type comes from the schema id: the registry's
 `format=serialized` (base64 `FileDescriptorProto`), or, in TypeScript,

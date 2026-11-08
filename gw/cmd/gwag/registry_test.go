@@ -209,7 +209,11 @@ func TestSchemaPush(t *testing.T) {
 	c, _ := sr.NewClient(sr.Config{URL: r.URL})
 	msg := &events.Message{Headers: map[string]string{}}
 	ch := events.MustChannel("orders.v1.OrderEvents", "events.orders.{orderId}.lifecycle")
-	if err := sr.NewSerde(c).Encode(context.Background(), ch, ch.Stream, &ordersv1.OrderCreated{}, msg); err != nil {
+	serde, err := sr.NewSerde(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serde.Encode(context.Background(), ch, ch.Stream, &ordersv1.OrderCreated{}, msg); err != nil {
 		t.Fatalf("lookup-only encode after push: %v", err)
 	}
 	if id, _, _, _ := sr.Unframe(msg.Data); id != 2 {

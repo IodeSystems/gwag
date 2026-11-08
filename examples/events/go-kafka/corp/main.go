@@ -69,7 +69,9 @@ func main() {
 		})))
 		check(err)
 		defer backend.Close()
-		bus := corpordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client)))
+		serde, err := sr.NewSerde(client)
+		check(err)
+		bus := corpordersv1.NewBus(backend, events.WithSerde(serde))
 		_, err = bus.OnOrder(ctx, "corp-import", func(ctx context.Context, _ corpordersv1.OrderSubject, m *corpordersv1.Order) error {
 			raw := events.MessageFrom(ctx)
 			return got("import %s %s total %d %s status %s skus %v (key %s, schema id %s)", raw.Type(), m.GetOrderId(),
@@ -84,7 +86,8 @@ func main() {
 		defer backend.Close()
 		// Records are framed as corp.orders.v1.Order; the handler
 		// takes them as the copy.
-		serde := sr.NewSerde(client, sr.TypeNames(map[string]string{"corp.orders.v1.Order": "shop.v1.CorpOrder"}))
+		serde, err := sr.NewSerde(client, sr.TypeNames(map[string]string{"corp.orders.v1.Order": "shop.v1.CorpOrder"}))
+		check(err)
 		bus := shopv1.NewBus(backend, events.WithSerde(serde))
 		_, err = bus.OnCorpOrders(ctx, "corp-shadow", func(ctx context.Context, _ shopv1.CorpOrdersSubject, m *shopv1.CorpOrder) error {
 			raw := events.MessageFrom(ctx)
