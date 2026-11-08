@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -291,5 +293,150 @@ func TestClusterLevel_AutoFinalize(t *testing.T) {
 	g.peers.autoFinalize(context.Background())
 	if g.ClusterLevel() != clusterLevelMax() {
 		t.Fatalf("level %d after auto-finalize", g.ClusterLevel())
+	}
+}
+
+// A peer forgotten on one node is gone on every node at once, with
+// the buckets at level 0 (no delete markers, so an expiry reaches no
+// watcher): another node's live set drops it and a finalize sent to
+// that node is not blocked by it. Without the delete ForgetPeer
+// writes, the other node kept the peer until its sweep, a TTL after
+// it noticed the expiry (S13: finalize refused after the blue nodes
+// were forgotten).
+func TestClusterLevel_ForgetOnOneNodeFinalizeOnAnother(t *testing.T) {
+	const ttl = 6 * time.Second
+	addrs := []string{freeAddr(t), freeAddr(t)}
+	var cls []*Cluster
+	for i, name := range []string{"fg-a", "fg-b"} {
+		cl, err := StartCluster(ClusterOptions{
+			NodeName:      name,
+			ClientListen:  "127.0.0.1:0",
+			ClusterListen: addrs[i],
+			Peers:         []string{addrs[1-i]},
+			DataDir:       t.TempDir(),
+			StartTimeout:  15 * time.Second,
+			LogLevel:      "silent",
+		})
+		if err != nil {
+			t.Fatalf("StartCluster %s: %v", name, err)
+		}
+		t.Cleanup(cl.Close)
+		cls = append(cls, cl)
+	}
+	for _, cl := range cls {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := cl.WaitForJetStream(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("WaitForJetStream: %v", err)
+		}
+	}
+	// A legacy peer, as a gateway older than feature levels writes
+	// it, in buckets without markers. No name: removing it from the
+	// meta group is not what this test is about.
+	var peers jetstream.KeyValue
+	waitUntilErr(t, 30*time.Second, "legacy buckets created", func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var err error
+		if peers, err = cls[0].JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: peersBucketName, TTL: ttl}); err != nil {
+			return err
+		}
+		if _, err := cls[0].JS.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: registryBucketName, TTL: ttl}); err != nil {
+			return err
+		}
+		_, err = peers.Put(ctx, "LEGACYNODE", []byte(`{"node_id":"LEGACYNODE","joined_unix_ms":1}`))
+		return err
+	})
+	var gws []*Gateway
+	for _, cl := range cls {
+		g := levelGateway(t, cl, withClusterKVTTL(ttl))
+		if _, err := g.startClusterTracking(context.Background()); err != nil {
+			t.Fatalf("startClusterTracking: %v", err)
+		}
+		gws = append(gws, g)
+	}
+	a, b := gws[0], gws[1]
+	for _, g := range gws {
+		if got := g.ClusterLevel(); got != 0 {
+			t.Fatalf("level %d, want 0 with a legacy peer", got)
+		}
+	}
+	if d := streamMarkerTTL(t, cls[0].JS, peersBucketName); d != 0 {
+		t.Fatalf("peers bucket has markers (%s) at level 0", d)
+	}
+	hasLegacy := func(g *Gateway) bool {
+		g.mu.Lock()
+		pt := g.peers
+		g.mu.Unlock()
+		if pt == nil {
+			return false
+		}
+		for _, id := range pt.LivePeers() {
+			if id == "LEGACYNODE" {
+				return true
+			}
+		}
+		return false
+	}
+	waitUntilErr(t, 10*time.Second, "both nodes see the legacy peer", func() error {
+		for _, g := range gws {
+			if !hasLegacy(g) {
+				return fmt.Errorf("%s: live %v", g.cfg.cluster.Server.Name(), g.peers.LivePeers())
+			}
+		}
+		return nil
+	})
+	waitUntilErr(t, 3*ttl, "legacy entry expired", func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		gone, err := kvKeyGone(ctx, cls[0].Conn, peersBucketName, "LEGACYNODE")
+		if err != nil {
+			return err
+		}
+		if !gone {
+			return errors.New("still present")
+		}
+		return nil
+	})
+	expired := time.Now()
+	// The scenario: b has not noticed. Its sweep drops a peer a TTL
+	// after the first sweep that misses it.
+	if !hasLegacy(b) {
+		t.Fatal("b dropped the expired peer before its sweep could")
+	}
+
+	// ForgetPeer goes on to the meta group and replica counts, which
+	// take a while; b must drop the peer when the forget starts.
+	dropped := make(chan time.Time, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for hasLegacy(b) {
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		dropped <- time.Now()
+	}()
+	if _, err := a.ControlPlane().ForgetPeer(context.Background(), &cpv1.ForgetPeerRequest{NodeId: "LEGACYNODE"}); err != nil {
+		t.Fatalf("forget on a: %v", err)
+	}
+	select {
+	case at := <-dropped:
+		if since := at.Sub(expired); since >= ttl/2 {
+			t.Fatalf("b dropped the forgotten peer %s after the expiry: by its sweep, not the forget", since)
+		}
+	case <-time.After(ttl):
+		t.Fatal("b keeps the forgotten peer")
+	}
+	resp, err := b.ControlPlane().FinalizeCluster(context.Background(), &cpv1.FinalizeClusterRequest{})
+	if err != nil {
+		t.Fatalf("finalize on b: %v", err)
+	}
+	if resp.GetActiveLevel() != uint32(clusterLevelMax()) {
+		t.Fatalf("finalize on b: %+v", resp)
 	}
 }

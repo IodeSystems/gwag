@@ -823,30 +823,22 @@ func (cp *controlPlane) ListPeers(ctx context.Context, _ *cpv1.ListPeersRequest)
 	}
 	kctx, cancel := kvCtx(ctx)
 	defer cancel()
-	keys, err := t.peers.Keys(kctx)
+	// The entries finalize counts (stream leader), so the list an
+	// operator checks before a forget or finalize is the one those
+	// calls act on.
+	entries, err := readPeerEntries(kctx, t.gw.cfg.cluster.Conn)
 	if err != nil {
-		// "no keys" is normal when standalone — collapse to empty list.
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return out, nil
-		}
 		return nil, fmt.Errorf("controlplane: list peers: %w", err)
 	}
-	for _, k := range keys {
-		entry, err := t.peers.Get(kctx, k)
-		if err != nil {
-			continue
-		}
-		var pe peerEntry
-		if json.Unmarshal(entry.Value(), &pe) == nil {
-			out.Peers = append(out.Peers, &cpv1.Peer{
-				NodeId:       pe.NodeID,
-				Name:         pe.Name,
-				JoinedUnixMs: pe.JoinedM,
-				Version:      pe.Version,
-				MinLevel:     uint32(pe.LevelMin),
-				MaxLevel:     uint32(pe.LevelMax),
-			})
-		}
+	for _, pe := range entries {
+		out.Peers = append(out.Peers, &cpv1.Peer{
+			NodeId:       pe.NodeID,
+			Name:         pe.Name,
+			JoinedUnixMs: pe.JoinedM,
+			Version:      pe.Version,
+			MinLevel:     uint32(pe.LevelMin),
+			MaxLevel:     uint32(pe.LevelMax),
+		})
 	}
 	return out, nil
 }
@@ -878,15 +870,25 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 
 	// Refuse if the peer is still alive — its KV entry would have been
 	// expired by JetStream once the TTL elapsed without a refresh, so
-	// presence implies a recent heartbeat.
-	if _, err := t.peers.Get(kctx, req.GetNodeId()); err == nil {
-		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), t.peerTTL)
-	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+	// presence implies a recent heartbeat. Asked of the stream leader:
+	// a direct get can be answered by a replica that is behind and
+	// miss an entry the stream still holds.
+	if gone, err := kvKeyGone(kctx, t.gw.cfg.cluster.Conn, peersBucketName, req.GetNodeId()); err != nil {
 		return nil, fmt.Errorf("controlplane: peer lookup: %w", err)
+	} else if !gone {
+		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), t.peerTTL)
+	}
+	// Delete the key, expired or not. An expiry raises no watch event
+	// below levelDeleteMarkers, so every other node would keep the peer
+	// in its live set until its sweep; a delete reaches every watcher
+	// and every replica, after any late Put of the peer. The forget is
+	// then cluster-wide at once, whichever node took it.
+	if err := t.peers.Delete(kctx, req.GetNodeId()); err != nil {
+		return nil, fmt.Errorf("controlplane: delete peer entry: %w", err)
 	}
 
-	// Bucket auto-expired the entry already. Drop it from our local
-	// live set just in case watch hasn't propagated yet, and reconcile.
+	// Drop it from our local live set too, in case the watch has not
+	// delivered the delete yet, and reconcile.
 	t.mu.Lock()
 	_, wasLive := t.live[req.GetNodeId()]
 	delete(t.live, req.GetNodeId())

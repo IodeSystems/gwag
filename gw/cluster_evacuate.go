@@ -200,7 +200,7 @@ func (t *peerTracker) removeMetaPeer(ctx context.Context, nodeID string) (bool, 
 		return false, nil
 	}
 	kctx, cancel := kvCtx(ctx)
-	entries, err := readPeerEntries(kctx, t.peers)
+	entries, err := readPeerEntries(kctx, t.gw.cfg.cluster.Conn)
 	cancel()
 	if err != nil {
 		return false, err

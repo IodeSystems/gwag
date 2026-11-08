@@ -286,8 +286,13 @@ $ gwag peer forget NBLJNPKR...WCWJ2K --gateway localhost:51094
 removed=false new_replicas=3 meta_removed=true
 ```
 
-(Four nodes, one stopped.) `removed=false` here: the peers entry had
-already expired, so there was nothing to delete. `meta_removed=true`:
+(Four nodes, one stopped.) The forget deletes the peer's key from
+`gwag-peers`, so every node drops the peer at once, and `peer list` and
+`cluster finalize` on any node stop counting it. `removed=false` here:
+the answering node had already dropped the peer from its live set.
+Whether the peer is live is asked of the stream leader, as are the
+entries `peer list` and `cluster finalize` read: a direct get can be
+answered by a replica that is behind. `meta_removed=true`:
 the peer also left the JetStream meta group, so its stream replicas
 are placed on live nodes and it no longer counts in the meta quorum
 (`false` when this node never saw the peer's name, or a live node has
@@ -327,7 +332,8 @@ Level 1 turns subject delete markers on for `gwag-registry` and
 `gwag-peers`. NATS refuses a replica-count update without markers on a
 bucket that has them, and v2.11.0 sends such updates. At level 0 an
 expired key leaves each node by the sweeps, 30-45 s after it expired,
-instead of by its marker.
+instead of by its marker; a forgotten peer leaves every node at once
+(the forget deletes its key).
 
 ```
 $ gwag peer list --gateway localhost:51094

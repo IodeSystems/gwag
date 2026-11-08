@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -148,18 +149,16 @@ func openClusterBucket(ctx context.Context, js jetstream.JetStream, r int) (jets
 // binary's max level when there are none. So a node of this version
 // joining a cluster of older nodes starts at their level, and a new
 // cluster starts at the highest level.
-func loadClusterLevel(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue, self string) (int, error) {
+func loadClusterLevel(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, kv jetstream.KeyValue, self string) (int, error) {
 	if rec, _, err := getClusterLevel(ctx, kv); err == nil {
 		return rec.Level, nil
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return 0, err
 	}
 	level := clusterLevelMax()
-	if peers, err := js.KeyValue(ctx, peersBucketName); err == nil {
-		// Bounded: the key listing is a watch that waits for the
-		// stream without the client's default timeout.
+	if _, err := js.KeyValue(ctx, peersBucketName); err == nil {
 		kctx, cancel := kvCtx(ctx)
-		entries, err := readPeerEntries(kctx, peers)
+		entries, err := readPeerEntries(kctx, nc)
 		cancel()
 		if err != nil {
 			return 0, err
@@ -201,29 +200,31 @@ func getClusterLevel(ctx context.Context, kv jetstream.KeyValue) (clusterLevelRe
 	return rec, e.Revision(), nil
 }
 
-// readPeerEntries returns every entry of the peers bucket.
-func readPeerEntries(ctx context.Context, kv jetstream.KeyValue) ([]peerEntry, error) {
-	keys, err := kv.Keys(ctx)
+// readPeerEntries returns every entry of the peers bucket, as the
+// stream leader holds it (kv_leader.go). Not KeyValue.Keys/Get: a
+// direct get may be answered by a replica that is behind or
+// rebuilding its store, which shows an expired or deleted peer as
+// live, or misses a live one. Either is wrong here: the first blocks
+// a finalize after the peer was forgotten, the second sets a level a
+// live peer cannot run at.
+func readPeerEntries(ctx context.Context, nc *nats.Conn) ([]peerEntry, error) {
+	keys, err := kvLeaderKeys(ctx, nc, peersBucketName)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("peers: %w", err)
 	}
 	var out []peerEntry
 	for _, k := range keys {
-		e, err := kv.Get(ctx, k)
+		v, ok, err := kvLeaderGet(ctx, nc, peersBucketName, k)
 		if err != nil {
-			// Gone since the listing: nothing to count. Any other
-			// error is not "no peer": skipping an old peer here
-			// would set a level it cannot run at.
-			if errors.Is(err, jetstream.ErrKeyNotFound) {
-				continue
-			}
+			// Not "no peer": skipping an old peer here would set
+			// a level it cannot run at.
 			return nil, fmt.Errorf("peers %s: %w", k, err)
 		}
+		if !ok {
+			continue // deleted (ForgetPeer) or expired since the listing
+		}
 		var pe peerEntry
-		if json.Unmarshal(e.Value(), &pe) == nil {
+		if json.Unmarshal(v, &pe) == nil {
 			out = append(out, pe)
 		}
 	}
@@ -360,7 +361,7 @@ func (g *Gateway) finalizeClusterLevel(ctx context.Context, level int, dryRun bo
 		return finalizeResult{}, err
 	}
 	res := finalizeResult{Previous: rec.Level, Active: rec.Level}
-	entries, err := readPeerEntries(kctx, t.peers)
+	entries, err := readPeerEntries(kctx, t.gw.cfg.cluster.Conn)
 	if err != nil {
 		return res, err
 	}
@@ -405,7 +406,7 @@ func (t *peerTracker) autoFinalize(ctx context.Context) {
 		return
 	}
 	kctx, cancel := kvCtx(ctx)
-	entries, err := readPeerEntries(kctx, t.peers)
+	entries, err := readPeerEntries(kctx, t.gw.cfg.cluster.Conn)
 	cancel()
 	if err != nil {
 		return
