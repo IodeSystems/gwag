@@ -109,10 +109,23 @@ type Message struct {
 	ID string
 	// Headers holds HeaderType, HeaderChannel and any extra headers.
 	Headers map[string]string
-	// Data is the proto binary body.
+	// Data is the body as the Serde wrote it. A handler sees plain
+	// proto binary: Core runs Serde.Decode first.
 	Data []byte
 	// Delivery is the 1-based delivery attempt. Set on receive.
 	Delivery int
+	// Key is the backend's record key, where it has one (Kafka). nil on
+	// NATS. Set on receive.
+	Key []byte
+}
+
+func (m *Message) clone() *Message {
+	c := *m
+	c.Headers = make(map[string]string, len(m.Headers))
+	for k, v := range m.Headers {
+		c.Headers[k] = v
+	}
+	return &c
 }
 
 // Type returns the HeaderType value.
@@ -169,6 +182,10 @@ type SubscribeOptions struct {
 	// AckWait is how long a delivery may run before the backend
 	// redelivers it. Default 30s.
 	AckWait time.Duration
+	// Backend holds backend-specific settings, keyed by the backend's
+	// own names (e.g. "kafka.retry"). Backends ignore keys they do not
+	// own. Set with BackendOption.
+	Backend map[string]any
 }
 
 // Delay returns the redelivery delay after failed delivery n (1-based).
@@ -211,6 +228,19 @@ func Backoff(d ...time.Duration) SubscribeOption {
 //
 // Stability: experimental
 func AckWait(d time.Duration) SubscribeOption { return func(o *SubscribeOptions) { o.AckWait = d } }
+
+// BackendOption sets SubscribeOptions.Backend[key]. Backend packages
+// wrap it in typed options (kafka.RetryTopic).
+//
+// Stability: experimental
+func BackendOption(key string, value any) SubscribeOption {
+	return func(o *SubscribeOptions) {
+		if o.Backend == nil {
+			o.Backend = map[string]any{}
+		}
+		o.Backend[key] = value
+	}
+}
 
 // ResolveSubscribeOptions applies opts over the defaults.
 //

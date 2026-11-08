@@ -15,6 +15,7 @@ import (
 // Stability: experimental
 type Core struct {
 	backend Backend
+	serde   Serde
 	logf    func(format string, args ...any)
 
 	mu   sync.Mutex
@@ -39,7 +40,7 @@ func WithLogf(f func(format string, args ...any)) Option {
 //
 // Stability: experimental
 func NewCore(b Backend, opts ...Option) *Core {
-	c := &Core{backend: b, logf: log.Printf}
+	c := &Core{backend: b, serde: ProtoSerde{}, logf: log.Printf}
 	for _, o := range opts {
 		o(c)
 	}
@@ -48,6 +49,16 @@ func NewCore(b Backend, opts ...Option) *Core {
 
 // Backend returns the backend.
 func (c *Core) Backend() Backend { return c.backend }
+
+// Serde returns the serde.
+func (c *Core) Serde() Serde { return c.serde }
+
+func (c *Core) topic(ch Channel) string {
+	if t, ok := c.backend.(Topics); ok {
+		return t.Topic(ch)
+	}
+	return ch.Stream
+}
 
 // Publish encodes m and publishes it on the subject built from
 // segments (in pattern order).
@@ -58,10 +69,6 @@ func (c *Core) Publish(ctx context.Context, ch Channel, segments []string, m pro
 	subject, err := ch.Pattern.Subject(segments)
 	if err != nil {
 		return fmt.Errorf("publish %s: %w", ch.Key, err)
-	}
-	data, err := proto.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("publish %s: marshal: %w", ch.Key, err)
 	}
 	var po publishOptions
 	for _, o := range opts {
@@ -76,7 +83,11 @@ func (c *Core) Publish(ctx context.Context, ch Channel, segments []string, m pro
 	}
 	headers[HeaderType] = string(m.ProtoReflect().Descriptor().FullName())
 	headers[HeaderChannel] = ch.Key
-	return c.backend.Publish(ctx, ch, &Message{Subject: subject, ID: po.id, Headers: headers, Data: data})
+	msg := &Message{Subject: subject, ID: po.id, Headers: headers}
+	if err := c.serde.Encode(ctx, ch, c.topic(ch), m, msg); err != nil {
+		return fmt.Errorf("publish %s: encode: %w", ch.Key, err)
+	}
+	return c.backend.Publish(ctx, ch, msg)
 }
 
 // SegmentHandler gets the wildcard segment values (pattern order) of
@@ -93,7 +104,15 @@ func (c *Core) Subscribe(ctx context.Context, ch Channel, group string, h Segmen
 		return nil, fmt.Errorf("subscribe %s: group %q: use letters, digits, '_' or '-'", ch.Key, group)
 	}
 	o := ResolveSubscribeOptions(opts...)
-	stop, err = c.backend.Subscribe(ctx, ch, group, o, func(ctx context.Context, m *Message) error {
+	topic := c.topic(ch)
+	stop, err = c.backend.Subscribe(ctx, ch, group, o, func(ctx context.Context, raw *Message) error {
+		m := raw
+		if _, plain := c.serde.(ProtoSerde); !plain {
+			m = raw.clone()
+			if err := c.serde.Decode(ctx, ch, topic, m); err != nil {
+				return fmt.Errorf("decode %s: %w", ch.Key, err)
+			}
+		}
 		segs, ok := ch.Pattern.Match(m.Subject)
 		if !ok {
 			c.Skip(ch, m, "subject "+m.Subject+" does not match "+ch.Pattern.String())
