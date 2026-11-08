@@ -185,6 +185,7 @@ func (g *Gateway) rebuildChannelBindingIndexLocked() {
 	}
 	sort.Slice(idx.channels, func(i, j int) bool { return idx.channels[i].key < idx.channels[j].key })
 	g.channelBindingIndex.Store(idx)
+	g.ensureEventStreamsAsync(idx.channels)
 }
 
 // resolveMessageDescriptorsLocked walks all proto and internal-proto

@@ -257,6 +257,10 @@ type Gateway struct {
 	// typedSkipLog rate-limits the log line for typed events ps.sub
 	// drops (event_channels.go).
 	typedSkipLog skipLogger
+
+	// eventStreams is the JetStream stream ensure state per named
+	// channel (event_streams.go).
+	eventStreams eventStreamState
 }
 
 // rejectedJoinSummary captures the most recent rejection plus a
@@ -472,6 +476,10 @@ type config struct {
 	// rejects publishes to channels with no matching binding pattern.
 	// Default false. See WithStrictPayloadTypes.
 	psStrictPayloadTypes bool
+
+	// eventStreamMaxAge is the MaxAge of named-channel JetStream
+	// streams. 0 → 7 days. See WithEventStreamMaxAge.
+	eventStreamMaxAge time.Duration
 
 	// mcpSeed seeds the MCP allowlist at construction. Applied once at
 	// New() before any control-plane / cluster watch overrides. Runtime
