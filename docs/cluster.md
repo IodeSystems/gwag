@@ -137,7 +137,9 @@ carried over):
    Two nodes serve; buckets are R1 until the third node is up.
 2. Re-register the services on the new cluster (control plane or
    `gwag` flags). Registrations live in the cluster buckets, and the
-   old node's are not imported.
+   old node's are not imported. Nor are stable and deprecated marks,
+   app keys, or Schema Registry contents: set them again (`gwag key
+   create`, `gwag schema import --into`) before moving traffic.
 3. Copy application KV and stream data you need to keep with a NATS
    client. Not tested.
 4. Move traffic to the new nodes, then stop the old node. Do not
@@ -148,12 +150,13 @@ carried over):
    offline=none`, `go_api_gateway_cluster_peers` is 3, and
    `/api/health` is 200 on every node.
 
-Downtime of the old node is its replacement: a stop and restart took
-6.2 to 6.4 s to a 200 response (path 1), and the switch in step 4 has
-no measured downtime. For a new deployment, list the future peers on
-the first node and start the second node within the time the first
-node may stay at 503; path 3 shows the first node then needs 2.7 s
-after the second node starts.
+The workaround has no restart of the old node; downtime depends on
+the traffic switch in step 4, which was not measured. Path 1 (6.2 to
+6.4 s to a 200 response) is the downtime of a restart, not a working
+migration. For a new deployment, list the future peers on the first
+node and start the second node while the first may still answer 503;
+path 3 shows the first node then needs 2.7 s after the second node
+starts.
 
 ### Embedded in Go
 
