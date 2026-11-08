@@ -131,6 +131,12 @@ or `.venv`.
 
 - The runtime, [`py/gwag-events/`](../py/gwag-events), is not on PyPI.
   Depend on it by path or copy it.
+- Kafka and the Schema Registry are separate packages, so
+  `gwag-events` has no Kafka or HTTP dependency:
+  `uv add ./path/to/gwag/py/gwag-events-kafka` (`gwag_events_kafka`)
+  and `uv add ./path/to/gwag/py/gwag-events-schemaregistry`
+  (`gwag_events_schemaregistry`). `Message.key` is the Kafka record
+  key as bytes.
 - `--out` must be a Python package: betterproto2 imports
   `from ...message_pool`, so the output directory sits one level above
   the proto package. Import as `proto_gen.orders.v1`.
@@ -311,7 +317,16 @@ stop = await bus.on_payments("ledger", captured=on_captured, note=on_note)
   case value is typed from its proto field. A case whose type lives in
   another package, or is a well-known type betterproto2 unwraps, is
   typed `Any`.
-- `OrdersBus(backend, logf=f)` sets the logger for skipped messages.
+- `OrdersBus(backend, serde=None, logf=None)`: `serde` is a
+  `gwag_events.Serde` (default plain proto; the Schema Registry serde
+  is [below](#schema-registry)), `logf` the logger for skipped
+  messages.
+- The generated file also registers the serialized
+  `FileDescriptorProto` of its proto file and of each non-builtin
+  import (`register_file_descriptors`). betterproto2 messages carry no
+  descriptor, and the Schema Registry serde needs one to register a
+  schema and to find a message's index in its file. They are the bytes
+  the Go runtime registers, so both register one schema.
 - Durations are seconds: `SubscribeOptions(max_deliver=5,
   deliver_all=False, backoff=(1.0, 5.0, 30.0), ack_wait=30.0)`.
 
@@ -359,14 +374,16 @@ stop = await bus.on_payments("ledger", captured=on_captured, note=on_note)
 
 Body: proto binary. The format is the same in all three languages, so
 a Go publisher can feed a Python listener and the reverse. A Serde
-changes the body, not the headers: the Go runtime has Confluent
-Schema Registry framing ([below](#schema-registry-wire-format)).
+changes the body, not the headers: the Go and Python runtimes have
+Confluent Schema Registry framing
+([below](#schema-registry-wire-format)).
 
 ## Backends
 
 All three runtimes have the same three backends: JetStream, memory
-and Kafka. Kafka is a supported package in Go (`events/kafka`, see
-[Kafka](#kafka)) and an example to copy in TypeScript and Python.
+and Kafka. Kafka is a supported package in Go (`events/kafka`) and
+Python (`py/gwag-events-kafka`), see [Kafka](#kafka), and an example
+to copy in TypeScript.
 
 - **JetStream** — one stream per channel named
   `EV_<package with . as _>_<name>` (`EV_orders_v1_OrderEvents`),
@@ -384,15 +401,15 @@ and Kafka. Kafka is a supported package in Go (`events/kafka`, see
   consumer group `<stream>.<group>`, retries in process (the
   partition waits), DLQ topic `gwag.dlq.<stream>`. No dedup: Kafka
   does not drop a repeated `Gwag-Msg-Id`. Each `test.sh` runs against
-  `apache/kafka` in docker. Go changes all of this per channel; see
-  [Kafka](#kafka).
+  `apache/kafka` in docker. Go and Python change all of this per
+  channel; see [Kafka](#kafka).
 
 | | Go | TypeScript | Python |
 |---|---|---|---|
 | JetStream | `jetstream.New(nc, jetstream.WithPrefetch(n))` | `new JetStreamBackend(nc, { prefetch?, logf? })` | `JetStreamBackend(nc, prefetch=16, logf=)` |
 | Memory | `memory.New()`, `DeadLetters()` | `new MemoryBackend()`, `deadLetters()` | `MemoryBackend()`, `dead_letters()` |
 | Backend suite | `events/eventstest.Run` | `runBackendSuite` from `@gwag/events/eventstest` | `gwag_events.testing.CHECKS` |
-| Kafka | [`events/kafka`](../events/kafka) (franz-go, own module); example [`go-kafka`](../examples/events/go-kafka) | example [`ts-kafka`](../examples/events/ts-kafka) (kafkajs) | example [`py-kafka`](../examples/events/py-kafka) (aiokafka) |
+| Kafka | [`events/kafka`](../events/kafka) (franz-go, own module); example [`go-kafka`](../examples/events/go-kafka) | example [`ts-kafka`](../examples/events/ts-kafka) (kafkajs) | [`py/gwag-events-kafka/`](../py/gwag-events-kafka) (aiokafka, not published); example [`py-kafka`](../examples/events/py-kafka) |
 | Runtime | `events/` (`events/jetstream`, `events/memory`) | [`ts/events/`](../ts/events) | [`py/gwag-events/`](../py/gwag-events) |
 
 `nc` is a `*nats.Conn` (Go), a `@nats-io/transport-node` connection
@@ -417,7 +434,7 @@ the backend suite against any new backend.
 
 ## Schema Registry
 
-Go only for now. TypeScript and Python follow.
+Go and Python. TypeScript follows.
 
 A Kafka topic often has a schema in a Confluent Schema Registry. How
 gwag uses that schema depends on one question: **who produces the
@@ -480,7 +497,25 @@ err := bus.PublishOrderEvents(ctx, ordersv1.OrderEventsSubject{OrderId: "o-1001"
 - The registry applies its compatibility level when a new version is
   registered: a publish or push of an incompatible change fails there.
 
-Example: `srinterop produce` and `consume`.
+Python:
+
+```python
+from gwag_events_kafka import KafkaBackend
+from gwag_events_schemaregistry import Client, Config, Serde
+
+backend = KafkaBackend("localhost:9092")
+registry = Client(Config(url="http://localhost:8081"))
+bus = OrdersBus(backend, serde=Serde(registry, auto_register=True))
+await bus.publish_order_events(OrderEventsSubject(order_id="o-1001"), OrderCreated(order_id="o-1001", customer="ann"))
+```
+
+The generated code carries the file descriptors the serde registers
+(see [Python notes](#python-notes)); the subject, references and
+bytes are the Go ones, so a Go and a Python service producing the same
+proto share one schema id. `gwag schema push` is the same command.
+
+Example: `srinterop produce` and `consume` (Go and
+[Python](../examples/events/py-kafka/srinterop.py)).
 
 ### Import
 
@@ -538,7 +573,27 @@ has another id or another text, or is gone. A newer version upstream
 is a note, not a failure: the lock pins on purpose. To move, re-import
 with `--subject corp-orders-value@latest` and review the diff.
 
-Example: `corp import`.
+Python: the same command with `--lang python`.
+
+```bash
+gwag gen --registry "$SR_URL" --subject corp-orders-value --import-dir imported \
+  --lang python --out gen_corp --opt paths=source_relative
+```
+
+```python
+from gen_corp.corp.orders.v1 import Order
+from gen_corp.corp.orders.v1.corp_orders_value_events import CorpOrdersValueBus, OrderSubject
+
+backend = KafkaBackend(brokers, topics=topic_table({"corp.orders.v1.Order": Topic(name="corp-orders")}))
+bus = CorpOrdersValueBus(backend, serde=Serde(registry))
+
+async def on_order(s: OrderSubject, m: Order) -> None:
+    print(message_from().key, m.order_id)   # record key, e.g. b"o-3001"
+
+await bus.on_order("shop", on_order)
+```
+
+Example: `corp import` (Go and [Python](../examples/events/py-kafka/corp.py)).
 
 ### Shadow
 
@@ -591,7 +646,11 @@ handlers get them:
 serde := sr.NewSerde(registry, sr.TypeNames(map[string]string{"corp.orders.v1.Order": "shop.v1.CorpOrder"}))
 ```
 
-Example: `corp shadow`, and `corp/shadow/drift/v1/drift.proto` for
+```python
+serde = Serde(registry, type_names={"corp.orders.v1.Order": "shop.v1.CorpOrder"})
+```
+
+Example: `corp shadow` (Go and Python), and `corp/shadow/drift/v1/drift.proto` for
 copies that fail.
 
 ## Kafka
@@ -617,6 +676,28 @@ bus := ordersv1.NewBus(backend)
 
 The producer is idempotent with `acks=all` (franz-go's defaults).
 
+Python (`py/gwag-events-kafka`, import `gwag_events_kafka`; add it by
+path like `gwag-events`):
+
+```python
+from gwag_events_kafka import KafkaBackend
+
+backend = KafkaBackend("localhost:9092", **opts)
+bus = OrdersBus(backend)
+```
+
+| Option | Default |
+|---|---|
+| `topics=mapper` | topic per channel, named by its stream |
+| `partitions=n`, `replication=n` | 3, 1, for topics the backend creates |
+| `client_config={...}` | aiokafka keyword arguments for every client: `security_protocol`, `ssl_context`, `sasl_mechanism`, `sasl_plain_username`, ... |
+| `producer_config={...}`, `consumer_config={...}` | the same, for the producer or the consumers only |
+
+The producer is idempotent with `acks="all"`. aiokafka reads
+snappy, lz4 and zstd batches (the package depends on
+`aiokafka[snappy,lz4,zstd]`): franz-go compresses with snappy by
+default, so a Python reader of a Go-written topic needs them.
+
 A mapper returns a `kafka.Topic` per channel; zero fields keep the
 default. `kafka.TopicTable` maps channel keys:
 
@@ -634,6 +715,12 @@ kafka.WithTopics(kafka.TopicTable(map[string]kafka.Topic{
     },
 }))
 ```
+
+Python: `Topic(name=, partitions=, replication=, key=, subject=,
+group=, dlq=, retry=)` with the same defaults, and
+`topic_table({"orders.v1.OrderEvents": Topic(...)})`.
+`subject` takes the aiokafka `ConsumerRecord`; `key` takes
+`(subject, message)` and returns bytes.
 
 - When `Key` returns something other than the subject, the subject
   rides in `Gwag-Subject`.
@@ -668,6 +755,15 @@ Chosen per subscribe:
 stop, err := bus.OnOrderEvents(ctx, "billing", handlers, kafka.RetryTopic(), events.MaxDeliver(5))
 ```
 
+```python
+from gwag_events_kafka import retry_topic
+
+stop = await bus.on_order_events("billing", order_created=on_created,
+                                 options=retry_topic(SubscribeOptions(max_deliver=5)))
+```
+
+`retry_in_process(opts)` is the default and can be left out.
+
 The backend creates the DLQ and retry topics at subscribe.
 
 ## Schema Registry wire format
@@ -699,6 +795,26 @@ to framing without a cut-over.
 | `WithReferenceSubject(f)` | subject of an import; default the import path |
 | `TypeNames(map)` | registry type name to local type name (shadow) |
 
+Python (`Serde(client, ...)`, import `gwag_events_schemaregistry`;
+`Config(url, username, password, token, verify, http_client)` with
+httpx):
+
+| Go | Python |
+|---|---|
+| `WithSubjectNameStrategy(s)` | `subject_name_strategy=` `topic_name_strategy` (default), `record_name_strategy`, `topic_record_name_strategy`, or `strategy_by_name("topic")` |
+| `AutoRegister()` | `auto_register=True` |
+| `UseLatest()` | `use_latest=True` |
+| `UseSchemaID(id)` | `use_schema_id=id` |
+| `Normalize()` | `normalize=True` |
+| `WithReferenceSubject(f)` | `reference_subject=f` |
+| `TypeNames(map)` | `type_names={...}` |
+
+`auto_register`, `use_latest` and `use_schema_id` exclude each other
+(Go takes the last one given). On decode Python reads the registry's
+`format=serialized` schema: the message tree is all it needs.
+`gwag_events_schemaregistry.srtest.FakeRegistry` is an in-memory
+registry for tests.
+
 Schemas are registered as Confluent's own clients do: base64 of the
 `FileDescriptorProto`, imports as references. `google/protobuf/*`,
 `google/type/*` and `confluent/*` imports are the registry's built-ins
@@ -711,6 +827,11 @@ from the environment: `GWAG_REGISTRY_USERNAME` /
 Confluent's own code: the Java `kafka-protobuf-console-consumer` and
 the Python `ProtobufDeserializer` read what gwag writes, and gwag reads
 what the Python `ProtobufSerializer` writes.
+`examples/events/py-kafka/test.sh` checks the Python serde the same
+way: Go-written records read by Python, Python-written records read by
+Confluent's `ProtobufDeserializer` and by Go, Confluent-written
+records (no `Gwag-*` headers) read by Python typed handlers, and the
+two languages registering one schema id.
 
 ## Reporting subscriptions to the gateway
 
@@ -749,14 +870,16 @@ example, runs the TypeScript tests, and then the Python checks.
 | Command | Runs |
 |---|---|
 | `examples/events/check.sh` | everything above; JetStream tests and Go-TypeScript interop need docker and are skipped without it |
-| `KAFKA=1 examples/events/check.sh` | also `go-kafka`, `ts-kafka` and `py-kafka` against `apache/kafka` (docker); `go-kafka` also starts `cp-schema-registry` and needs `uv` (`SR=0` skips that part) |
+| `KAFKA=1 examples/events/check.sh` | also `go-kafka`, `ts-kafka` and `py-kafka` against `apache/kafka` (docker); `go-kafka` and `py-kafka` also start `cp-schema-registry`; `go-kafka` needs `uv`, `py-kafka` needs `uv` and `go` (`SR=0` skips that part) |
 | `PY=0 examples/events/check.sh` | skips Python |
-| `examples/events/py/check.sh` | `uv lock --check`, Python regen and drift check, `mypy --strict`, runtime and example tests on an embedded NATS (no docker), including Go-Python interop (`tests/test_interop.py`: Go to Python, Python to Go, one group split across both); `KAFKA=1` adds `py-kafka` |
+| `examples/events/py/check.sh` | `uv lock --check`, Python regen and drift check, `mypy --strict`, runtime, Kafka-backend (skipped without a broker), serde and example tests on an embedded NATS (no docker), including Go-Python interop (`tests/test_interop.py`: Go to Python, Python to Go, one group split across both); `KAFKA=1` adds `py-kafka` (backend tests, Schema Registry interop) |
 | `examples/events/interop.sh` | Go publisher into TypeScript listener, the reverse, and a Go and a TypeScript member of one group (docker) |
 | `ts/events/test.sh` | TypeScript runtime tests against NATS in docker |
 
 The Kafka scripts take `KAFKA_PORT` (default 19092 for Go and
 TypeScript, 19093 for Python) and refuse to start when it is in use.
+The registry scripts also take `SR_PORT` (18081 for Go, 18083 for
+Python).
 
 ## Adding a language
 

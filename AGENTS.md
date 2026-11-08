@@ -141,8 +141,11 @@ go / ts / python, see `docs/events.md`).
   transport + target are positional.)
 - **Typed events** — `gwag gen --lang go|ts|python`. Runtimes: `events/`
   (Go; `events/jetstream`, `events/memory`, `events/eventstest`),
-  `ts/events` (`@gwag/events`), `py/gwag-events` (`gwag_events`). Same
-  wire format and stream names in all three. Codegen: `gw/eventgen/`;
+  `ts/events` (`@gwag/events`), `py/gwag-events` (`gwag_events`; Kafka in
+  `py/gwag-events-kafka`, Schema Registry in
+  `py/gwag-events-schemaregistry`, separate uv projects so the core has
+  no Kafka or HTTP dependency). Same wire format and stream names in all
+  three. Codegen: `gw/eventgen/`;
   a language is an `eventgen.Language` registered from `init`. Base
   generators come from the consumer project's pins (`go tool
   protoc-gen-go`, `node_modules/.bin/protoc-gen-es`, `uv run --locked`),
@@ -155,7 +158,10 @@ go / ts / python, see `docs/events.md`).
   `py-kafka` are own modules / projects. `events/schemaregistry`
   (Confluent Schema Registry serde, net/http + protocompile) is in the
   root module. The gateway stays NATS-only: nothing in `gw/` imports
-  Kafka or the registry. Registry CLI: `gwag gen --registry URL
+  Kafka or the registry. Python buses get file descriptors from the
+  generated `*_events.py` (betterproto2 has none): `eventgen` embeds
+  `schemaregistry.SchemaOf` bytes, so Go and Python register one
+  schema. Registry CLI: `gwag gen --registry URL
   --subject S[@V]` (import, lock file), `gwag gen --check-lock`,
   `gwag schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
   `gwag schema push --registry URL` (own). The bus is open: authorship
