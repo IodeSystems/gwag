@@ -1,0 +1,39 @@
+[project]
+name = "gwag-events-kafka"
+version = "0.0.0"
+description = "Kafka Backend for the gwag Python events runtime (aiokafka). Not published."
+requires-python = ">=3.12"
+dependencies = [
+    "aiokafka==0.13.0",
+    "gwag-events",
+]
+
+[dependency-groups]
+dev = [
+    "mypy==1.20.0",
+    "pytest==9.0.0",
+    "pytest-asyncio==1.3.0",
+]
+
+[tool.uv.sources]
+gwag-events = { path = "../gwag-events", editable = true }
+
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gwag_events_kafka"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+
+# aiokafka ships no type information.
+[[tool.mypy.overrides]]
+module = "aiokafka.*"
+ignore_missing_imports = true

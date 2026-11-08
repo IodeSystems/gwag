@@ -49,6 +49,9 @@ class Harness:
     settle: float = 0.0
     # Skip the dedup check, for backends without message-id dedup (Kafka).
     no_dedup: bool = False
+    # Adjusts the options of every subscribe (a backend's own mode,
+    # such as Kafka's retry_topic).
+    adjust: Callable[[SubscribeOptions], SubscribeOptions] | None = None
 
 
 _seq = itertools.count(1)
@@ -85,7 +88,8 @@ async def _sub(
     fn: Callable[[list[str], Message], Awaitable[None]],
     options: SubscribeOptions | None = None,
 ) -> Callable[[], Awaitable[None]]:
-    stop = await c.subscribe(ch, group, fn, options)
+    opts = options or SubscribeOptions()
+    stop = await c.subscribe(ch, group, fn, h.adjust(opts) if h.adjust else opts)
     await asyncio.sleep(h.settle)
     return stop
 
