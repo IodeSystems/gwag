@@ -183,3 +183,35 @@ async def test_unknown_schema_id_fails() -> None:
     _, _, serde = _setup()
     with pytest.raises(Exception, match="404"):
         await serde.decode(CH, "orders", Message(subject="s", data=frame(99, [0], b"")))
+
+
+async def test_channel_clients() -> None:
+    """One channel's lookups and decodes go to its registry (another id space)."""
+    own, corp = FakeRegistry(), FakeRegistry()
+    oc = Client(Config(url="http://own.test", http_client=own.http_client()))
+    cc = Client(Config(url="http://corp.test", http_client=corp.http_client()))
+    # Burn an id in corp, so the two registries frame with other ids.
+    corp.add("filler-value", Schema(_b64(_file("f.proto", "f", [], _msg("F")))))
+    corp_ch = Channel.new("corp.v1.Orders", "corp.orders")
+    serde = Serde(oc, files=_files(), auto_register=True, channel_clients={corp_ch.key: cc})
+    a, b = _out("shop.v1.Order"), _out("shop.v1.Order")
+    await serde.encode(corp_ch, "corp-orders", b"a", a)
+    await serde.encode(CH, "own-orders", b"b", b)
+    corp_id = (await cc.subject_version("corp-orders-value", "latest")).id
+    own_id = (await oc.subject_version("own-orders-value", "latest")).id
+    assert corp_id != own_id
+    with pytest.raises(NotRegisteredError):
+        await oc.ensure_file("corp-orders-value", "shop/order.proto", files=_files())
+    for ch, m, sid in ((corp_ch, a, corp_id), (CH, b, own_id)):
+        got = Message(subject="s", data=m.data)
+        await serde.decode(ch, "", got)
+        assert got.headers[HEADER_SCHEMA_ID] == str(sid)
+        assert got.type == "shop.v1.Order"
+    # The corp channel's id is not in the serde's own registry.
+    with pytest.raises(Exception, match="404"):
+        await serde.decode(CH, "", Message(subject="s", data=frame(corp_id, [1], b"")))
+    for bad in ({"": cc}, {corp_ch.key: None}):
+        with pytest.raises(ValueError) as e:
+            Serde(oc, files=_files(), channel_clients=bad)  # type: ignore[arg-type]
+        assert str(e.value).startswith('schema registry: channel client for channel "')
+        assert str(e.value).endswith('": want a channel key and a client')

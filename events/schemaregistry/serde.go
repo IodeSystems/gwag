@@ -86,8 +86,10 @@ type Serde struct {
 	normalize bool
 	refSubj   func(string) string
 	typeNames map[string]string
+	channels  map[string]*Client // channel key -> its registry
+	badChan   error
 
-	ids sync.Map // subject + "\x00" + message full name -> encoding
+	ids sync.Map // channel key (when in channels) + "\x00" + subject + "\x00" + message full name -> encoding
 }
 
 type encoding struct {
@@ -153,6 +155,38 @@ func TypeNames(m map[string]string) SerdeOption {
 	return func(x *Serde) { x.typeNames = m }
 }
 
+// ChannelClient sends the registry calls of channel key (its channel
+// key, "corp.orders.v1.Order") to c instead of the serde's client, on
+// publish and on delivery. For a channel another system produces: its
+// schema ids are that system's, so its records decode only against its
+// registry, or against the gwag context it was imported into
+// (http://gwag:8080/schema-registry/contexts/.corp after `gwag schema
+// import --into .corp`). Repeatable, one per channel. An empty key or
+// a nil client fails NewSerde.
+//
+// Stability: experimental
+func ChannelClient(key string, c *Client) SerdeOption {
+	return func(x *Serde) {
+		if key == "" || c == nil {
+			if x.badChan == nil {
+				x.badChan = channelClientErr(key)
+			}
+			return
+		}
+		if x.channels == nil {
+			x.channels = map[string]*Client{}
+		}
+		x.channels[key] = c
+	}
+}
+
+// channelClientErr is the error of an empty channel key or a nil
+// client. The Go, TypeScript and Python serdes reject it with this
+// same text.
+func channelClientErr(key string) error {
+	return fmt.Errorf("schema registry: channel client for channel %q: want a channel key and a client", key)
+}
+
 // ErrExclusiveModes is returned by NewSerde when more than one of
 // AutoRegister, UseLatest and UseSchemaID is given. The Go, TypeScript
 // and Python serdes reject the combination with this same text.
@@ -161,7 +195,8 @@ func TypeNames(m map[string]string) SerdeOption {
 var ErrExclusiveModes = errors.New("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one")
 
 // NewSerde returns a Serde over c. It returns ErrExclusiveModes when
-// more than one of AutoRegister, UseLatest and UseSchemaID is given.
+// more than one of AutoRegister, UseLatest and UseSchemaID is given,
+// and an error when a ChannelClient has an empty key or a nil client.
 //
 // Stability: experimental
 func NewSerde(c *Client, opts ...SerdeOption) (*Serde, error) {
@@ -172,7 +207,18 @@ func NewSerde(c *Client, opts ...SerdeOption) (*Serde, error) {
 	if s.modes > 1 {
 		return nil, ErrExclusiveModes
 	}
+	if s.badChan != nil {
+		return nil, s.badChan
+	}
 	return s, nil
+}
+
+// client is the registry of ch, and the cache prefix of its encodings.
+func (s *Serde) client(ch events.Channel) (*Client, string) {
+	if c, ok := s.channels[ch.Key]; ok {
+		return c, ch.Key
+	}
+	return s.c, ""
 }
 
 // Subject returns the subject a publish of md to topic uses.
@@ -181,10 +227,11 @@ func (s *Serde) Subject(topic string, md protoreflect.MessageDescriptor) string 
 }
 
 // Encode implements events.Serde.
-func (s *Serde) Encode(ctx context.Context, _ events.Channel, topic string, m proto.Message, out *events.Message) error {
+func (s *Serde) Encode(ctx context.Context, ch events.Channel, topic string, m proto.Message, out *events.Message) error {
 	md := m.ProtoReflect().Descriptor()
 	subject := s.strategy(topic, md)
-	enc, err := s.encoding(ctx, subject, md)
+	c, pfx := s.client(ch)
+	enc, err := s.encoding(ctx, c, pfx, subject, md)
 	if err != nil {
 		return err
 	}
@@ -196,8 +243,8 @@ func (s *Serde) Encode(ctx context.Context, _ events.Channel, topic string, m pr
 	return nil
 }
 
-func (s *Serde) encoding(ctx context.Context, subject string, md protoreflect.MessageDescriptor) (encoding, error) {
-	k := subject + "\x00" + string(md.FullName())
+func (s *Serde) encoding(ctx context.Context, c *Client, pfx, subject string, md protoreflect.MessageDescriptor) (encoding, error) {
+	k := pfx + "\x00" + subject + "\x00" + string(md.FullName())
 	if s.mode != modeLatest {
 		if v, ok := s.ids.Load(k); ok {
 			return v.(encoding), nil
@@ -206,7 +253,7 @@ func (s *Serde) encoding(ctx context.Context, subject string, md protoreflect.Me
 	var enc encoding
 	switch s.mode {
 	case modeLookup, modeRegister:
-		r, err := s.c.EnsureFile(ctx, subject, md.ParentFile(), RegisterOptions{
+		r, err := c.EnsureFile(ctx, subject, md.ParentFile(), RegisterOptions{
 			Register: s.mode == modeRegister, Normalize: s.normalize, RefSubject: s.refSubj,
 		})
 		if err != nil {
@@ -216,13 +263,13 @@ func (s *Serde) encoding(ctx context.Context, subject string, md protoreflect.Me
 	case modeLatest, modeID:
 		id := s.id
 		if s.mode == modeLatest {
-			v, err := s.c.SubjectVersion(ctx, subject, "latest", "")
+			v, err := c.SubjectVersion(ctx, subject, "latest", "")
 			if err != nil {
 				return encoding{}, fmt.Errorf("latest of %s: %w", subject, err)
 			}
 			id = v.ID
 		}
-		fd, err := s.c.FileByID(ctx, id)
+		fd, err := c.FileByID(ctx, id)
 		if err != nil {
 			return encoding{}, err
 		}
@@ -239,7 +286,7 @@ func (s *Serde) encoding(ctx context.Context, subject string, md protoreflect.Me
 }
 
 // Decode implements events.Serde.
-func (s *Serde) Decode(ctx context.Context, _ events.Channel, _ string, in *events.Message) error {
+func (s *Serde) Decode(ctx context.Context, ch events.Channel, _ string, in *events.Message) error {
 	if len(in.Data) == 0 || in.Data[0] != MagicByte {
 		return nil // plain proto
 	}
@@ -247,7 +294,8 @@ func (s *Serde) Decode(ctx context.Context, _ events.Channel, _ string, in *even
 	if err != nil {
 		return err
 	}
-	fd, err := s.c.FileByID(ctx, id)
+	c, _ := s.client(ch)
+	fd, err := c.FileByID(ctx, id)
 	if err != nil {
 		return err
 	}

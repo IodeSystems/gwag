@@ -239,3 +239,43 @@ test("autoRegister, useLatest and useSchemaId are mutually exclusive", () => {
   }
   new SchemaRegistrySerde(c, { useLatest: true, autoRegister: false });
 });
+
+test("channelClients: one channel's lookups and decodes go to its registry (another id space)", async () => {
+  const own = await fakeRegistry();
+  const corp = await fakeRegistry();
+  try {
+    const oc = new RegistryClient({ url: own.url });
+    const cc = new RegistryClient({ url: corp.url });
+    // Burn an id in corp, so the two registries frame with other ids.
+    await cc.register("filler-value", { schemaType: "PROTOBUF", schema: 'syntax = "proto3"; package f; message F {}' });
+    const corpCh = channel("corp.v1.Orders", "corp-orders");
+    const s = new SchemaRegistrySerde(oc, { autoRegister: true, channelClients: { "corp.v1.Orders": cc } });
+    const body = toBinary(OrderCreatedSchema, create(OrderCreatedSchema, { orderId: "o" }));
+    const a: Message = { subject: "s", id: "", headers: {}, data: body, delivery: 0 };
+    const b: Message = { subject: "s", id: "", headers: {}, data: body, delivery: 0 };
+    await s.encode(corpCh, "corp-orders", OrderCreatedSchema, a);
+    await s.encode(orderEvents, "own-orders", OrderCreatedSchema, b);
+    assert.ok(corp.schemas.some((x) => x.subject === "corp-orders-value"), "corp channel registered in its registry");
+    assert.ok(!own.schemas.some((x) => x.subject === "corp-orders-value"), "corp channel not in the serde's registry");
+    assert.ok(own.schemas.some((x) => x.subject === "own-orders-value"));
+    const aid = unframe(a.data).id;
+    const bid = unframe(b.data).id;
+    assert.notEqual(aid, bid);
+    for (const [ch, m, id] of [[corpCh, a, aid], [orderEvents, b, bid]] as const) {
+      await s.decode(ch, "", m);
+      assert.equal(m.headers[HeaderSchemaID], String(id));
+      assert.equal(m.headers["Gwag-Type"], "orders.v1.OrderCreated");
+    }
+    // The corp channel's id is not in the serde's own registry.
+    const m: Message = { subject: "s", id: "", headers: {}, data: frame(aid, [0], new Uint8Array()), delivery: 0 };
+    await assert.rejects(s.decode(orderEvents, "", m));
+    for (const bad of [{ "": cc }, { "corp.v1.Orders": undefined as unknown as RegistryClient }] as Record<string, RegistryClient>[]) {
+      assert.throws(() => new SchemaRegistrySerde(oc, { channelClients: bad }), {
+        message: /^schema registry: channel client for channel ".*": want a channel key and a client$/,
+      });
+    }
+  } finally {
+    own.server.close();
+    corp.server.close();
+  }
+});

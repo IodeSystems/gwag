@@ -63,6 +63,16 @@ export interface SerdeOptions {
    * decode only.
    */
   typeNames?: Record<string, string>;
+  /**
+   * Registry per channel key ("corp.orders.v1.Order"), used instead of
+   * the serde's client on publish and on delivery. For a channel
+   * another system produces: its schema ids are that system's, so its
+   * records decode only against its registry, or against the gwag
+   * context it was imported into
+   * (http://gwag:8080/schema-registry/contexts/.corp after
+   * `gwag schema import --into .corp`).
+   */
+  channelClients?: Record<string, RegistryClient>;
 }
 
 interface Encoding {
@@ -90,6 +100,11 @@ export class SchemaRegistrySerde implements Serde {
     if (modes.filter(Boolean).length > 1) {
       throw new Error("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one");
     }
+    for (const [key, c] of Object.entries(opts.channelClients ?? {})) {
+      if (key === "" || !c) {
+        throw new Error(`schema registry: channel client for channel ${JSON.stringify(key)}: want a channel key and a client`);
+      }
+    }
     this.client = client;
     this.#o = opts;
     this.#strategy = opts.subjectNameStrategy ?? topicNameStrategy;
@@ -100,20 +115,26 @@ export class SchemaRegistrySerde implements Serde {
     return this.#strategy(topic, md);
   }
 
-  async encode(_ch: Channel, topic: string, type: DescMessage | string, out: Message): Promise<void> {
+  /** The registry of ch, and the cache prefix of its encodings. */
+  #clientOf(ch: Channel): [RegistryClient, string] {
+    const c = this.#o.channelClients?.[ch.key];
+    return c ? [c, ch.key] : [this.client, ""];
+  }
+
+  async encode(ch: Channel, topic: string, type: DescMessage | string, out: Message): Promise<void> {
     if (typeof type === "string") {
       throw new Error(`message ${type}: the schema registry serde needs the message schema; publish through a generated bus`);
     }
-    const enc = await this.#encoding(this.#strategy(topic, type), type);
+    const enc = await this.#encoding(this.#clientOf(ch), this.#strategy(topic, type), type);
     out.data = frame(enc.id, enc.indexes, out.data);
   }
 
-  #encoding(subject: string, md: DescMessage): Promise<Encoding> {
+  #encoding([client, pfx]: [RegistryClient, string], subject: string, md: DescMessage): Promise<Encoding> {
     const o = this.#o;
-    const k = `${subject}\0${md.typeName}`;
+    const k = `${pfx}\0${subject}\0${md.typeName}`;
     const cached = o.useLatest ? undefined : this.#ids.get(k);
     if (cached) return cached;
-    const p = this.#resolve(subject, md);
+    const p = this.#resolve(client, subject, md);
     if (!o.useLatest) {
       p.catch(() => this.#ids.delete(k));
       this.#ids.set(k, p);
@@ -121,25 +142,25 @@ export class SchemaRegistrySerde implements Serde {
     return p;
   }
 
-  async #resolve(subject: string, md: DescMessage): Promise<Encoding> {
+  async #resolve(client: RegistryClient, subject: string, md: DescMessage): Promise<Encoding> {
     const o = this.#o;
     if (o.useLatest || o.useSchemaId !== undefined) {
       let id = o.useSchemaId ?? 0;
       if (o.useLatest) {
         let v;
         try {
-          v = await this.client.subjectVersion(subject, "latest");
+          v = await client.subjectVersion(subject, "latest");
         } catch (e) {
           throw new Error(`latest of ${subject}: ${(e as Error).message}`, { cause: e });
         }
         id = v.id ?? 0;
       }
-      const shape = await fileByID(this.client, id);
+      const shape = await fileByID(client, id);
       const indexes = findMessage(shape, md.typeName);
       if (!indexes) throw new Error(`schema id ${id} (subject ${subject}) has no message ${md.typeName}`);
       return { id, indexes };
     }
-    const r = await ensureFile(this.client, subject, md.file, {
+    const r = await ensureFile(client, subject, md.file, {
       register: o.autoRegister === true,
       normalize: o.normalize,
       referenceSubject: o.referenceSubject,
@@ -147,10 +168,10 @@ export class SchemaRegistrySerde implements Serde {
     return { id: r.id ?? 0, indexes: messageIndexes(md) };
   }
 
-  async decode(_ch: Channel, _topic: string, m: Message): Promise<void> {
+  async decode(ch: Channel, _topic: string, m: Message): Promise<void> {
     if (m.data.length === 0 || m.data[0] !== MagicByte) return; // plain proto
     const { id, indexes, body } = unframe(m.data);
-    const shape: FileShape = await fileByID(this.client, id);
+    const shape: FileShape = await fileByID(this.#clientOf(ch)[0], id);
     let full: string;
     try {
       full = messageAt(shape, indexes);

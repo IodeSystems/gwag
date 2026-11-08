@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -232,5 +234,66 @@ func TestExclusiveModes(t *testing.T) {
 	}
 	if _, err := sr.NewSerde(c, sr.UseLatest(), sr.Normalize()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ChannelClient sends one channel's lookups and decodes to another
+// registry (another id space); the other channels use the serde's.
+func TestChannelClient(t *testing.T) {
+	ctx := context.Background()
+	own, corp := srtest.New(), srtest.New()
+	defer own.Close()
+	defer corp.Close()
+	oc, _ := sr.NewClient(sr.Config{URL: own.URL})
+	cc, _ := sr.NewClient(sr.Config{URL: corp.URL})
+	// Burn an id in corp, so the two registries frame with other ids.
+	corp.Add("filler-value", sr.Schema{Schema: `syntax = "proto3"; package f; message F {}`, SchemaType: "PROTOBUF"})
+	s, err := sr.NewSerde(oc, sr.AutoRegister(), sr.ChannelClient("corp.v1.Orders", cc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpCh := events.Channel{Key: "corp.v1.Orders"}
+	ownCh := events.Channel{Key: "orders.v1.OrderEvents"}
+	var a, b events.Message
+	if err := s.Encode(ctx, corpCh, "corp-orders", &ordersv1.OrderCreated{OrderId: "c"}, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Encode(ctx, ownCh, "own-orders", &ordersv1.OrderCreated{OrderId: "o"}, &b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cc.SubjectVersion(ctx, "corp-orders-value", "latest", ""); err != nil {
+		t.Errorf("corp channel not registered in its registry: %v", err)
+	}
+	if _, err := oc.SubjectVersion(ctx, "corp-orders-value", "latest", ""); !sr.IsNotFound(err) {
+		t.Errorf("corp channel registered in the serde's registry: %v", err)
+	}
+	if _, err := oc.SubjectVersion(ctx, "own-orders-value", "latest", ""); err != nil {
+		t.Errorf("own channel: %v", err)
+	}
+	aid, _, _, _ := sr.Unframe(a.Data)
+	bid, _, _, _ := sr.Unframe(b.Data)
+	if aid == bid {
+		t.Fatalf("both framed with id %d; the test needs the id spaces apart", aid)
+	}
+	for _, tc := range []struct {
+		ch events.Channel
+		m  *events.Message
+		id int
+	}{{corpCh, &a, aid}, {ownCh, &b, bid}} {
+		tc.m.Headers = map[string]string{}
+		if err := s.Decode(ctx, tc.ch, "", tc.m); err != nil || tc.m.Headers[sr.HeaderSchemaID] != fmt.Sprint(tc.id) {
+			t.Errorf("decode on %s: %v %v", tc.ch.Key, err, tc.m.Headers)
+		}
+	}
+	// The corp channel's id is not in the serde's own registry.
+	m := events.Message{Data: sr.Frame(aid, []int{0}, nil), Headers: map[string]string{}}
+	if err := s.Decode(ctx, ownCh, "", &m); err == nil {
+		t.Errorf("corp id %d decoded on the own channel: %v", aid, m.Headers)
+	}
+	for _, opt := range []sr.SerdeOption{sr.ChannelClient("", cc), sr.ChannelClient("corp.v1.Orders", nil)} {
+		_, err := sr.NewSerde(oc, opt)
+		if err == nil || !strings.HasPrefix(err.Error(), "schema registry: channel client for channel ") || !strings.HasSuffix(err.Error(), ": want a channel key and a client") {
+			t.Errorf("bad channel client: %v", err)
+		}
 	}
 }

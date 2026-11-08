@@ -80,6 +80,13 @@ class Serde:
         for a shadow copy in another package: a record framed as
         "corp.orders.v1.Order" is delivered with Gwag-Type
         "shop.v1.OrderShadow". Applied on decode only.
+      channel_clients: registry per channel key ("corp.orders.v1.Order"),
+        used instead of client on publish and on delivery. For a
+        channel another system produces: its schema ids are that
+        system's, so its records decode only against its registry, or
+        against the gwag context it was imported into
+        (http://gwag:8080/schema-registry/contexts/.corp after
+        `gwag schema import --into .corp`).
       files: where generated code registered its file descriptors.
     """
 
@@ -94,10 +101,14 @@ class Serde:
         normalize: bool = False,
         reference_subject: Callable[[str], str] | None = None,
         type_names: Mapping[str, str] | None = None,
+        channel_clients: Mapping[str, Client] | None = None,
         files: Files = default_files,
     ) -> None:
         if sum([auto_register, use_latest, use_schema_id is not None]) > 1:
             raise ValueError("schema registry: auto-register, use-latest and use-schema-id are mutually exclusive; set at most one")
+        for key, c in (channel_clients or {}).items():
+            if not key or c is None:
+                raise ValueError(f'schema registry: channel client for channel "{key}": want a channel key and a client')
         self._c = client
         self._strategy = subject_name_strategy
         self._register = auto_register
@@ -106,21 +117,28 @@ class Serde:
         self._normalize = normalize
         self._ref_subject = reference_subject
         self._type_names = dict(type_names or {})
+        self._channels = dict(channel_clients or {})
         self._files = files
-        self._ids: dict[tuple[str, str], _Encoding] = {}
+        self._ids: dict[tuple[str, str, str], _Encoding] = {}
 
     def subject(self, topic: str, full_name: str) -> str:
         """The subject a publish of full_name to topic uses."""
         return self._strategy(topic, full_name)
 
+    def _client(self, channel: Channel) -> tuple[Client, str]:
+        """The registry of channel, and the cache prefix of its encodings."""
+        c = self._channels.get(channel.key)
+        return (c, channel.key) if c is not None else (self._c, "")
+
     async def encode(self, channel: Channel, topic: str, body: bytes, out: Message) -> None:
         name = out.headers.get(HEADER_TYPE, "")
         subject = self._strategy(topic, name)
-        enc = await self._encoding(subject, name)
+        c, pfx = self._client(channel)
+        enc = await self._encoding(c, pfx, subject, name)
         out.data = frame(enc.id, enc.indexes, body)
 
-    async def _encoding(self, subject: str, name: str) -> _Encoding:
-        k = (subject, name)
+    async def _encoding(self, c: Client, pfx: str, subject: str, name: str) -> _Encoding:
+        k = (pfx, subject, name)
         if not self._latest and (hit := self._ids.get(k)) is not None:
             return hit
         found = self._files.find_message(name)
@@ -128,7 +146,7 @@ class Serde:
             if found is None:
                 raise LookupError(f"no descriptor for {name}: generated code registers it (gwag gen --lang python)")
             info, indexes = found
-            r = await self._c.ensure_file(
+            r = await c.ensure_file(
                 subject,
                 info.name,
                 files=self._files,
@@ -141,12 +159,12 @@ class Serde:
             sid = self._id
             if self._latest:
                 try:
-                    sid = (await self._c.subject_version(subject, "latest")).id
+                    sid = (await c.subject_version(subject, "latest")).id
                 except Exception as e:
                     e.add_note(f"latest of {subject}")
                     raise
             assert sid is not None
-            fi = await self._c.file_by_id(sid)
+            fi = await c.file_by_id(sid)
             idx = fi.indexes_of(name)
             if idx is None:
                 raise LookupError(f"schema id {sid} (subject {subject}) has no message {name}")
@@ -159,7 +177,7 @@ class Serde:
         if not m.data or m.data[0] != MAGIC_BYTE:
             return  # plain proto
         schema_id, indexes, body = unframe(m.data)
-        fi = await self._c.file_by_id(schema_id)
+        fi = await self._client(channel)[0].file_by_id(schema_id)
         try:
             full = fi.message_at(indexes)
         except ValueError as e:
