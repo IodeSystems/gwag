@@ -114,8 +114,10 @@ type peerTracker struct {
 	// (ForgetPeer).
 	currentR atomic.Int32
 	replMu   sync.Mutex
-	// reconciling is set while a kickReconcile goroutine runs.
-	reconciling atomic.Bool
+	// reconciling is set while a kickReconcile goroutine runs;
+	// reconcilePending is a kick it has not run for yet.
+	reconciling      atomic.Bool
+	reconcilePending atomic.Bool
 
 	rec *reconciler
 }
@@ -154,7 +156,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	if err != nil {
 		return nil, err
 	}
-	level, err := loadClusterLevel(ctx, cl.JS, clusterKV, cl.Server.Name())
+	level, err := loadClusterLevel(ctx, cl.Conn, cl.JS, clusterKV, cl.Server.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -358,17 +360,31 @@ func (t *peerTracker) refreshLoop(ctx context.Context) {
 	}
 }
 
-// kickReconcile runs reconcileReplicas off the refresh loop, so a
-// slow raise never delays the peer refresh. Skipped while one is
-// running. It retries a raise that failed and picks up a replica
-// change another node made.
+// kickReconcile runs reconcileReplicas off the refresh and watch
+// loops, so a slow raise never delays the peer refresh or the live
+// set. A raise on a node that is not the JetStream leader waits for
+// the leader first (applyStream), many seconds; run in the watch
+// loop it held every peer event behind it, and the live set stayed
+// stale that long. A kick while one runs makes it run once more, for
+// the newer live set. It retries a raise that failed and picks up a
+// replica change another node made.
 func (t *peerTracker) kickReconcile(ctx context.Context) {
+	t.reconcilePending.Store(true)
 	if !t.reconciling.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
-		defer t.reconciling.Store(false)
-		t.reconcileReplicas(ctx)
+		for {
+			for t.reconcilePending.Swap(false) {
+				t.reconcileReplicas(ctx)
+			}
+			t.reconciling.Store(false)
+			// A kick between the last Swap and the Store saw
+			// reconciling set and returned: run for it.
+			if !t.reconcilePending.Load() || !t.reconciling.CompareAndSwap(false, true) {
+				return
+			}
+		}
 	}()
 }
 
@@ -408,7 +424,9 @@ func (t *peerTracker) sweepPeers(ctx context.Context, missing map[string]time.Ti
 // watchLoop tracks the live peer set and triggers a replica reconcile
 // on every change. KV TTL handles departure: a peer that stops
 // refreshing has its key expired, and the delete marker the bucket
-// leaves (openExpiringBucket) arrives here as a Purge.
+// leaves (openExpiringBucket) arrives here as a Purge. ForgetPeer
+// deletes the key, which arrives as a Delete. The reconcile runs off
+// this loop (kickReconcile).
 func (t *peerTracker) watchLoop(ctx context.Context) {
 	defer close(t.done)
 	for {
@@ -423,7 +441,7 @@ func (t *peerTracker) watchLoop(ctx context.Context) {
 		for ev := range w.Updates() {
 			if ev == nil {
 				// initial-state-replayed marker
-				t.reconcileReplicas(ctx)
+				t.kickReconcile(ctx)
 				continue
 			}
 			t.mu.Lock()
@@ -438,7 +456,7 @@ func (t *peerTracker) watchLoop(ctx context.Context) {
 				delete(t.live, ev.Key())
 			}
 			t.mu.Unlock()
-			t.reconcileReplicas(ctx)
+			t.kickReconcile(ctx)
 		}
 		_ = w.Stop()
 		if ctx.Err() != nil {
