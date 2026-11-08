@@ -89,6 +89,20 @@ func startThreeNodeNATS(t *testing.T) ([]*Cluster, []*lineLogger) {
 			t.Fatal(err)
 		}
 	}
+	// A meta leader does not mean every peer can take a replica: a
+	// peer is placeable once the leader has its first server stats
+	// (system account traffic), which can come up to a second later.
+	// Until then an R3 placement fails with "no suitable peers for
+	// placement, peer offline" (10005). Wait for an R3 stream to be
+	// placeable, so the tests below start from a formed cluster.
+	waitUntilErr(t, 30*time.Second, "R3 placement", func() error {
+		pctx, pcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer pcancel()
+		if _, err := cls[0].JS.CreateStream(pctx, jetstream.StreamConfig{Name: "HERDPROBE", Subjects: []string{"herd.probe"}, Replicas: 3}); err != nil {
+			return err
+		}
+		return cls[0].JS.DeleteStream(pctx, "HERDPROBE")
+	})
 	return cls, logs
 }
 
