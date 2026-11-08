@@ -1,0 +1,97 @@
+{
+  "containerDefinitions": [
+    {
+      "command": [
+        "up",
+        "--data-dir=/data",
+        "--no-context-write",
+        "--addr=:8080",
+        "--control-plane=:50090",
+        "--nats-listen=:14222",
+        "--nats-cluster=:14248",
+        "--node-name=gwag-2",
+        "--shutdown-delay=10s",
+        "--shutdown-timeout=30s",
+        "--nats-peer=gwag-1.gwag.local:14248",
+        "--nats-peer=gwag-3.gwag.local:14248"
+      ],
+      "essential": true,
+      "healthCheck": {
+        "command": [
+          "CMD",
+          "/gwag",
+          "probe",
+          "--live",
+          "http://localhost:8080/api/health"
+        ],
+        "interval": 10,
+        "retries": 6,
+        "startPeriod": 120,
+        "timeout": 5
+      },
+      "image": "example.com/gwag:v1",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "REPLACE_LOG_GROUP_NAME",
+          "awslogs-region": "REPLACE_REGION",
+          "awslogs-stream-prefix": "gwag"
+        }
+      },
+      "mountPoints": [
+        {
+          "containerPath": "/data",
+          "sourceVolume": "data"
+        }
+      ],
+      "name": "gwag",
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 50090,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 14222,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 14248,
+          "protocol": "tcp"
+        }
+      ],
+      "readonlyRootFilesystem": true,
+      "secrets": [
+        {
+          "name": "GWAG_ADMIN_TOKEN",
+          "valueFrom": "REPLACE_ADMIN_SECRET_ARN"
+        }
+      ],
+      "stopTimeout": 90
+    }
+  ],
+  "cpu": "512",
+  "executionRoleArn": "REPLACE_EXECUTION_ROLE_ARN",
+  "family": "gwag-2",
+  "memory": "1024",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "volumes": [
+    {
+      "efsVolumeConfiguration": {
+        "authorizationConfig": {
+          "accessPointId": "REPLACE_EFS_ACCESS_POINT_ID_NODE_2",
+          "iam": "DISABLED"
+        },
+        "fileSystemId": "REPLACE_EFS_FILE_SYSTEM_ID",
+        "transitEncryption": "ENABLED"
+      },
+      "name": "data"
+    }
+  ]
+}
