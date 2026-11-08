@@ -106,3 +106,61 @@ func TestStartClusterTracking_CloseDuringFailingStart(t *testing.T) {
 		}
 	}
 }
+
+// TestStartClusterTracking_DoesNotHoldGatewayLock: a node whose
+// JetStream has no meta leader (its only route peer is down) answers
+// no bucket call. startClusterTracking waits on those calls; g.mu must
+// stay free meanwhile, or every registration, and with it a booting
+// gateway's HTTP listener, waits too. Before the fix it held g.mu
+// across the calls (5s each, without end in a key listing).
+func TestStartClusterTracking_DoesNotHoldGatewayLock(t *testing.T) {
+	cl, err := StartCluster(ClusterOptions{
+		NodeName:      "no-meta",
+		ClientListen:  freeAddr(t),
+		ClusterListen: freeAddr(t),
+		Peers:         []string{freeAddr(t)}, // nothing listens there
+		DataDir:       t.TempDir(),
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cl.Close)
+	g := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := g.startClusterTracking(ctx)
+		done <- err
+	}()
+	time.Sleep(500 * time.Millisecond) // the first bucket call is in flight
+	select {
+	case err := <-done:
+		t.Fatalf("startClusterTracking returned without a meta leader: %v", err)
+	default:
+	}
+	locked := make(chan struct{})
+	go func() {
+		g.mu.Lock()
+		g.mu.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("g.mu held while startClusterTracking waits on JetStream")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("startClusterTracking succeeded without a meta leader")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("startClusterTracking did not return after its context was cancelled")
+	}
+	g.Close()
+}

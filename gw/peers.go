@@ -127,10 +127,17 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, errors.New("gateway: cluster is not configured")
 	}
 	g.armRegistrySync()
+	// trackMu, not g.mu, is held while the buckets open: those are
+	// JetStream round trips that can take seconds (meta leader
+	// election, a stream catching up after a restart). g.mu held
+	// across them blocks every registration, and with it the HTTP
+	// listener of a booting gateway.
+	g.trackMu.Lock()
+	defer g.trackMu.Unlock()
 	g.mu.Lock()
-	if g.peers != nil {
-		t := g.peers
-		g.mu.Unlock()
+	t := g.peers
+	g.mu.Unlock()
+	if t != nil {
 		return t, nil
 	}
 	cl := g.cfg.cluster
@@ -140,18 +147,15 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	// before anything is written.
 	clusterKV, err := openClusterBucket(ctx, cl.JS)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 	level, err := loadClusterLevel(ctx, cl.JS, clusterKV, cl.Server.Name())
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 	g.clusterLevel.Store(int32(level))
 	if err := checkClusterLevel(level); err != nil {
 		g.setClusterLevelErr(err)
-		g.mu.Unlock()
 		return nil, err
 	}
 	g.setClusterLevelErr(nil)
@@ -167,12 +171,10 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	peerTTL, registryTTL := g.clusterTTLs()
 	peers, err := openExpiringBucket(ctx, cl.JS, peersBucketName, peerTTL, markers)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 	reg, err := openExpiringBucket(ctx, cl.JS, registryBucketName, registryTTL, markers)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 
@@ -182,13 +184,11 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		TTL:      stableTTL,
 	})
 	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		g.mu.Unlock()
 		return nil, fmt.Errorf("stable bucket: %w", err)
 	}
 	if stable == nil {
 		stable, err = cl.JS.KeyValue(ctx, stableBucketName)
 		if err != nil {
-			g.mu.Unlock()
 			return nil, fmt.Errorf("stable bucket open: %w", err)
 		}
 	}
@@ -199,13 +199,11 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		TTL:      deprecatedTTL,
 	})
 	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		g.mu.Unlock()
 		return nil, fmt.Errorf("deprecated bucket: %w", err)
 	}
 	if deprecated == nil {
 		deprecated, err = cl.JS.KeyValue(ctx, deprecatedBucketName)
 		if err != nil {
-			g.mu.Unlock()
 			return nil, fmt.Errorf("deprecated bucket open: %w", err)
 		}
 	}
@@ -216,38 +214,32 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		TTL:      mcpConfigTTL,
 	})
 	if err != nil && !errors.Is(err, jetstream.ErrBucketExists) {
-		g.mu.Unlock()
 		return nil, fmt.Errorf("mcp_config bucket: %w", err)
 	}
 	if mcpConfig == nil {
 		mcpConfig, err = cl.JS.KeyValue(ctx, mcpConfigBucketName)
 		if err != nil {
-			g.mu.Unlock()
 			return nil, fmt.Errorf("mcp_config bucket open: %w", err)
 		}
 	}
 
 	drain, err := openDrainBucket(ctx, cl.JS)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 
 	externals, err := openExternalDependentsBucket(ctx, cl.JS)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 
 	notifications, err := openNotificationsBucket(ctx, cl.JS)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 
 	appKeys, err := openAppKeysBucket(ctx, cl.JS)
 	if err != nil {
-		g.mu.Unlock()
 		return nil, err
 	}
 
@@ -255,7 +247,6 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	var schemas jetstream.KeyValue
 	if g.sr != nil {
 		if schemas, err = openSchemasBucket(ctx, cl.JS); err != nil {
-			g.mu.Unlock()
 			return nil, err
 		}
 		buckets = append(append([]string(nil), replicaBuckets...), schemasBucketName)
@@ -270,12 +261,11 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		LevelMax: clusterLevelMax(),
 	})
 	if err != nil {
-		g.mu.Unlock()
 		return nil, fmt.Errorf("marshal self: %w", err)
 	}
 
 	tctx, cancel := context.WithCancel(ctx)
-	t := &peerTracker{
+	t = &peerTracker{
 		gw:                g,
 		js:                cl.JS,
 		peers:             peers,
@@ -306,6 +296,14 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		levelDone:         make(chan struct{}),
 	}
 	t.currentR.Store(1)
+	g.mu.Lock()
+	if g.closing.Load() {
+		// Close ran while the buckets opened and found no tracker to
+		// stop; nothing will stop this one either.
+		g.mu.Unlock()
+		cancel()
+		return nil, errors.New("gateway: closed")
+	}
 	g.peers = t
 	g.mu.Unlock()
 

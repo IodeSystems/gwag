@@ -109,6 +109,14 @@ type Gateway struct {
 	peers      *peerTracker
 	broker     *subBroker
 
+	// trackMu serialises startClusterTracking. It is held across the
+	// JetStream calls that open the buckets; g.mu is not, so a slow or
+	// unavailable JetStream does not block registration and HTTP boot.
+	trackMu sync.Mutex
+	// closing is set at the start of Close. A tracker start that
+	// finishes after it is not published.
+	closing atomic.Bool
+
 	// psBus is the ps.pub / ps.sub transport under broker: a
 	// failoverBus (NATS, local while NATS is down) in cluster mode, a
 	// gat.LocalBus otherwise. psFailover is the same value when it is
@@ -1561,6 +1569,7 @@ func New(opts ...Option) *Gateway {
 //
 // Stability: stable
 func (g *Gateway) Close() {
+	g.closing.Store(true)
 	g.mu.Lock()
 	tracker := g.peers
 	g.peers = nil
