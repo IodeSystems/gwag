@@ -273,6 +273,12 @@ message DependencyStatus {
   repeated string lines = 2;
   // Subset of lines with >= 1 ready instance. Empty = missing.
   repeated string present_lines = 3;
+  // Set when the dependency comes from ServiceBinding.subscribes: the
+  // channel key and the consumer group. service and lines then name
+  // the (namespace, version) that declares the channel; both are
+  // empty while no registered service declares it.
+  string channel = 4;
+  string group = 5;
 }
 
 // BindingStatus is the start-gate state of one binding of a
@@ -416,6 +422,8 @@ message ServiceInfo {
   // (namespace, version): ServiceBinding.public of the latest
   // registration, or the gateway's public-services setting.
   bool public = 9;
+  // Manifest: ServiceBinding.subscribes of the latest registration.
+  repeated Subscription subscribes = 10;
 }
 
 // SubscribeAuthCode is the result of an attempted subscribe. Both the
