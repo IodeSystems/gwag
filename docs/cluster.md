@@ -524,9 +524,14 @@ created on green. Result: 33410 GraphQL calls, 0 failed; 4036 events
 acked, all in the stream, none twice; stable marks and the app key
 unchanged; every stream at R3 on green; level 0 until finalize, then 1
 with delete markers on. After each evacuation the test also checks that
-every bucket and stream is at R3 and on no evacuated node; with the
-evacuation record and buckets created at the cluster's count, that
-held in 3 of 3 runs. Not tested: a swap between two versions that
+every bucket and stream is at R3 and on no evacuated node. Without the
+evacuation precondition that failed in 1 of 7 runs, and again in 1 of
+9: a green node had created four buckets at R1 (its replica count read
+timed out right after it joined the meta group), and b1's evacuation
+started while their raise was still running. With the precondition
+and the retried read: 15 of 15 runs (9 run three at a time, 6 in
+sequence); in 2 of them the first evacuate call was refused (409, a
+replica not current) and the next ones went through. Not tested: a swap between two versions that
 both have feature levels (that is the next release), and a swap with
 `--cluster-replicas` other than `odd`.
 
