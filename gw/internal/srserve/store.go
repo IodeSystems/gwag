@@ -365,14 +365,22 @@ func (s *Store) Lookup(ctx context.Context, subject string, in sr.Schema, delete
 	if err != nil {
 		return versionRec{}, nil, errf(codeInvalidSchema, "Invalid schema: %v", err)
 	}
+	// Two versions can hold the same schema in different forms
+	// (Confluent keeps the text it was sent). As Confluent answers: a
+	// version with the identical text, else the oldest equivalent one.
 	vs := rec.live(deleted)
-	for i := len(vs) - 1; i >= 0; i-- {
-		sch, err := s.schema(ctx, vs[i].ID)
-		if err != nil {
+	schemas := make([]*schemaRec, len(vs))
+	for i, v := range vs {
+		if schemas[i], err = s.schema(ctx, v.ID); err != nil {
 			return versionRec{}, nil, storeErr(err)
 		}
-		if matches(sch, want) {
-			return vs[i], sch, nil
+		if identical(schemas[i], want) {
+			return v, schemas[i], nil
+		}
+	}
+	for i, v := range vs {
+		if matches(schemas[i], want) {
+			return v, schemas[i], nil
 		}
 	}
 	return versionRec{}, nil, errf(codeSchemaNotFound, "Schema not found")

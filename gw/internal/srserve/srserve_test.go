@@ -311,6 +311,29 @@ func TestConcurrentRegister(t *testing.T) {
 	}
 }
 
+// Two imported versions hold one schema in two forms: a lookup gets the
+// version with identical text, else the oldest equivalent one.
+func TestLookupPrefersIdenticalThenOldest(t *testing.T) {
+	ctx := context.Background()
+	st := srserve.NewStore(srserve.NewMemKV(), 1)
+	text := `syntax = "proto3"; package l; message M { string a = 1; }`
+	spaced := `syntax = "proto3";  package l;  message M { string a = 1; }`
+	other := `syntax = "proto3"; package l; message M { string a = 1; }` + "\n"
+	_, err := st.Import(ctx, srserve.Bundle{
+		Schemas:  []srserve.ImportSchema{{ID: 7, SchemaType: "PROTOBUF", Schema: text}, {ID: 8, SchemaType: "PROTOBUF", Schema: spaced}},
+		Versions: []srserve.ImportVersion{{Subject: "l", Version: 1, ID: 7}, {Subject: "l", Version: 2, ID: 8}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]int{text: 1, spaced: 2, other: 1} {
+		v, _, err := st.Lookup(ctx, "l", sr.Schema{Schema: in, SchemaType: "PROTOBUF"}, false)
+		if err != nil || v.Version != want {
+			t.Errorf("lookup %q: version %d %v, want %d", in, v.Version, err, want)
+		}
+	}
+}
+
 func TestCompatibility(t *testing.T) {
 	ctx := context.Background()
 	st := srserve.NewStore(srserve.NewMemKV(), 1)

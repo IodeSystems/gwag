@@ -253,6 +253,7 @@ func recOf(ctx context.Context, id int, byID map[int]*ImportSchema, recs map[int
 				rec.Keys = append(rec.Keys, k)
 			}
 			if rec.Serialized == "" {
+				rec.Derived = "serialized"
 				if rec.Serialized, err = serialize(fd); err != nil {
 					return nil, err
 				}

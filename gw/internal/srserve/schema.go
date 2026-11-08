@@ -40,6 +40,9 @@ type schemaRec struct {
 	// (keyOf). An imported schema has one per form it came in.
 	Keys     []string `json:"keys"`
 	Imported bool     `json:"imported,omitempty"`
+	// Derived names the form gwag made rather than received: "schema"
+	// or "serialized". A lookup's identical-text match skips it.
+	Derived string `json:"derived,omitempty"`
 }
 
 // resolver returns the schema registered as version of subject
@@ -60,7 +63,21 @@ const rootPath = "gwag-sr-root.proto"
 
 // compile compiles a PROTOBUF schema (.proto text or base64 of a
 // FileDescriptorProto) with its references.
+//
+// References compile from their .proto text, else from the serialized
+// form: Confluent's serialized form of a text schema can carry empty
+// json_name values that do not compile.
 func compile(ctx context.Context, schema string, refs []sr.Reference, resolve resolver) (protoreflect.FileDescriptor, error) {
+	fd, err := compileRefs(ctx, schema, refs, resolve, false)
+	if err != nil && len(refs) > 0 {
+		if fd2, err2 := compileRefs(ctx, schema, refs, resolve, true); err2 == nil {
+			return fd2, nil
+		}
+	}
+	return fd, err
+}
+
+func compileRefs(ctx context.Context, schema string, refs []sr.Reference, resolve resolver, serializedRefs bool) (protoreflect.FileDescriptor, error) {
 	t := &sr.Tree{Root: rootPath}
 	seen := map[string]bool{}
 	var walk func(refs []sr.Reference, depth int) error
@@ -80,9 +97,9 @@ func compile(ctx context.Context, schema string, refs []sr.Reference, resolve re
 			if err := walk(rec.References, depth+1); err != nil {
 				return err
 			}
-			src := rec.Serialized
-			if src == "" {
-				src = rec.Schema
+			src := rec.Schema
+			if serializedRefs && rec.Serialized != "" {
+				src = rec.Serialized
 			}
 			t.Files = append(t.Files, sr.TreeFile{Path: r.Name, Source: src})
 		}
@@ -122,11 +139,61 @@ func keyOf(fd protoreflect.FileDescriptor, refs []sr.Reference) (string, error) 
 	}
 	fields(fdp.Extension, true)
 	msgs(fdp.MessageType)
+	stripCustomOptions(fdp.ProtoReflect())
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(fdp)
 	if err != nil {
 		return "", err
 	}
 	return rawKey(TypeProtobuf, string(b), refs), nil
+}
+
+// stripCustomOptions drops custom options (extensions of the
+// google.protobuf.*Options messages) everywhere in m, and options
+// messages left empty. Confluent's .proto text leaves custom options
+// out, so the same file read back from a Confluent registry has none.
+func stripCustomOptions(m protoreflect.Message) {
+	// strip reports whether cm is an options message left empty.
+	strip := func(cm protoreflect.Message) bool {
+		name := string(cm.Descriptor().FullName())
+		if !strings.HasPrefix(name, "google.protobuf.") || !strings.HasSuffix(name, "Options") {
+			stripCustomOptions(cm)
+			return false
+		}
+		cm.SetUnknown(nil)
+		var exts []protoreflect.FieldDescriptor
+		empty := true
+		cm.Range(func(xf protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+			if xf.IsExtension() {
+				exts = append(exts, xf)
+			} else {
+				empty = false
+			}
+			return true
+		})
+		for _, xf := range exts {
+			cm.Clear(xf)
+		}
+		return empty
+	}
+	var clear []protoreflect.FieldDescriptor
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		switch {
+		case fd.Message() == nil || fd.IsMap():
+		case fd.IsList():
+			l := v.List()
+			for i := 0; i < l.Len(); i++ {
+				strip(l.Get(i).Message())
+			}
+		default:
+			if strip(v.Message()) {
+				clear = append(clear, fd)
+			}
+		}
+		return true
+	})
+	for _, fd := range clear {
+		m.Clear(fd)
+	}
 }
 
 // rawKey identifies a schema by its exact text (types gwag does not
@@ -204,11 +271,13 @@ func prepare(ctx context.Context, in sr.Schema, resolve resolver) (*schemaRec, e
 	rec.Keys = []string{k}
 	if isSerialized(in.Schema) {
 		rec.Serialized = strings.TrimSpace(in.Schema)
+		rec.Derived = "schema"
 		if rec.Schema, err = printProto(fd); err != nil {
 			return nil, err
 		}
 	} else {
 		rec.Schema = in.Schema
+		rec.Derived = "serialized"
 		if rec.Serialized, err = serialize(fd); err != nil {
 			return nil, err
 		}
@@ -228,14 +297,41 @@ func sameRefs(a, b []sr.Reference) bool {
 	return true
 }
 
-// matches reports whether a and b are the same schema: same type and
-// references, and a shared key or identical text.
-func matches(a, b *schemaRec) bool {
+// identical reports whether a and b have the same type, references and
+// text, comparing only the forms each was given (not ones gwag made).
+func identical(a, b *schemaRec) bool {
 	if a.Type != b.Type || !sameRefs(a.References, b.References) {
 		return false
 	}
-	if a.Schema == b.Schema || (a.Serialized != "" && a.Serialized == b.Serialized) {
+	for _, x := range a.given() {
+		for _, y := range b.given() {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *schemaRec) given() []string {
+	var out []string
+	if r.Derived != "schema" {
+		out = append(out, r.Schema)
+	}
+	if r.Derived != "serialized" && r.Serialized != "" {
+		out = append(out, r.Serialized)
+	}
+	return out
+}
+
+// matches reports whether a and b are the same schema: same type and
+// references, and a shared key or identical text.
+func matches(a, b *schemaRec) bool {
+	if identical(a, b) {
 		return true
+	}
+	if a.Type != b.Type || !sameRefs(a.References, b.References) {
+		return false
 	}
 	for _, x := range a.Keys {
 		for _, y := range b.Keys {
