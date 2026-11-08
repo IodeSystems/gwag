@@ -32,14 +32,21 @@ type Harness struct {
 	// Settle waits after Subscribe returns until the subscriber is
 	// receiving. Optional.
 	Settle time.Duration
+	// NoDedup skips the dedup check, for backends without message-id
+	// dedup (Kafka).
+	NoDedup bool
 }
 
-var seq atomic.Int64
+var (
+	seq atomic.Int64
+	run = events.NewID()[:8]
+)
 
-// Channel returns a channel with a unique key.
+// Channel returns a channel with a key unique to this process, so
+// runs against a long-lived broker do not see each other's messages.
 func Channel(t *testing.T) events.Channel {
 	n := seq.Add(1)
-	return events.MustChannel(fmt.Sprintf("test.v1.C%d", n), fmt.Sprintf("test.c%d.{id}", n))
+	return events.MustChannel(fmt.Sprintf("test.v1.C%s_%d", run, n), fmt.Sprintf("test.c%s_%d.{id}", run, n))
 }
 
 // Run runs every check.
@@ -48,7 +55,9 @@ func Run(t *testing.T, h Harness) {
 	t.Run("GroupSharesWork", func(t *testing.T) { groupShares(t, h) })
 	t.Run("Redelivery", func(t *testing.T) { redelivery(t, h) })
 	t.Run("DeadLetter", func(t *testing.T) { deadLetter(t, h) })
-	t.Run("Dedup", func(t *testing.T) { dedup(t, h) })
+	if !h.NoDedup {
+		t.Run("Dedup", func(t *testing.T) { dedup(t, h) })
+	}
 	t.Run("DeliverAll", func(t *testing.T) { deliverAll(t, h) })
 }
 
@@ -142,8 +151,10 @@ func groupShares(t *testing.T, h Harness) {
 	sub(t, h, c, ch, "shared", slow(&one))
 	sub(t, h, c, ch, "shared", slow(&two))
 	const n = 40
+	// Distinct subjects, so a backend that partitions by subject
+	// (Kafka) spreads them.
 	for i := 0; i < n; i++ {
-		pub(t, c, ch, "k", fmt.Sprint(i))
+		pub(t, c, ch, fmt.Sprint("k", i), fmt.Sprint(i))
 	}
 	waitFor(t, "all messages", func() bool { return one.len()+two.len() >= n })
 	time.Sleep(50 * time.Millisecond)
