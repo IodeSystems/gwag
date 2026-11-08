@@ -7,7 +7,7 @@
 #   SR=0 examples/events/py-kafka/test.sh   # Kafka only, no registry
 #
 # The Schema Registry part checks gwag's Python serde against Confluent
-# and against Go (docs/events.md, "Schema Registry"):
+# and against Go (docs/events-kafka.md, "Schema Registry options"):
 #   - Go produces with the registry serde, Python reads;
 #   - Python produces, Confluent's Python ProtobufDeserializer and Go
 #     read (the confluent-kafka project in ../go-kafka/confluent);

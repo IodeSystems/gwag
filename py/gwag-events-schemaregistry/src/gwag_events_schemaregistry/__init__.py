@@ -3,8 +3,8 @@ Confluent's protobuf wire format (magic byte 0, a 4-byte big-endian
 schema id, the message-index array, then the proto body). Python half of
 events/schemaregistry in Go; the framing is byte for byte the same.
 
-Who produces the topic decides how it is used (docs/events.md, "Schema
-Registry"): own (gwag registers its protos), import (gwag reads a
+Who produces the topic decides how it is used (docs/events-kafka.md, "Who
+produces the topic?"): own (gwag registers its protos), import (gwag reads a
 pinned copy of another team's schema), shadow (gwag keeps its own copy
 and `gwag schema check` compares it).
 

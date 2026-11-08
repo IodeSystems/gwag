@@ -10,7 +10,7 @@
 # own code: the Java kafka-protobuf-console-consumer in the registry
 # image and the confluent-kafka Python client (confluent/, run with uv)
 # read what gwag writes, and gwag reads what the Python serializer
-# writes. Then the three ways to use a topic (docs/events.md, "Who
+# writes. Then the three ways to use a topic (docs/events-kafka.md, "Who
 # produces the topic?"): own (srinterop, gwag schema push), import
 # (corp import, gwag gen --check-lock), shadow (corp shadow, gwag
 # schema check).

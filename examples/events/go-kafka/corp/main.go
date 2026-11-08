@@ -1,6 +1,6 @@
 // Command corp reads topic corp-orders, which another team produces
 // with Confluent's serializer (subject corp-orders-value, message
-// corp.orders.v1.Order). Two ways, one per row of docs/events.md
+// corp.orders.v1.Order). Two ways, one per row of docs/events-kafka.md
 // "Who produces the topic?":
 //
 //	corp import TOPIC   # typed code from a pinned copy of the subject
