@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
 	"github.com/iodesystems/gwag/v2/gw/gat"
 	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 	"github.com/iodesystems/gwag/v2/gw/ir"
@@ -261,6 +262,10 @@ type Gateway struct {
 	// eventStreams is the JetStream stream ensure state per named
 	// channel (event_streams.go).
 	eventStreams eventStreamState
+
+	// sr is the served Schema Registry (schema_registry.go); nil
+	// unless WithSchemaRegistry.
+	sr *schemaRegistry
 }
 
 // rejectedJoinSummary captures the most recent rejection plus a
@@ -480,6 +485,9 @@ type config struct {
 	// eventStreamMaxAge is the MaxAge of named-channel JetStream
 	// streams. 0 → 7 days. See WithEventStreamMaxAge.
 	eventStreamMaxAge time.Duration
+
+	// schemaRegistry: WithSchemaRegistry. nil = off.
+	schemaRegistry *SchemaRegistryOptions
 
 	// mcpSeed seeds the MCP allowlist at construction. Applied once at
 	// New() before any control-plane / cluster watch overrides. Runtime
@@ -1358,6 +1366,11 @@ func New(opts ...Option) *Gateway {
 	if err := cfg.clusterReplicas.Validate(); err != nil {
 		panic("gateway: WithClusterReplicas: " + err.Error())
 	}
+	if o := cfg.schemaRegistry; o != nil {
+		if _, err := sr.StrategyByName(o.Strategy); err != nil {
+			panic("gateway: WithSchemaRegistry: " + err.Error())
+		}
+	}
 	if cfg.metrics == nil {
 		cfg.metrics = newPrometheusMetrics(cfg.metricPrefix)
 	}
@@ -1427,6 +1440,7 @@ func New(opts ...Option) *Gateway {
 		tracer:      newTracer(cfg.tracerProvider),
 	}
 	g.devToken.Store(&devTok)
+	g.sr = newSchemaRegistry(g)
 	// WithCallerIDDelegated needs the live *Gateway to look up the
 	// _caller_auth/v1 pool at call time, so the extractor wrapper is
 	// built here (after g exists) and wins over any extractor set

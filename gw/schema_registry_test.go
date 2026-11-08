@@ -1,0 +1,287 @@
+package gateway
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sort"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+
+	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
+	ordersv1 "github.com/iodesystems/gwag/v2/examples/events/gen/orders/v1"
+)
+
+// srServer mounts g's registry under /schema-registry.
+func srServer(t *testing.T, g *Gateway) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("/schema-registry/", http.StripPrefix("/schema-registry", g.SchemaRegistryHandler()))
+	s := httptest.NewServer(mux)
+	t.Cleanup(s.Close)
+	return s.URL + "/schema-registry"
+}
+
+func srClient(t *testing.T, url string, cfg sr.Config) *sr.Client {
+	t.Helper()
+	cfg.URL = url
+	c, err := sr.NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// addOrdersProto registers examples/events/proto/orders/v1/orders.proto
+// under its import path, as a service would.
+func addOrdersProto(t *testing.T, g *Gateway) {
+	t.Helper()
+	src, err := os.ReadFile("../examples/events/proto/orders/v1/orders.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := os.ReadFile("proto/ps/v1/options.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports := map[string][]byte{"gw/proto/ps/v1/options.proto": opts}
+	if err := g.AddProtoBytes("orders/v1/orders.proto", src, To("127.0.0.1:1"), As("orders"), ProtoImports(imports)); err != nil {
+		t.Fatal(err)
+	}
+	g.Handler() // assembles the schema and the channel index
+}
+
+// waitSubject polls until subject has a version.
+func waitSubject(t *testing.T, c *sr.Client, subject string) *sr.Schema {
+	t.Helper()
+	var got *sr.Schema
+	waitUntilErr(t, 20*time.Second, "subject "+subject, func() error {
+		s, err := c.SubjectVersion(context.Background(), subject, "latest", "")
+		got = s
+		return err
+	})
+	return got
+}
+
+// A proto slot's named channels show up as subjects, and the Go serde
+// in lookup mode (generated code, protoc) finds what gwag registered
+// from source (protocompile): same canonical bytes, same id.
+func TestSchemaRegistry_OwnedChannels(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{
+		Topics: map[string]string{"orders.v1.OrderShipped": "shipped"},
+	}))
+	t.Cleanup(g.Close)
+	addOrdersProto(t, g)
+	url := srServer(t, g)
+	c := srClient(t, url, sr.Config{})
+	shipped := waitSubject(t, c, "shipped-value")
+	evs := waitSubject(t, c, "EV_orders_v1_OrderEvents-value")
+	if shipped.ID != evs.ID {
+		t.Errorf("one file, two ids: %d %d", shipped.ID, evs.ID)
+	}
+	ctx := context.Background()
+	found, err := c.EnsureFile(ctx, "shipped-value", ordersv1.File_orders_v1_orders_proto, sr.RegisterOptions{})
+	if err != nil || found.ID != shipped.ID {
+		t.Fatalf("serde lookup: %+v %v (gwag registered id %d)", found, err, shipped.ID)
+	}
+	// The REST API is READONLY: the admin token does not register.
+	admin := srClient(t, url, sr.Config{Username: "u", Password: g.AdminTokenHex()})
+	_, err = admin.Register(ctx, "x-value", sr.Schema{Schema: `syntax = "proto3"; message X {}`}, false)
+	var e *sr.Error
+	if !errors.As(err, &e) || e.Code != 42205 {
+		t.Errorf("register on READONLY: %v", err)
+	}
+}
+
+func TestSchemaRegistry_Writes(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{Writes: true, FirstID: 1000}))
+	t.Cleanup(g.Close)
+	url := srServer(t, g)
+	ctx := context.Background()
+	x := sr.Schema{Schema: `syntax = "proto3"; package x; message X {}`}
+	for _, tc := range []struct {
+		cfg  sr.Config
+		code int
+	}{
+		{sr.Config{}, 40101},
+		{sr.Config{Token: g.DevTokenHex()}, 40301},
+		{sr.Config{Username: "u", Password: "wrong"}, 40101},
+	} {
+		_, err := srClient(t, url, tc.cfg).Register(ctx, "x-value", x, false)
+		var e *sr.Error
+		if !errors.As(err, &e) || e.Code != tc.code {
+			t.Errorf("%+v: %v, want %d", tc.cfg, err, tc.code)
+		}
+	}
+	for _, cfg := range []sr.Config{{Username: "u", Password: g.AdminTokenHex()}, {Token: g.AdminTokenHex()}} {
+		id, err := srClient(t, url, cfg).Register(ctx, "x-value", x, false)
+		if err != nil || id != 1000 {
+			t.Errorf("admin register: %d %v", id, err)
+		}
+	}
+}
+
+func TestSchemaRegistry_Off(t *testing.T) {
+	g := New(WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(g.Close)
+	_, err := srClient(t, srServer(t, g), sr.Config{}).Subjects(context.Background(), false)
+	if !sr.IsNotFound(err) {
+		t.Fatalf("off: %v", err)
+	}
+}
+
+// Three gateways on one 3-node cluster register the same channels at
+// once and race on admin registrations of distinct schemas: every
+// schema gets one id, the same on every node; a restarted gateway
+// serves the same ids.
+func TestSchemaRegistry_Cluster(t *testing.T) {
+	cls, _ := startThreeNodeNATS(t)
+	opts := func(cl *Cluster) []Option {
+		return []Option{WithCluster(cl), WithoutMetrics(), WithoutBackpressure(), WithSchemaRegistry(SchemaRegistryOptions{Writes: true})}
+	}
+	gws := make([]*Gateway, 3)
+	urls := make([]string, 3)
+	for i, cl := range cls {
+		gws[i] = New(opts(cl)...)
+		t.Cleanup(gws[i].Close)
+		urls[i] = srServer(t, gws[i])
+	}
+	var wg sync.WaitGroup
+	for _, g := range gws {
+		wg.Add(1)
+		go func(g *Gateway) {
+			defer wg.Done()
+			g.ControlPlane() // boots cluster tracking
+			addOrdersProto(t, g)
+		}(g)
+	}
+	wg.Wait()
+
+	// Concurrent admin registrations: 3 nodes x the same 10 schemas.
+	const n = 10
+	ctx := context.Background()
+	got := make([][]int, 3)
+	for i := range gws {
+		c := srClient(t, urls[i], sr.Config{Token: gws[i].AdminTokenHex()})
+		waitUntilErr(t, 30*time.Second, "store ready", func() error {
+			_, err := c.Subjects(ctx, false)
+			return err
+		})
+		wg.Add(1)
+		go func(i int, c *sr.Client) {
+			defer wg.Done()
+			for k := 0; k < n; k++ {
+				id, err := c.Register(ctx, fmt.Sprintf("race-%d-value", k%3), sr.Schema{Schema: fmt.Sprintf(`syntax = "proto3"; package race; message M%d {}`, k)}, false)
+				if err != nil {
+					t.Errorf("node %d register %d: %v", i, k, err)
+					return
+				}
+				got[i] = append(got[i], id)
+			}
+		}(i, c)
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	seen := map[int]int{}
+	for k := 0; k < n; k++ {
+		for i := range got {
+			if got[i][k] != got[0][k] {
+				t.Fatalf("schema %d: node %d id %d, node 0 id %d", k, i, got[i][k], got[0][k])
+			}
+		}
+		if prev, dup := seen[got[0][k]]; dup {
+			t.Fatalf("schemas %d and %d share id %d", prev, k, got[0][k])
+		}
+		seen[got[0][k]] = k
+	}
+
+	// Every node serves the same subjects with the same ids.
+	snapshot := func(url string) (map[string]int, error) {
+		c := srClient(t, url, sr.Config{})
+		subs, err := c.Subjects(ctx, false)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]int{}
+		for _, s := range subs {
+			vs, err := c.Versions(ctx, s, false)
+			if err != nil {
+				return nil, err
+			}
+			for _, v := range vs {
+				x, err := c.Version(ctx, s, v, "", false)
+				if err != nil {
+					return nil, err
+				}
+				out[fmt.Sprintf("%s@%d", s, v)] = x.ID
+			}
+		}
+		return out, nil
+	}
+	var want map[string]int
+	waitUntilErr(t, 20*time.Second, "owned subjects on every node", func() error {
+		var err error
+		if want, err = snapshot(urls[0]); err != nil {
+			return err
+		}
+		if _, ok := want["EV_orders_v1_OrderEvents-value@1"]; !ok {
+			return fmt.Errorf("node 0 subjects %v", keys(want))
+		}
+		for i := 1; i < 3; i++ {
+			got, err := snapshot(urls[i])
+			if err != nil {
+				return err
+			}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				return fmt.Errorf("node %d %v, node 0 %v", i, got, want)
+			}
+		}
+		return nil
+	})
+	if _, ok := want["EV_orders_v1_OrderEvents-value@2"]; ok {
+		t.Errorf("three nodes registering one file made two versions: %v", want)
+	}
+
+	// The bucket follows the replica policy with the other buckets.
+	waitStream(t, cls[0].JS, "KV_"+schemasBucketName, func(c jetstream.StreamConfig) bool { return c.Replicas == 3 })
+
+	// Restart gateway 2 on the same NATS node: same ids.
+	gws[2].Close()
+	g := New(opts(cls[2])...)
+	t.Cleanup(g.Close)
+	g.ControlPlane()
+	url := srServer(t, g)
+	waitUntilErr(t, 30*time.Second, "restarted node serves the same ids", func() error {
+		got, err := snapshot(url)
+		if err != nil {
+			return err
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			return fmt.Errorf("restarted %v, want %v", got, want)
+		}
+		return nil
+	})
+	// And a lookup on the restarted node matches the generated file.
+	c := srClient(t, url, sr.Config{})
+	found, err := c.EnsureFile(ctx, "EV_orders_v1_OrderEvents-value", ordersv1.File_orders_v1_orders_proto, sr.RegisterOptions{})
+	if err != nil || found.ID != want["EV_orders_v1_OrderEvents-value@1"] {
+		t.Fatalf("lookup after restart: %+v %v", found, err)
+	}
+}
+
+func keys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

@@ -65,6 +65,9 @@ type peerTracker struct {
 	// notifications holds the hook-failure notification items
 	// (notification_store.go).
 	notifications jetstream.KeyValue
+	// buckets is every managed bucket: replicaBuckets, plus
+	// gwag-schemas with WithSchemaRegistry.
+	buckets []string
 
 	nodeID string
 	self   []byte
@@ -199,6 +202,16 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, err
 	}
 
+	buckets := replicaBuckets
+	var schemas jetstream.KeyValue
+	if g.sr != nil {
+		if schemas, err = openSchemasBucket(ctx, cl.JS); err != nil {
+			g.mu.Unlock()
+			return nil, err
+		}
+		buckets = append(append([]string(nil), replicaBuckets...), schemasBucketName)
+	}
+
 	selfBytes, err := json.Marshal(peerEntry{
 		NodeID:  cl.NodeID,
 		Name:    cl.Server.Name(),
@@ -221,6 +234,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		drain:             drain,
 		externals:         externals,
 		notifications:     notifications,
+		buckets:           buckets,
 		nodeID:            cl.NodeID,
 		self:              selfBytes,
 		peerTTL:           peerTTL,
@@ -280,6 +294,9 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.drainWatchLoop(tctx)
 	go t.externalsWatchLoop(tctx)
 	go t.notificationsWatchLoop(tctx)
+	if schemas != nil {
+		g.sr.bindCluster(schemas)
+	}
 	return t, nil
 }
 
@@ -437,7 +454,7 @@ func (t *peerTracker) syncReplicasLocked(ctx context.Context) int {
 // managed buckets.
 func (t *peerTracker) appliedReplicas(ctx context.Context) (int, error) {
 	low := 0
-	for _, b := range replicaBuckets {
+	for _, b := range t.buckets {
 		cfg, err := readStreamConfig(ctx, t.js, "KV_"+b)
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w", b, err)
@@ -461,7 +478,7 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var firstErr error
-	for _, b := range replicaBuckets {
+	for _, b := range t.buckets {
 		_, err := applyStream(c, t.js, "KV_"+b, t.gw.isJetStreamLeader, func(cur *jetstream.StreamConfig) (jetstream.StreamConfig, bool) {
 			if cur == nil {
 				return jetstream.StreamConfig{}, false
