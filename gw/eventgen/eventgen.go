@@ -260,7 +260,7 @@ func Generate(ctx context.Context, cfg Config) ([]string, error) {
 //
 // Stability: experimental
 func RunPlugin(ctx context.Context, p Plugin, req *pluginpb.CodeGeneratorRequest) (*pluginpb.CodeGeneratorResponse, error) {
-	in, err := proto.Marshal(req)
+	in, err := proto.MarshalOptions{Deterministic: true}.Marshal(req)
 	if err != nil {
 		return nil, err
 	}

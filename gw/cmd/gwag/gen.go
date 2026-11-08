@@ -18,12 +18,12 @@ func genCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	lang := fs.String("lang", "", "Target language: "+strings.Join(eventgen.Languages(), ", "))
 	out := fs.String("out", ".", "Output directory")
-	moduleDir := fs.String("module-dir", ".", "Project root that pins the base generators (go: go.mod tool directive; python: pyproject.toml with uv)")
+	moduleDir := fs.String("module-dir", ".", "Project root that pins the base generators (go: go.mod tool directive; ts: node_modules/.bin/protoc-gen-es; python: pyproject.toml with uv)")
 	grpc := fs.Bool("grpc", false, "Also generate gRPC service stubs (go: go tool protoc-gen-go-grpc)")
 	imports := &stringListValue{}
 	fs.Var(imports, "I", "Import path (repeatable; default .)")
 	opts := &stringListValue{}
-	fs.Var(opts, "opt", "Generator parameter, e.g. paths=source_relative (repeatable; passed to every generator)")
+	fs.Var(opts, "opt", "Generator parameter, e.g. paths=source_relative or target=ts (repeatable; passed to every generator; ts also reads events_import=MODULE)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag gen --lang LANG [--out DIR] [-I DIR]... [--opt K=V]... [--grpc] [--module-dir DIR] FILE.proto...")
 		fmt.Fprintln(fs.Output(), "  Imports gwag/ps/v1/options.proto (or gw/proto/ps/v1/options.proto) need no copy on disk.")

@@ -4,11 +4,16 @@
 # JetStream example.
 #
 #   examples/events/check.sh          # Go, JetStream (embedded NATS)
-#   KAFKA=1 examples/events/check.sh  # also go-kafka and py-kafka (docker)
+#   KAFKA=1 examples/events/check.sh  # also go-kafka, ts-kafka and py-kafka (docker)
 #   PY=0 examples/events/check.sh     # skip the Python checks
 #
-# Needs go, and uv for the Python checks. protoc-gen-go comes from the root go.mod tool directive;
-# nothing is taken from PATH.
+# Needs go; node >= 24 with pnpm for the TypeScript part; uv for the
+# Python part. The generators are the ones the projects pin
+# (protoc-gen-go from the root go.mod tool directive, protoc-gen-es
+# from node_modules/.bin, betterproto2 from the uv project); nothing
+# is taken from PATH. The TypeScript JetStream tests and the Go /
+# TypeScript interop run need docker (a NATS container); without it
+# they are skipped and the script says so.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"
@@ -55,9 +60,38 @@ for want in \
   fi
 done
 
+echo "== gwag gen --lang ts"
+(cd ts/events && pnpm install --frozen-lockfile >/dev/null)
+(cd examples/events/ts && pnpm install --frozen-lockfile >/dev/null)
+ts/events/gen.sh >/dev/null
+examples/events/ts/gen.sh >/dev/null
+ts_gen="ts/events/src/gen examples/events/ts/src/gen"
+if ! git diff --quiet -- $ts_gen || [[ -n "$(git ls-files --others --exclude-standard -- $ts_gen)" ]]; then
+  echo "FAIL regenerated TypeScript differs from committed:" >&2
+  git status --short -- $ts_gen >&2
+  fail=1
+fi
+
+echo "== typecheck + tests (ts/events, examples/events/ts)"
+(cd ts/events && pnpm typecheck) || fail=1
+(cd ts/events && pnpm test) || fail=1
+(cd examples/events/ts && pnpm typecheck) || fail=1
+(cd examples/events/ts && pnpm test) || fail=1
+
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "== ts/events JetStream tests (docker)"
+  ts/events/test.sh || fail=1
+  echo "== Go <-> TypeScript interop (docker)"
+  examples/events/interop.sh || fail=1
+else
+  echo "SKIP JetStream tests and Go <-> TypeScript interop: docker is not available"
+fi
+
 if [[ "${KAFKA:-}" == 1 ]]; then
   echo "== go-kafka (docker)"
   examples/events/go-kafka/test.sh || fail=1
+  echo "== ts-kafka (docker)"
+  examples/events/ts-kafka/test.sh || fail=1
 fi
 
 # Python: needs uv. PY=0 skips it. With KAFKA=1 it also runs py-kafka.

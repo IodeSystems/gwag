@@ -60,7 +60,7 @@ gwag gen --lang go --out gen -I proto --opt paths=source_relative orders/v1/orde
 
 | Flag | Meaning |
 |---|---|
-| `--lang` | `go`, `python` (alias `py`); TypeScript: see below |
+| `--lang` | `go`, `ts` (alias `typescript`), `python` (alias `py`) |
 | `--out` | output directory, default `.` |
 | `-I` | import path, repeatable, default `.` |
 | `--opt` | generator parameter, repeatable; passed to every generator (`paths=source_relative`, `module=...`, `M...`) |
@@ -96,6 +96,8 @@ your project pins, so two machines generate the same bytes:
 
   `uv` itself is the only tool taken from `PATH`. If the compiler is
   missing, the error prints the `uv add` line.
+- **ts** — `node_modules/.bin/protoc-gen-es` of `--module-dir`; see
+  [TypeScript](#typescript).
 
 Generated event files carry a header with the gwag version and the
 base generator's version. An untagged gwag build stamps `(devel)`, so
@@ -241,8 +243,114 @@ payloads yourself if consumers must trust who sent them.
 
 ## TypeScript
 
-TODO (E3): `--lang typescript`, `protoc-gen-es` from the project's
-`node_modules/.bin`.
+Setup in your project (pnpm, exact versions, lockfile committed):
+
+```bash
+pnpm add --save-dev --save-exact @bufbuild/protoc-gen-es@2.17.0 typescript
+pnpm add --save-exact @bufbuild/protobuf@2.17.0
+```
+
+`@gwag/events` is the runtime. It is private for now: depend on it by
+path (`"@gwag/events": "link:../gwag/ts/events"`). It ships TypeScript
+source, so run it with Node 24 or newer (type stripping) or a
+bundler.
+
+```bash
+gwag gen --lang ts --out src/gen -I proto \
+  --opt target=ts --opt import_extension=ts --opt erasable_syntax=true \
+  orders/v1/orders.proto
+```
+
+`gwag gen` runs `node_modules/.bin/protoc-gen-es` of `--module-dir`
+(default `.`); it never looks on `PATH`. If it is missing, the error
+prints the `pnpm add` line. It writes `orders/v1/orders_pb.ts` (the
+messages) and `orders/v1/orders_events.ts` (the channels). `--lang
+typescript` is the same as `--lang ts`.
+
+Options go to protoc-gen-es as they are. Use `import_extension=ts` and
+`erasable_syntax=true` to run the output directly with Node
+(`erasable_syntax` turns enums into plain objects). `events_import=MODULE`
+is read by gwag and not passed on: it names the module the events file
+imports the runtime from, default `@gwag/events`.
+
+The proto must import `gw/proto/ps/v1/options.proto` (the long path).
+The generated `_pb.ts` imports its TypeScript from
+`@gwag/events/proto/...`, so no copy of the options file is generated
+next to your code. Pass your own `map_imports=...` to change that.
+
+The same calls as Go. Messages are protobuf-es messages; publish
+takes a message or its init object (`MessageInitShape`):
+
+```ts
+import { OrdersBus } from "./gen/orders/v1/orders_events.ts";
+
+const bus = new OrdersBus(backend);
+
+// Plain
+await bus.publishOrderShipped({ orderId: "o-1" }, { carrier: "ups" });
+const stop = await bus.onOrderShipped("notify", async (subject, msg, raw) => {
+  // subject.orderId, msg.carrier; resolving acks, throwing redelivers
+});
+
+// Union: a tagged event to publish, a handler map (or one function) to listen
+await bus.publishOrderEvents({ orderId: "o-1" }, { type: "orders.v1.OrderCreated", value: { customer: "ann" } });
+await bus.onOrderEvents("billing", {
+  OrderCreated: async (s, m) => {},
+  OrderCancelled: async (s, m) => {},
+  unknown: async (s, raw) => {},
+});
+await bus.onOrderEvents("audit", async (s, event) => {
+  if (event.type === "orders.v1.OrderCreated") event.value.customer;
+});
+
+// Oneof: per case, or the whole message with onPaymentsMessage
+await bus.onPayments("ledger", { captured: async (s, m) => {}, refunded: async (s, m) => {} });
+```
+
+Per channel `X`:
+
+- `XSubject` — `{ orderId: string }`: one property per pattern segment,
+  lower camel case (`{order_id}` is `orderId`, `*` is `p1`, `>` is
+  `rest`).
+- `publishX(subject, msg, opts?)` — `opts` is `{ msgId?, headers? }`.
+- `onX(group, handler, opts?) => Promise<stop>` — `opts` is
+  `{ maxDeliver?, deliverAll?, backoffMs?: number[], ackWaitMs? }`,
+  the same knobs as Go in milliseconds. `stop()` ends this subscriber
+  and does not wait for a running handler.
+- Handlers get `(subject, msg, raw)`; `raw` is the `Message`: subject,
+  id, headers, data, delivery attempt.
+- Union: `XEvent` is `{ type: "pkg.Msg"; value: Msg } | ...`, `XEventInit`
+  is the same with init objects as values, and `XHandlers` has one
+  optional key per message (its protobuf-es name) plus `unknown`. A
+  missing key acks that type; with no `unknown` an unknown type is
+  acked and logged once.
+- Oneof: `XHandlers` has one optional key per case (protobuf-es
+  property name) plus `unknown`, which gets the whole message.
+- `bus.subscriptions()` and `bus.core` as in Go. `new OrdersBus(backend,
+  { logf })` sets the logger for skipped messages.
+
+One difference from Go: 64-bit integers are `bigint`.
+
+Backends (`@gwag/events/...`):
+
+- **`jetstream`** — `new JetStreamBackend(nc, { prefetch?, logf? })`,
+  `nc` from `@nats-io/transport-node`. Same stream names, durable
+  consumers, stream config, ack / nak / dead-letter behaviour as the
+  Go backend, so Go and TypeScript members of one group share its
+  messages. `prefetch` defaults to 16; use 1 to spread work evenly.
+- **`memory`** — `new MemoryBackend()`, `deadLetters()` for assertions.
+- **`eventstest`** — `runBackendSuite(name, harness)`, the port of
+  `events/eventstest` for `node:test`.
+- **Kafka** — [`examples/events/ts-kafka/`](../examples/events/ts-kafka),
+  kafkajs, the same mapping as the Go one (topic = stream name,
+  record key = subject, group `<stream>.<group>`, DLQ topic
+  `gwag.dlq.<stream>`).
+
+Checks: [`examples/events/ts/`](../examples/events/ts) is the generated
+example, and `examples/events/interop.sh` runs a Go publisher into a
+TypeScript listener, the reverse, and a Go and a TypeScript member of
+one group on one NATS (docker). `ts/events/test.sh` runs the runtime
+tests against NATS in docker.
 
 ## Python
 
