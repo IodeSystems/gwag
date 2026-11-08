@@ -125,6 +125,14 @@ Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
   `As`, `Version`, `AsInternal`, `ForwardHeaders`, `OpenAPIClient`,
   `ProtoImports`. (`AddMCP` reads `As` / `Version` / `AsInternal`;
   transport + target are positional.)
+- **Typed events** — runtime in `events/` (Backend interface,
+  `events/jetstream`, `events/memory`), codegen in `gw/eventgen/`
+  (`gwag gen`). A language is an `eventgen.Language` registered from
+  `init`; base generators come from the consumer project's pins
+  (`go tool protoc-gen-go`), never `PATH`. `examples/events/gen` is
+  generated; `examples/events/check.sh` fails on drift.
+  `examples/events/go-kafka` is its own module (franz-go stays out of
+  the root `go.mod`). See `docs/events.md`.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`
   is `mcp`, the slot owns the live client (a subprocess for stdio).
