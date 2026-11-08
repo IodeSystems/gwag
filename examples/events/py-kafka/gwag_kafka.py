@@ -114,6 +114,9 @@ class KafkaBackend:
 
     async def subscribe(self, channel: Channel, group: str, opts: SubscribeOptions, handler: Handler) -> Stop:
         await self._ensure_topic(channel.stream)
+        # A reader of the dead-letter topic must find it before the first
+        # dead letter, also on a broker that does not auto-create topics.
+        await self._ensure_topic(dlq_subject(channel.stream))
         listener = _Assigned()
         consumer = AIOKafkaConsumer(
             bootstrap_servers=self._brokers,

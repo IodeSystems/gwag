@@ -3,7 +3,7 @@
 // and says so.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dlqSubject, HeaderMsgID, type Message } from "@gwag/events";
+import { channel, dlqSubject, HeaderMsgID, resolveSubscribeOptions, type Message } from "@gwag/events";
 import { runBackendSuite } from "@gwag/events/eventstest";
 import { Kafka, logLevel } from "kafkajs";
 import { KafkaBackend } from "../src/kafka.ts";
@@ -41,8 +41,33 @@ if (!brokers) {
       assert.ok(out.length >= n, `got ${out.length} dead letters, want ${n}`);
       return out;
     },
-    // Offsets of a new group resolve after assignment.
-    settleMs: 1000,
     noDedup: true,
+  });
+
+  // A record published right after subscribe returns must reach a new
+  // group. kafkajs resolves a new group's start at its first fetch,
+  // after the join, unless the backend seeds it.
+  test("publish right after subscribe is delivered", async () => {
+    const run = Date.now().toString(36);
+    // Trials run in parallel: each stop waits out a fetch long-poll.
+    const trial = async (i: number): Promise<boolean> => {
+      const b = new KafkaBackend(brokers);
+      try {
+        const ch = channel(`race.v1.C${run}_${i}`, `race.c${run}_${i}.{id}`);
+        let got = 0;
+        const stop = await b.subscribe(ch, "g", resolveSubscribeOptions(), async () => {
+          got++;
+        });
+        await b.publish(ch, { subject: `race.c${run}_${i}.x`, id: `m${i}`, headers: {}, data: new Uint8Array([1]), delivery: 0 });
+        for (let t = 0; t < 400 && got === 0; t++) await new Promise((r) => setTimeout(r, 25));
+        await stop();
+        return got > 0;
+      } finally {
+        await b.close();
+      }
+    };
+    const ok = await Promise.all(Array.from({ length: 8 }, (_, i) => trial(i)));
+    const lost = ok.flatMap((v, i) => (v ? [] : [i]));
+    assert.deepEqual(lost, [], `lost on trials ${lost}`);
   });
 }
