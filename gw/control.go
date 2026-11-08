@@ -188,6 +188,34 @@ type sharedConn struct {
 	refs int
 }
 
+// registerTrackingWait is how long a Register on a cluster node waits
+// for cluster tracking to start before it answers Unavailable.
+const registerTrackingWait = 10 * time.Second
+
+// clusterRegistryKV returns the registry bucket a Register writes to:
+// nil when standalone. On a cluster node whose tracking has not
+// started yet (boot, JetStream meta not settled) it waits, then
+// answers Unavailable so the client retries. Taking the standalone
+// path there would register the service on this node only: no KV
+// entry, so no other node learns it.
+func (cp *controlPlane) clusterRegistryKV(ctx context.Context) (jetstream.KeyValue, error) {
+	if cp.gw.cfg.cluster == nil {
+		return nil, nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, registerTrackingWait)
+	defer cancel()
+	for {
+		if kv := cp.gw.registryKV(); kv != nil {
+			return kv, nil
+		}
+		select {
+		case <-wctx.Done():
+			return nil, status.Error(codes.Unavailable, "controlplane: cluster tracking has not started yet; retry")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest) (*cpv1.RegisterResponse, error) {
 	// The key is checked before anything is compiled or introspected;
 	// its namespaces once the bindings name theirs.
@@ -383,7 +411,10 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 
 	// Lookup the cluster KV BEFORE taking g.mu — registryKV takes g.mu
 	// internally, and we don't want a re-entrant lock deadlock.
-	clusterKV := cp.gw.registryKV()
+	clusterKV, err := cp.clusterRegistryKV(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ownerNode := cp.gw.nodeID()
 
 	cp.mu.Lock()

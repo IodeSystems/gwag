@@ -6,6 +6,10 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
 // newFailingTrackingCluster starts a single-node cluster whose peers
@@ -114,20 +118,7 @@ func TestStartClusterTracking_CloseDuringFailingStart(t *testing.T) {
 // gateway's HTTP listener, waits too. Before the fix it held g.mu
 // across the calls (5s each, without end in a key listing).
 func TestStartClusterTracking_DoesNotHoldGatewayLock(t *testing.T) {
-	cl, err := StartCluster(ClusterOptions{
-		NodeName:      "no-meta",
-		ClientListen:  freeAddr(t),
-		ClusterListen: freeAddr(t),
-		Peers:         []string{freeAddr(t)}, // nothing listens there
-		DataDir:       t.TempDir(),
-		StartTimeout:  10 * time.Second,
-		LogLevel:      "silent",
-	})
-	if err != nil {
-		t.Fatalf("StartCluster: %v", err)
-	}
-	t.Cleanup(cl.Close)
-	g := New(WithCluster(cl), WithoutMetrics(), WithoutBackpressure())
+	g := New(WithCluster(newNoMetaCluster(t)), WithoutMetrics(), WithoutBackpressure())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -163,4 +154,57 @@ func TestStartClusterTracking_DoesNotHoldGatewayLock(t *testing.T) {
 		t.Fatal("startClusterTracking did not return after its context was cancelled")
 	}
 	g.Close()
+}
+
+// newNoMetaCluster starts a clustered node whose only route peer does
+// not exist: JetStream never elects a meta leader, so no bucket call
+// is answered and cluster tracking never starts.
+func newNoMetaCluster(t *testing.T) *Cluster {
+	t.Helper()
+	cl, err := StartCluster(ClusterOptions{
+		NodeName:      "no-meta",
+		ClientListen:  freeAddr(t),
+		ClusterListen: freeAddr(t),
+		Peers:         []string{freeAddr(t)}, // nothing listens there
+		DataDir:       t.TempDir(),
+		StartTimeout:  10 * time.Second,
+		LogLevel:      "silent",
+	})
+	if err != nil {
+		t.Fatalf("StartCluster: %v", err)
+	}
+	t.Cleanup(cl.Close)
+	return cl
+}
+
+// TestRegister_ClusterWithoutTrackingIsUnavailable: a Register on a
+// cluster node whose tracking has not started answers Unavailable, so
+// the client retries. It used to take the standalone path: the service
+// was registered on this node only, with no registry KV entry, and no
+// other node learned it (e2e S4 rolling upgrade: `Cannot query field
+// "orders"` on the other nodes).
+func TestRegister_ClusterWithoutTrackingIsUnavailable(t *testing.T) {
+	g := New(WithCluster(newNoMetaCluster(t)), WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(g.Close)
+	cp := g.ControlPlane() // starts tracking, which cannot finish
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := cp.Register(ctx, &cpv1.RegisterRequest{
+		Addr:       "127.0.0.1:1",
+		InstanceId: "greeter-instance",
+		Services: []*cpv1.ServiceBinding{{
+			Namespace:   "greeter",
+			Version:     "v1",
+			ProtoSource: testProtoBytes(t, "greeter.proto"),
+		}},
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("Register before cluster tracking: err %v, want Unavailable", err)
+	}
+	g.mu.Lock()
+	_, local := g.slots[poolKey{namespace: "greeter", version: "v1"}]
+	g.mu.Unlock()
+	if local {
+		t.Fatal("Register before cluster tracking installed greeter/v1 on this node")
+	}
 }
