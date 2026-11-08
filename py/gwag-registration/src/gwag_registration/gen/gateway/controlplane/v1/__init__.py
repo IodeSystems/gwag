@@ -866,6 +866,16 @@ class RegisterResponse(betterproto2.Message):
     from gateways that predate the start gate: treat as all READY.
     """
 
+    warnings: "list[str]" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    Problems the gateway found that did not stop the registration:
+    a message with (gwag.ps.v1.shadow) that differs from the subject
+    it shadows in the gateway's own Schema Registry. One line each.
+    Empty from gateways that predate the check. Log them.
+    """
+
 
 default_message_pool.register_message(
     "gateway.controlplane.v1", "RegisterResponse", RegisterResponse
@@ -1151,6 +1161,15 @@ class ServiceInfo(betterproto2.Message):
     )
     """
     Manifest: ServiceBinding.subscribes of the latest registration.
+    """
+
+    warnings: "list[str]" = betterproto2.field(
+        11, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    Warnings of the latest Register of this (namespace, version) on
+    this gateway: see RegisterResponse.warnings. Not replicated; a
+    gateway that did not take the Register has none.
     """
 
 
