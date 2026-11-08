@@ -334,7 +334,7 @@ instance or line. Default sink only.
 | `service_instances` | gauge | `namespace`, `version`, `state` | Instances by start-gate state: `ready`, `waiting`, `degraded`. |
 | `service_drain_instances` | gauge | `namespace`, `version`, `drain_state` | Instances by drain state: `draining`, `blocked`, `safe_to_stop`. |
 | `start_gate_transitions_total` | counter | `namespace`, `version`, `from`, `to` | State changes (`none`, `waiting`, `ready`, `degraded`, `removed`). READY/DEGRADED flips are sampled every 2s and at scrape, so a shorter flip can go uncounted. |
-| `dependency_unmet` | gauge | `consumer_kind`, `consumer_namespace`, `consumer_version`, `provider` | 1 when no accepted line of the provider has a ready instance. `consumer_kind`: `service` (a registered line) or `external` (a declared external dependent: `consumer_namespace` is its id, `consumer_version` is empty; see [lifecycle.md](./lifecycle.md#external-dependents)). Review-due declarations keep their series. |
+| `dependency_unmet` | gauge | `consumer_kind`, `consumer_namespace`, `consumer_version`, `provider`, `channel` | 1 when no accepted line of the provider has a ready instance. `channel`: the channel key of a subscription edge (`provider` is empty while no line declares it; see [lifecycle.md](./lifecycle.md#channel-subscriptions)), empty for `depends` edges. `consumer_kind`: `service` (a registered line) or `external` (a declared external dependent: `consumer_namespace` is its id, `consumer_version` is empty; see [lifecycle.md](./lifecycle.md#external-dependents)). Review-due declarations keep their series. |
 | `line_sunsetable` | gauge | `namespace`, `version` | 1 when the line is sunset-able (admin dependency graph rule, default 1h usage window). |
 | `drain_requests_total` | counter | `outcome` | Drain requests: `requested`, `already_requested`, `cancelled`, `unknown_instance`, `error`. |
 | `declarations_review_due` | gauge | — | External dependents past their review date (or with none). They still count as dependents. Cluster-wide set, read on this node. See [lifecycle.md](./lifecycle.md#review-date). |
@@ -348,6 +348,7 @@ instance or line. Default sink only.
 | `sign_auth_total` | counter | `code` | `SignSubscriptionToken` bearer checks: `in_process`, `ok_signer`, `ok_bearer`, `denied_bearer`, `missing_bearer`, `no_token_configured`. |
 | `pub_no_binding_total` | counter | none | Publishes to a channel with no channel binding (empty `payload_type`). |
 | `pubsub_bus_degraded` | gauge | none | 1 while `ps.pub`/`ps.sub` run local-only because the cluster NATS connection is down. |
+| `pubsub_typed_skipped_total` | counter | `reason` | Typed events (`Gwag-Type` header) `ps_sub` dropped. `reason`: `unknown_type` (no registered proto declares the type) or `decode` (the body is not that type). |
 | `plan_cache_hits_total` | counter | none | Plan-cache lookups that skipped parse, validate and plan. |
 | `plan_cache_misses_total` | counter | none | Lookups that paid for them; a rising rate means the working set exceeds `WithDocCacheSize`. |
 
