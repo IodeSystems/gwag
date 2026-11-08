@@ -245,6 +245,8 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag schema (check|push) --registry ... FILE.proto...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -410,7 +412,7 @@ func servicesCmd(args []string) int {
 
 func schemaCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push) ...")
 		return 2
 	}
 	switch args[0] {
@@ -418,8 +420,12 @@ func schemaCmd(args []string) int {
 		return schemaFetchCmd(args[1:])
 	case "diff":
 		return schemaDiffCmd(args[1:])
+	case "check":
+		return schemaCheckCmd(args[1:], os.Stdout, os.Stderr)
+	case "push":
+		return schemaPushCmd(args[1:], os.Stdout, os.Stderr)
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push) ...")
 		return 2
 	}
 }
