@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Protocol
 
 from .channel import Channel, valid_group
+from .serde import ProtoSerde, Serde, Topics
 from .types import (
     HEADER_CHANNEL,
     HEADER_TYPE,
@@ -43,8 +44,15 @@ SegmentHandler = Callable[[list[str], Message], Awaitable[None]]
 
 
 class Core:
-    def __init__(self, backend: Backend, *, logf: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        serde: Serde | None = None,
+        logf: Callable[[str], None] | None = None,
+    ) -> None:
         self._backend = backend
+        self._serde: Serde = serde or ProtoSerde()
         self._logf: Callable[[str], None] = logf or _log.warning
         self._subs: list[Subscription] = []
         self._warned: set[tuple[str, str]] = set()
@@ -52,6 +60,15 @@ class Core:
     @property
     def backend(self) -> Backend:
         return self._backend
+
+    @property
+    def serde(self) -> Serde:
+        return self._serde
+
+    def _topic(self, channel: Channel) -> str:
+        if isinstance(self._backend, Topics):
+            return self._backend.topic(channel)
+        return channel.stream
 
     async def publish(
         self,
@@ -74,10 +91,13 @@ class Core:
         h = dict(headers or {})
         h[HEADER_TYPE] = type_name
         h[HEADER_CHANNEL] = channel.key
-        await self._backend.publish(
-            channel,
-            Message(subject=subject, id=msg_id or new_id(), headers=h, data=bytes(message)),
-        )
+        msg = Message(subject=subject, id=msg_id or new_id(), headers=h)
+        try:
+            await self._serde.encode(channel, self._topic(channel), bytes(message), msg)
+        except Exception as e:
+            e.add_note(f"publish {channel.key}: encode")
+            raise
+        await self._backend.publish(channel, msg)
 
     async def subscribe(
         self,
@@ -92,7 +112,18 @@ class Core:
             raise ValueError(f"subscribe {channel.key}: group {group!r}: use letters, digits, '_' or '-'")
         opts = (options or SubscribeOptions()).resolved()
 
-        async def deliver(m: Message) -> None:
+        plain = isinstance(self._serde, ProtoSerde)
+        topic = self._topic(channel)
+
+        async def deliver(raw: Message) -> None:
+            m = raw
+            if not plain:
+                m = raw.clone()
+                try:
+                    await self._serde.decode(channel, topic, m)
+                except Exception as e:
+                    e.add_note(f"decode {channel.key}")
+                    raise
             segs = channel.pattern.match(m.subject)
             if segs is None:
                 self.skip(channel, m, f"subject {m.subject} does not match {channel.pattern}")

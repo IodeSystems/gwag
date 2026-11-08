@@ -13,8 +13,10 @@ from .channel import (
     valid_group,
 )
 from .core import Core, ProtoMessage, SegmentHandler, message_from
+from .descriptors import FileInfo, Files, default_files, register_file_descriptors
 from .jetstream import JetStreamBackend
 from .memory import MemoryBackend
+from .serde import ProtoSerde, Serde, Topics
 from .types import (
     HEADER_CHANNEL,
     HEADER_ERROR,
@@ -40,21 +42,28 @@ __all__ = [
     "Backend",
     "Channel",
     "Core",
+    "FileInfo",
+    "Files",
     "Handler",
     "JetStreamBackend",
     "MemoryBackend",
     "Message",
     "Pattern",
     "ProtoMessage",
+    "ProtoSerde",
     "Segment",
     "SegmentHandler",
     "SegmentKind",
+    "Serde",
     "Stop",
     "SubscribeOptions",
     "Subscription",
+    "Topics",
+    "default_files",
     "dlq_subject",
     "message_from",
     "new_id",
+    "register_file_descriptors",
     "stream_name",
     "valid_group",
 ]

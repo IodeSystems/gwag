@@ -4,8 +4,8 @@ Mirrors events/events.go."""
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .channel import Channel
@@ -22,13 +22,18 @@ class Message:
     """One message on the wire."""
 
     subject: str
-    data: bytes
+    data: bytes = b""
     id: str = ""
     # HEADER_TYPE, HEADER_CHANNEL and any extra headers. Not the id
     # header: backends carry the id in `id`.
     headers: dict[str, str] = field(default_factory=dict)
     # 1-based delivery attempt. Set on receive.
     delivery: int = 0
+    # The record key, on backends that have one (Kafka). Set on receive.
+    key: bytes = b""
+
+    def clone(self) -> Message:
+        return replace(self, headers=dict(self.headers))
 
     @property
     def type(self) -> str:
@@ -48,10 +53,13 @@ class SubscribeOptions:
     backoff: tuple[float, ...] = (1.0, 5.0, 30.0)
     # How long a delivery may run before the backend redelivers it.
     ack_wait: float = 30.0
+    # Backend-specific settings, keyed by backend (the Kafka package's
+    # retry_topic() sets one). Other backends ignore them.
+    backend: Mapping[str, object] = field(default_factory=dict)
 
     def resolved(self) -> SubscribeOptions:
         if self.max_deliver < 1:
-            return SubscribeOptions(1, self.deliver_all, self.backoff, self.ack_wait)
+            return replace(self, max_deliver=1)
         return self
 
     def delay(self, n: int) -> float:
