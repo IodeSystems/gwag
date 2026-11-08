@@ -65,7 +65,8 @@ echo "== gwag gen --lang ts"
 (cd examples/events/ts && pnpm install --frozen-lockfile >/dev/null)
 ts/events/gen.sh >/dev/null
 examples/events/ts/gen.sh >/dev/null
-ts_gen="ts/events/src/gen examples/events/ts/src/gen"
+ts/registration/gen.sh >/dev/null
+ts_gen="ts/events/src/gen examples/events/ts/src/gen ts/registration/src/gen"
 if ! git diff --quiet -- $ts_gen || [[ -n "$(git ls-files --others --exclude-standard -- $ts_gen)" ]]; then
   echo "FAIL regenerated TypeScript differs from committed:" >&2
   git status --short -- $ts_gen >&2
@@ -78,8 +79,8 @@ echo "== typecheck + tests (ts/events, examples/events/ts)"
 (cd examples/events/ts && pnpm typecheck) || fail=1
 (cd examples/events/ts && pnpm test) || fail=1
 
-echo "== typecheck + tests (ts/events-kafka, ts/events-schemaregistry; no Kafka)"
-for d in ts/events-kafka ts/events-schemaregistry; do
+echo "== typecheck + tests (ts/events-kafka, ts/events-schemaregistry; no Kafka; ts/registration)"
+for d in ts/events-kafka ts/events-schemaregistry ts/registration; do
   (cd "$d" && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm test) || fail=1
 done
 
@@ -105,6 +106,8 @@ fi
 if [[ "${PY:-1}" != 0 ]]; then
   echo "== python (examples/events/py/check.sh)"
   examples/events/py/check.sh || fail=1
+  echo "== registration clients against a real gateway (examples/events/registration.sh)"
+  examples/events/registration.sh || fail=1
 fi
 
 if [[ $fail == 0 ]]; then echo "PASS"; else echo "FAILED" >&2; exit 1; fi
