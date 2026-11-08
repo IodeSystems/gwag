@@ -37,6 +37,39 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 class Stopped extends Error {}
 
+const STARTING = new Set([
+  "UNKNOWN_TOPIC_OR_PARTITION",
+  "LEADER_NOT_AVAILABLE",
+  "NOT_LEADER_FOR_PARTITION",
+  "COORDINATOR_NOT_AVAILABLE",
+  "COORDINATOR_LOAD_IN_PROGRESS",
+  "NOT_COORDINATOR",
+]);
+
+function isStarting(e: unknown): boolean {
+  for (let c = e as { type?: string; retriable?: boolean; cause?: unknown } | undefined; c; c = c.cause as typeof c) {
+    if ((c.type !== undefined && STARTING.has(c.type)) || c.retriable === true) return true;
+  }
+  return false;
+}
+
+/**
+ * Runs fn until it succeeds, fails with an error that is not about the
+ * broker still starting up, or 30s pass. A new topic has no leader
+ * everywhere yet, and a fresh broker has no group coordinator until
+ * __consumer_offsets is created.
+ */
+async function retryStartup<T>(fn: () => Promise<T>): Promise<T> {
+  for (const deadline = Date.now() + 30000; ; ) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!isStarting(e) || Date.now() > deadline) throw e;
+    }
+    await sleep(50);
+  }
+}
+
 export class KafkaBackend implements Backend {
   readonly #kafka: Kafka;
   readonly #partitions: number;
@@ -77,6 +110,26 @@ export class KafkaBackend implements Backend {
     this.#topics.add(topic);
   }
 
+  /**
+   * The start position of a group that has no commit yet, per partition:
+   * the end now, or the start with deliverAll. A new group otherwise
+   * resolves its position at its first fetch, after it has joined, so a
+   * record produced between the join and that fetch is skipped although
+   * subscribe has returned. The consumer seeks to these on joining
+   * (kafkajs applies a seek before it resolves offsets). Partitions with
+   * a commit keep it.
+   */
+  async #startOffsets(topic: string, groupId: string, deliverAll: boolean): Promise<Map<number, string>> {
+    await this.#connect();
+    const committed = await retryStartup(() => this.#admin.fetchOffsets({ groupId, topics: [topic] }));
+    const have = new Set<number>();
+    for (const t of committed) for (const p of t.partitions) if (Number(p.offset) >= 0) have.add(p.partition);
+    const offsets = await retryStartup(() => this.#admin.fetchTopicOffsets(topic));
+    const start = new Map<number, string>();
+    for (const o of offsets) if (!have.has(o.partition)) start.set(o.partition, deliverAll ? o.low : o.high);
+    return start;
+  }
+
   #record(m: Message) {
     const headers: IHeaders = { ...m.headers };
     if (m.id !== "") headers[HeaderMsgID] = m.id;
@@ -91,12 +144,17 @@ export class KafkaBackend implements Backend {
   async subscribe(ch: Channel, group: string, opts: ResolvedSubscribeOptions, h: Handler): Promise<Stop> {
     if (this.#closed) throw new Error("kafka: closed");
     await this.#ensureTopic(ch.stream);
+    await this.#ensureTopic(dlqSubject(ch.stream));
     const groupId = `${ch.stream}.${group}`;
+    const start = await this.#startOffsets(ch.stream, groupId, opts.deliverAll);
     const consumer = this.#kafka.consumer({ groupId, allowAutoTopicCreation: false });
     let stopped = false;
     const joined = new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error(`kafka: group ${groupId}: no partition assignment after 30s`)), 30000);
       consumer.on(consumer.events.GROUP_JOIN, () => {
+        // Once: a later rebalance must not rewind partitions already consumed.
+        for (const [partition, offset] of start) consumer.seek({ topic: ch.stream, partition, offset });
+        start.clear();
         clearTimeout(t);
         resolve();
       });
