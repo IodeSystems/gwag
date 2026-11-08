@@ -78,14 +78,25 @@ type EvacuateResult struct {
 // is current (a replica raise in between can place one back, the way
 // `gwag peer evacuate --wait` does). With leave, the peer is then
 // removed from the JetStream meta group.
+//
+// The gateway refuses to start an evacuation (409) while a bucket or
+// event stream is below the cluster's replica count or has a replica
+// that is not current; that is asked again too, as --wait does, and
+// each new refusal is logged.
 func (g *Gateway) Evacuate(t testing.TB, nodeID string, leave bool, timeout time.Duration) EvacuateResult {
 	t.Helper()
 	var res EvacuateResult
+	lastRefusal := ""
 	Eventually(t, timeout, fmt.Sprintf("%s evacuates %s", g.Name, nodeID), func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		var r EvacuateResult
 		if err := g.Post(ctx, "/api/admin/peers/"+nodeID+"/evacuate", map[string]any{"leave": leave}, &r, Bearer(g.Token())); err != nil {
+			var he *HTTPError
+			if errors.As(err, &he) && he.Status == http.StatusConflict && he.Body != lastRefusal {
+				lastRefusal = he.Body
+				t.Logf("%s: evacuation of %s not started yet: %s", g.Name, nodeID, he.Body)
+			}
 			return err
 		}
 		res = r

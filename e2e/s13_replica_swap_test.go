@@ -345,7 +345,16 @@ func TestS13bRollbackBeforeFinalize(t *testing.T) {
 		})
 	}
 	js := s13JetStream(t, cluster.NATSURLs())
-	stableBefore := s13Bucket(t, js, "gwag-stable")
+	// The stable mark is written after the slot routes (see
+	// TestS13ReplicaSwap); read before it, "before" lacks orders.
+	var stableBefore map[string]string
+	harness.Eventually(t, 15*time.Second, "stable mark for orders before the rollback", func() error {
+		stableBefore = s13Bucket(t, js, "gwag-stable")
+		if stableBefore["orders"] == "" {
+			return fmt.Errorf("no orders mark: %v", stableBefore)
+		}
+		return nil
+	})
 	green := []*harness.Gateway{cluster.NewNode(harness.GatewayOpts{Name: "g1"}), cluster.NewNode(harness.GatewayOpts{Name: "g2"})}
 	lb := cluster.LB(t, harness.LBOpts{})
 	load := harness.StartLoad(t, harness.LoadOpts{Workers: 4, Interval: 10 * time.Millisecond},

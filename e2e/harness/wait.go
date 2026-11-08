@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"testing"
@@ -88,14 +89,21 @@ var (
 // and has not been handed out before in this test binary. Another
 // process can still take it before the caller binds it; a process
 // that fails to bind shows that in its log.
+//
+// The port is drawn from freePortMin..freePortMax, below the ephemeral
+// range Linux (32768-60999) and macOS (49152-65535) give outgoing
+// connections. A port from 127.0.0.1:0 is in that range: a node
+// started later than its port was picked (cluster.NewNode) lost it to
+// an outgoing connection in an S13 run ("bind: address already in
+// use"); a cluster of six opens many.
 func FreePort(t testing.TB) int {
 	t.Helper()
-	for i := 0; i < 100; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
+	for i := 0; i < 1000; i++ {
+		port := freePortMin + rand.IntN(freePortMax-freePortMin+1)
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
-			t.Fatalf("harness: free port: %v", err)
+			continue
 		}
-		port := l.Addr().(*net.TCPAddr).Port
 		_ = l.Close()
 		portsMu.Lock()
 		used := ports[port]
@@ -105,6 +113,11 @@ func FreePort(t testing.TB) int {
 			return port
 		}
 	}
-	t.Fatalf("harness: no unused free port after 100 tries")
+	t.Fatalf("harness: no unused free port in %d-%d after 1000 tries", freePortMin, freePortMax)
 	return 0
 }
+
+const (
+	freePortMin = 20000
+	freePortMax = 32767
+)
