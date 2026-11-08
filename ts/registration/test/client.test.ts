@@ -186,7 +186,7 @@ describe("register", () => {
     const { f, addr } = await start();
     const reg = await register({ gateway: addr, serviceAddr: "b:1", services: [svc], heartbeatIntervalMs: 50, logger: quiet });
     f.known.clear(); // gateway restarted
-    await waitFor(() => f.registers.length >= 2);
+    await waitFor(() => reg.id === "r2"); // the fake counts the call before the client reads the reply
     assert.equal(reg.id, "r2");
     await reg.close();
     assert.deepEqual(f.deregisters, ["r2"]);
