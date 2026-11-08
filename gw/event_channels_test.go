@@ -3,6 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -376,5 +379,38 @@ func TestTypedEvents_PubPublishesRawProto(t *testing.T) {
 		if i == 0 && dm.Get(desc.Fields().ByName("total")).Int() != 12 {
 			t.Errorf("total = %v", dm.Get(desc.Fields().ByName("total")))
 		}
+	}
+}
+
+// TestTypedEvents_PubOverGraphQL: the payload_type argument reaches
+// ps.pub through the GraphQL handler.
+func TestTypedEvents_PubOverGraphQL(t *testing.T) {
+	g, cl := typedPubSubGateway(t)
+	got := make(chan *nats.Msg, 1)
+	s, err := cl.Conn.ChanSubscribe("events.orders.9", got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Unsubscribe() })
+	_ = cl.Conn.Flush()
+	srv := httptest.NewServer(g.Handler())
+	t.Cleanup(srv.Close)
+	q := `{"query":"{ ps { pub(channel: \"events.orders.9\", payload: \"{\\\"orderId\\\":\\\"9\\\"}\", payload_type: \"orders.v1.OrderShipped\") { __typename } } }"}`
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(q))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(body), "errors") {
+		t.Fatalf("graphql: %s", body)
+	}
+	select {
+	case m := <-got:
+		if m.Header.Get(EventHeaderType) != "orders.v1.OrderShipped" {
+			t.Fatalf("headers %v", m.Header)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no message; response %s", body)
 	}
 }
