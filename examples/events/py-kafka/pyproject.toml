@@ -26,7 +26,7 @@ gwag-events-schemaregistry = { path = "../../../py/gwag-events-schemaregistry", 
 
 [tool.mypy]
 strict = true
-files = ["main.py", "srinterop.py", "corp.py"]
+files = ["main.py", "srinterop.py", "corp.py", "listen.py"]
 # ../py holds the generated orders code and the sample app;
 # gen_corp/ and gen_shop/ are written by corp-gen.sh.
 mypy_path = ".:../py"

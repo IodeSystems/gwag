@@ -9,6 +9,7 @@ go test -tags e2e ./e2e/...                      # all stories
 go test -tags e2e ./e2e/ -run TestS0 -v          # one story
 E2E_LOG_LINES=200 go test -tags e2e ./e2e/...    # longer log tails on failure
 E2E_KNOWN_BUGS=1 go test -tags e2e ./e2e/ -run KnownBug   # reproduce open bugs
+E2E_KAFKA=1 go test -tags e2e ./e2e/ -run TestS12 -v      # the Kafka story (docker)
 ```
 
 The first test that needs a binary builds it with `go build` into a temp
@@ -25,6 +26,10 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
   or GraphQL; self-registers with `controlclient.SelfRegister`; injects
   faults. `fixture.proto` is compiled at boot (protocompile + dynamicpb),
   so there is no generated code.
+- `kafka-fixture/` — the Go services of the Kafka story (orders
+  producer, billing listener, retry/DLQ probe). Its own Go module, so
+  franz-go stays out of the root `go.mod`; the harness builds it from
+  that directory.
 - `*_test.go` here — the stories. `known_bugs_test.go` holds tests for
   open gateway bugs; they skip unless `E2E_KNOWN_BUGS=1`.
 
@@ -45,11 +50,23 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 | `TestS9bDeclarationSinks` | external-dependent changes to a webhook and a file per node |
 | `TestS10AdminRoles` | three admin readers, public and private services |
 | `TestS11TypedEvents` | typed event channels on a 3-node cluster: streams, start gate and graph, Go group delivery, TypeScript and Python listeners, `ps_sub` / `ps.pub` bridge, dead letters, NATS node loss |
+| `TestS12KafkaEvents` | the same channels over Kafka with the Schema Registry serde, services registered on a 3-node cluster: start gate, graph and sunset, Go group, TypeScript and Python delivery, Confluent's Java deserializer reads the records, `gwag gen --registry` import of a Confluent-written topic, retry topic and DLQ, gateway node loss |
 
 `TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
 and `pnpm` are on `PATH`, and the Python listener when `uv` is; it
 runs `pnpm install --frozen-lockfile` and `uv sync --locked` first.
 Without a tool, that step is skipped and says why.
+
+`TestS12KafkaEvents` skips unless `E2E_KAFKA=1` is set and docker
+answers. It starts `apache/kafka` and `confluentinc/cp-schema-registry`
+(the tags `examples/events/kafka-stack.sh` pins; `KAFKA_IMAGE` /
+`SR_IMAGE` override) on free ports and removes them at the end. The
+TypeScript and Python listeners (`examples/events/ts-kafka/src/listen.ts`,
+`examples/events/py-kafka/listen.py`) and the import step (Confluent's
+Python serializer in `examples/events/go-kafka/confluent`) need the
+same tools as in S11 and skip the same way. The gateway carries no
+event traffic in this story; TypeScript and Python have no
+control-plane client, so the test registers their `Subscribes`.
 
 The gateway is `examples/multi/cmd/gateway`: it has the flags the
 stories need (backpressure caps, `--caller-id-public`, NATS cluster,
@@ -106,7 +123,10 @@ env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless N
   FixtureOpts.FailoverGateways []*Gateway            // --gateway-alt per node
 env.Start(name, bin, args...) *Proc                  // any other process
 env.StartWith(name, ProcOpts{Dir, Env, Stdin}, bin, args...) *Proc   // with cwd, env, open stdin
-harness.Binary(t, "gateway"|"fixture"|"gwag") string
+harness.Binary(t, "gateway"|"fixture"|"gwag"|"kafka-fixture") string
+harness.DockerAvailable() string                       // why not, or ""
+harness.StartKafkaStack(t) *KafkaStack                 // Kafka + Schema Registry in docker, free ports
+  s.Brokers · s.SRURL · s.Name (Name:9094 inside the network) · s.Env() · s.Exec(ctx, args...)
 
 Proc: Stop(timeout) code · Kill() · Restart() · Signal(sig) · WaitExit(timeout) code
       Running() · ExitCode() · PID() · WaitLog(substr, timeout) · Logs() · CurrentLogs()
