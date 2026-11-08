@@ -64,6 +64,7 @@ func upCmd(args []string) int {
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
+	requireAppKeys := fs.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY; mint with 'gwag key create'), operator RPCs the admin token. Default off: the control plane is open")
 	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
@@ -141,6 +142,9 @@ func upCmd(args []string) int {
 	}
 	if *pprofEnable {
 		gwOpts = append(gwOpts, gateway.WithPprof())
+	}
+	if *requireAppKeys {
+		gwOpts = append(gwOpts, gateway.WithRequireAppKeys())
 	}
 	srOpt, err := srFlags.option()
 	if err != nil {

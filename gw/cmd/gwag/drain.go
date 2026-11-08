@@ -66,6 +66,7 @@ func runDrain(args []string, stdout, stderr io.Writer) int {
 	if *list {
 		ctx, c := context.WithTimeout(context.Background(), 10*time.Second)
 		defer c()
+		ctx = withBearer(ctx, login.Bearer)
 		resp, err := client.ListRegistrations(ctx, &cpv1.ListRegistrationsRequest{})
 		if err != nil {
 			fmt.Fprintf(stderr, "ListRegistrations: %v\n", err)
@@ -87,6 +88,7 @@ func runDrain(args []string, stdout, stderr io.Writer) int {
 	call := func(cancelReq bool) (*cpv1.DrainInstanceResponse, error) {
 		ctx, c := context.WithTimeout(context.Background(), 10*time.Second)
 		defer c()
+		ctx = withBearer(ctx, login.Bearer)
 		return client.DrainInstance(ctx, &cpv1.DrainInstanceRequest{Instance: instance, Cancel: cancelReq})
 	}
 	resp, err := call(*cancel)

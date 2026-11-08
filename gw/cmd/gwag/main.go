@@ -213,6 +213,8 @@ func main() {
 			os.Exit(signCmd(os.Args[2:]))
 		case "drain":
 			os.Exit(drainCmd(os.Args[2:]))
+		case "key":
+			os.Exit(keyCmd(os.Args[2:]))
 		case "secret":
 			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
 		case "gen":
@@ -236,6 +238,7 @@ func runGateway() {
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	shutdownDelay := flag.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := flag.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
+	requireAppKeys := flag.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY), operator RPCs the admin token. Mint keys with 'gwag key create' (needs the admin API, which this mode does not mount; use gwag up or an embedding gateway)")
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
@@ -244,6 +247,7 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag schema (check|push) --registry ... FILE.proto...")
@@ -264,6 +268,9 @@ func runGateway() {
 	gwOpts := []gateway.Option{gateway.WithAllowTier(tiers...), gateway.WithEnvironment(*environment)}
 	if *adminDataDir != "" {
 		gwOpts = append(gwOpts, gateway.WithAdminDataDir(*adminDataDir))
+	}
+	if *requireAppKeys {
+		gwOpts = append(gwOpts, gateway.WithRequireAppKeys())
 	}
 	gw := gateway.New(gwOpts...)
 	for _, p := range protos {
@@ -618,6 +625,16 @@ func signCmd(args []string) int {
 	return 0
 }
 
+// withBearer sends tok as `authorization: Bearer <tok>` on gRPC calls
+// made with ctx; no-op for an empty tok. A gateway with
+// --require-app-keys needs the admin token on operator RPCs.
+func withBearer(ctx context.Context, tok string) context.Context {
+	if tok == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+}
+
 // splitFlagsAndPositionals walks a free-form argv tail and returns
 // (flags, positionals) so the flags can be parsed even when they're
 // interleaved with positional args. Recognises --flag, --flag=val,
@@ -679,6 +696,7 @@ func peerCmd(args []string) int {
 	client := cpv1.NewControlPlaneClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	ctx = withBearer(ctx, login.Bearer)
 
 	switch verb {
 	case "list":
