@@ -25,8 +25,7 @@ type Registry struct {
 
 	// Compatible answers POST /compatibility; nil accepts everything.
 	Compatible func(subject, version string, s schemaregistry.Schema) (bool, []string)
-	// Requests counts requests by "METHOD path".
-	Requests map[string]int
+	requests   map[string]int
 
 	mu       sync.Mutex
 	nextID   int
@@ -36,9 +35,17 @@ type Registry struct {
 
 // New starts a registry. Close it when done.
 func New() *Registry {
-	r := &Registry{nextID: 1, ids: map[int]schemaregistry.Schema{}, subjects: map[string][]schemaregistry.Schema{}, Requests: map[string]int{}}
+	r := &Registry{nextID: 1, ids: map[int]schemaregistry.Schema{}, subjects: map[string][]schemaregistry.Schema{}, requests: map[string]int{}}
 	r.Server = httptest.NewServer(http.HandlerFunc(r.serve))
 	return r
+}
+
+// Requests returns how many requests "METHOD /path" (path unescaped)
+// the registry served.
+func (r *Registry) Requests(key string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.requests[key]
 }
 
 // Add registers s under subject and returns its id and version.
@@ -100,7 +107,7 @@ func (r *Registry) serve(w http.ResponseWriter, req *http.Request) {
 	for i, p := range parts {
 		parts[i], _ = url.PathUnescape(p)
 	}
-	r.Requests[req.Method+" /"+strings.Join(parts, "/")]++
+	r.requests[req.Method+" /"+strings.Join(parts, "/")]++
 	var body schemaregistry.Schema
 	if req.Method == http.MethodPost {
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {

@@ -159,12 +159,35 @@ func (c *Client) FileByID(ctx context.Context, id int) (protoreflect.FileDescrip
 // Stability: experimental
 func SchemaOf(fd protoreflect.FileDescriptor, refs []Reference) (Schema, error) {
 	fdp := protodesc.ToFileDescriptorProto(fd)
-	fdp.SourceCodeInfo = nil
+	canonical(fdp)
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(fdp)
 	if err != nil {
 		return Schema{}, err
 	}
 	return Schema{Schema: base64.StdEncoding.EncodeToString(b), SchemaType: "PROTOBUF", References: refs}, nil
+}
+
+// canonical drops what differs between compilers of the same source,
+// so a file pushed from .proto source (gwag schema push) and the same
+// file in generated code (the Serde at publish) register as one
+// schema: source info, and proto3_optional on extensions (protoc sets
+// it, protocompile does not; an extension always has presence).
+func canonical(fdp *descriptorpb.FileDescriptorProto) {
+	fdp.SourceCodeInfo = nil
+	clear := func(fs []*descriptorpb.FieldDescriptorProto) {
+		for _, f := range fs {
+			f.Proto3Optional = nil
+		}
+	}
+	clear(fdp.Extension)
+	var walk func(ms []*descriptorpb.DescriptorProto)
+	walk = func(ms []*descriptorpb.DescriptorProto) {
+		for _, m := range ms {
+			clear(m.Extension)
+			walk(m.NestedType)
+		}
+	}
+	walk(fdp.MessageType)
 }
 
 // RegisterOptions controls EnsureFile.
