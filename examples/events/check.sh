@@ -59,8 +59,8 @@ for want in \
 done
 
 echo "== gwag gen --lang ts"
-pnpm --dir ts/events install --frozen-lockfile >/dev/null
-pnpm --dir examples/events/ts install --frozen-lockfile >/dev/null
+(cd ts/events && pnpm install --frozen-lockfile >/dev/null)
+(cd examples/events/ts && pnpm install --frozen-lockfile >/dev/null)
 ts/events/gen.sh >/dev/null
 examples/events/ts/gen.sh >/dev/null
 ts_gen="ts/events/src/gen examples/events/ts/src/gen"
@@ -71,10 +71,10 @@ if ! git diff --quiet -- $ts_gen || [[ -n "$(git ls-files --others --exclude-sta
 fi
 
 echo "== typecheck + tests (ts/events, examples/events/ts)"
-pnpm --dir ts/events typecheck || fail=1
-pnpm --dir ts/events test || fail=1
-pnpm --dir examples/events/ts typecheck || fail=1
-pnpm --dir examples/events/ts test || fail=1
+(cd ts/events && pnpm typecheck) || fail=1
+(cd ts/events && pnpm test) || fail=1
+(cd examples/events/ts && pnpm typecheck) || fail=1
+(cd examples/events/ts && pnpm test) || fail=1
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   echo "== ts/events JetStream tests (docker)"
