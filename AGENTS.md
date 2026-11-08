@@ -168,6 +168,20 @@ go / ts / python, see `docs/events.md`).
   `gwag schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
   `gwag schema push --registry URL` (own). The bus is open: authorship
   is the application's job. See `docs/events.md` and `docs/events-kafka.md`.
+- **Registration clients** — `ts/registration` (`@gwag/registration`,
+  connect-node gRPC) and `py/gwag-registration` (`gwag_registration`,
+  grpclib) register TypeScript / Python services with the control plane:
+  announce, wait for ok, heartbeat, deregister; they mirror
+  `gw/controlclient`. Own packages, so `ts/events` / `py/gwag-events` take
+  no gRPC dependency. Stubs generated from
+  `gw/proto/controlplane/v1/control.proto` by `ts/registration/gen.sh` and
+  `py/gwag-registration/gen.sh` (pinned generators; output committed,
+  drift-checked by `examples/events/check.sh`; never edit
+  `*/gen/`). The Schema Registry serves that file as the default subject
+  `gateway.controlplane.v1.ControlPlane` under a reserved id
+  (2147483647, counting down; `Store.RegisterReserved`), so imports
+  cannot collide with it. `examples/events/registration.sh` runs both
+  clients against a real `gwag up`. See `docs/registration-clients.md`.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`
   is `mcp`, the slot owns the live client (a subprocess for stdio).

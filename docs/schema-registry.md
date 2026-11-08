@@ -63,6 +63,26 @@ import paths as references: the bytes the Go serde's `AutoRegister`
 sends. A serde in lookup mode (the default) finds the id gwag
 allocated. A changed file adds a version.
 
+## Control plane schema
+
+The registry always holds the control plane's schema as the subject
+`gateway.controlplane.v1.ControlPlane` (the gRPC service name):
+
+```
+curl http://HOST:8080/schema-registry/subjects/gateway.controlplane.v1.ControlPlane/versions/latest
+```
+
+It is `gw/proto/controlplane/v1/control.proto`, comments included, and
+changes with the gateway version. A service generates its registration
+client from it: [`registration-clients.md`](./registration-clients.md).
+
+Its id is 2147483647. gwag allocates ids for its own schemas from the top
+of the int32 range downward, apart from the counter for channels and
+imports, which counts up from 1. An import never collides with it, and
+`--schema-registry-first-id` does not apply to it. The subject is a
+service name, so it cannot be a channel subject (a topic name or a
+message name).
+
 ## Import
 
 ```

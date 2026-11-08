@@ -290,6 +290,7 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 - [`docs/services.md`](./docs/services.md) — registering a service: `controlclient`, versions, start gate, drain; in-process `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`
 - [`docs/cluster.md`](./docs/cluster.md) — 3-node setup, load balancer probe, node loss, rolling upgrade, forgetting a peer
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
+- [`docs/registration-clients.md`](./docs/registration-clients.md) — TypeScript and Python registration clients (announce, wait for ok, heartbeat, deregister); control-plane schema served by the Schema Registry
 - [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop; pointer to `gwag gen` for event code
 - [`docs/mcp.md`](./docs/mcp.md) — exposing the gateway to LLM agents (tools, allowlist, mounting, cluster semantics)
 

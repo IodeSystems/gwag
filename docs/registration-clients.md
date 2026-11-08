@@ -1,0 +1,137 @@
+# Registration clients for TypeScript and Python
+
+A service registers with the gateway's control plane
+(`gateway.controlplane.v1.ControlPlane`, gRPC). Go services use
+[`controlclient`](./services.md#control-plane-with-controlclient). TypeScript
+and Python services use the two clients below. Both do the same four
+things: announce, wait for the gateway's ok, heartbeat, deregister.
+Status: experimental.
+
+| | Package | Transport | Dependencies |
+|---|---|---|---|
+| TypeScript | [`ts/registration`](../ts/registration) (`@gwag/registration`, private) | `@connectrpc/connect-node` gRPC client | `@bufbuild/protobuf`, `@connectrpc/connect`, `@connectrpc/connect-node` |
+| Python | [`py/gwag-registration`](../py/gwag-registration) (uv project, `gwag_registration`, private) | `grpclib` | `betterproto2[grpclib]` (`grpclib`, `h2`, `multidict`; no compiled extension) |
+
+Each is its own package, so `@gwag/events` and `gwag-events` take no
+gRPC dependency. Python uses `grpclib` rather than `grpcio` because it
+is pure Python and the stubs come from the same betterproto2 compiler
+the event code uses.
+
+## The control plane schema is on the gateway
+
+With the [Schema Registry](./schema-registry.md) on (`gwag up
+--schema-registry`), the gateway serves `control.proto` as the subject
+`gateway.controlplane.v1.ControlPlane`:
+
+```
+curl http://HOST:8080/schema-registry/subjects/gateway.controlplane.v1.ControlPlane/versions/latest
+```
+
+The reply has `schema` (the `.proto` text, comments included),
+`schemaType` `PROTOBUF` and `id` 2147483647 (a reserved id, outside any
+imported registry's range). Save `schema` as a `.proto` file and run
+your own generator on it: protoc-gen-es, betterproto2, protoc-gen-go,
+buf. `gwag gen --lang ts|python` does it with the generators your
+project pins (see [`events.md`](./events.md)).
+
+The two packages here do that step with the generators they pin and
+commit the output. `examples/events/registration.sh` fetches the
+subject from a running gateway, regenerates both clients and checks
+they equal the committed ones.
+
+## TypeScript
+
+```ts
+import { readFileSync } from "node:fs";
+import { register } from "@gwag/registration";
+
+const reg = await register({
+  gateway: "gateway:50090",                 // the control-plane address
+  serviceAddr: "billing:50051",             // where this service's gRPC server listens
+  applicationKey: process.env.GWAG_APP_KEY, // optional
+  ttlSeconds: 30,
+  deregisterOnSignal: ["SIGTERM", "SIGINT"],
+  services: [{
+    namespace: "billing",
+    version: "v1",
+    protoSource: readFileSync("billing.proto", "utf8"),
+    subscribes: [{ channel: "orders.v1.OrderEvents", group: "billing" }],
+  }],
+});
+// register() returned: the gateway said ok. Start serving.
+// ...
+await reg.close(); // deregisters
+```
+
+## Python
+
+```python
+reg = await register(Options(
+    gateway="gateway:50090",
+    service_addr="billing:50051",
+    application_key=os.environ.get("GWAG_APP_KEY"),
+    ttl_seconds=30,
+    deregister_on_signal=(signal.SIGTERM, signal.SIGINT),
+    services=[Service(
+        namespace="billing",
+        version="v1",
+        proto_source=Path("billing.proto").read_text(),
+        subscribes=[Subscription("orders.v1.OrderEvents", "billing")],
+    )],
+))
+# register() returned: the gateway said ok. Start serving.
+await reg.close()  # deregisters; `async with await register(...)` does the same
+```
+
+## Behaviour
+
+The same as `controlclient`:
+
+- **Waits for ok.** `register` returns when the gateway reports every
+  binding ready. A binding whose `depends` or `subscribes` have no ready
+  provider is WAITING (the [start gate](./services.md)); the client
+  polls `Heartbeat` and logs what it waits for. A service that listens
+  on a channel nobody has declared yet does not start.
+- **Gateway down.** An unreachable gateway (`UNAVAILABLE`,
+  `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, a refused
+  connection) is retried with backoff, 250 ms up to 5 s, forever. A
+  refused register (bad request, dependency cycle, rejected key) raises.
+  Abort the wait with `signal` (TypeScript) or by cancelling the task
+  (Python).
+- **Heartbeat** at TTL/3 (10 s when the gateway reports no TTL). A
+  heartbeat answered `ok: false` (the gateway restarted or evicted the
+  registration) registers again on the same gateway; `reg.id` changes.
+- **Several gateways.** `gateway` takes a list. When a heartbeat cannot
+  reach the gateway that holds the registration, the client registers on
+  the next address.
+- **Deregister** on `close()`, and on the signals in
+  `deregisterOnSignal` / `deregister_on_signal`. After a signal the
+  client re-raises it so the process exits as it would have. Off by
+  default: catching a signal changes the process's signal handling.
+- **Application key.** Sent on every call as gRPC metadata
+  `authorization: Bearer <key>`. The client sends it when set; a
+  gateway that checks application keys reads it there.
+
+`reg.bindings` reports the start-gate state of each binding, and
+`reg.presentLines(service)` / `reg.present_lines(service)` the lines of
+a dependency that are ready.
+
+## Not in the clients
+
+Drain (`DrainInstance`) and the other control-plane calls (peers,
+`SignSubscriptionToken`, stable and deprecation controls) are in the
+generated stubs, not in the wrappers. `BuildTag` (refuse `unstable` in
+release builds) is Go only. OpenAPI and GraphQL bindings are supported
+by field (`openapiSpec`, `graphqlEndpoint`) but only proto bindings are
+tested end to end.
+
+## Tests
+
+```
+pnpm --dir ts/registration test        # in-process control plane
+(cd py/gwag-registration && uv run pytest)
+examples/events/registration.sh        # a real gateway; needs go, node >= 24, pnpm, uv
+```
+
+`examples/events/check.sh` runs all three and the drift checks on the
+generated stubs (`ts/registration/gen.sh`, `py/gwag-registration/gen.sh`).

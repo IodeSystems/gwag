@@ -5,7 +5,8 @@ A service reaches the gateway in one of two ways:
 - **Control plane.** The service calls the gateway's gRPC control
   plane at startup with its schema and address, then heartbeats. The
   `controlclient` package wraps this. Works against one gateway or a
-  cluster, with no gateway restart or config edit.
+  cluster, with no gateway restart or config edit. TypeScript and
+  Python services use [`registration-clients.md`](./registration-clients.md).
 - **In-process.** The program that embeds the gateway calls
   `AddProto`, `AddOpenAPI`, `AddGraphQL` or `AddMCP` at boot. The
   registration lasts as long as the gateway process.
