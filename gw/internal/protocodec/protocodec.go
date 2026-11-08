@@ -101,11 +101,17 @@ func LowerCamel(s string) string {
 }
 
 // ArgsToMessage walks args (lowerCamel keys, GraphQL-canonical values)
-// and writes them into msg according to its descriptor. Unknown args
-// are ignored; type mismatches return errors.
+// and writes them into msg according to its descriptor. A field with
+// no lowerCamel key is also looked up by its proto name: the GraphQL
+// renderer names top-level proto op arguments after the proto field
+// (payload_type), not lowerCamel. Unknown args are ignored; type
+// mismatches return errors.
 func (o Options) ArgsToMessage(args map[string]any, msg *dynamicpb.Message) error {
 	for _, info := range FieldInfos(msg.Descriptor()) {
 		v, ok := args[info.JSONKey]
+		if !ok {
+			v, ok = args[string(info.FD.Name())]
+		}
 		if !ok {
 			continue
 		}
