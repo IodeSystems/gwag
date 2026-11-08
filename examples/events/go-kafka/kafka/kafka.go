@@ -82,6 +82,54 @@ func (b *Backend) ensureTopic(ctx context.Context, topic string) error {
 	return nil
 }
 
+// seedGroup commits the start position of a group that has none yet
+// (the end of each partition, or the start with deliverAll). Without
+// it a new group resolves its position after the partition assignment,
+// so a record produced between assignment and that lookup is skipped
+// even though Subscribe has returned. A group that already holds
+// commits keeps them. Where the commit is refused because the group
+// is live, its members hold their positions already.
+func (b *Backend) seedGroup(ctx context.Context, topic, group string, deliverAll bool) error {
+	committed, err := b.admin.FetchOffsets(ctx, group)
+	if err != nil {
+		return fmt.Errorf("kafka: fetch offsets of %s: %w", group, err)
+	}
+	// A topic created a moment ago may not have a leader everywhere yet.
+	var listed kadm.ListedOffsets
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		if deliverAll {
+			listed, err = b.admin.ListStartOffsets(ctx, topic)
+		} else {
+			listed, err = b.admin.ListEndOffsets(ctx, topic)
+		}
+		if err == nil {
+			err = listed.Error()
+		}
+		if err == nil {
+			break
+		}
+		retry := errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.LeaderNotAvailable) || errors.Is(err, kerr.NotLeaderForPartition)
+		if !retry || time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("kafka: list offsets of %s: %w", topic, err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	seed := listed.Offsets()
+	for p := range seed[topic] {
+		if o, ok := committed.Lookup(topic, p); ok && o.At >= 0 {
+			seed.Delete(topic, p)
+		}
+	}
+	if len(seed[topic]) == 0 {
+		return nil
+	}
+	_, _ = b.admin.CommitOffsets(ctx, group, seed)
+	return nil
+}
+
 func record(topic string, m *events.Message) *kgo.Record {
 	r := &kgo.Record{Topic: topic, Key: []byte(m.Subject), Value: m.Data}
 	for k, v := range m.Headers {
@@ -111,6 +159,9 @@ func (b *Backend) Subscribe(ctx context.Context, ch events.Channel, group string
 	// starts before the first dead letter would otherwise wait for a
 	// metadata refresh to find a topic created after it.
 	if err := b.ensureTopic(ctx, events.DLQSubject(ch.Stream)); err != nil {
+		return nil, err
+	}
+	if err := b.seedGroup(ctx, ch.Stream, ch.Stream+"."+group, opts.DeliverAll); err != nil {
 		return nil, err
 	}
 	reset := kgo.NewOffset().AtEnd()
