@@ -109,9 +109,14 @@ func main() {
 		ReadyPollInterval: 200 * time.Millisecond,
 		Logger:            log.Printf,
 	}
+	serde := func(opts ...sr.SerdeOption) events.Option {
+		s, err := sr.NewSerde(client, opts...)
+		check(err)
+		return events.WithSerde(s)
+	}
 	switch cmd {
 	case "orders":
-		bus := ordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client, sr.AutoRegister())))
+		bus := ordersv1.NewBus(backend, serde(sr.AutoRegister()))
 		imports := map[string][]byte{"gw/proto/ps/v1/options.proto": read(*options)}
 		cp.Services = []controlclient.Service{
 			{Namespace: "orders", Version: "v1", ProtoSource: read(*protoV1), ProtoImports: imports},
@@ -119,10 +124,10 @@ func main() {
 		}
 		runOrders(ctx, bus, cp, *control)
 	case "billing":
-		bus := ordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client)))
+		bus := ordersv1.NewBus(backend, serde())
 		runBilling(ctx, bus, cp, *group)
 	case "retry-probe":
-		bus := ordersv1.NewBus(backend, events.WithSerde(sr.NewSerde(client)))
+		bus := ordersv1.NewBus(backend, serde())
 		runRetryProbe(ctx, backend, bus, strings.Split(*brokers, ","), *group)
 	default:
 		log.Fatalf("unknown command %q", cmd)
