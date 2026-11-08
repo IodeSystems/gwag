@@ -43,6 +43,15 @@ message PubRequest {
   // Wall-clock unix timestamp the client used when signing. Bounded by
   // the operator's skew window to prevent replay.
   int64 ts = 4;
+
+  // Fully-qualified proto message name of the payload, for a channel
+  // with a named binding (gwag.ps.v1.ChannelBinding.name). The payload
+  // is then protojson for that message; the gateway encodes it as
+  // binary proto and publishes it with the Gwag-Type header, so typed
+  // listeners receive it. Required on a union channel (several message
+  // types share the channel); optional on a plain named channel
+  // (defaults to the bound type). Ignored on unnamed channels.
+  string payload_type = 5;
 }
 
 message PubResponse {}

@@ -78,6 +78,33 @@ func Run(t *testing.T, newHarness func(t *testing.T) Harness) {
 		stay.want(t, h, "c.1=before", "c.1=after")
 		gone.want(t, h, "c.1=before") // nothing after unsubscribe
 	})
+	t.Run("Headers", func(t *testing.T) {
+		h := newHarness(t)
+		hb, ok := h.Bus.(gat.HeaderBus)
+		if !ok {
+			t.Skip("bus does not implement gat.HeaderBus")
+		}
+		r := &recorder{}
+		unsub, err := hb.SubscribeMsg("h.*", func(channel string, hd gat.Header, payload []byte) {
+			r.mu.Lock()
+			r.got = append(r.got, channel+"="+string(payload)+"|"+hd.Get("Gwag-Type")+"|"+hd.Get("Nats-Msg-Id"))
+			r.mu.Unlock()
+		})
+		if err != nil {
+			t.Fatalf("SubscribeMsg: %v", err)
+		}
+		t.Cleanup(unsub)
+		plain := subscribe(t, h, "h.*")
+		hd := gat.Header{}
+		hd.Set("Gwag-Type", "a.v1.T")
+		hd.Set("Nats-Msg-Id", "m1")
+		if err := hb.PublishMsg("h.1", hd, []byte("x")); err != nil {
+			t.Fatalf("PublishMsg: %v", err)
+		}
+		publish(t, h, "h.2", "y")
+		r.want(t, h, "h.1=x|a.v1.T|m1", "h.2=y||")
+		plain.want(t, h, "h.1=x", "h.2=y")
+	})
 }
 
 // recorder collects deliveries as "channel=payload" strings.

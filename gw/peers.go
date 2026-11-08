@@ -421,6 +421,10 @@ func (t *peerTracker) setReplicas(ctx context.Context, r int) error {
 			firstErr = fmt.Errorf("%s: %w", b.name, err)
 		}
 	}
+	// Named-channel event streams follow the same policy.
+	if err := t.gw.setEventStreamReplicas(c, t.js, r); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return firstErr
 }
 

@@ -189,6 +189,7 @@ The service registered once, with n1; all three nodes answer.
 | `Depends` | Services this one calls through the gateway, with the lines it ships clients for. |
 | `Owner` | `Team` and `Contact`, free-form. |
 | `Public` | Show the binding to admin readers without a token. Admin visibility only; calls are not affected. |
+| `Subscribes` | Event channels this binding listens on (`Channel` key, consumer `Group`). Counted like `Depends` on the service that declares each channel. |
 
 Exactly one of `ProtoSource`/`ProtoFS`, `OpenAPISpec` and
 `GraphQLEndpoint` per `Service`; the other combinations are refused.
@@ -261,6 +262,26 @@ each binding and `reg.PresentLines("hello")` lists the lines of a
 dependency that have a ready instance: the lines your client code can
 call. `Depends` also feeds the dependency graph and the drain check
 below.
+
+### Start gate: Subscribes
+
+`Subscribes` names the event channels this binding listens on, by
+channel key (`<proto package>.<channel name>`, see
+[`pubsub.md`](./pubsub.md#named-channels)) and consumer group.
+Generated event code reports them.
+
+```go
+Subscribes: []controlclient.Subscription{
+	{Channel: "orders.v1.OrderEvents", Group: "billing"},
+},
+```
+
+Each entry waits like a dependency on the line whose proto declares
+the channel. While no registered service declares it, the binding
+waits; the log names it: `billing/v1 needs channel
+orders.v1.OrderEvents (not declared yet)`. A channel the binding's own
+proto declares does not wait. Subscriptions do not count in the drain
+check.
 
 ### Draining
 

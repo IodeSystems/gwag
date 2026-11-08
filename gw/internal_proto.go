@@ -96,7 +96,10 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 	// Internal-proto slots are gateway-bundled code; bypass --allow-tier
 	// policy (it gates user registrations only).
 	key := poolKey{namespace: ns, version: canonicalVer}
-	bindings := extractChannelBindings(fd)
+	bindings, err := extractChannelBindings(fd)
+	if err != nil {
+		return fmt.Errorf("internalproto: %s/%s: %w", ns, canonicalVer, err)
+	}
 	existed, err := g.registerSlotLockedSkipTierCheck(slotKindInternalProto, key, hash, 0, 0, bindings)
 	if err != nil {
 		return fmt.Errorf("internalproto: %w", err)

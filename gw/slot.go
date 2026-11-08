@@ -258,17 +258,25 @@ func (g *Gateway) checkCrossSlotBindingsLocked(key poolKey, bindings []ir.Channe
 		return nil
 	}
 	incoming := make(map[string]struct{}, len(bindings))
+	channels := map[string]struct{}{}
 	for _, b := range bindings {
-		incoming[b.Pattern] = struct{}{}
+		incoming[normalizeSubject(b.Pattern)] = struct{}{}
+		if b.Channel != "" {
+			channels[b.Channel] = struct{}{}
+		}
 	}
 	for otherKey, other := range g.slots {
 		if otherKey == key {
 			continue
 		}
 		for _, ob := range other.channelBindings {
-			if _, hit := incoming[ob.Pattern]; hit {
+			if _, hit := incoming[normalizeSubject(ob.Pattern)]; hit {
 				return fmt.Errorf("channel binding pattern %q already claimed by %s/%s; cannot also be claimed by %s/%s (cross-slot pattern conflict)",
 					ob.Pattern, otherKey.namespace, otherKey.version, key.namespace, key.version)
+			}
+			if _, hit := channels[ob.Channel]; hit && ob.Channel != "" {
+				return fmt.Errorf("channel %s already declared by %s/%s; cannot also be declared by %s/%s (cross-slot channel conflict)",
+					ob.Channel, otherKey.namespace, otherKey.version, key.namespace, key.version)
 			}
 		}
 	}

@@ -36,7 +36,15 @@ type PubRequest struct {
 	Hmac string `protobuf:"bytes,3,opt,name=hmac,proto3" json:"hmac,omitempty"`
 	// Wall-clock unix timestamp the client used when signing. Bounded by
 	// the operator's skew window to prevent replay.
-	Ts            int64 `protobuf:"varint,4,opt,name=ts,proto3" json:"ts,omitempty"`
+	Ts int64 `protobuf:"varint,4,opt,name=ts,proto3" json:"ts,omitempty"`
+	// Fully-qualified proto message name of the payload, for a channel
+	// with a named binding (gwag.ps.v1.ChannelBinding.name). The payload
+	// is then protojson for that message; the gateway encodes it as
+	// binary proto and publishes it with the Gwag-Type header, so typed
+	// listeners receive it. Required on a union channel (several message
+	// types share the channel); optional on a plain named channel
+	// (defaults to the bound type). Ignored on unnamed channels.
+	PayloadType   string `protobuf:"bytes,5,opt,name=payload_type,json=payloadType,proto3" json:"payload_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -97,6 +105,13 @@ func (x *PubRequest) GetTs() int64 {
 		return x.Ts
 	}
 	return 0
+}
+
+func (x *PubRequest) GetPayloadType() string {
+	if x != nil {
+		return x.PayloadType
+	}
+	return ""
 }
 
 type PubResponse struct {
@@ -284,13 +299,14 @@ var File_gw_proto_ps_v1_ps_proto protoreflect.FileDescriptor
 const file_gw_proto_ps_v1_ps_proto_rawDesc = "" +
 	"\n" +
 	"\x17gw/proto/ps/v1/ps.proto\x12\n" +
-	"gwag.ps.v1\"d\n" +
+	"gwag.ps.v1\"\x87\x01\n" +
 	"\n" +
 	"PubRequest\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\tR\apayload\x12\x12\n" +
 	"\x04hmac\x18\x03 \x01(\tR\x04hmac\x12\x0e\n" +
-	"\x02ts\x18\x04 \x01(\x03R\x02ts\"\r\n" +
+	"\x02ts\x18\x04 \x01(\x03R\x02ts\x12!\n" +
+	"\fpayload_type\x18\x05 \x01(\tR\vpayloadType\"\r\n" +
 	"\vPubResponse\"J\n" +
 	"\n" +
 	"SubRequest\x12\x18\n" +

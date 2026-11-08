@@ -35,6 +35,12 @@ import (
 //   - anything else (incl. "unknown") → an external caller,
 //     consumerNamespace "".
 //
+// Channel edges (edgeKind "channel"): one per declared subscription
+// (ServiceBinding.subscribes), from the subscriber line to the line
+// that declares the channel (gateDepsLocked). channel and group say
+// which; provider and lines are empty while no line declares it. They
+// count like RPC edges for met / unmet and the sunset rule.
+//
 // External dependents (external_dependents.go): each declaration
 // adds one desired edge per pinned service, with consumerKind
 // "external", consumerNamespace = its id and consumerVersion "". They
@@ -85,9 +91,12 @@ type graphNode struct {
 
 type graphDesiredEdge struct {
 	ConsumerKind      string   `json:"consumerKind" enum:"service,external" doc:"service: a registered line; external: a declared external dependent (consumerNamespace is its id, consumerVersion is empty)."`
+	EdgeKind          string   `json:"edgeKind" enum:"rpc,channel" doc:"rpc: a declared dependency (depends); channel: a declared subscription (subscribes) to an event channel the provider declares."`
+	Channel           string   `json:"channel" doc:"Channel key of a channel edge, e.g. orders.v1.OrderEvents; empty for rpc edges."`
+	Group             string   `json:"group" doc:"Consumer group of a channel edge; empty for rpc edges."`
 	ConsumerNamespace string   `json:"consumerNamespace"`
 	ConsumerVersion   string   `json:"consumerVersion"`
-	Provider          string   `json:"provider" doc:"Provider namespace."`
+	Provider          string   `json:"provider" doc:"Provider namespace. Empty on a channel edge while no line declares the channel."`
 	Lines             []string `json:"lines" doc:"Accepted lines."`
 	PresentLines      []string `json:"presentLines" doc:"Accepted lines with a ready instance."`
 	Met               bool     `json:"met"`
@@ -186,18 +195,48 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 
 	nodes := map[poolKey]*graphNode{}
 	namespaces := map[string]bool{}
+	lineSubs := map[poolKey][]*cpv1.Subscription{}
 	type edgeKey struct {
 		external bool
 		consumer poolKey
 		provider string
 		lines    string
+		channel  string
+		group    string
 	}
 	edges := map[edgeKey]*graphDesiredEdge{}
 	var edgeOrder []edgeKey
+	addChannelEdge := func(consumer poolKey, provider string, lines []string, channel, group string, fromInstance bool) {
+		sorted := append([]string(nil), lines...)
+		sort.Strings(sorted)
+		k := edgeKey{false, consumer, provider, strings.Join(sorted, ","), channel, group}
+		e := edges[k]
+		if e == nil {
+			edgeKind := "rpc"
+			if channel != "" {
+				edgeKind = "channel"
+			}
+			e = &graphDesiredEdge{
+				ConsumerKind:      "service",
+				EdgeKind:          edgeKind,
+				Channel:           channel,
+				Group:             group,
+				ConsumerNamespace: consumer.namespace,
+				ConsumerVersion:   consumer.version,
+				Provider:          provider,
+				Lines:             append([]string{}, lines...),
+			}
+			edges[k] = e
+			edgeOrder = append(edgeOrder, k)
+		}
+		if fromInstance {
+			e.InstanceCount++
+		}
+	}
 	addEdge := func(consumer poolKey, provider string, lines []string, fromInstance, external bool) {
 		sorted := append([]string(nil), lines...)
 		sort.Strings(sorted)
-		k := edgeKey{external, consumer, provider, strings.Join(sorted, ",")}
+		k := edgeKey{external: external, consumer: consumer, provider: provider, lines: strings.Join(sorted, ",")}
 		e := edges[k]
 		if e == nil {
 			kind := "service"
@@ -206,6 +245,7 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			}
 			e = &graphDesiredEdge{
 				ConsumerKind:      kind,
+				EdgeKind:          "rpc",
 				ConsumerNamespace: consumer.namespace,
 				ConsumerVersion:   consumer.version,
 				Provider:          provider,
@@ -259,6 +299,10 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			}
 			n.Instances = append(n.Instances, gi)
 			for _, d := range inst.GetDepends() {
+				if d.GetChannel() != "" {
+					addChannelEdge(k, d.GetService(), d.GetLines(), d.GetChannel(), d.GetGroup(), true)
+					continue
+				}
 				addEdge(k, d.GetService(), d.GetLines(), true, false)
 			}
 		}
@@ -266,7 +310,26 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 			for _, d := range s.GetDepends() {
 				addEdge(k, d.GetService(), d.GetLines(), false, false)
 			}
+			if len(s.GetSubscribes()) > 0 {
+				lineSubs[k] = s.GetSubscribes()
+			}
 		}
+	}
+
+	// Line-manifest subscriptions (no instance listed): resolve the
+	// declaring line the way the start gate does.
+	if len(lineSubs) > 0 {
+		g.mu.Lock()
+		for k, subs := range lineSubs {
+			m := serviceManifest{}
+			for _, sub := range subs {
+				m.Subscribes = append(m.Subscribes, manifestSubscription{Channel: sub.GetChannel(), Group: sub.GetGroup()})
+			}
+			for _, d := range g.gateDepsLocked(m, k) {
+				addChannelEdge(k, d.Service, d.Lines, d.Channel, d.Group, false)
+			}
+		}
+		g.mu.Unlock()
 	}
 
 	// External dependents: every declaration counts, review-due or not.
@@ -369,7 +432,11 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 				case !view.line(e.ConsumerNamespace, e.ConsumerVersion):
 					who = "a hidden service"
 				}
-				reasons = append(reasons, fmt.Sprintf("%s accepts %s [%s]: no other ready line", who, e.Provider, strings.Join(e.Lines, ", ")))
+				if e.Channel != "" {
+					reasons = append(reasons, fmt.Sprintf("%s subscribes to %s (group %s)", who, e.Channel, e.Group))
+				} else {
+					reasons = append(reasons, fmt.Sprintf("%s accepts %s [%s]: no other ready line", who, e.Provider, strings.Join(e.Lines, ", ")))
+				}
 			}
 		}
 		if n.TrafficCount > 0 {
@@ -408,7 +475,10 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 		if a.ConsumerVersion != b.ConsumerVersion {
 			return a.ConsumerVersion < b.ConsumerVersion
 		}
-		return a.Provider < b.Provider
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		return a.Channel < b.Channel
 	})
 	for _, e := range active {
 		sort.Slice(e.Methods, func(i, j int) bool {

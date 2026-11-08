@@ -97,8 +97,8 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 			"Control-plane instances per (namespace, version) with a drain requested, by drain state (draining, blocked, safe_to_stop). Per-node view; series exist only while the line is registered.",
 			[]string{"namespace", "version", "drain_state"}, nil),
 		unmet: prometheus.NewDesc(p+"_dependency_unmet",
-			"1 when a declared dependency has no accepted line with a ready instance, else 0. One series per (consumer, provider namespace). consumer_kind: service (a registered line) or external (a declared external dependent; consumer_namespace is its id, consumer_version is empty). Per-node view.",
-			[]string{"consumer_kind", "consumer_namespace", "consumer_version", "provider"}, nil),
+			"1 when a declared dependency has no accepted line with a ready instance, else 0. One series per (consumer, provider namespace, channel). consumer_kind: service (a registered line) or external (a declared external dependent; consumer_namespace is its id, consumer_version is empty). channel: the channel key of a subscription edge (provider is empty while no line declares the channel); empty for depends edges. Per-node view.",
+			[]string{"consumer_kind", "consumer_namespace", "consumer_version", "provider", "channel"}, nil),
 		sunset: prometheus.NewDesc(p+"_line_sunsetable",
 			"1 when the admin dependency graph marks the line sunset-able, else 0: every dependent has another ready line and the line had no traffic on this node in the last 1h (the graph's default window); the only line of a namespace is never sunset-able. Per-node view.",
 			[]string{"namespace", "version"}, nil),
@@ -161,10 +161,10 @@ func (m *lifecycleMetrics) Collect(ch chan<- prometheus.Metric) {
 	}
 	// One series per (consumer line, provider); edges with different
 	// accepted-line sets fold to the worst case.
-	type edgeKey struct{ kind, ns, ver, provider string }
+	type edgeKey struct{ kind, ns, ver, provider, channel string }
 	unmet := map[edgeKey]float64{}
 	for _, e := range out.Body.DesiredEdges {
-		k := edgeKey{e.ConsumerKind, e.ConsumerNamespace, e.ConsumerVersion, e.Provider}
+		k := edgeKey{e.ConsumerKind, e.ConsumerNamespace, e.ConsumerVersion, e.Provider, e.Channel}
 		v := 0.0
 		if !e.Met {
 			v = 1
@@ -174,7 +174,7 @@ func (m *lifecycleMetrics) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 	for k, v := range unmet {
-		ch <- prometheus.MustNewConstMetric(m.unmet, gauge, v, k.kind, k.ns, k.ver, k.provider)
+		ch <- prometheus.MustNewConstMetric(m.unmet, gauge, v, k.kind, k.ns, k.ver, k.provider, k.channel)
 	}
 }
 
@@ -189,7 +189,7 @@ func (m *lifecycleMetrics) observeGate() {
 	cur := make(map[string]seenGate, len(g.gate.instances))
 	for id, inst := range g.gate.instances {
 		cur[id] = seenGate{
-			state: adminInstanceState(g.gateStateLocked(inst.waiting, inst.manifest.Depends)),
+			state: adminInstanceState(g.gateStateLocked(inst.waiting, g.gateDepsLocked(inst.manifest, inst.key))),
 			key:   inst.key,
 		}
 	}

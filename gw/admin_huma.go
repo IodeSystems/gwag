@@ -101,6 +101,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 				ReplicaCount:            s.GetReplicaCount(),
 				ManualDeprecationReason: s.GetManualDeprecationReason(),
 				Depends:                 adminDepends(s.GetDepends()),
+				Subscribes:              adminSubscriptions(s.GetSubscribes()),
 				Owner:                   adminOwner(s.GetOwner()),
 				Drains:                  adminLineDrains(g, s.GetNamespace(), s.GetVersion()),
 				Instances:               adminInstances(s.GetInstances()),
@@ -198,12 +199,18 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 		out := &bindingsOut{}
 		out.Body.Bindings = []bindingInfo{}
 		for _, e := range g.channelBindingIndexSnapshot() {
-			out.Body.Bindings = append(out.Body.Bindings, bindingInfo{
-				Pattern:    e.pattern,
+			info := bindingInfo{
+				Pattern:    e.declared,
 				MessageFQN: e.messageFQN,
+				Name:       e.name,
+				Channel:    e.channel,
 				Namespace:  e.namespace,
 				Version:    e.version,
-			})
+			}
+			if e.channel != "" {
+				info.Stream = eventStreamName(e.channel)
+			}
+			out.Body.Bindings = append(out.Body.Bindings, info)
 		}
 		return out, nil
 	})
@@ -913,6 +920,10 @@ type serviceInfo struct {
 	// declared dependencies); Owner is omitted when not declared.
 	Depends []dependencyInfo `json:"depends"`
 	Owner   *ownerInfo       `json:"owner,omitempty"`
+	// Subscribes is ServiceBinding.subscribes of the latest
+	// registration: the event channels this line listens on. Never
+	// nil.
+	Subscribes []subscriptionInfo `json:"subscribes"`
 	// Drains lists the instances on this line with a drain requested
 	// (instance_drain.go). Empty = none; the UI shows a chip per entry.
 	Drains []instanceDrainInfo `json:"drains"`
@@ -943,6 +954,22 @@ type dependencyStatusInfo struct {
 	Service      string   `json:"service"`
 	Lines        []string `json:"lines"`
 	PresentLines []string `json:"presentLines"`
+	Channel      string   `json:"channel" doc:"Set when the dependency is a subscription: the channel key. service / lines then name the line that declares it (empty while none does)."`
+	Group        string   `json:"group" doc:"Consumer group of a subscription dependency."`
+}
+
+// subscriptionInfo is one declared subscription.
+type subscriptionInfo struct {
+	Channel string `json:"channel" doc:"Channel key: <proto package>.<channel name>."`
+	Group   string `json:"group" doc:"Consumer group the line listens as."`
+}
+
+func adminSubscriptions(in []*cpv1.Subscription) []subscriptionInfo {
+	out := make([]subscriptionInfo, 0, len(in)) // never nil
+	for _, s := range in {
+		out = append(out, subscriptionInfo{Channel: s.GetChannel(), Group: s.GetGroup()})
+	}
+	return out
 }
 
 func adminInstances(in []*cpv1.InstanceStatus) []instanceInfo {
@@ -954,6 +981,8 @@ func adminInstances(in []*cpv1.InstanceStatus) []instanceInfo {
 				Service:      d.GetService(),
 				Lines:        append([]string{}, d.GetLines()...),
 				PresentLines: append([]string{}, d.GetPresentLines()...),
+				Channel:      d.GetChannel(),
+				Group:        d.GetGroup(),
 			})
 		}
 		out = append(out, instanceInfo{
@@ -1080,8 +1109,11 @@ type channelsOut struct {
 }
 
 type bindingInfo struct {
-	Pattern    string `json:"pattern"`
+	Pattern    string `json:"pattern" doc:"As declared; named segments ({orderId}) match like *."`
 	MessageFQN string `json:"messageFQN"`
+	Name       string `json:"name" doc:"Channel name; empty for an unnamed binding."`
+	Channel    string `json:"channel" doc:"Channel key <proto package>.<name>; empty for an unnamed binding. Several bindings with one key form a union channel."`
+	Stream     string `json:"stream" doc:"JetStream stream of a named channel in cluster mode (EV_...); empty for an unnamed binding."`
 	Namespace  string `json:"namespace"`
 	Version    string `json:"version"`
 }

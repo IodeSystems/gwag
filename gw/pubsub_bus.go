@@ -79,8 +79,8 @@ func (g *Gateway) pubSubBusMode() string {
 // degraded reach this node's subscribers only, and nothing is
 // replayed to other nodes after reconnect.
 type failoverBus struct {
-	nc       *nats.Conn // nil: cluster configured without a connection
-	primary  gat.Bus    // gatnats over nc; nil when nc is nil
+	nc       *nats.Conn    // nil: cluster configured without a connection
+	primary  gat.HeaderBus // gatnats over nc; nil when nc is nil
 	local    *gat.LocalBus
 	degraded atomic.Bool
 	onChange func(degraded bool)
@@ -95,12 +95,12 @@ type failoverBus struct {
 
 type failoverSub struct {
 	pattern      string
-	fn           func(channel string, payload []byte)
+	fn           func(channel string, header gat.Header, payload []byte)
 	localUnsub   func()
 	primaryUnsub func() // nil until the NATS subscribe succeeds
 }
 
-var _ gat.Bus = (*failoverBus)(nil)
+var _ gat.HeaderBus = (*failoverBus)(nil)
 
 // newFailoverBus starts degraded when nc is nil or not connected and
 // reports that through onChange before returning. onChange runs on the
@@ -168,7 +168,7 @@ func (b *failoverBus) refresh() {
 		// before publishes stop going to the local bus.
 		for _, s := range b.subs {
 			if s.primaryUnsub == nil {
-				if un, err := b.primary.Subscribe(s.pattern, s.fn); err == nil {
+				if un, err := b.primary.SubscribeMsg(s.pattern, s.fn); err == nil {
 					s.primaryUnsub = un
 				}
 			}
@@ -188,13 +188,18 @@ func (b *failoverBus) Degraded() bool { return b.degraded.Load() }
 // delivery without risking a duplicate. Other NATS errors (e.g.
 // payload too large) are returned as before.
 func (b *failoverBus) Publish(channel string, payload []byte) error {
+	return b.PublishMsg(channel, nil, payload)
+}
+
+// PublishMsg is Publish with headers; the same failover rule applies.
+func (b *failoverBus) PublishMsg(channel string, header gat.Header, payload []byte) error {
 	if b.primary != nil && !b.degraded.Load() {
-		err := b.primary.Publish(channel, payload)
+		err := b.primary.PublishMsg(channel, header, payload)
 		if err == nil || !connectionGone(err) {
 			return err
 		}
 	}
-	return b.local.Publish(channel, payload)
+	return b.local.PublishMsg(channel, header, payload)
 }
 
 func connectionGone(err error) bool {
@@ -208,15 +213,22 @@ func connectionGone(err error) bool {
 // the subscription is kept local-only and NATS is retried on
 // reconnect.
 func (b *failoverBus) Subscribe(pattern string, fn func(channel string, payload []byte)) (func(), error) {
+	return b.SubscribeMsg(pattern, func(channel string, _ gat.Header, payload []byte) {
+		fn(channel, payload)
+	})
+}
+
+// SubscribeMsg is Subscribe with headers.
+func (b *failoverBus) SubscribeMsg(pattern string, fn func(channel string, header gat.Header, payload []byte)) (func(), error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lu, err := b.local.Subscribe(pattern, fn)
+	lu, err := b.local.SubscribeMsg(pattern, fn)
 	if err != nil {
 		return nil, err
 	}
 	s := &failoverSub{pattern: pattern, fn: fn, localUnsub: lu}
 	if b.primary != nil {
-		pu, err := b.primary.Subscribe(pattern, fn)
+		pu, err := b.primary.SubscribeMsg(pattern, fn)
 		switch {
 		case err == nil:
 			s.primaryUnsub = pu

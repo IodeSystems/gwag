@@ -120,10 +120,18 @@ type Service struct {
 // is the proto fully-qualified message name (`"<package>.<Name>"`,
 // matching the keys in Service.Types for proto-origin services).
 //
+// Name and Channel are set for a named binding
+// (`(gwag.ps.v1.binding) = { name, pattern }`): Name as declared,
+// Channel the channel key "<proto package>.<Name>". Several bindings
+// sharing a Channel (and Pattern) form a union channel. Pattern may
+// name its wildcard segments (`{orderId}`), each matching like `*`.
+//
 // Stability: stable
 type ChannelBinding struct {
 	Pattern    string
 	MessageFQN string
+	Name       string
+	Channel    string
 }
 
 // OperationGroup is one nested namespace under a Service (or under

@@ -19,7 +19,10 @@ import (
 //
 // A control-plane binding that declares depends is not routable until
 // every dependency is present: for each dependency, at least one
-// accepted line has a ready instance. Until then the binding is
+// accepted line has a ready instance. A subscription
+// (ServiceBinding.subscribes) counts as a dependency on the slot that
+// declares the channel (gateDepsLocked); until some slot declares it,
+// it is not present. Until then the binding is
 // WAITING and is NOT added to the dispatch pool (no slot, no schema
 // fields, no stable advance). When its deps become present it joins
 // the pool like any other registration and is READY from then on.
@@ -231,6 +234,8 @@ func (g *Gateway) dependencyStatusLocked(deps []manifestDependency) []*cpv1.Depe
 			Service:      d.Service,
 			Lines:        append([]string(nil), d.Lines...),
 			PresentLines: g.presentLinesLocked(d),
+			Channel:      d.Channel,
+			Group:        d.Group,
 		})
 	}
 	return out
@@ -250,11 +255,19 @@ func (g *Gateway) gateStateLocked(waiting bool, deps []manifestDependency) cpv1.
 }
 
 // missingDeps renders the deps with no present line, for logs and
-// errors: "library(v1|v2), users(unstable)".
+// errors: "library(v1|v2), users(unstable), channel orders.v1.OrderEvents".
 func missingDeps(st []*cpv1.DependencyStatus) string {
 	var parts []string
 	for _, d := range st {
-		if len(d.GetPresentLines()) == 0 {
+		if len(d.GetPresentLines()) > 0 {
+			continue
+		}
+		switch {
+		case d.GetChannel() != "" && d.GetService() == "":
+			parts = append(parts, "channel "+d.GetChannel()+" (not declared yet)")
+		case d.GetChannel() != "":
+			parts = append(parts, "channel "+d.GetChannel()+" ("+d.GetService()+"/"+strings.Join(d.GetLines(), "|")+")")
+		default:
 			parts = append(parts, d.GetService()+"("+strings.Join(d.GetLines(), "|")+")")
 		}
 	}
@@ -280,13 +293,14 @@ func (g *Gateway) gateInstancesLocked() map[poolKey][]*gateInstance {
 }
 
 func (g *Gateway) instanceStatusLocked(inst *gateInstance) *cpv1.InstanceStatus {
+	deps := g.gateDepsLocked(inst.manifest, inst.key)
 	return &cpv1.InstanceStatus{
 		ReplicaId:      inst.replicaID,
 		RegistrationId: inst.regID,
 		InstanceId:     inst.instanceID,
 		Addr:           inst.addr,
-		State:          g.gateStateLocked(inst.waiting, inst.manifest.Depends),
-		Depends:        g.dependencyStatusLocked(inst.manifest.Depends),
+		State:          g.gateStateLocked(inst.waiting, deps),
+		Depends:        g.dependencyStatusLocked(deps),
 	}
 }
 
@@ -330,10 +344,10 @@ func (g *Gateway) checkDependencyCycleLocked(add []gateEdges) error {
 		}
 	}
 	for k, s := range g.slots {
-		addEdges(k, s.manifest.Depends)
+		addEdges(k, g.gateDepsLocked(s.manifest, k))
 	}
 	for _, inst := range g.gate.instances {
-		addEdges(inst.key, inst.manifest.Depends)
+		addEdges(inst.key, g.gateDepsLocked(inst.manifest, inst.key))
 	}
 	for _, e := range add {
 		addEdges(e.from, e.deps)
@@ -455,8 +469,8 @@ func (p *preparedBinding) kind() slotKind {
 func (g *Gateway) admitLocked(prep []preparedBinding) ([]bool, error) {
 	edges := make([]gateEdges, 0, len(prep))
 	for _, p := range prep {
-		if len(p.manifest.Depends) > 0 {
-			edges = append(edges, gateEdges{from: p.key(), deps: p.manifest.Depends})
+		if deps := g.gateDepsLocked(p.manifest, p.key()); len(deps) > 0 {
+			edges = append(edges, gateEdges{from: p.key(), deps: deps})
 		}
 	}
 	if err := g.checkDependencyCycleLocked(edges); err != nil {
@@ -464,7 +478,7 @@ func (g *Gateway) admitLocked(prep []preparedBinding) ([]bool, error) {
 	}
 	waiting := make([]bool, len(prep))
 	for i, p := range prep {
-		waiting[i] = !g.depsMetLocked(p.manifest.Depends)
+		waiting[i] = !g.depsMetLocked(g.gateDepsLocked(p.manifest, p.key()))
 	}
 	return waiting, nil
 }
@@ -475,11 +489,12 @@ func (cp *controlPlane) bindingStatusesLocked(reg *registration) []*cpv1.Binding
 	g := cp.gw
 	out := make([]*cpv1.BindingStatus, 0, len(reg.bindings))
 	for _, b := range reg.bindings {
+		deps := g.gateDepsLocked(b.prep.manifest, b.prep.key())
 		out = append(out, &cpv1.BindingStatus{
 			Namespace: b.prep.namespace,
 			Version:   b.prep.version,
-			State:     g.gateStateLocked(b.waiting, b.prep.manifest.Depends),
-			Depends:   g.dependencyStatusLocked(b.prep.manifest.Depends),
+			State:     g.gateStateLocked(b.waiting, deps),
+			Depends:   g.dependencyStatusLocked(deps),
 		})
 	}
 	return out
@@ -538,7 +553,7 @@ func (cp *controlPlane) promoteStandaloneLocked() {
 				continue // registered through the cluster path
 			}
 			for _, b := range reg.bindings {
-				if !b.waiting || !g.depsMetLocked(b.prep.manifest.Depends) {
+				if !b.waiting || !g.depsMetLocked(g.gateDepsLocked(b.prep.manifest, b.prep.key())) {
 					continue
 				}
 				if err := cp.joinPreparedLocked(reg.id, reg.addr, reg.conn, b.prep); err != nil {
@@ -573,7 +588,7 @@ func (cp *controlPlane) promoteCluster() {
 	cp.gw.mu.Lock()
 	for _, reg := range cp.regs {
 		for _, b := range reg.bindings {
-			if b.waiting && reg.kvKeys != nil && cp.gw.depsMetLocked(b.prep.manifest.Depends) {
+			if b.waiting && reg.kvKeys != nil && cp.gw.depsMetLocked(cp.gw.gateDepsLocked(b.prep.manifest, b.prep.key())) {
 				cands = append(cands, cand{reg, b})
 			}
 		}

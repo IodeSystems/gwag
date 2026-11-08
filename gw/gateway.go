@@ -253,6 +253,14 @@ type Gateway struct {
 	// across all slots. Rebuilt on every assembleLocked; atomic-
 	// swapped so the psPub hot path reads without g.mu.
 	channelBindingIndex atomic.Pointer[channelBindingIndex]
+
+	// typedSkipLog rate-limits the log line for typed events ps.sub
+	// drops (event_channels.go).
+	typedSkipLog skipLogger
+
+	// eventStreams is the JetStream stream ensure state per named
+	// channel (event_streams.go).
+	eventStreams eventStreamState
 }
 
 // rejectedJoinSummary captures the most recent rejection plus a
@@ -468,6 +476,10 @@ type config struct {
 	// rejects publishes to channels with no matching binding pattern.
 	// Default false. See WithStrictPayloadTypes.
 	psStrictPayloadTypes bool
+
+	// eventStreamMaxAge is the MaxAge of named-channel JetStream
+	// streams. 0 → 7 days. See WithEventStreamMaxAge.
+	eventStreamMaxAge time.Duration
 
 	// mcpSeed seeds the MCP allowlist at construction. Applied once at
 	// New() before any control-plane / cluster watch overrides. Runtime
@@ -1997,7 +2009,10 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	}
 	g.warnSubscribeDelegateDeprecated(e.namespace, e.version)
 	key := poolKey{namespace: e.namespace, version: e.version}
-	bindings := extractChannelBindings(e.file)
+	bindings, err := extractChannelBindings(e.file)
+	if err != nil {
+		return fmt.Errorf("gateway: %s/%s: %w", e.namespace, e.version, err)
+	}
 	existed, err := g.registerSlotLocked(slotKindProto, key, e.hash, e.maxConcurrency, e.maxConcurrencyPerInstance, bindings)
 	if err != nil {
 		return fmt.Errorf("gateway: %w", err)

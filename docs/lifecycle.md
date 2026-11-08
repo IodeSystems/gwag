@@ -147,6 +147,34 @@ asymmetric reality that *adding* fields is always safe but
 Stop heartbeating; the gateway evicts after TTL. The schema
 rebuilds; the field disappears.
 
+### Channel subscriptions
+
+A registration that lists `subscribes` (channel key + consumer group;
+see [`pubsub.md`](./pubsub.md#named-channels)) gets one dependency
+edge per entry, to the `(namespace, version)` whose proto declares the
+channel. The edge counts like a `depends` entry:
+
+- **Start gate.** The binding waits until the declaring line has a
+  ready instance. A channel no registered line declares is unmet, so
+  the binding waits for it. A channel the binding declares itself is
+  ignored.
+- **Cycle check.** Resolved channel edges join the depends graph; a
+  cycle is refused at Register. An edge to a channel nobody declares
+  yet has no target, so a cycle through a waiting declarer is not
+  seen (two services that each wait for the other's channel both stay
+  waiting).
+- **Sunset.** A line with a subscriber is not sunset-able: the
+  subscriber accepts only the declaring line.
+- **Graph and metrics.** `/admin/graph` lists the edge with
+  `edgeKind: "channel"`, `channel` and `group` (RPC edges have
+  `edgeKind: "rpc"`); `provider` is empty while nobody declares the
+  channel. `dependency_unmet` has a `channel` label.
+- **Admin output.** `/admin/services` rows carry `subscribes`;
+  instance `depends` entries carry `channel` and `group`.
+
+Subscriptions do not block a drain: events wait in the channel's
+stream while the publisher is down.
+
 ### External dependents
 
 A line is sunset-able (admin graph `sunsetable`, metric

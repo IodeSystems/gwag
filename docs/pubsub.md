@@ -10,7 +10,7 @@ type Query {
   ps: PsQueryNamespace!
 }
 type PsQueryNamespace {
-  pub(channel: String, hmac: String, payload: String, ts: String): Gwag_Ps_V1_PubResponse
+  pub(channel: String, hmac: String, payload: String, payload_type: String, ts: String): Gwag_Ps_V1_PubResponse
   # also under ps.v1 and ps.stable
 }
 type Subscription {
@@ -34,10 +34,11 @@ level. `ts` is a string because it is an int64. The response is an
 empty message: select `_void`, which is always null.
 
 The handler checks in this order: `channel` is not empty (error
-`ps.pub: channel required`), `channel` has no `*` or `>` (error
-`ps.pub: wildcards not valid on publish`), channel auth, then the
-binding checks (see Contract enforcement). The first two are plain Go
-errors, not typed rejects.
+`ps.pub: channel required`), `channel` has no `*`, `>`, `{` or `}`
+(error `ps.pub: wildcards not valid on publish`), channel auth, then
+the binding checks (see Contract enforcement, and Named channels for
+channels with a named binding). The first two are plain Go errors,
+not typed rejects.
 
 `hmac` is base64 (standard alphabet) HMAC-SHA256 over
 `<channel>\n<ts>`. `ts` is unix seconds and must be within the skew
@@ -92,7 +93,7 @@ full) sit above the bus and behave the same on every transport.
 | Deployment | Transport | Reach |
 |---|---|---|
 | No `WithCluster` | in-process bus | this gateway only |
-| `WithCluster`, NATS connected | NATS core: subject = channel, body = proto-encoded `Event` | every node on the cluster |
+| `WithCluster`, NATS connected | NATS core: subject = channel, body = proto-encoded `Event` (a typed event on a named channel: see Named channels) | every node on the cluster |
 | `WithCluster`, NATS connection down | in-process bus (degraded) | this gateway only |
 
 **Single node.** A gateway without a cluster serves `ps.pub` /
@@ -129,8 +130,18 @@ Signals:
 Admin events (`admin_events_watchServices`) are published on NATS
 only. They need a cluster, and while NATS is down none arrive.
 
-The wire format in cluster mode is unchanged, so nodes on this
-version and older versions share channels.
+The wire format of unnamed channels is unchanged, so nodes on this
+version and older versions share them. Older nodes ignore the
+headers and decode a typed event's body as an `Event` envelope, so
+their `ps_sub` subscribers get a wrong event or none. Upgrade every
+node before publishing on named channels.
+
+**The NATS bus is open.** Any client that can reach the NATS client
+port (`ClusterOptions.ClientListen`) can publish or subscribe on any
+subject: gwag's HMAC and channel auth tiers apply only to `ps.pub` and
+`ps_sub` through the gateway. Who wrote a message on the bus is an
+application concern: sign payloads yourself if consumers must check
+the author. Restrict the client port at the network level.
 
 ## Auth tiers
 
@@ -213,17 +224,120 @@ On delivery the gateway stamps `Event.payload_type` (GraphQL `payloadType`) at
 `pub` time with the matched binding's FQN. Subscribers fetch the descriptor at any time
 via `/api/schema/proto?service=...` for validation or codegen. List
 the active registry through the admin endpoint
-`GET /api/admin/bindings` (rows: `pattern`, `messageFQN`, `namespace`,
-`version`; no tier). The tier comes from `WithChannelAuth`.
+`GET /api/admin/bindings` (rows: `pattern`, `messageFQN`, `name`,
+`channel`, `stream`, `namespace`, `version`; no tier). The tier comes
+from `WithChannelAuth`.
 
 **Tier policy inherits.** `unstable` slots' bindings overwrite on
 rebake; `vN` slots' bindings lock by `(pattern, payload_fqn)` —
 versioned messaging gets the existing version-tier story.
 
 **Pattern uniqueness across slots.** Two different `(namespace,
-version)` slots can't both claim the same pattern. Conflict is
-hard-rejected at registration. Same-slot rebake on `unstable` swaps
-the binding; on `vN` it's `AlreadyExists`.
+version)` slots can't both claim the same pattern (named segments
+compare as `*`, so `a.{id}` and `a.*` are the same pattern), or the
+same channel key. Conflict is hard-rejected at registration.
+Same-slot rebake on `unstable` swaps the binding; on `vN` it's
+`AlreadyExists`. A `v2` line of a service therefore declares its
+channels in its own package (`orders.v2`) on its own patterns.
+
+## Named channels
+
+A binding with a `name` declares a channel. Generated event code
+(`gwag gen`) names its typed calls after it.
+
+```proto
+package orders.v1;
+import "gw/proto/ps/v1/options.proto";
+
+message OrderCreated {
+  option (gwag.ps.v1.binding) = { name: "OrderEvents", pattern: "events.orders.{orderId}" };
+  string order_id = 1;
+}
+message OrderShipped {
+  option (gwag.ps.v1.binding) = { name: "OrderEvents", pattern: "events.orders.{orderId}" };
+  string order_id = 1;
+  string carrier = 2;
+}
+```
+
+**Channel key.** `<proto package>.<name>`: `orders.v1.OrderEvents`.
+The key names the channel in `ServiceBinding.subscribes`, in admin
+output and in the stream name.
+
+**Named segments.** `{orderId}` matches one token, like `*`. `*` and
+`>` keep working. For matching, auth rules, `ps_sub` patterns and
+stream subjects the gateway reads `{x}` as `*`. A segment with a brace
+must be exactly `{identifier}`; a name may appear once per pattern.
+
+**Unions.** Messages of one proto file that share a name and a
+pattern form a union channel: it carries any of them, and the
+`Gwag-Type` header says which. Rejected at registration:
+
+- one name with two patterns;
+- one pattern with two names (or with a named and an unnamed binding);
+- a name without a pattern, or a name that is not an identifier;
+- a channel key or pattern another slot already claims.
+
+**Wire format.** A message on a named channel is the binary proto of
+the message (`proto.Marshal`, not the `Event` envelope) with NATS
+headers:
+
+| Header | Value |
+|---|---|
+| `Gwag-Type` | message full name, `orders.v1.OrderShipped` |
+| `Gwag-Channel` | channel key, `orders.v1.OrderEvents` |
+| `Nats-Msg-Id` | message id; JetStream drops a repeat within the duplicates window |
+
+**`ps_sub`.** A message with a `Gwag-Type` header arrives as an
+`Event` with `payload` = the protojson of the message, `payloadType` =
+the header, `channel` = the subject. The type is looked up among the
+messages of every registered proto slot. An unknown type or a body
+that does not decode is dropped: one log line at most every 10 s, and
+`go_api_gateway_pubsub_typed_skipped_total{reason="unknown_type"|"decode"}`.
+Envelope messages on the same subject still arrive as before.
+
+**`ps.pub`.** On a subject that matches a named binding, `payload` is
+the protojson of `payload_type`. `payload_type` is required on a union
+channel and defaults to the bound type on a plain one; a type the
+channel does not carry, or a payload that does not parse, fails with
+`INVALID_ARGUMENT`. The gateway publishes the binary proto with the
+three headers and a random message id, so generated listeners receive
+it. `WithChannelBindingEnforce` and `WithStrictPayloadTypes` do not
+change this path: a named channel always checks the payload. Auth
+tiers and HMAC are unchanged.
+
+```graphql
+{ ps { pub(channel: "events.orders.42", payload: "{\"orderId\":\"42\"}", payload_type: "orders.v1.OrderCreated", hmac: "...", ts: "1700000000") { _void } } }
+```
+
+**Streams (cluster mode).** The gateway keeps one JetStream stream per
+named channel. It creates or updates the stream when a slot that
+declares the channel registers (every node does this; the calls are
+idempotent):
+
+| Field | Value |
+|---|---|
+| name | `EV_` + key with `.` → `_`: `EV_orders_v1_OrderEvents` |
+| subjects | the pattern with named segments as `*`: `events.orders.*` |
+| storage / retention | file / limits |
+| max age | 7 days; `WithEventStreamMaxAge(d)` |
+| duplicates window | 2 minutes |
+| replicas | the cluster replica policy (`WithClusterReplicas`), changed with the KV buckets |
+
+Generated event code creates the stream only when it is missing (R1)
+and never updates it, so the gateway's config wins. The gateway does
+not delete a stream when the declaring slot goes away: stored events
+stay until max age. Remove a stream by hand (`nats stream rm`) to drop
+them. Two named channels whose patterns overlap (`a.*` and `a.>`)
+cannot both get a stream; the second fails and is logged. Consumers
+that fail to process a message publish it to `gwag.dlq.<stream name>`.
+Without a cluster there are no streams.
+
+**Subscriptions are dependency edges.** A binding lists the channels
+it listens on in `ServiceBinding.subscribes` (`controlclient`:
+`Service.Subscribes`), each with a consumer group. The gateway counts
+each one like a `depends` entry on the line that declares the channel:
+see [`lifecycle.md`](./lifecycle.md#channel-subscriptions).
 
 ## Contract enforcement (opt-in)
 

@@ -105,6 +105,7 @@ func (v adminView) service(info *serviceInfo) {
 	}
 	info.Owner = v.owner(info.Owner)
 	info.Depends = v.depends(info.Depends)
+	info.Subscribes = []subscriptionInfo{}
 	info.RejectedJoins = nil
 	for i := range info.Drains {
 		info.Drains[i].Addr = ""
