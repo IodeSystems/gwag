@@ -141,6 +141,19 @@ func (r *Registry) serve(w http.ResponseWriter, req *http.Request) {
 			out = append(out, s)
 		}
 		writeJSON(w, 200, out)
+	case req.Method == http.MethodGet && len(parts) == 3 && parts[0] == "subjects" && parts[2] == "versions":
+		vs, ok := r.subjects[parts[1]]
+		if !ok {
+			notFound(w, 40401, "Subject '"+parts[1]+"' not found.")
+			return
+		}
+		out := []int{}
+		for _, v := range vs {
+			out = append(out, v.Version)
+		}
+		writeJSON(w, 200, out)
+	case req.Method == http.MethodGet && len(parts) == 1 && parts[0] == "config":
+		writeJSON(w, 200, map[string]string{"compatibilityLevel": "BACKWARD"})
 	case req.Method == http.MethodGet && len(parts) == 4 && parts[0] == "subjects" && parts[2] == "versions":
 		vs, ok := r.subjects[parts[1]]
 		if !ok {
