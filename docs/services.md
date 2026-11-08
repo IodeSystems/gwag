@@ -267,13 +267,20 @@ below.
 
 `Subscribes` names the event channels this binding listens on, by
 channel key (`<proto package>.<channel name>`, see
-[`pubsub.md`](./pubsub.md#named-channels)) and consumer group.
-Generated event code reports them.
+[`pubsub.md`](./pubsub.md#named-channels)) and consumer group. The
+generated bus records them as you call its `On` methods
+([`events.md`](./events.md#reporting-subscriptions-to-the-gateway)):
 
 ```go
-Subscribes: []controlclient.Subscription{
-	{Channel: "orders.v1.OrderEvents", Group: "billing"},
-},
+bus := ordersv1.NewBus(backend)
+stop, err := bus.OnOrderEvents(ctx, "billing", handlers) // before SelfRegister
+
+var subs []controlclient.Subscription
+for _, s := range bus.Subscriptions() {
+	subs = append(subs, controlclient.Subscription{Channel: s.Channel, Group: s.Group})
+}
+// controlclient.Service{..., Subscribes: subs}
+// e.g. {Channel: "orders.v1.OrderEvents", Group: "billing"}
 ```
 
 Each entry waits like a dependency on the line whose proto declares
@@ -425,3 +432,4 @@ the registration exists while the process runs.
 - [`admin-auth.md`](./admin-auth.md) — roles and public services.
 - [`operations.md`](./operations.md) — health, drain, backpressure.
 - [`mcp.md`](./mcp.md) — MCP ingest.
+- [`events.md`](./events.md) — typed event code and the `Subscribes` source.

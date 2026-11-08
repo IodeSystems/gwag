@@ -290,7 +290,7 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 - [`docs/services.md`](./docs/services.md) — registering a service: `controlclient`, versions, start gate, drain; in-process `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`
 - [`docs/cluster.md`](./docs/cluster.md) — 3-node setup, load balancer probe, node loss, rolling upgrade, forgetting a peer
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
-- [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop
+- [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop; pointer to `gwag gen` for event code
 - [`docs/mcp.md`](./docs/mcp.md) — exposing the gateway to LLM agents (tools, allowlist, mounting, cluster semantics)
 
 **Performance**:
@@ -306,6 +306,10 @@ per-pattern auth (`ChannelAuthOpen` / `HMAC` / `Delegate`) and a
 channel→type binding registry. Service-declared `stream Resp`
 methods stay as per-subscriber gRPC streams. See
 [`docs/pubsub.md`](./docs/pubsub.md).
+
+**Typed event channels** — `gwag gen` writes typed publish / listen
+code for Go, TypeScript and Python from proto annotations, over NATS
+JetStream, memory or Kafka. See [`docs/events.md`](./docs/events.md).
 
 **Stability + release**:
 

@@ -243,7 +243,15 @@ channels in its own package (`orders.v2`) on its own patterns.
 ## Named channels
 
 A binding with a `name` declares a channel. Generated event code
-(`gwag gen`) names its typed calls after it.
+(`gwag gen`) names its typed calls after it. This section is what the
+gateway does with the annotation: registry, `ps_sub` / `ps.pub`,
+streams, dependency edges. The generated `publish` and `on` calls, the
+backends and the delivery rules are in [`events.md`](./events.md);
+they talk to the bus directly, not through the gateway.
+
+The bus is open by default and message authorship is an application
+concern; see [Security in `events.md`](./events.md#security). The HMAC
+tiers below cover `ps.pub` and `ps_sub` only.
 
 ```proto
 package orders.v1;
@@ -418,5 +426,6 @@ now belongs to `ps_sub` via `WithChannelAuth`.
 ## See also
 
 - [`docs/architecture.md`](./architecture.md) — IR layer, slot model, cluster reconciler
+- [`docs/events.md`](./events.md) — typed event code (`gwag gen`) for Go, TypeScript and Python; backends, groups, dead letters
 - [`docs/cluster.md`](./cluster.md) — NATS / JetStream KV that backs the broker
 - [`docs/admin-auth.md`](./admin-auth.md) — `AdminAuthorizer` delegate pattern that `ChannelAuthDelegate` mirrors

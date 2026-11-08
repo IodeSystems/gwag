@@ -82,6 +82,75 @@ func (b *Backend) ensureTopic(ctx context.Context, topic string) error {
 	return nil
 }
 
+// seedGroup commits the start position of a group that has none yet
+// (the end of each partition, or the start with deliverAll). Without
+// it a new group resolves its position after the partition assignment,
+// so a record produced between assignment and that lookup is skipped
+// even though Subscribe has returned. A group that already holds
+// commits keeps them. Where the commit is refused because the group
+// is live, its members hold their positions already.
+func (b *Backend) seedGroup(ctx context.Context, topic, group string, deliverAll bool) error {
+	var committed kadm.OffsetResponses
+	err := retryMetadata(ctx, func() (err error) {
+		committed, err = b.admin.FetchOffsets(ctx, group)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("kafka: fetch offsets of %s: %w", group, err)
+	}
+	var listed kadm.ListedOffsets
+	err = retryMetadata(ctx, func() error {
+		var err error
+		if deliverAll {
+			listed, err = b.admin.ListStartOffsets(ctx, topic)
+		} else {
+			listed, err = b.admin.ListEndOffsets(ctx, topic)
+		}
+		if err == nil {
+			err = listed.Error()
+		}
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("kafka: list offsets of %s: %w", topic, err)
+	}
+	seed := listed.Offsets()
+	for p := range seed[topic] {
+		if o, ok := committed.Lookup(topic, p); ok && o.At >= 0 {
+			seed.Delete(topic, p)
+		}
+	}
+	if len(seed[topic]) == 0 {
+		return nil
+	}
+	_, _ = b.admin.CommitOffsets(ctx, group, seed)
+	return nil
+}
+
+// retryMetadata runs fn until it succeeds, fails with an error that
+// is not about the broker still starting up, or 30s pass. A new topic
+// has no leader everywhere yet, and a fresh broker has no group
+// coordinator until __consumer_offsets is created.
+func retryMetadata(ctx context.Context, fn func() error) error {
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		starting := errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.LeaderNotAvailable) ||
+			errors.Is(err, kerr.NotLeaderForPartition) || errors.Is(err, kerr.CoordinatorNotAvailable) ||
+			errors.Is(err, kerr.CoordinatorLoadInProgress) || errors.Is(err, kerr.NotCoordinator)
+		if !starting || time.Now().After(deadline) || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func record(topic string, m *events.Message) *kgo.Record {
 	r := &kgo.Record{Topic: topic, Key: []byte(m.Subject), Value: m.Data}
 	for k, v := range m.Headers {
@@ -105,6 +174,15 @@ func (b *Backend) Publish(ctx context.Context, ch events.Channel, m *events.Mess
 // holds a partition assignment.
 func (b *Backend) Subscribe(ctx context.Context, ch events.Channel, group string, opts events.SubscribeOptions, h events.Handler) (func(), error) {
 	if err := b.ensureTopic(ctx, ch.Stream); err != nil {
+		return nil, err
+	}
+	// Create the DLQ topic now. A reader of gwag.dlq.<stream> that
+	// starts before the first dead letter would otherwise wait for a
+	// metadata refresh to find a topic created after it.
+	if err := b.ensureTopic(ctx, events.DLQSubject(ch.Stream)); err != nil {
+		return nil, err
+	}
+	if err := b.seedGroup(ctx, ch.Stream, ch.Stream+"."+group, opts.DeliverAll); err != nil {
 		return nil, err
 	}
 	reset := kgo.NewOffset().AtEnd()

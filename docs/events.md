@@ -1,13 +1,18 @@
 # Typed event channels
 
 Annotate a proto message with a channel name and subject pattern.
-`gwag gen` writes typed `Publish<Channel>` / `On<Channel>` calls next
-to the language's normal protobuf output. The calls run over a
-pluggable bus: NATS JetStream (the gateway's cluster bus), an
-in-process queue for tests, or your own backend (a Kafka one is in
-[`examples/events/go-kafka/`](../examples/events/go-kafka)).
+`gwag gen` writes typed publish and listen calls next to the
+language's normal protobuf output, for Go, TypeScript and Python. The
+calls run over a pluggable bus: NATS JetStream (the gateway's cluster
+bus), an in-process queue for tests, or your own backend (Kafka
+examples for all three languages are in
+[`examples/events/`](../examples/events)).
 
-Runnable example: [`examples/events/`](../examples/events).
+What the gateway does with the same annotations (registry, `ps_sub`
+and `ps.pub`, streams, dependency edges) is in
+[`pubsub.md`](./pubsub.md#named-channels). This page covers the
+generated code and its runtimes. The gateway is not on the path of a
+generated `publish` or `on` call.
 
 ## Annotation
 
@@ -26,13 +31,13 @@ message OrderShipped {
 
 `gwag gen` serves `gw/proto/ps/v1/options.proto` (and the short path
 `gwag/ps/v1/options.proto`) itself; no copy on disk. Prefer the long
-path: it matches the Go registry path and the gateway docs
-([pubsub.md](./pubsub.md)). A service that registers this proto with
-the gateway still ships the options file in its proto imports.
+path: it matches the Go registry path and the gateway docs. A service
+that registers this proto with the gateway still ships the options
+file in its proto imports.
 
 - **Channel key** — `<proto package>.<name>`, e.g.
   `orders.v1.OrderShipped`. A message with a binding but no `name`
-  generates nothing (payload typing only, as before).
+  generates nothing (payload typing only).
 - **Pattern** — NATS subject grammar. `{orderId}` matches one token
   and is named; `*` matches one token and is named `P1`, `P2`, ... in
   order; a trailing `>` matches the rest and is named `Rest`. Publish
@@ -63,47 +68,114 @@ gwag gen --lang go --out gen -I proto --opt paths=source_relative orders/v1/orde
 | `--lang` | `go`, `ts` (alias `typescript`), `python` (alias `py`) |
 | `--out` | output directory, default `.` |
 | `-I` | import path, repeatable, default `.` |
-| `--opt` | generator parameter, repeatable; passed to every generator (`paths=source_relative`, `module=...`, `M...`) |
-| `--grpc` | also run the gRPC stub generator |
-| `--module-dir` | project root that pins the generators (`go.mod`, `pyproject.toml`), default `.` |
+| `--opt` | generator parameter, repeatable; passed to every generator (`paths=source_relative`, `module=...`, `M...`); `gwag` reads `events_import=MODULE` for TypeScript and does not pass it on |
+| `--grpc` | also run the gRPC stub generator (Go) |
+| `--module-dir` | project root that pins the generators (`go.mod`, `package.json`, `pyproject.toml`), default `.` |
 
 Files are named relative to an import path, as with `protoc`. A file
 given by its disk path is mapped to the import path that contains it.
 
-### Pinned generators
-
 `gwag gen` does not look up generators on `PATH`. It runs the version
-your project pins, so two machines generate the same bytes:
-
-- **go** — `go tool protoc-gen-go` (and `go tool protoc-gen-go-grpc`
-  with `--grpc`), run in `--module-dir`. Pin it once:
-
-  ```bash
-  go get -tool google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
-  go get -tool google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest   # with --grpc
-  ```
-
-  If the tool is missing, the error prints the `go get -tool` line.
-- **python** — `uv run --locked --project <module-dir>
-  protoc-gen-python_betterproto2`, from the uv project's own
-  environment. `--locked` fails when `uv.lock` is out of date. Pin it
-  once:
-
-  ```bash
-  uv add --dev betterproto2_compiler==0.10.1
-  uv add betterproto2==0.10.0
-  ```
-
-  `uv` itself is the only tool taken from `PATH`. If the compiler is
-  missing, the error prints the `uv add` line.
-- **ts** — `node_modules/.bin/protoc-gen-es` of `--module-dir`; see
-  [TypeScript](#typescript).
-
-Generated event files carry a header with the gwag version and the
+your project pins, so two machines generate the same bytes. If a
+generator is missing, the error prints the command that adds it. Each
+generated event file carries a header with the gwag version and the
 base generator's version. An untagged gwag build stamps `(devel)`, so
 regenerating on another commit does not change the header.
 
-## Go API
+| | Base generator | Pin once | Output |
+|---|---|---|---|
+| Go | `go tool protoc-gen-go` (`protoc-gen-go-grpc` with `--grpc`), run in `--module-dir` | `go get -tool google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12`; with `--grpc` also `go get -tool google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest` | `<file>.pb.go`, `<file>.events.go` (same package) |
+| TypeScript | `node_modules/.bin/protoc-gen-es` of `--module-dir` | `pnpm add --save-dev --save-exact @bufbuild/protoc-gen-es@2.17.0 typescript` and `pnpm add --save-exact @bufbuild/protobuf@2.17.0` | `<file>_pb.ts`, `<file>_events.ts` |
+| Python | `uv run --locked --project <module-dir> protoc-gen-python_betterproto2` | `uv add --dev betterproto2_compiler==0.10.1` and `uv add betterproto2==0.10.0` | betterproto2 modules, `<file>_events.py` |
+
+Python needs `uv` on `PATH`; it is the only tool taken from there.
+`--locked` fails when `uv.lock` is out of date. Commit the lockfiles
+(`go.mod`, `pnpm-lock.yaml`, `uv.lock`); do not commit `node_modules`
+or `.venv`.
+
+### TypeScript notes
+
+- The runtime `@gwag/events` is private for now. Depend on it by path
+  (`"@gwag/events": "link:../gwag/ts/events"`). It ships TypeScript
+  source: run it with Node 24 or newer (type stripping) or a bundler.
+- Command:
+
+  ```bash
+  gwag gen --lang ts --out src/gen -I proto \
+    --opt target=ts --opt import_extension=ts --opt erasable_syntax=true \
+    orders/v1/orders.proto
+  ```
+
+- Options go to protoc-gen-es as they are. `import_extension=ts` and
+  `erasable_syntax=true` make the output run directly under Node
+  (`erasable_syntax` turns enums into plain objects).
+  `events_import=MODULE` names the module the events file imports the
+  runtime from, default `@gwag/events`.
+- The proto must import `gw/proto/ps/v1/options.proto` (the long
+  path). The generated `_pb.ts` imports its TypeScript from
+  `@gwag/events/proto/...`, so no copy of the options file lands next
+  to your code. Pass your own `map_imports=...` to change that.
+
+### Python notes
+
+- Setup, then generate:
+
+  ```bash
+  uv add betterproto2==0.10.0 nats-py==2.16.0
+  uv add --dev betterproto2_compiler==0.10.1
+  uv add ./path/to/gwag/py/gwag-events          # import name: gwag_events
+  gwag gen --lang python --out proto_gen -I proto --opt paths=source_relative orders/v1/orders.proto
+  ```
+
+- The runtime, [`py/gwag-events/`](../py/gwag-events), is not on PyPI.
+  Depend on it by path or copy it.
+- `--out` must be a Python package: betterproto2 imports
+  `from ...message_pool`, so the output directory sits one level above
+  the proto package. Import as `proto_gen.orders.v1`.
+- betterproto2 writes a module for every file in its request, not only
+  the ones you name. `gwag gen` leaves out its own option protos and
+  the `descriptor.proto` they pull in. Any other imported proto (for
+  example `google/protobuf/timestamp.proto`) is generated too.
+- `--opt` values go to betterproto2 unchanged. It ignores the ones it
+  does not know.
+- Generation fails when a generated name collides with a message or
+  enum of the package, with a name the file imports (`Callable`,
+  `Message`, ...), or with another channel's, and when a handler
+  keyword is taken (`unknown`, `options`, `group`). Rename the channel
+  or the message.
+- The generated file and the runtime pass `mypy --strict`.
+  betterproto2's own `message_pool.py` does not (it calls an untyped
+  constructor); the example's `pyproject.toml` relaxes
+  `disallow_untyped_calls` for that one module.
+
+## Calls by language
+
+One bus type per `.proto` file: `Bus` in Go (so all channels of one Go
+package must be declared in one file), `<File>Bus` in TypeScript and
+Python (`orders.proto` gives `OrdersBus`). Per channel `X`:
+
+| | Go | TypeScript | Python |
+|---|---|---|---|
+| Create | `ordersv1.NewBus(backend)` | `new OrdersBus(backend)` | `OrdersBus(backend)` |
+| Subject | `XSubject{OrderId: "o-1"}` | `{ orderId: "o-1" }` | `XSubject(order_id="o-1")` |
+| Publish | `bus.PublishX(ctx, subj, msg, opts...)` | `await bus.publishX(subj, msg, opts?)` | `await bus.publish_x(subj, msg, msg_id=, headers=)` |
+| Listen | `stop, err := bus.OnX(ctx, group, fn, opts...)` | `const stop = await bus.onX(group, fn, opts?)` | `stop = await bus.on_x(group, fn, options=)` |
+| Union handlers | `XHandlers{OrderCreated: fn, Unknown: fn}` | `{ OrderCreated: fn, unknown: fn }` | `order_created=fn, unknown=fn` |
+| Oneof handlers | `XHandlers{Captured: fn}` | `{ captured: fn }` | `captured=fn` |
+| Oneof, whole message | `bus.OnXMessage` | `bus.onXMessage` | `bus.on_x_message` |
+| Subscriptions | `bus.Subscriptions()` | `bus.subscriptions()` | `bus.subscriptions()` |
+| Runtime access | `bus.Core()` | `bus.core` | `bus.core` |
+| Stop | `stop()` | `await stop()` | `await stop()` |
+| Ack / redeliver | return `nil` / `error` | resolve / throw | return / raise |
+| Raw message | `events.MessageFrom(ctx)` | third handler argument | `message_from()` |
+
+A nil or missing handler acks that type or case without handling it. A
+type with no handler and no `Unknown` is acked and logged once per
+(channel, type). `Unknown` gets a union type this code does not know,
+or a oneof message with no case set; in a union it receives the raw
+`Message`, in a oneof the whole message.
+
+### Go
 
 `<file>.events.go` lands in the same package as `<file>.pb.go` (the
 proto's `go_package`). For the example proto:
@@ -131,155 +203,23 @@ stop, err = bus.OnPayments(ctx, "ledger", ordersv1.PaymentsHandlers{
 })
 ```
 
-Per channel `X`:
-
 - `XSubject` — one exported `string` field per pattern segment.
-- `PublishX(ctx, XSubject, msg, ...events.PublishOption)` — options
-  `events.MsgID(id)` (default random) and `events.Header(k, v)`.
-- `OnX(ctx, group, handler, ...events.SubscribeOption) (stop, err)`.
+- `PublishX` options: `events.MsgID(id)` (default random) and
+  `events.Header(k, v)`.
+- `OnX` options: `events.MaxDeliver`, `events.DeliverAll`,
+  `events.Backoff`, `events.AckWait` (see [Delivery](#delivery)).
+- `NewBus(backend, events.WithLogf(f))` sets the logger for skipped
+  messages (default `log.Printf`).
 - Union: `XEvent`, a sealed interface the member messages implement
   (marker method in the generated file), and `XHandlers`.
-- Oneof: `XHandlers` with one field per case, and `OnXMessage` for
-  the whole message.
-- A nil field in `XHandlers` acks that type or case without handling
-  it. A type with no handler and no `Unknown` is acked and logged once
-  per (channel, type).
+- Oneof: `XHandlers` with one field per case.
 - `events.MessageFrom(ctx)` inside a handler returns the raw message:
   subject, id, headers, delivery attempt.
 
-All channels of one Go package must be declared in one `.proto` file:
-each file gets a `Bus` type.
+### TypeScript
 
-## Wire format
-
-| Header | Value |
-|---|---|
-| `Gwag-Type` | full name of the body message, always set |
-| `Gwag-Channel` | channel key |
-| `Nats-Msg-Id` | message id on NATS (JetStream dedup) |
-| `Gwag-Msg-Id` | message id on other backends |
-
-Body: proto binary. Dead-lettered messages add `Gwag-Error`.
-
-## Groups, acks, dead letters
-
-- **Group** — `OnX(ctx, "billing", ...)`. Every group gets every
-  message. Subscribers sharing a group share its messages: run the
-  same service three times and each message reaches one of the three.
-  On JetStream a group is a durable consumer, so messages published
-  while no subscriber runs wait for the group.
-- **New group** — starts at new messages. `events.DeliverAll()` starts
-  it at the first stored message. Only the first subscriber's options
-  create the group; later subscribers use it as it is.
-- **Ack** — the handler returns nil.
-- **Redelivery** — the handler returns an error. The message comes
-  back after the backoff (`events.Backoff(...)`, default 1s, 5s, 30s;
-  last value repeats).
-- **Dead letter** — after `events.MaxDeliver(n)` failed deliveries
-  (default 5) the message is published to `gwag.dlq.<stream>` with the
-  original headers plus `Gwag-Error`, then dropped from the channel.
-  Nothing consumes the DLQ subject unless you add a stream or
-  listener for `gwag.dlq.>`.
-- **AckWait** — `events.AckWait(d)`, default 30s. A handler still
-  running after it gets the message redelivered elsewhere. A delivery
-  that times out on its last attempt is dropped by JetStream without a
-  dead letter.
-
-## Backends
-
-```go
-type Backend interface {
-    Publish(ctx context.Context, ch events.Channel, m *events.Message) error
-    Subscribe(ctx context.Context, ch events.Channel, group string, opts events.SubscribeOptions, h events.Handler) (stop func(), err error)
-    Close() error
-}
-```
-
-The backend owns delivery: ack on nil, redeliver after
-`opts.Delay(n)`, dead-letter after `opts.MaxDeliver`.
-`events/eventstest.Run` is the behaviour suite every backend should
-pass.
-
-- **`events/jetstream`** — `jetstream.New(nc)`. One stream per channel
-  named `EV_<package with . as _>_<name>` (`EV_orders_v1_OrderEvents`),
-  subject = the pattern with `{x}` as `*`. The backend creates a
-  missing stream (file storage, limits retention, MaxAge 7d,
-  Duplicates 2m, 1 replica) and never updates an existing one; the
-  gateway ensures streams with its cluster policy and wins. Republishing
-  a message id inside the 2 minute window stores it once.
-- **`events/memory`** — `memory.New()`. In-process, same group and
-  retry semantics, `DeadLetters()` for assertions. For tests.
-- **Kafka** — [`examples/events/go-kafka/`](../examples/events/go-kafka),
-  its own Go module (franz-go); Python:
-  [`examples/events/py-kafka/`](../examples/events/py-kafka) (aiokafka,
-  same mapping). Topic per channel (stream name), record
-  key = subject, consumer group `<stream>.<group>`, retries in process
-  (the partition waits), DLQ topic `gwag.dlq.<stream>`. No dedup:
-  Kafka does not drop a repeated `Gwag-Msg-Id`. `test.sh` runs it
-  against `apache/kafka` in docker.
-
-## Reporting subscriptions to the gateway
-
-The bus records each `(channel, group)` an `On*` call used. Pass them
-to the control plane so the gateway counts them as dependency edges:
-
-```go
-var subs []controlclient.Subscription
-for _, s := range bus.Subscriptions() {
-    subs = append(subs, controlclient.Subscription{Channel: s.Channel, Group: s.Group})
-}
-// controlclient.Service{..., Subscribes: subs}
-```
-
-Call the `On*` methods before `SelfRegister`. `events` does not import
-`controlclient`, so the copy is yours.
-
-## Security
-
-The bus is open by default. Any client that reaches the NATS port can
-publish or subscribe on any subject, including these channels and the
-DLQ subjects. Message authorship is an application concern: sign
-payloads yourself if consumers must trust who sent them.
-
-## TypeScript
-
-Setup in your project (pnpm, exact versions, lockfile committed):
-
-```bash
-pnpm add --save-dev --save-exact @bufbuild/protoc-gen-es@2.17.0 typescript
-pnpm add --save-exact @bufbuild/protobuf@2.17.0
-```
-
-`@gwag/events` is the runtime. It is private for now: depend on it by
-path (`"@gwag/events": "link:../gwag/ts/events"`). It ships TypeScript
-source, so run it with Node 24 or newer (type stripping) or a
-bundler.
-
-```bash
-gwag gen --lang ts --out src/gen -I proto \
-  --opt target=ts --opt import_extension=ts --opt erasable_syntax=true \
-  orders/v1/orders.proto
-```
-
-`gwag gen` runs `node_modules/.bin/protoc-gen-es` of `--module-dir`
-(default `.`); it never looks on `PATH`. If it is missing, the error
-prints the `pnpm add` line. It writes `orders/v1/orders_pb.ts` (the
-messages) and `orders/v1/orders_events.ts` (the channels). `--lang
-typescript` is the same as `--lang ts`.
-
-Options go to protoc-gen-es as they are. Use `import_extension=ts` and
-`erasable_syntax=true` to run the output directly with Node
-(`erasable_syntax` turns enums into plain objects). `events_import=MODULE`
-is read by gwag and not passed on: it names the module the events file
-imports the runtime from, default `@gwag/events`.
-
-The proto must import `gw/proto/ps/v1/options.proto` (the long path).
-The generated `_pb.ts` imports its TypeScript from
-`@gwag/events/proto/...`, so no copy of the options file is generated
-next to your code. Pass your own `map_imports=...` to change that.
-
-The same calls as Go. Messages are protobuf-es messages; publish
-takes a message or its init object (`MessageInitShape`):
+Messages are protobuf-es messages; publish takes a message or its init
+object (`MessageInitShape`).
 
 ```ts
 import { OrdersBus } from "./gen/orders/v1/orders_events.ts";
@@ -307,82 +247,26 @@ await bus.onOrderEvents("audit", async (s, event) => {
 await bus.onPayments("ledger", { captured: async (s, m) => {}, refunded: async (s, m) => {} });
 ```
 
-Per channel `X`:
-
 - `XSubject` — `{ orderId: string }`: one property per pattern segment,
   lower camel case (`{order_id}` is `orderId`, `*` is `p1`, `>` is
   `rest`).
 - `publishX(subject, msg, opts?)` — `opts` is `{ msgId?, headers? }`.
-- `onX(group, handler, opts?) => Promise<stop>` — `opts` is
-  `{ maxDeliver?, deliverAll?, backoffMs?: number[], ackWaitMs? }`,
-  the same knobs as Go in milliseconds. `stop()` ends this subscriber
-  and does not wait for a running handler.
+- `onX(group, handler, opts?)` — `opts` is `{ maxDeliver?,
+  deliverAll?, backoffMs?: number[], ackWaitMs? }`. `stop()` ends this
+  subscriber and does not wait for a running handler.
 - Handlers get `(subject, msg, raw)`; `raw` is the `Message`: subject,
   id, headers, data, delivery attempt.
-- Union: `XEvent` is `{ type: "pkg.Msg"; value: Msg } | ...`, `XEventInit`
-  is the same with init objects as values, and `XHandlers` has one
-  optional key per message (its protobuf-es name) plus `unknown`. A
-  missing key acks that type; with no `unknown` an unknown type is
-  acked and logged once.
+- Union: `XEvent` is `{ type: "pkg.Msg"; value: Msg } | ...`,
+  `XEventInit` is the same with init objects as values, and
+  `XHandlers` has one optional key per message (its protobuf-es name)
+  plus `unknown`, which gets `(subject, raw)`.
 - Oneof: `XHandlers` has one optional key per case (protobuf-es
-  property name) plus `unknown`, which gets the whole message.
-- `bus.subscriptions()` and `bus.core` as in Go. `new OrdersBus(backend,
-  { logf })` sets the logger for skipped messages.
+  property name) plus `unknown`.
+- `new OrdersBus(backend, { logf })` sets the logger for skipped
+  messages (default `console.warn`).
+- 64-bit integers are `bigint`.
 
-One difference from Go: 64-bit integers are `bigint`.
-
-Backends (`@gwag/events/...`):
-
-- **`jetstream`** — `new JetStreamBackend(nc, { prefetch?, logf? })`,
-  `nc` from `@nats-io/transport-node`. Same stream names, durable
-  consumers, stream config, ack / nak / dead-letter behaviour as the
-  Go backend, so Go and TypeScript members of one group share its
-  messages. `prefetch` defaults to 16; use 1 to spread work evenly.
-- **`memory`** — `new MemoryBackend()`, `deadLetters()` for assertions.
-- **`eventstest`** — `runBackendSuite(name, harness)`, the port of
-  `events/eventstest` for `node:test`.
-- **Kafka** — [`examples/events/ts-kafka/`](../examples/events/ts-kafka),
-  kafkajs, the same mapping as the Go one (topic = stream name,
-  record key = subject, group `<stream>.<group>`, DLQ topic
-  `gwag.dlq.<stream>`).
-
-Checks: [`examples/events/ts/`](../examples/events/ts) is the generated
-example, and `examples/events/interop.sh` runs a Go publisher into a
-TypeScript listener, the reverse, and a Go and a TypeScript member of
-one group on one NATS (docker). `ts/events/test.sh` runs the runtime
-tests against NATS in docker.
-
-## Python
-
-`gwag gen --lang python` runs betterproto2's plugin for the message
-classes and adds `<pkg dir>/<file>_events.py` next to them. Runnable
-example, including a Go and a Python service on one NATS:
-[`examples/events/py/`](../examples/events/py) (`check.sh` runs it).
-
-### Setup
-
-A uv project that pins the compiler and the runtime:
-
-```bash
-uv add betterproto2==0.10.0 nats-py==2.16.0
-uv add --dev betterproto2_compiler==0.10.1
-uv add ./path/to/gwag/py/gwag-events          # import name: gwag_events
-gwag gen --lang python --out proto_gen -I proto --opt paths=source_relative orders/v1/orders.proto
-```
-
-- The runtime, [`py/gwag-events/`](../py/gwag-events), is not on PyPI.
-  Depend on it by path or copy it.
-- `--out` must be a Python package: betterproto2 imports
-  `from ...message_pool`, so the output directory sits one level above
-  the proto package. Import as `proto_gen.orders.v1`.
-- betterproto2 writes a module for every file in its request, not only
-  the ones you name. `gwag gen` leaves out its own option protos and
-  the `descriptor.proto` they pull in. Any other imported proto (for
-  example `google/protobuf/timestamp.proto`) is generated too.
-- `--opt` values go to betterproto2 unchanged. It ignores the ones it
-  does not know.
-
-### API
+### Python
 
 ```python
 from gwag_events import JetStreamBackend
@@ -410,82 +294,165 @@ stop = await bus.on_order_events(
 stop = await bus.on_payments("ledger", captured=on_captured, note=on_note)
 ```
 
-The class is `<File>Bus`, named after the `.proto` file (`orders.proto`
-gives `OrdersBus`), one per file. Per channel `X` (snake case `x`):
-
 - `XSubject` — frozen dataclass, one `str` field per pattern segment,
   in snake case: `{orderId}` is `order_id`, `*` is `p1`, `p2`, ..., a
   trailing `>` is `rest`. A keyword gets a trailing `_` (`from_`).
-- `publish_x(subject, message, *, msg_id=None, headers=None)`.
+- `publish_x(subject, message, *, msg_id=None, headers=None)`;
   `msg_id` defaults to a random id.
-- `on_x(group, handler, *, options=None) -> Stop`. `Stop` is
-  `async () -> None`.
+- `on_x(group, handler, *, options=None) -> Stop`, `Stop` is
+  `async () -> None`. `stop()` returns after the current handler
+  finishes.
 - Union: `XEvent`, a type alias of the member classes, which
   `publish_x` takes. `on_x(group, *, <member>=..., unknown=...,
   options=None)` has one keyword per member, in snake case.
-- Oneof: `on_x(group, *, <case>=..., unknown=..., options=None)` has
-  one keyword per case. `on_x_message(group, handler)` takes the whole
-  message. A case value is typed from its proto field. A case whose
-  type lives in another package, or is a well-known type betterproto2
-  unwraps, is typed `Any`.
-- A keyword left out acks that type or case without handling it. A
-  type with no handler and no `unknown` is acked and logged once per
-  (channel, type).
-- `message_from()` inside a handler returns the raw `Message`: subject,
-  id, headers, delivery attempt.
-- `bus.subscriptions()` returns the `(channel, group)` pairs, as in Go.
+- Oneof: `on_x(group, *, <case>=..., unknown=..., options=None)`. A
+  case value is typed from its proto field. A case whose type lives in
+  another package, or is a well-known type betterproto2 unwraps, is
+  typed `Any`.
+- `OrdersBus(backend, logf=f)` sets the logger for skipped messages.
+- Durations are seconds: `SubscribeOptions(max_deliver=5,
+  deliver_all=False, backoff=(1.0, 5.0, 30.0), ack_wait=30.0)`.
 
-A handler acks by returning and asks for redelivery by raising.
-Durations are seconds: `SubscribeOptions(max_deliver=5,
-deliver_all=False, backoff=(1.0, 5.0, 30.0), ack_wait=30.0)`.
+## Delivery
 
-Generation fails when a generated name collides with a message or enum
-of the package, with a name the file imports (`Callable`, `Message`,
-...), or with another channel's, and when a handler keyword is taken
-(`unknown`, `options`, `group`). Rename the channel or the message.
+- **Group** — the `group` argument of `On`. Every group gets every
+  message. Subscribers sharing a group share its messages: run the
+  same service three times and each message reaches one of the three.
+  This holds across languages. On JetStream a group is a durable
+  consumer, so messages published while no subscriber runs wait for
+  the group.
+- **New group** — starts at new messages. `DeliverAll` starts it at
+  the first stored message. Only the first subscriber's options create
+  the group; later subscribers use it as it is.
+- **Ack** — the handler succeeds.
+- **Redelivery** — the handler fails. The message comes back after the
+  backoff, default 1s, 5s, 30s; the last value repeats.
+- **Dead letter** — after `MaxDeliver` failed deliveries (default 5)
+  the message is published to `gwag.dlq.<stream>` with the original
+  headers plus `Gwag-Error`, then dropped from the channel. Nothing
+  consumes the DLQ subject unless you add a stream or listener for
+  `gwag.dlq.>`.
+- **AckWait** — default 30s. A handler still running after it gets the
+  message redelivered elsewhere. On JetStream, a delivery that times
+  out on its last attempt is dropped without a dead letter.
 
-The generated file and the runtime pass `mypy --strict`. betterproto2's
-own `message_pool.py` does not (it calls an untyped constructor); the
-example's `pyproject.toml` relaxes `disallow_untyped_calls` for that one
-module.
+| | Go | TypeScript | Python |
+|---|---|---|---|
+| Max deliveries | `events.MaxDeliver(n)` | `maxDeliver` | `max_deliver` |
+| Start at first message | `events.DeliverAll()` | `deliverAll` | `deliver_all` |
+| Backoff | `events.Backoff(d...)` | `backoffMs` | `backoff` |
+| Ack wait | `events.AckWait(d)` | `ackWaitMs` | `ack_wait` |
+| Unit | `time.Duration` | milliseconds | seconds |
 
-### Runtime and backends
+## Wire format
 
-`gwag_events` mirrors the Go `events` package: a `Backend` protocol
-(`publish`, `subscribe`, `close`), the same header names, the same
-pattern parse, fill and match, the same stream names.
+| Header | Value |
+|---|---|
+| `Gwag-Type` | full name of the body message, always set |
+| `Gwag-Channel` | channel key |
+| `Nats-Msg-Id` | message id on NATS (JetStream dedup) |
+| `Gwag-Msg-Id` | message id on other backends |
+| `Gwag-Error` | failure text, on dead letters only |
 
-- **`JetStreamBackend(nc)`** — nats-py. Same stream and consumer
-  behaviour as the Go backend: a missing stream is created (file,
-  limits, 7d, 2m duplicate window, 1 replica) and an existing one is
-  left alone. A group is a durable consumer, used as it is when it
-  exists. A new group starts at new messages. Ack on success, nak with
-  backoff on error, and after `max_deliver` a term plus a publish to
-  `gwag.dlq.<stream>` with the original headers and `Gwag-Error`. A
-  subscriber handles its fetched messages one at a time. `prefetch=`
-  (default 16) is the fetch batch size; lower it to spread a group's
-  work more evenly. `stop()` returns after the current handler
-  finishes.
-- **`MemoryBackend()`** — in-process, same semantics, `dead_letters()`
-  for assertions.
-- **Kafka** — [`examples/events/py-kafka/`](../examples/events/py-kafka),
-  its own uv project (aiokafka). Same mapping as the Go one: topic per
-  channel, record key = subject, group `<stream>.<group>`, retries in
-  process, DLQ topic `gwag.dlq.<stream>`, no dedup. `test.sh` runs it
-  against `apache/kafka` in docker.
-- `gwag_events.testing.CHECKS` is the behaviour suite every backend
-  should pass, the Python twin of `events/eventstest`.
+Body: proto binary. The format is the same in all three languages, so
+a Go publisher can feed a Python listener and the reverse.
 
-Go and Python consumers in one group on one NATS share its messages:
-the wire format is the same. `examples/events/py/tests/test_interop.py`
-checks Go to Python, Python to Go, and one group split across both.
+## Backends
 
-### Pinning
+All three runtimes have the same three backends: JetStream, memory,
+and Kafka as an example to copy.
 
-Every tool is pinned in a `pyproject.toml` and its `uv.lock`, and
-`.python-version` pins the interpreter. Nothing reads a global
-`protoc`, `pip` or `PATH` entry except `uv`. Commit `uv.lock`; do not
-commit `.venv`.
+- **JetStream** — one stream per channel named
+  `EV_<package with . as _>_<name>` (`EV_orders_v1_OrderEvents`),
+  subject = the pattern with `{x}` as `*`. The backend creates a
+  missing stream (file storage, limits retention, MaxAge 7d,
+  Duplicates 2m, 1 replica) and never updates an existing one; the
+  gateway ensures streams with its cluster policy and wins.
+  Republishing a message id inside the 2 minute window stores it once.
+  Messages are pulled in batches (`prefetch`, default 16); lower it to
+  1 to spread a group's work evenly, as prefetched messages count
+  against AckWait.
+- **Memory** — in-process, same group and retry semantics, dead
+  letters kept for assertions. For tests.
+- **Kafka** — topic per channel (stream name), record key = subject,
+  consumer group `<stream>.<group>`, retries in process (the
+  partition waits), DLQ topic `gwag.dlq.<stream>`. No dedup: Kafka
+  does not drop a repeated `Gwag-Msg-Id`. Each `test.sh` runs against
+  `apache/kafka` in docker.
+
+| | Go | TypeScript | Python |
+|---|---|---|---|
+| JetStream | `jetstream.New(nc, jetstream.WithPrefetch(n))` | `new JetStreamBackend(nc, { prefetch?, logf? })` | `JetStreamBackend(nc, prefetch=16, logf=)` |
+| Memory | `memory.New()`, `DeadLetters()` | `new MemoryBackend()`, `deadLetters()` | `MemoryBackend()`, `dead_letters()` |
+| Backend suite | `events/eventstest.Run` | `runBackendSuite` from `@gwag/events/eventstest` | `gwag_events.testing.CHECKS` |
+| Kafka example | [`go-kafka`](../examples/events/go-kafka) (franz-go, own module) | [`ts-kafka`](../examples/events/ts-kafka) (kafkajs) | [`py-kafka`](../examples/events/py-kafka) (aiokafka) |
+| Runtime | `events/` (`events/jetstream`, `events/memory`) | [`ts/events/`](../ts/events) | [`py/gwag-events/`](../py/gwag-events) |
+
+`nc` is a `*nats.Conn` (Go), a `@nats-io/transport-node` connection
+(TypeScript) or a `nats-py` client (Python). The JetStream backends
+behave the same: a missing stream is created and an existing one is
+left alone; ack on success, nak with backoff on error, and after
+`MaxDeliver` a term plus a publish to `gwag.dlq.<stream>`.
+
+A backend is this interface; it owns delivery (ack on success,
+redeliver after the backoff, dead-letter after `MaxDeliver`):
+
+```go
+type Backend interface {
+    Publish(ctx context.Context, ch events.Channel, m *events.Message) error
+    Subscribe(ctx context.Context, ch events.Channel, group string, opts events.SubscribeOptions, h events.Handler) (stop func(), err error)
+    Close() error
+}
+```
+
+The TypeScript and Python `Backend` are the same three methods. Run
+the backend suite against any new backend.
+
+## Reporting subscriptions to the gateway
+
+The bus records each `(channel, group)` an `On` call used. Pass them
+to the control plane so the gateway counts them as dependency edges
+(see [`services.md`](./services.md#start-gate-subscribes)):
+
+```go
+var subs []controlclient.Subscription
+for _, s := range bus.Subscriptions() {
+    subs = append(subs, controlclient.Subscription{Channel: s.Channel, Group: s.Group})
+}
+// controlclient.Service{..., Subscribes: subs}
+```
+
+Call the `On` methods before `SelfRegister`. `events` does not import
+`controlclient`, so the copy is yours. TypeScript and Python have no
+control-plane client; their `subscriptions()` return the same pairs.
+
+## Security
+
+The bus is open by default. Any client that reaches the NATS port can
+publish or subscribe on any subject, including these channels and the
+DLQ subjects. Message authorship is an application concern: sign
+payloads yourself if consumers must trust who sent them. gwag's HMAC
+channel auth covers only `ps.pub` and `ps_sub` through the gateway
+([`pubsub.md`](./pubsub.md#auth-tiers)), not calls made with generated
+code or a raw NATS client.
+
+## Checks
+
+`examples/events/check.sh` regenerates the Go and TypeScript code and
+fails when it differs from what is committed, vets and tests the Go
+example, runs the TypeScript tests, and then the Python checks.
+
+| Command | Runs |
+|---|---|
+| `examples/events/check.sh` | everything above; JetStream tests and Go-TypeScript interop need docker and are skipped without it |
+| `KAFKA=1 examples/events/check.sh` | also `go-kafka`, `ts-kafka` and `py-kafka` against `apache/kafka` (docker) |
+| `PY=0 examples/events/check.sh` | skips Python |
+| `examples/events/py/check.sh` | `uv lock --check`, Python regen and drift check, `mypy --strict`, runtime and example tests on an embedded NATS (no docker), including Go-Python interop (`tests/test_interop.py`: Go to Python, Python to Go, one group split across both); `KAFKA=1` adds `py-kafka` |
+| `examples/events/interop.sh` | Go publisher into TypeScript listener, the reverse, and a Go and a TypeScript member of one group (docker) |
+| `ts/events/test.sh` | TypeScript runtime tests against NATS in docker |
+
+The Kafka scripts take `KAFKA_PORT` (default 19092 for Go and
+TypeScript, 19093 for Python) and refuse to start when it is in use.
 
 ## Adding a language
 
