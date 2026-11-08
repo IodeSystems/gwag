@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iodesystems/gwag/v2/events/kafka"
 	ordersv1 "github.com/iodesystems/gwag/v2/examples/events/gen/orders/v1"
-	"github.com/iodesystems/gwag/v2/examples/events/go-kafka/kafka"
 )
 
 func main() {

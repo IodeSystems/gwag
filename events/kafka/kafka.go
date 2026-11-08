@@ -1,6 +1,6 @@
 // Package kafka is an events.Backend over Apache Kafka (franz-go). It
-// is an example, in its own module so the gwag root module carries no
-// Kafka dependency; copy it into your project.
+// is its own Go module (github.com/iodesystems/gwag/v2/events/kafka),
+// so the gwag root module carries no Kafka dependency.
 //
 // Mapping:
 //   - one topic per channel, named ch.Stream (EV_<pkg>_<Name>),

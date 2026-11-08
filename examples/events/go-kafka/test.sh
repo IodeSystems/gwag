@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Start a single-node Kafka in docker, run the Kafka backend tests and
-# the example against it, stop it.
+# Start a single-node Kafka in docker, run the Kafka backend tests
+# (events/kafka) and the example against it, stop it.
 #
 #   examples/events/go-kafka/test.sh
 #
@@ -46,7 +46,7 @@ docker logs "$NAME" 2>&1 | grep -q "Kafka Server started" || { docker logs "$NAM
 
 export KAFKA_BROKERS="127.0.0.1:$KAFKA_PORT"
 echo "== backend tests"
-go test -count=1 ./...
+(cd ../../../events/kafka && go test -count=1 ./...)
 echo "== example"
 out="$(go run .)"
 echo "$out"

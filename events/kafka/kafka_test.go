@@ -11,7 +11,7 @@ import (
 
 	"github.com/iodesystems/gwag/v2/events"
 	"github.com/iodesystems/gwag/v2/events/eventstest"
-	"github.com/iodesystems/gwag/v2/examples/events/go-kafka/kafka"
+	"github.com/iodesystems/gwag/v2/events/kafka"
 )
 
 // brokers returns KAFKA_BROKERS or skips. ../test.sh starts
