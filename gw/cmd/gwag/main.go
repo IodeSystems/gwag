@@ -25,6 +25,10 @@
 //	# Print a strong random secret (for --declarations-hook-secret):
 //	gwag secret gen
 //
+//	# Generate typed event code for the channels a .proto declares
+//	# (docs/events.md):
+//	gwag gen --lang go --opt paths=source_relative -I proto orders/v1/orders.proto
+//
 //	# Talk to a running gateway:
 //	gwag peer list   --gateway localhost:50090
 //	gwag peer forget --gateway localhost:50090 NODE_ID
@@ -211,6 +215,8 @@ func main() {
 			os.Exit(drainCmd(os.Args[2:]))
 		case "secret":
 			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
+		case "gen":
+			os.Exit(genCmd(os.Args[2:], os.Stdout, os.Stderr))
 		}
 	}
 	runGateway()
@@ -238,6 +244,7 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|forget) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

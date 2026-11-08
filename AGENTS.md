@@ -92,7 +92,8 @@ For the real admin UI, run `bin/build` first — `bin/gwag` only seeds
 the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
 Subcommands: `peer list/forget`, `services list`, `schema fetch/diff`,
-`sign`, `login/logout/context/use`.
+`sign`, `login/logout/context/use`, `gen` (typed event code, see
+`docs/events.md`).
 
 ## Architecture Essentials
 
