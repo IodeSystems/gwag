@@ -60,12 +60,12 @@ gwag gen --lang go --out gen -I proto --opt paths=source_relative orders/v1/orde
 
 | Flag | Meaning |
 |---|---|
-| `--lang` | `go` (TypeScript and Python: see below) |
+| `--lang` | `go`, `python` (alias `py`); TypeScript: see below |
 | `--out` | output directory, default `.` |
 | `-I` | import path, repeatable, default `.` |
 | `--opt` | generator parameter, repeatable; passed to every generator (`paths=source_relative`, `module=...`, `M...`) |
 | `--grpc` | also run the gRPC stub generator |
-| `--module-dir` | project root that pins the generators, default `.` |
+| `--module-dir` | project root that pins the generators (`go.mod`, `pyproject.toml`), default `.` |
 
 Files are named relative to an import path, as with `protoc`. A file
 given by its disk path is mapped to the import path that contains it.
@@ -84,6 +84,18 @@ your project pins, so two machines generate the same bytes:
   ```
 
   If the tool is missing, the error prints the `go get -tool` line.
+- **python** — `uv run --locked --project <module-dir>
+  protoc-gen-python_betterproto2`, from the uv project's own
+  environment. `--locked` fails when `uv.lock` is out of date. Pin it
+  once:
+
+  ```bash
+  uv add --dev betterproto2_compiler==0.10.1
+  uv add betterproto2==0.10.0
+  ```
+
+  `uv` itself is the only tool taken from `PATH`. If the compiler is
+  missing, the error prints the `uv add` line.
 
 Generated event files carry a header with the gwag version and the
 base generator's version. An untagged gwag build stamps `(devel)`, so
@@ -196,7 +208,9 @@ pass.
 - **`events/memory`** — `memory.New()`. In-process, same group and
   retry semantics, `DeadLetters()` for assertions. For tests.
 - **Kafka** — [`examples/events/go-kafka/`](../examples/events/go-kafka),
-  its own Go module (franz-go). Topic per channel (stream name), record
+  its own Go module (franz-go); Python:
+  [`examples/events/py-kafka/`](../examples/events/py-kafka) (aiokafka,
+  same mapping). Topic per channel (stream name), record
   key = subject, consumer group `<stream>.<group>`, retries in process
   (the partition waits), DLQ topic `gwag.dlq.<stream>`. No dedup:
   Kafka does not drop a repeated `Gwag-Msg-Id`. `test.sh` runs it
@@ -232,8 +246,138 @@ TODO (E3): `--lang typescript`, `protoc-gen-es` from the project's
 
 ## Python
 
-TODO (E4): `--lang python`, `protoc-gen-python_betterproto2` via
-`uv run`.
+`gwag gen --lang python` runs betterproto2's plugin for the message
+classes and adds `<pkg dir>/<file>_events.py` next to them. Runnable
+example, including a Go and a Python service on one NATS:
+[`examples/events/py/`](../examples/events/py) (`check.sh` runs it).
+
+### Setup
+
+A uv project that pins the compiler and the runtime:
+
+```bash
+uv add betterproto2==0.10.0 nats-py==2.16.0
+uv add --dev betterproto2_compiler==0.10.1
+uv add ./path/to/gwag/py/gwag-events          # import name: gwag_events
+gwag gen --lang python --out proto_gen -I proto --opt paths=source_relative orders/v1/orders.proto
+```
+
+- The runtime, [`py/gwag-events/`](../py/gwag-events), is not on PyPI.
+  Depend on it by path or copy it.
+- `--out` must be a Python package: betterproto2 imports
+  `from ...message_pool`, so the output directory sits one level above
+  the proto package. Import as `proto_gen.orders.v1`.
+- betterproto2 writes a module for every file in its request, not only
+  the ones you name. `gwag gen` leaves out its own option protos and
+  the `descriptor.proto` they pull in. Any other imported proto (for
+  example `google/protobuf/timestamp.proto`) is generated too.
+- `--opt` values go to betterproto2 unchanged. It ignores the ones it
+  does not know.
+
+### API
+
+```python
+from gwag_events import JetStreamBackend
+from proto_gen.orders.v1 import OrderCreated, OrderShipped
+from proto_gen.orders.v1.orders_events import OrderEventsSubject, OrdersBus, OrderShippedSubject
+
+nc = await nats.connect(url)
+bus = OrdersBus(JetStreamBackend(nc))
+
+# Plain
+await bus.publish_order_shipped(OrderShippedSubject(order_id="o-1"), OrderShipped(carrier="ups"))
+stop = await bus.on_order_shipped("notify", handler)   # async def handler(subject, message) -> None
+await stop()
+
+# Union: one consumer per (channel, group), dispatch by Gwag-Type
+await bus.publish_order_events(OrderEventsSubject(order_id="o-1"), OrderCreated(customer="ann"))
+stop = await bus.on_order_events(
+    "billing",
+    order_created=on_created,      # async def (OrderEventsSubject, OrderCreated) -> None
+    order_cancelled=on_cancelled,
+    unknown=on_unknown,            # async def (OrderEventsSubject, Message) -> None
+)
+
+# Oneof: per case, or the whole message with on_payments_message
+stop = await bus.on_payments("ledger", captured=on_captured, note=on_note)
+```
+
+The class is `<File>Bus`, named after the `.proto` file (`orders.proto`
+gives `OrdersBus`), one per file. Per channel `X` (snake case `x`):
+
+- `XSubject` — frozen dataclass, one `str` field per pattern segment,
+  in snake case: `{orderId}` is `order_id`, `*` is `p1`, `p2`, ..., a
+  trailing `>` is `rest`. A keyword gets a trailing `_` (`from_`).
+- `publish_x(subject, message, *, msg_id=None, headers=None)`.
+  `msg_id` defaults to a random id.
+- `on_x(group, handler, *, options=None) -> Stop`. `Stop` is
+  `async () -> None`.
+- Union: `XEvent`, a type alias of the member classes, which
+  `publish_x` takes. `on_x(group, *, <member>=..., unknown=...,
+  options=None)` has one keyword per member, in snake case.
+- Oneof: `on_x(group, *, <case>=..., unknown=..., options=None)` has
+  one keyword per case. `on_x_message(group, handler)` takes the whole
+  message. A case value is typed from its proto field. A case whose
+  type lives in another package, or is a well-known type betterproto2
+  unwraps, is typed `Any`.
+- A keyword left out acks that type or case without handling it. A
+  type with no handler and no `unknown` is acked and logged once per
+  (channel, type).
+- `message_from()` inside a handler returns the raw `Message`: subject,
+  id, headers, delivery attempt.
+- `bus.subscriptions()` returns the `(channel, group)` pairs, as in Go.
+
+A handler acks by returning and asks for redelivery by raising.
+Durations are seconds: `SubscribeOptions(max_deliver=5,
+deliver_all=False, backoff=(1.0, 5.0, 30.0), ack_wait=30.0)`.
+
+Generation fails when a generated name collides with a message or enum
+of the package, with a name the file imports (`Callable`, `Message`,
+...), or with another channel's, and when a handler keyword is taken
+(`unknown`, `options`, `group`). Rename the channel or the message.
+
+The generated file and the runtime pass `mypy --strict`. betterproto2's
+own `message_pool.py` does not (it calls an untyped constructor); the
+example's `pyproject.toml` relaxes `disallow_untyped_calls` for that one
+module.
+
+### Runtime and backends
+
+`gwag_events` mirrors the Go `events` package: a `Backend` protocol
+(`publish`, `subscribe`, `close`), the same header names, the same
+pattern parse, fill and match, the same stream names.
+
+- **`JetStreamBackend(nc)`** — nats-py. Same stream and consumer
+  behaviour as the Go backend: a missing stream is created (file,
+  limits, 7d, 2m duplicate window, 1 replica) and an existing one is
+  left alone. A group is a durable consumer, used as it is when it
+  exists. A new group starts at new messages. Ack on success, nak with
+  backoff on error, and after `max_deliver` a term plus a publish to
+  `gwag.dlq.<stream>` with the original headers and `Gwag-Error`. A
+  subscriber handles its fetched messages one at a time. `prefetch=`
+  (default 16) is the fetch batch size; lower it to spread a group's
+  work more evenly. `stop()` returns after the current handler
+  finishes.
+- **`MemoryBackend()`** — in-process, same semantics, `dead_letters()`
+  for assertions.
+- **Kafka** — [`examples/events/py-kafka/`](../examples/events/py-kafka),
+  its own uv project (aiokafka). Same mapping as the Go one: topic per
+  channel, record key = subject, group `<stream>.<group>`, retries in
+  process, DLQ topic `gwag.dlq.<stream>`, no dedup. `test.sh` runs it
+  against `apache/kafka` in docker.
+- `gwag_events.testing.CHECKS` is the behaviour suite every backend
+  should pass, the Python twin of `events/eventstest`.
+
+Go and Python consumers in one group on one NATS share its messages:
+the wire format is the same. `examples/events/py/tests/test_interop.py`
+checks Go to Python, Python to Go, and one group split across both.
+
+### Pinning
+
+Every tool is pinned in a `pyproject.toml` and its `uv.lock`, and
+`.python-version` pins the interpreter. Nothing reads a global
+`protoc`, `pip` or `PATH` entry except `uv`. Commit `uv.lock`; do not
+commit `.venv`.
 
 ## Adding a language
 

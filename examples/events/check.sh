@@ -4,9 +4,10 @@
 # JetStream example.
 #
 #   examples/events/check.sh          # Go, JetStream (embedded NATS)
-#   KAFKA=1 examples/events/check.sh  # also go-kafka/test.sh (docker)
+#   KAFKA=1 examples/events/check.sh  # also go-kafka and py-kafka (docker)
+#   PY=0 examples/events/check.sh     # skip the Python checks
 #
-# Needs go. protoc-gen-go comes from the root go.mod tool directive;
+# Needs go, and uv for the Python checks. protoc-gen-go comes from the root go.mod tool directive;
 # nothing is taken from PATH.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -57,6 +58,12 @@ done
 if [[ "${KAFKA:-}" == 1 ]]; then
   echo "== go-kafka (docker)"
   examples/events/go-kafka/test.sh || fail=1
+fi
+
+# Python: needs uv. PY=0 skips it. With KAFKA=1 it also runs py-kafka.
+if [[ "${PY:-1}" != 0 ]]; then
+  echo "== python (examples/events/py/check.sh)"
+  examples/events/py/check.sh || fail=1
 fi
 
 if [[ $fail == 0 ]]; then echo "PASS"; else echo "FAILED" >&2; exit 1; fi

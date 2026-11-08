@@ -75,6 +75,10 @@ type Plugin struct {
 	Version string
 	// Parameter overrides Env.Parameter for this generator when set.
 	Parameter string
+	// Request, when set, edits this generator's copy of the request
+	// before it runs. For generators that cannot take every file the
+	// request carries.
+	Request func(*pluginpb.CodeGeneratorRequest)
 }
 
 // Emitter writes one language's event code.
@@ -225,6 +229,9 @@ func Generate(ctx context.Context, cfg Config) ([]string, error) {
 		r := proto.Clone(req).(*pluginpb.CodeGeneratorRequest)
 		if p.Parameter != "" {
 			r.Parameter = proto.String(p.Parameter)
+		}
+		if p.Request != nil {
+			p.Request(r)
 		}
 		resp, err := RunPlugin(ctx, p, r)
 		if err != nil {
