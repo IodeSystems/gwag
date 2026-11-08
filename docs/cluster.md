@@ -96,10 +96,12 @@ gateway --node-name n1 --http :18080 --control-plane :50090 \
 
 ### Bootstrap rule
 
-A node with no `--nats-peer` runs standalone JetStream at one replica,
-and cannot be scaled out later. To get a cluster, start every node,
-the first one included, with at least one peer entry. Listing all the
-other nodes on each node, as above, needs no designated seed.
+A node with no `--nats-peer` runs standalone JetStream at one replica.
+Restarting it with peers does not carry its application data into a
+cluster, see [Single node to three](#single-node-to-three). To get a
+cluster, start every node, the first one included, with at least one
+peer entry. Listing all the other nodes on each node, as above, needs no
+designated seed.
 
 A node started with `--nats-peer` entries does not run alone while
 those peers are down. NATS sizes the JetStream meta group from the
@@ -111,11 +113,47 @@ peers that were not up had no leader after 20 s; when the second node
 started, a leader was elected within 0.2 s and buckets could be
 created; with the third, a bucket went from R1 to R3.
 
-So there is no "single node, then 3" path. Start the first node with
-its future peers listed and start a second node before the first has
-to serve. A node already running without `--nats-peer` keeps its state
-in a standalone JetStream; restarting it with peers is not tested, and
-the gateway has no state export or import.
+### Single node to three
+
+Measured with `gwag up` binaries on one host, nats-server v2.15.2,
+`--cluster-replicas odd`. The standalone node held the gateway buckets,
+an application KV bucket (`appkv`), and application streams (`EV_*`)
+with messages.
+
+| Path | Result |
+|------|--------|
+| 1. Stop the standalone node, restart it on the same data dir with `--nats-peer` for n2 and n3, start n2 at the same time | A meta leader is elected and the node serves again 6.2 to 6.4 s after the stop. The application KV bucket and streams are **not** usable: they are on disk but unknown to the new meta group, and the log says `Detected orphaned stream '$G > EV_s0', will cleanup` about 30 s after start. Re-creating them by name adopts the disk copy only when the new R1 stream is placed on the restarted node: 1 run kept the data (2 streams), 1 run placed all 10 streams on n2 and the data stayed orphaned on n1, 1 run (waited 75 s before re-creating) had them deleted and re-created empty. Gateway buckets are re-created by the gateway; whether their old content survives was not shown (`gwag-registry` held 0 messages), and in one run they were placed on n2 while the old copy stayed orphaned on n1. When n3 joined, the gateway buckets went R1 to R3. Application streams and KV stayed R1. |
+| 2. Start n2 and n3 fresh, then restart n1 on its standalone data dir with peers | n2 and n3 formed a cluster on their own and served (`/api/health` 200) with n1 down. When n1 joined, its gateway buckets were reset to the cluster copy (`Catchup for stream '$G > KV_gwag-peers' resetting first sequence`), and its application streams were removed as orphans (`Detected orphaned stream`) about 30 to 65 s later. n1's data is discarded. |
+| 3. Start n1 with peers that are not up and leave it alone | No meta leader. `/api/health` returns 503 `starting`, `gwag peer list` shows `(no peers)`, JetStream calls return 503 (err_code 10008). The GraphQL endpoint answers (`{ __typename }` returned `Query`, 200) and `/api/schema` is served. Not tested: registering a service in this state. When n2 started, n1 reported 200 after 2.7 s. After n3 joined, `gwag peer list` showed `jetstream meta: leader=n1 size=3`, `cluster_peers` was 3, and the gateway buckets went R1 to R3. An application KV bucket and streams created after n2 joined kept their data and stayed R1 after n3 joined; raise their replicas with a stream update. |
+| 4. Manual leader or bootstrap option in NATS | `$JS.API.META.RESCUE` (system account) lowers the quorum on a surviving server, but refused on a node that never had a leader: `JetStream system rescue not applied: raft: log is empty` (err_code 10224). JetStream stayed unavailable. The gateway does not expose it. No option converts a standalone store to a clustered one. |
+| 5. Copy data by stream sourcing or mirroring | Not built. `ClusterOptions` has no leafnode, domain or account settings, so a mirror from the standalone server into the cluster cannot be configured through the gateway. Copying with a NATS client (read from the old node, write to the new cluster) was not tried. |
+
+Workaround, as tested in paths 2 and 3 (no application data is
+carried over):
+
+1. Start n2 and n3 on empty data dirs, each with the other two nodes in
+   `--nats-peer`. Check `/api/health` returns 200 on both, and
+   `gwag peer list --gateway <n2 control plane>` shows both nodes.
+   Two nodes serve; buckets are R1 until the third node is up.
+2. Re-register the services on the new cluster (control plane or
+   `gwag` flags). Registrations live in the cluster buckets, and the
+   old node's are not imported.
+3. Copy application KV and stream data you need to keep with a NATS
+   client. Not tested.
+4. Move traffic to the new nodes, then stop the old node. Do not
+   restart it into the cluster: its data is discarded or orphaned.
+5. Start the third node (or add the old node again on an empty data
+   dir; not tested). Check
+   `gwag peer list` ends with `jetstream meta: leader=<name> size=3
+   offline=none`, `go_api_gateway_cluster_peers` is 3, and
+   `/api/health` is 200 on every node.
+
+Downtime of the old node is its replacement: a stop and restart took
+6.2 to 6.4 s to a 200 response (path 1), and the switch in step 4 has
+no measured downtime. For a new deployment, list the future peers on
+the first node and start the second node within the time the first
+node may stay at 503; path 3 shows the first node then needs 2.7 s
+after the second node starts.
 
 ### Embedded in Go
 
