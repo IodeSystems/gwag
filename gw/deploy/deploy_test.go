@@ -26,6 +26,15 @@ func TestGolden(t *testing.T) {
 				want := map[string]bool{}
 				for _, f := range files {
 					want[f.Path] = true
+					// Token files are gitignored by the generated
+					// secrets/.gitignore, so they have no golden copy;
+					// check they carry the token instead.
+					if isSecretFile(f.Path) {
+						if !strings.Contains(string(f.Data), testToken) {
+							t.Errorf("%s does not carry the admin token", f.Path)
+						}
+						continue
+					}
 					p := filepath.Join(dir, f.Path)
 					if *update {
 						if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -50,7 +59,7 @@ func TestGolden(t *testing.T) {
 				filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 					if err == nil && !info.IsDir() {
 						rel, _ := filepath.Rel(dir, p)
-						if !want[rel] {
+						if !want[rel] || isSecretFile(rel) {
 							t.Errorf("stale golden file %s", rel)
 						}
 					}
@@ -59,6 +68,12 @@ func TestGolden(t *testing.T) {
 			})
 		}
 	}
+}
+
+// isSecretFile reports a generated file under secrets/ other than its
+// .gitignore.
+func isSecretFile(p string) bool {
+	return strings.HasPrefix(filepath.ToSlash(p), "secrets/") && filepath.Base(p) != ".gitignore"
 }
 
 func TestPeers(t *testing.T) {
