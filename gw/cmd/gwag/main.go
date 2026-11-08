@@ -223,6 +223,10 @@ func main() {
 			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
 		case "gen":
 			os.Exit(genCmd(os.Args[2:], os.Stdout, os.Stderr))
+		case "deploy":
+			os.Exit(deployCmd(os.Args[2:], os.Stdout, os.Stderr))
+		case "probe":
+			os.Exit(probeCmd(os.Args[2:]))
 		}
 	}
 	runGateway()
