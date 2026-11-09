@@ -163,7 +163,7 @@ until_graph 20 "orders/v1 has a waiting instance" \
 until_graph 5 "edge orders -> library [v1] is unmet" \
   '.desiredEdges[] | select(.consumerNamespace=="orders" and .provider=="library") | .met==false'
 sleep 1
-assert "orders log says it is waiting for dependencies" logs_have orders-1 "waiting for dependencies"
+assert "orders log says what it is waiting for" logs_have orders-1 "waiting: orders/v1 needs library"
 pause
 
 # ---- 3. provider v1 -----------------------------------------------
