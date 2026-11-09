@@ -1802,7 +1802,7 @@ func AsPublic() ServiceOption {
 // Stability: stable
 func ForwardHeaders(headers ...string) ServiceOption {
 	return func(c *serviceConfig) {
-		c.forwardHeaders = append([]string(nil), headers...)
+		c.forwardHeaders = append(make([]string, 0, len(headers)), headers...)
 	}
 }
 
