@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 	greeterv1 "github.com/iodesystems/gwag/v2/examples/multi/gen/greeter/v1"
+	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
 // freeAddr grabs a free 127.0.0.1 port and returns its address. Closes
@@ -37,12 +38,12 @@ func freeAddr(t *testing.T) string {
 // real grpc.Server hosting its control plane. Cleanup is t.Cleanup-
 // driven; the gateway is closed before the cluster (LIFO).
 type clusterNode struct {
-	cluster   *Cluster
-	gw        *Gateway
-	cpAddr    string
-	httpSrv   *httptest.Server
-	grpcSrv   *grpc.Server
-	dataDir   string
+	cluster *Cluster
+	gw      *Gateway
+	cpAddr  string
+	httpSrv *httptest.Server
+	grpcSrv *grpc.Server
+	dataDir string
 }
 
 func startClusterNode(t *testing.T, name, clusterAddr string, peers []string) *clusterNode {
@@ -317,11 +318,11 @@ func TestClusterE2E_CrossGatewayDispatch(t *testing.T) {
 		t.Fatalf("post A: %v", err)
 	}
 	defer resp2.Body.Close()
+	body2, _ := io.ReadAll(resp2.Body)
 	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("A status=%d", resp2.StatusCode)
+		t.Fatalf("A status=%d: %s", resp2.StatusCode, body2)
 	}
 	if got := greeter.helloCalls.Load(); got != 2 {
-		t.Fatalf("after both calls: helloCalls=%d, want 2", got)
+		t.Fatalf("after both calls: helloCalls=%d, want 2; A answered %s", got, body2)
 	}
 }
-
