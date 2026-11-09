@@ -28,6 +28,11 @@ axes — rotate the credential without invalidating dashboards built on
 gw := gateway.New(gateway.WithCallerIDPublic())
 ```
 
+`gwag up --caller-id-public` turns it on for the binary. The Connect
+ingress (`/api/connect/`) does not pass request headers to the
+extractor: its calls count as `unknown`. Send `caller-id` metadata on
+the gRPC ingress, or `X-Caller-Id` on GraphQL or the REST ingress.
+
 Reads `X-Caller-Id` (HTTP / WebSocket upgrade) or `caller-id` (gRPC
 metadata). Forgeable by design — appropriate for development, for an
 mTLS-terminating reverse proxy that injects the header after cert
