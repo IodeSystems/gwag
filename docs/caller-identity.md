@@ -176,12 +176,27 @@ use the bucket's own mutex so distinct callers never contend on the
 hot path. Subscription dispatch bypasses the quota gate — pair with the
 HMAC channel-auth seam on subscribe instead.
 
+## Built-in quotas
+
+Without a delegate, quotas per caller id can be set in the gateway
+itself: `gwag quota set --caller ID|--default --service ns[:vN]
+[--op X] --limit N --per 1m [--units]`. Short windows are split
+across the live nodes; windows of 1 minute and more use a cluster
+counter. `WithQuota` replaces them: with the delegate configured,
+built-in quotas are not checked. See [`quota.md`](./quota.md).
+
 ## Known gaps
 
-- **Permits are per-gateway, not cluster-shared.** A caller hitting
-  three gateways at burst sees up to 3× the configured burst.
-  Cluster-shared accounting needs a JetStream-backed counter or
-  delegate-side coordination; deferred until use case.
+- **Delegate permits are per-gateway, not cluster-shared.** With
+  `WithQuota`, a caller hitting three gateways at burst sees up to 3×
+  the configured burst, unless the delegate shares its accounting.
+  Built-in quotas ([`quota.md`](./quota.md#accuracy-in-a-cluster))
+  split short windows by the live peer count and share a cluster
+  counter for windows of 1 minute and more; that counter can go over
+  by what the other nodes counted since their last flush.
+- **The gRPC ingress skips the delegate quota gate** on proto
+  upstreams (the route runs the proto handler, not the dispatcher
+  middlewares). Built-in quotas and rate limits apply there.
 - **Public mode is forgeable by design.** Public mode on an open
   ingress is a configuration mistake; use HMAC or mTLS-via-proxy for
   untrusted networks.

@@ -131,7 +131,8 @@ entry's delete marker, so routing has no gap.
 The cluster keeps its state in JetStream KV buckets (peers, registry,
 stable, deprecated, mcp config, drain, external dependents, app keys,
 notifications, `gwag-cluster` (the feature level, see
-[`cluster.md`](./cluster.md#feature-levels)), and `gwag-schemas` with
+[`cluster.md`](./cluster.md#feature-levels)), `gwag-limits`,
+`gwag-quota-counters` and `gwag-usage` ([`quota.md`](./quota.md)), and `gwag-schemas` with
 `--schema-registry`). A node creates a missing bucket at the replica
 count of `gwag-peers` (R1 on a new cluster), so a bucket a new node
 adds to a cluster at R3 starts at R3. If the cluster cannot place that
@@ -235,6 +236,10 @@ fails with `Reject(ResourceExhausted, "could not acquire slot in N")`
 — this is the "you can't even get a slot" backoff. There's no flat
 gateway-wide unary cap by design (it would couple unrelated requests);
 visibility comes from the per-pool metrics below.
+
+A rate limit on a service (`gateway.RateLimit`, `gwag limit set`)
+waits for a token within the same `MaxWaitTime`, on that service's
+own bucket. See [`quota.md`](./quota.md).
 
 ## Upstream timeouts, retries, ejection
 
@@ -358,6 +363,33 @@ Admin auth denials are already counted in `admin_auth_total`
 | `upstream_timeouts_total` | counter | `namespace`, `version` | Calls that ran past the upstream timeout. gRPC pools also show `DeadlineExceeded` in dispatch `code`, but OpenAPI and GraphQL sources report `Internal`, so this series is the one to alert on. Default sink only. |
 | `replica_ejections_total` | counter | `namespace`, `version`, `replica` | Replica ejections: the failure limit was reached, or a readmitted replica failed again. Default sink only. |
 | `replicas_ejected` | gauge | `namespace`, `version` | Replicas ejected now (scrape time). Default sink only. |
+
+### Upstream SLA
+
+Per upstream attempt, for what an upstream promises (latency to the
+first byte, sizes, how often it answers what). Default sink only. No
+`caller` label. `method` is the `dispatch_duration_seconds` method
+label, so the series join.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `upstream_requests_total` | counter | `namespace`, `version`, `method`, `code` | Attempts sent upstream. `code`: the upstream's HTTP status (`"200"`, `"429"`), the gRPC code name for proto upstreams, `none` when no response came (connect error, timeout). This is the hit count. `dispatch_duration_seconds_count` is not: it also counts calls the gateway refused (rate limit, quota, pause, backpressure), counts a retried call once, and folds HTTP statuses into gRPC codes (429 and 503 are both a code there). |
+| `upstream_ttfb_seconds` | histogram | `namespace`, `version`, `method` | Time to the first response byte. HTTP: from sending the request to `httptrace` `GotFirstResponseByte`, connect included when a connection is dialed. gRPC: from `Invoke` to its return; on a unary call the header and the message arrive together, and the gateway does not observe the header alone. Not recorded without a response. |
+| `upstream_request_bytes` | histogram | `namespace`, `version`, `method` | Request body bytes. HTTP: `Content-Length` (a streamed multipart body has none and is not recorded). gRPC: protobuf message size. |
+| `upstream_response_bytes` | histogram | `namespace`, `version`, `method` | Response body bytes. HTTP: body read; gRPC: protobuf message size. |
+
+MCP upstreams have no SLA series. Subscriptions are not counted.
+
+### Rate limits and quotas
+
+See [`quota.md`](./quota.md). Default sink only.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `limit_rejections_total` | counter | `namespace`, `version`, `reason` | Calls refused before they were sent: `rate_limit` (no token within `MaxWaitTime`), `quota` (built-in quota), `paused` (the service answered 429). |
+| `upstream_pauses_total` | counter | `namespace`, `version`, `origin` | Pauses after an upstream 429: `local` (this node got it), `peer` (another node's, over NATS). |
+| `rate_limit_wait_seconds` | histogram | `namespace`, `version` | Time a call waited for a rate-limit token. Calls that did not wait are not recorded. |
+| `rate_limit_split_peers` | gauge | none | The peer count this node divides rate limits and short-window quotas by; 1 standalone. |
 
 ### Registry and cluster
 
