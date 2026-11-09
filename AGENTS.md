@@ -107,7 +107,7 @@ REBUILD=1 bin/gwag up                  # force a fresh build first
 For the real admin UI, run `bin/build` first — `bin/gwag` only seeds
 the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
-Subcommands: `peer list/forget`, `services list`, `schema fetch/diff/check/push`,
+Subcommands: `peer list/forget`, `services list`, `schema fetch/diff/check/push/snapshot`,
 `sign`, `login/logout/context/use`, `gen` (typed event code for
 go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
 (Compose, minikube, k8s and ECS files from `gw/deploy`; see `docs/deploy.md`),

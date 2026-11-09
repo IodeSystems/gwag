@@ -142,6 +142,52 @@ optional arg?" directly. Until then, the relaxation matches the
 asymmetric reality that *adding* fields is always safe but
 *removing* fields is mostly safe for the optional ones.
 
+### Frozen spec snapshots
+
+When specs are generated from code (huma, gat), freeze each version's
+spec as a committed file and let CI compare the generated spec with it:
+
+```bash
+$ gwag schema snapshot check  --spec http://localhost:8080/openapi.json \
+    --snapshot api/v1.openapi.json
+$ gwag schema snapshot update --spec ./gen/v1.graphql --snapshot api/v1.graphql
+```
+
+`--format openapi|graphql|proto` is inferred from the file extension
+when omitted (`.graphql`/`.gql`, `.yaml`/`.yml`, `.proto`/`.pb`); a
+`.json` file needs `--format`. Both sides are normalized before
+comparing: sorted definitions, fields and arguments (GraphQL SDL);
+sorted keys, YAML accepted (OpenAPI); the compiled `FileDescriptorProto`
+without source info as sorted-key JSON (proto; `--spec` may be a
+`.proto` source, with `-I DIR,...` for imports, a binary
+`FileDescriptorSet`, or protojson). The proto snapshot holds the one
+file named by `--spec`.
+
+`check` prints a line diff and classifies the change. Exit codes:
+
+- `0` equal
+- `3` differs, additive only (info changes): run `update`
+- `4` differs, at least one breaking change
+- `1` error, `2` usage
+
+`update` rewrites the snapshot (creates it if missing) and refuses a
+breaking change with exit `4` unless `--allow-breaking`, so a frozen
+version only grows. Classification:
+
+- GraphQL uses the `schema diff` rules above, same code.
+- OpenAPI and proto have no SDL conversion in the CLI. They get a
+  structural comparison of the canonical JSON: removed or changed value
+  is breaking; added key or array element is info. Arrays of objects are
+  matched by `name` (OpenAPI parameters by `in` + `name`); an added
+  element with `required: true` is breaking. OpenAPI `description`,
+  `summary`, `title`, `example(s)` and `externalDocs` changes are info.
+  Other arrays (`required`, `enum`) must be equal. This is stricter than
+  an OpenAPI-aware diff in places (an `enum` value added to a response
+  is reported breaking) and looser in others (it does not know
+  request from response position). Treat exit `3` as a prompt to read
+  the diff, not as proof of compatibility. Golden request/response
+  tests ([`docs/contract-tests.md`](./contract-tests.md)) cover behavior.
+
 ## Retire
 
 Stop heartbeating; the gateway evicts after TTL. The schema
