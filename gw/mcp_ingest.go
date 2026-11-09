@@ -122,6 +122,10 @@ func (g *Gateway) AddMCP(transport MCPTransport, target string, opts ...ServiceO
 		return fmt.Errorf("gateway: AddMCP: %w", err)
 	}
 	hash := sha256.Sum256(rawTools)
+	if err := g.limits.setCode(ns, ver, sc.limits); err != nil {
+		_ = cl.Close()
+		return fmt.Errorf("gateway: AddMCP(%s): %w", target, err)
+	}
 
 	g.mu.Lock()
 	defer g.mu.Unlock()

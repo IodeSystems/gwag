@@ -116,6 +116,9 @@ type trafficMetrics struct {
 	rebuilds      *prometheus.CounterVec
 	rebuildDur    prometheus.Histogram
 	registrations *prometheus.CounterVec
+
+	// sla: per-upstream TTFB, sizes and attempts (upstream_sla.go).
+	sla *slaMetrics
 }
 
 func newTrafficMetrics(reg *prometheus.Registry, p string, dur, self *prometheus.HistogramVec) *trafficMetrics {
@@ -193,6 +196,7 @@ func newTrafficMetrics(reg *prometheus.Registry, p string, dur, self *prometheus
 	}
 	reg.MustRegister(inflight, reqSize, respSize, tm.rejected, errs, tm.partial, tm.retries,
 		tm.timeouts, tm.ejections, tm.rebuilds, tm.rebuildDur, tm.registrations, buildInfo)
+	tm.sla = newSLAMetrics(reg, p)
 	return tm
 }
 

@@ -27,6 +27,8 @@ import (
 //	app and system keys   gwag-app-keys, with the stored hashes: the
 //	                      same keys work on green
 //	external dependents   gwag-external-dependents
+//	limits                gwag-limits: operator rate limits, quotas,
+//	                      costs (upstream_limits.go)
 //	Schema Registry       gwag-schemas, every context with its ids,
 //	                      the default context included; the control
 //	                      plane subject is left out (each gateway
@@ -34,7 +36,7 @@ import (
 //
 // Not in it: registrations (services register with both clusters),
 // the MCP include/exclude config, drains, notifications, peers, event
-// streams.
+// streams, quota counters and usage rows.
 //
 // Export reads every bucket from its stream leader and refuses unless
 // the cluster is frozen (cluster_freeze.go), or allowUnfrozen is set.
@@ -59,6 +61,7 @@ type clusterState struct {
 	Deprecated         []cutoverDeprecated `json:"deprecated"`
 	Keys               []appKeyRecord      `json:"keys" doc:"App and system keys as stored: id, kind, namespaces, SHA-256 hash of the key, expiry. The keys themselves are not stored anywhere."`
 	ExternalDependents []externalDependent `json:"externalDependents"`
+	Limits             []limitRecord       `json:"limits,omitempty" doc:"Operator rate limits, quotas and costs."`
 	SchemaRegistry     *cutoverRegistry    `json:"schemaRegistry,omitempty" doc:"Absent when the source serves no Schema Registry."`
 	Warnings           []string            `json:"warnings,omitempty"`
 }
@@ -232,6 +235,13 @@ func (g *Gateway) exportClusterState(ctx context.Context, allowUnfrozen bool) (*
 		Keys:               []appKeyRecord{},
 		ExternalDependents: []externalDependent{},
 	}
+	limits, err := g.limits.readRecords(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("limits: %w", err)
+	}
+	for _, k := range stateKeys(limits) {
+		doc.Limits = append(doc.Limits, limits[k])
+	}
 	if !frozen {
 		if !allowUnfrozen {
 			return nil, &cutoverError{status: http.StatusConflict, code: codes.FailedPrecondition, msg: "cluster state export: the cluster is not frozen; freeze it first (gwag cluster freeze), or export with allowUnfrozen and copy again after the last change"}
@@ -333,6 +343,7 @@ type importResult struct {
 	Deprecated         importCounts         `json:"deprecated"`
 	Keys               importCounts         `json:"keys"`
 	ExternalDependents importCounts         `json:"externalDependents"`
+	Limits             importCounts         `json:"limits"`
 	SchemaRegistry     importRegistryCounts `json:"schemaRegistry"`
 	// Conflicts lists the items that differ (dry run, or with
 	// overwrite: the ones overwritten).
@@ -451,6 +462,33 @@ func (g *Gateway) importClusterState(ctx context.Context, doc *clusterState, ove
 		}
 	}
 
+	var limitPut []limitRecord
+	if len(doc.Limits) > 0 {
+		have, err := g.limits.readRecords(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("limits: %w", err)
+		}
+		for _, r := range doc.Limits {
+			if err := r.validate(); err != nil {
+				return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("limit %s %s: %v", r.Kind, r.scope(), err))
+			}
+			cur, ok := have[r.key()]
+			switch {
+			case !ok:
+				limitPut = append(limitPut, r)
+				res.Limits.Added++
+			case cur == r:
+				res.Limits.Unchanged++
+			default:
+				conflicts = append(conflicts, fmt.Sprintf("%s %s %s differs here", r.Kind, r.scope(), r.Caller))
+				if overwrite {
+					limitPut = append(limitPut, r)
+					res.Limits.Overwritten++
+				}
+			}
+		}
+	}
+
 	// Schema Registry: a dry run of each context.
 	var srConflicts []string
 	var st *srserve.Store
@@ -517,6 +555,11 @@ func (g *Gateway) importClusterState(ctx context.Context, doc *clusterState, ove
 	for _, r := range keyPut {
 		if err := g.putAppKey(ctx, r); err != nil {
 			return nil, err
+		}
+	}
+	for _, r := range limitPut {
+		if err := g.limits.putRecord(ctx, r); err != nil {
+			return nil, fmt.Errorf("limit %s %s: %w", r.Kind, r.scope(), err)
 		}
 	}
 	for _, e := range extPut {
@@ -614,7 +657,7 @@ func registerClusterState(api huma.API, g *Gateway) {
 		OperationID: "exportClusterState",
 		Method:      http.MethodGet,
 		Path:        "/admin/cluster/state",
-		Summary:     "Export the cluster state a cutover copies to another cluster: stable and deprecated marks, app and system keys (stored hashes), external dependents, Schema Registry contents with ids. Refused unless the cluster is frozen (allowUnfrozen overrides). Admin or system key.",
+		Summary:     "Export the cluster state a cutover copies to another cluster: stable and deprecated marks, app and system keys (stored hashes), external dependents, operator limits, quotas and costs, Schema Registry contents with ids. Refused unless the cluster is frozen (allowUnfrozen overrides). Admin or system key.",
 	}, func(ctx context.Context, in *exportClusterStateIn) (*exportClusterStateOut, error) {
 		doc, err := g.exportClusterState(ctx, in.AllowUnfrozen)
 		if err != nil {

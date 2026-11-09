@@ -78,7 +78,7 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 		mirror.isLatest = src.versionN == latestByNS[svc.Namespace]
 		quotaMW := g.quotaMiddleware(svc.Namespace, svc.Version)
 		enforceMW := g.callerIDEnforceMiddleware()
-		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW)
+		registerGraphQLOps(g.dispatchers, mirror, src, svc.Operations, metrics, bp, false, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW, g.limits)
 		for _, grp := range svc.Groups {
 			// Each top-level group gets a graphqlGroupDispatcher that
 			// captures the whole sub-selection and forwards in one
@@ -87,8 +87,8 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 			// path; they short-circuit to a "no AST" error when the
 			// renderer's bypass-resolver path takes over for GraphQL
 			// ingress.
-			registerGraphQLGroupDispatcher(g.dispatchers, mirror, grp, metrics, bp, quotaMW, enforceMW)
-			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW)
+			registerGraphQLGroupDispatcher(g.dispatchers, mirror, grp, metrics, bp, quotaMW, enforceMW, g.limits)
+			registerGraphQLGroupOps(g.dispatchers, mirror, src, grp, metrics, bp, chain, inputDescs, svc.Namespace, svc.Version, quotaMW, enforceMW, g.limits)
 		}
 	}
 	return nil
@@ -98,20 +98,21 @@ func (g *Gateway) registerGraphQLDispatchersLocked(svcs []*ir.Service) error {
 // the group's SchemaID. Backpressure wraps it (one slot per upstream
 // call, same posture as a per-leaf dispatch). Quota + caller-id
 // enforce wrap the outside, matching the per-leaf wiring.
-func registerGraphQLGroupDispatcher(registry *ir.DispatchRegistry, mirror *graphQLMirror, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, quotaMW, enforceMW ir.DispatcherMiddleware) {
+func registerGraphQLGroupDispatcher(registry *ir.DispatchRegistry, mirror *graphQLMirror, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, quotaMW, enforceMW ir.DispatcherMiddleware, lim *upstreamLimits) {
 	core := newGraphqlGroupDispatcher(mirror, grp, metrics)
 	var dispatcher ir.Dispatcher = core
 	dispatcher = backpressureMiddleware(graphQLBackpressureConfig(mirror.src, core.label, metrics, bp))(core)
 	if quotaMW != nil {
 		dispatcher = quotaMW(dispatcher)
 	}
+	dispatcher = lim.gateMiddleware(mirror.src.namespace, mirror.src.version, grp.Name)(dispatcher)
 	if enforceMW != nil {
 		dispatcher = enforceMW(dispatcher)
 	}
 	registry.Set(grp.SchemaID, dispatcher)
 }
 
-func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string, quotaMW, enforceMW ir.DispatcherMiddleware) {
+func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, ops []*ir.Operation, metrics Metrics, bp BackpressureOptions, isGrouped bool, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string, quotaMW, enforceMW ir.DispatcherMiddleware, lim *upstreamLimits) {
 	for _, op := range ops {
 		opLabel := graphQLOpLabel(op.Kind)
 		core := newGraphQLDispatcher(mirror, op, opLabel, metrics, isGrouped)
@@ -139,6 +140,9 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 		if op.Kind != ir.OpSubscription && quotaMW != nil {
 			dispatcher = quotaMW(dispatcher)
 		}
+		if op.Kind != ir.OpSubscription {
+			dispatcher = lim.gateMiddleware(namespace, version, op.Name)(dispatcher)
+		}
 		if op.Kind != ir.OpSubscription && enforceMW != nil {
 			dispatcher = enforceMW(dispatcher)
 		}
@@ -146,15 +150,15 @@ func registerGraphQLOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, sr
 	}
 }
 
-func registerGraphQLGroupOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string, quotaMW, enforceMW ir.DispatcherMiddleware) {
+func registerGraphQLGroupOps(registry *ir.DispatchRegistry, mirror *graphQLMirror, src *graphQLSource, grp *ir.OperationGroup, metrics Metrics, bp BackpressureOptions, chain Middleware, inputDescs map[ir.SchemaID]protoreflect.MessageDescriptor, namespace, version string, quotaMW, enforceMW ir.DispatcherMiddleware, lim *upstreamLimits) {
 	// Grouped ops live under a namespace-shaped upstream object; the
 	// canonical-args path can't synthesize the nested call shape from
 	// a leaf op alone, so isGrouped=true short-circuits canonicalQuery
 	// and the dispatcher returns the existing "no AST" error when an
 	// HTTP/gRPC ingress reaches one.
-	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp, true, chain, inputDescs, namespace, version, quotaMW, enforceMW)
+	registerGraphQLOps(registry, mirror, src, grp.Operations, metrics, bp, true, chain, inputDescs, namespace, version, quotaMW, enforceMW, lim)
 	for _, sub := range grp.Groups {
-		registerGraphQLGroupOps(registry, mirror, src, sub, metrics, bp, chain, inputDescs, namespace, version, quotaMW, enforceMW)
+		registerGraphQLGroupOps(registry, mirror, src, sub, metrics, bp, chain, inputDescs, namespace, version, quotaMW, enforceMW, lim)
 	}
 }
 

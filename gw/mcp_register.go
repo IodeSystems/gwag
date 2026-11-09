@@ -48,6 +48,7 @@ func (g *Gateway) registerMCPDispatchersLocked(svcs []*ir.Service) {
 			if quotaMW != nil {
 				dispatcher = quotaMW(dispatcher)
 			}
+			dispatcher = g.limits.gateMiddleware(svc.Namespace, svc.Version, op.Name)(dispatcher)
 			if enforceMW != nil {
 				dispatcher = enforceMW(dispatcher)
 			}

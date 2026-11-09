@@ -280,6 +280,10 @@ type Gateway struct {
 	// Plan §Caller-ID + quota ladder.
 	quotaAuth *quotaAuthDelegate
 
+	// limits holds rate limits, built-in quotas, costs, upstream 429
+	// pauses and usage (upstream_limits.go). Always set.
+	limits *upstreamLimits
+
 	// rejectedJoins counts and timestamps registerSlotLocked
 	// rejections per slot key, so /admin/services can surface "this
 	// slot rejected N joins with caps X (currently running Y)" before
@@ -507,6 +511,14 @@ type config struct {
 	// rejects with CodeResourceExhausted instead of granting an
 	// emergency permit block. Default false. See WithQuotaEnforce.
 	quotaEnforce bool
+
+	// usage turns on the usage report (WithUsage); nil → off.
+	usage *UsageOptions
+
+	// pause429Default is the pause after an upstream 429 without
+	// Retry-After (WithUpstream429Pause); pause429Set marks it set.
+	pause429Default time.Duration
+	pause429Set     bool
 
 	// channelAuth is the operator-declared (pattern → tier) rule set
 	// gating ps.pub / ps.sub. Stored in declaration order; first-hit-
@@ -1506,6 +1518,7 @@ func New(opts ...Option) *Gateway {
 		g.quotaAuth = newQuotaAuthDelegate(g, *cfg.quota)
 		g.quotaAuth.enforce = cfg.quotaEnforce
 	}
+	g.limits = newUpstreamLimits(g)
 	if pm != nil {
 		pm.callerExtractor = cfg.callerIDExtractor
 	}
@@ -1550,6 +1563,7 @@ func New(opts ...Option) *Gateway {
 	}
 	if pm != nil {
 		g.tm = pm.traffic
+		g.limits.metrics = newLimitMetrics(pm.registry, pm.prefix, g.limits)
 		pm.registry.MustRegister(newGatewayCollector(g, pm.prefix))
 		g.lifecycle = newLifecycleMetrics(g, pm)
 		g.appKeyMetrics = newAppKeyMetrics(g, pm)
@@ -1578,6 +1592,7 @@ func New(opts ...Option) *Gateway {
 		replayActive.Add(1)
 	}
 	go g.appKeyWarnLoop()
+	go g.limits.loop(life)
 	g.bindMirror()
 	warnShortHexSecret("signer-secret", cfg.signerSecret)
 	warnShortHexSecret("subscribe-secret", cfg.subAuth.Secret)
@@ -1686,6 +1701,10 @@ type serviceConfig struct {
 	// AddProtoBytes (multi-file .protos). Keyed by import path; nil
 	// for single-file .protos.
 	protoImports map[string][]byte
+
+	// limits are the rate limits and costs declared with RateLimit,
+	// OperationRateLimit and OperationCost (upstream_limits.go).
+	limits []limitRecord
 }
 
 // isInternal reports whether ns is hidden from the public GraphQL
@@ -1985,6 +2004,9 @@ func (g *Gateway) addProtoFromDescriptor(fd protoreflect.FileDescriptor, sc *ser
 	if err != nil {
 		return fmt.Errorf("gateway: %s: %w", label, err)
 	}
+	if err := g.limits.setCode(ns, ver, sc.limits); err != nil {
+		return fmt.Errorf("gateway: %s: %w", label, err)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {
@@ -2039,6 +2061,9 @@ func (g *Gateway) AddProto(path string, opts ...ServiceOption) error {
 	}
 	ver, _, err := parseVersion(sc.version)
 	if err != nil {
+		return fmt.Errorf("gateway: AddProto(%s): %w", path, err)
+	}
+	if err := g.limits.setCode(ns, ver, sc.limits); err != nil {
 		return fmt.Errorf("gateway: AddProto(%s): %w", path, err)
 	}
 	addr := fmt.Sprintf("addproto:%s", path)
@@ -2513,6 +2538,10 @@ type rejection struct {
 	// in its error body (upstream_fields.go); GraphQL renders them as
 	// extensions.fields.
 	fields []upstreamFieldError
+	// throttled: an upstream answered 429 (RetryAfter holds its
+	// Retry-After). Set by the HTTP dispatch paths; read by the
+	// upstream limits gate to pause the service.
+	throttled bool
 }
 
 func (r *rejection) Error() string { return r.Msg }

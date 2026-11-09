@@ -106,6 +106,7 @@ func appendWrapperCases(t *testing.T) []appendWrapperCase {
 		{"quotaMiddleware", g.quotaMiddleware("ns", "v1")},
 		{"callerIDEnforceMiddleware", g.callerIDEnforceMiddleware()},
 		{"wrapCanonicalDispatcherWithChain", canonical},
+		{"gateMiddleware", g.limits.gateMiddleware("ns", "v1", "op")},
 	}
 }
 

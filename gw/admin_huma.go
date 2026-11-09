@@ -39,6 +39,8 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	// under /admin/openapi so inbound /api/admin/openapi.json
 	// resolves cleanly.
 	cfg.OpenAPIPath = "/admin/openapi"
+	// text/csv: the usage report's CSV form (format=csv).
+	cfg.Formats["text/csv"] = usageCSVFormat
 	api := humago.New(mux, cfg)
 
 	cp, ok := g.ControlPlane().(*controlPlane)
@@ -57,6 +59,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	registerClusterFreeze(api, g)
 	registerClusterState(api, g)
 	registerEventMirror(api, g)
+	registerLimits(api, g)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "listPeers",

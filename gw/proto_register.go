@@ -54,6 +54,7 @@ func (g *Gateway) registerProtoDispatchersLocked(filter schemaFilter) {
 					core := newProtoDispatcher(p, sd, md, chain, headers, metrics, bp, uploadStore, uploadLimit)
 					dispatcher := backpressureMiddleware(poolBackpressureConfig(p, label, metrics, bp))(core)
 					dispatcher = g.quotaMiddleware(p.key.namespace, p.key.version)(dispatcher)
+					dispatcher = g.limits.gateMiddleware(p.key.namespace, p.key.version, string(md.Name()))(dispatcher)
 					dispatcher = g.callerIDEnforceMiddleware()(dispatcher)
 					g.dispatchers.Set(sid, dispatcher)
 				}

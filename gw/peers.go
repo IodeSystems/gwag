@@ -216,6 +216,11 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 		return nil, err
 	}
 
+	limitsKV, err := openLimitsBuckets(ctx, cl.JS, r, g.usageBucketTTL())
+	if err != nil {
+		return nil, err
+	}
+
 	var schemas jetstream.KeyValue
 	if g.sr != nil {
 		if schemas, err = openSchemasBucket(ctx, cl.JS, r); err != nil {
@@ -334,6 +339,7 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	go t.externalsWatchLoop(tctx)
 	go t.notificationsWatchLoop(tctx)
 	go t.levelWatchLoop(tctx)
+	g.limits.bindCluster(tctx, cl.Conn, cl.NodeID, limitsKV)
 	if schemas != nil {
 		g.sr.bindCluster(schemas)
 	}
@@ -477,6 +483,9 @@ var replicaBuckets = []string{
 	notificationsBucketName,
 	appKeysBucketName,
 	clusterBucketName,
+	limitsBucketName,
+	quotaCountersBucketName,
+	usageBucketName,
 }
 
 // reconcileReplicas raises every managed bucket and event stream to

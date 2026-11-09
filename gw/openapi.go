@@ -101,6 +101,9 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 	if sc.maxConcurrencyPerInstance < 0 {
 		return fmt.Errorf("gateway: AddOpenAPI(%s): MaxConcurrencyPerInstance must be ≥ 0", label)
 	}
+	if err := g.limits.setCode(ns, ver, sc.limits); err != nil {
+		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", label, err)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if sc.internal {
@@ -720,6 +723,8 @@ func dispatchOpenAPIRaw(
 	if client == nil {
 		client = http.DefaultClient
 	}
+	obs := upstreamObsFrom(ctx)
+	obs.sent(req)
 	resp, err := doUpstreamHTTP(client, req)
 	// Whatever the outcome, multipart Upload readers we opened for
 	// this dispatch are ours to close.
@@ -729,6 +734,7 @@ func dispatchOpenAPIRaw(
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
+	obs.answered(resp.StatusCode, len(respBytes))
 	if err != nil {
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("openapi: %s %s: read body: %s", method, full, err.Error()), err)
 	}
@@ -737,6 +743,9 @@ func dispatchOpenAPIRaw(
 			fmt.Sprintf("openapi: %s %s: %s: %s", method, full, resp.Status, strings.TrimSpace(string(respBytes))))
 		if resp.StatusCode < 500 {
 			rej.fields = upstreamFieldErrors(respBytes)
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			markThrottled(rej, resp.Header)
 		}
 		return nil, rej
 	}
