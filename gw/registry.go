@@ -115,6 +115,19 @@ func kvCtx(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, kvCallTimeout)
 }
 
+// heartbeatKVCtx bounds a heartbeat's registry refresh: half of the
+// time left before the caller's deadline, at most kvCallTimeout. The
+// other half is for the answer. A healthy put acks in milliseconds.
+func heartbeatKVCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	budget := kvCallTimeout
+	if d, ok := parent.Deadline(); ok {
+		if half := time.Until(d) / 2; half < budget {
+			budget = half
+		}
+	}
+	return context.WithTimeout(parent, budget)
+}
+
 // kvPutRetry puts value under key, retrying until ctx ends. A put
 // sent while a bucket's replica count changes (reconcileReplicas
 // raises it as peers join) can get no ack: the stream elects a new

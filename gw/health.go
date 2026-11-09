@@ -34,6 +34,14 @@ import (
 // "degraded": true but keeps the status code — the node still
 // serves.
 //
+// A cluster node that has replayed the registry adds "jetstream":
+// "ok", or "unavailable" when its last peer-entry refresh failed
+// (JetStream has no quorum, e.g. 2 of 3 nodes down). Unavailable
+// adds "degraded": true and keeps 200 "serving": the node still
+// routes every service in the registry it holds, so a load balancer
+// should keep it. Registrations, heartbeats' registry refresh, admin
+// writes, KV and event streams fail until the quorum is back.
+//
 // Mount alongside the GraphQL handler; load balancers poll this to
 // take the gateway out of rotation when it goes 503.
 //
@@ -68,6 +76,14 @@ func (g *Gateway) HealthHandler() http.Handler {
 		body["pubsub"] = mode
 		if mode == pubSubModeDegraded {
 			body["degraded"] = true
+		}
+		if g.registrySync.Load() == registrySyncDone {
+			if g.clusterWriteFailed.Load() {
+				body["jetstream"] = "unavailable"
+				body["degraded"] = true
+			} else {
+				body["jetstream"] = "ok"
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)

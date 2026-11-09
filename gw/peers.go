@@ -350,13 +350,30 @@ func (t *peerTracker) refreshLoop(ctx context.Context) {
 			return
 		case <-tk.C:
 			c, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, _ = t.peers.Put(c, t.nodeID, t.self)
+			_, err := t.peers.Put(c, t.nodeID, t.self)
 			cancel()
+			if ctx.Err() == nil {
+				t.noteWrite(err)
+			}
 			missing = t.sweepPeers(ctx, missing)
 			t.kickReconcile(ctx)
 			t.applyFeatures(ctx)
 			t.autoFinalize(ctx)
 		}
+	}
+}
+
+// noteWrite records the outcome of the peer-entry refresh for
+// /health ("jetstream") and logs the change.
+func (t *peerTracker) noteWrite(err error) {
+	failed := err != nil
+	if t.gw.clusterWriteFailed.Swap(failed) == failed {
+		return
+	}
+	if failed {
+		t.gw.cfg.cluster.Server.Warnf("cluster: JetStream takes no writes (%v); routing from the registry this node holds, registrations and admin writes fail", err)
+	} else {
+		t.gw.cfg.cluster.Server.Noticef("cluster: JetStream takes writes again")
 	}
 }
 

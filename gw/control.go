@@ -420,18 +420,24 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	}
 	ownerNode := cp.gw.nodeID()
 
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
 	// Cluster mode: KV is the source of truth. Don't dial or touch
 	// pools — the reconciler picks up our KV.Put and joins both the
 	// receiving gateway's pool and every other gateway's pool.
 	// Waiting bindings are Put with Waiting=true; reconcilers skip
 	// them until the gate loop re-Puts them (start_gate.go).
+	//
+	// cp.mu is not held across the puts. Without a JetStream quorum
+	// each put waits out its timeout (10s here); holding cp.mu that
+	// long made every heartbeat to this node miss its deadline, so
+	// the clients moved away and the janitor evicted instances that
+	// were still up. The registration is not in cp.regs until its
+	// keys are stored, so nothing else sees it half done.
 	if clusterKV != nil {
+		cp.mu.Lock()
 		cp.gw.mu.Lock()
 		waiting, err := cp.gw.admitLocked(prep)
 		cp.gw.mu.Unlock()
+		cp.mu.Unlock()
 		if err != nil {
 			return nil, err
 		}
@@ -499,10 +505,12 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			reg.namespaces = append(reg.namespaces, p.namespace+"/"+p.version)
 		}
 		reg.lastBeatMs.Store(time.Now().UnixMilli())
+		cp.mu.Lock()
 		cp.regs[id] = reg
 		cp.gw.mu.Lock()
 		statuses := cp.bindingStatusesLocked(reg)
 		cp.gw.mu.Unlock()
+		cp.mu.Unlock()
 		cp.logWaiting(reg.id, statuses)
 		// A waiter may be met already by a Put the reconciler had not
 		// applied when admitLocked ran.
@@ -514,6 +522,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			Warnings:       cp.gw.noteShadowWarnings(prep, shadowWarn),
 		}, nil
 	}
+
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
 
 	// Standalone mode: directly populate the in-memory pool and conn
 	// pool. OpenAPI bindings don't need a gRPC dial — the addr is an
@@ -683,21 +694,30 @@ func (cp *controlPlane) Heartbeat(ctx context.Context, req *cpv1.HeartbeatReques
 	reg.lastBeatMs.Store(time.Now().UnixMilli())
 
 	// Cluster mode: refresh each KV entry's TTL by re-Putting the same
-	// JSON value. Best-effort; transient KV errors are logged-and-go
-	// because the in-memory regs map still has the registration and
-	// the next heartbeat will retry.
+	// JSON value. Best-effort: the in-memory regs map still has the
+	// registration and the next heartbeat retries. The refresh gets
+	// half of the time the client gave the call, so the answer is
+	// back before the client's deadline even when JetStream has no
+	// quorum (every put then waits out its timeout). A timed-out
+	// heartbeat moves the client to another address; the janitor then
+	// evicts the registration here and the node stops routing an
+	// instance that is still up.
 	// putMu + a copy under cp.mu: the gate loop may rewrite a value
-	// (promotion) concurrently.
-	if kv := cp.gw.registryKV(); kv != nil {
-		reg.putMu.Lock()
+	// (promotion) concurrently. Its put refreshes the entry too, so a
+	// heartbeat that finds putMu held skips the refresh instead of
+	// waiting behind a put that may hang.
+	if kv := cp.gw.registryKV(); kv != nil && reg.putMu.TryLock() {
 		cp.mu.Lock()
 		refs := append([]registryKeyRef(nil), reg.kvKeys...)
 		cp.mu.Unlock()
+		kctx, cancel := heartbeatKVCtx(ctx)
 		for _, r := range refs {
-			kctx, cancel := kvCtx(ctx)
-			_ = kvPutRetry(kctx, kv, replicaKey(r.namespace, r.version, r.replicaID), r.value)
-			cancel()
+			if err := kvPutRetry(kctx, kv, replicaKey(r.namespace, r.version, r.replicaID), r.value); err != nil {
+				cp.gw.cfg.cluster.Server.Warnf("controlplane: heartbeat %s: registry refresh of %s failed: %v", reg.id, replicaKey(r.namespace, r.version, r.replicaID), err)
+				break // the rest would wait out the same budget
+			}
 		}
+		cancel()
 		reg.putMu.Unlock()
 	}
 
