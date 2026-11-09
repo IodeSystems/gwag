@@ -1,0 +1,16 @@
+{
+  "name": "07-discount-closed-order",
+  "method": "POST",
+  "path": "/v1/orders/o-2/discount",
+  "body": {
+    "percent": 10
+  },
+  "want": {
+    "status": 409,
+    "body": {
+      "title": "Conflict",
+      "status": 409,
+      "detail": "order o-2 is closed"
+    }
+  }
+}

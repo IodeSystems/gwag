@@ -1,0 +1,117 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Mutation {
+  orders: OrdersMutationNamespace!
+}
+
+type OrdersMutationNamespace {
+  refundOrder(body: orders_RefundInBodyInput!, id: String!): orders_Order @derived(operationId: "refundOrder")
+  v1: OrdersV1MutationNamespace! @deprecated(reason: "v2 is current")
+  v2: OrdersV2MutationNamespace!
+}
+
+type OrdersQueryNamespace {
+  getOrder(id: String!): orders_Order @derived(operationId: "getOrder")
+  listOrders(
+    currency: String
+    
+    """Money in integer minor units (cents) of the order's currency."""
+    minAmountCents: Cents
+  ): orders_ListOutBody @derived(operationId: "listOrders")
+  v1: OrdersV1QueryNamespace! @deprecated(reason: "v2 is current")
+  v2: OrdersV2QueryNamespace!
+}
+
+type OrdersV1MutationNamespace {
+  applyDiscount(body: orders_v1_DiscountInBodyInput!, id: String!): orders_v1_Order @deprecated(reason: "v2 is current") @derived(operationId: "applyDiscount")
+}
+
+type OrdersV1QueryNamespace {
+  getOrder(id: String!): orders_v1_Order @deprecated(reason: "v2 is current") @derived(operationId: "getOrder")
+  listOrders(
+    
+    """Only orders of at least this many dollars."""
+    minAmount: Float
+  ): orders_v1_ListOutBody @deprecated(reason: "v2 is current") @derived(operationId: "listOrders")
+}
+
+type OrdersV2MutationNamespace {
+  refundOrder(body: orders_RefundInBodyInput!, id: String!): orders_Order @derived(operationId: "refundOrder")
+}
+
+type OrdersV2QueryNamespace {
+  getOrder(id: String!): orders_Order @derived(operationId: "getOrder")
+  listOrders(
+    currency: String
+    
+    """Money in integer minor units (cents) of the order's currency."""
+    minAmountCents: Cents
+  ): orders_ListOutBody @derived(operationId: "listOrders")
+}
+
+type Query {
+  orders: OrdersQueryNamespace!
+}
+
+type orders_ListOutBody {
+  orders: [orders_Order!]!
+}
+
+type orders_Order {
+  
+  """Money in integer minor units (cents) of the order's currency."""
+  amountCents: Cents!
+  
+  """ISO 4217 code."""
+  currency: String!
+  customer: String!
+  id: String!
+  
+  """Money in integer minor units (cents) of the order's currency."""
+  refundedCents: Cents!
+  status: orders_OrderStatus!
+}
+
+type orders_v1_ListOutBody {
+  orders: [orders_v1_Order!]!
+}
+
+type orders_v1_Order {
+  
+  """Order total in US dollars."""
+  amount: Float!
+  customerName: String!
+  id: String!
+  status: orders_v1_OrderStatus!
+}
+
+enum orders_OrderStatus {
+  closed
+  open
+  refunded
+}
+
+enum orders_v1_OrderStatus {
+  closed
+  open
+}
+
+input orders_RefundInBodyInput {
+  
+  """Money in integer minor units (cents) of the order's currency."""
+  amountCents: Cents!
+}
+
+input orders_v1_DiscountInBodyInput {
+  percent: Int!
+}
+
+"""Integer sent as a JSON number, exact within ±(2^53-1). Accepts a JSON number or a decimal string as input."""
+scalar Cents
+
+directive @derived(operationId: String) on FIELD_DEFINITION | OBJECT | INPUT_OBJECT | INPUT_FIELD_DEFINITION | ENUM | SCALAR | UNION | INTERFACE | ARGUMENT_DEFINITION
+
+directive @export(as: String!) on FIELD

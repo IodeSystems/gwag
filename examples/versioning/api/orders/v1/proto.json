@@ -1,0 +1,223 @@
+{
+  "enum_type": [
+    {
+      "name": "OrderStatus",
+      "value": [
+        {
+          "name": "OrderStatus_open",
+          "number": 0
+        },
+        {
+          "name": "OrderStatus_closed",
+          "number": 1
+        }
+      ]
+    }
+  ],
+  "message_type": [
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "percent",
+          "number": 1,
+          "type": "TYPE_INT32"
+        }
+      ],
+      "name": "DiscountInBody"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "location",
+          "number": 1,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "message",
+          "number": 2,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "value",
+          "number": 3,
+          "type": "TYPE_STRING"
+        }
+      ],
+      "name": "ErrorDetail"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "detail",
+          "number": 1,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_REPEATED",
+          "name": "errors",
+          "number": 2,
+          "type": "TYPE_MESSAGE",
+          "type_name": ".orders.v1.ErrorDetail"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "instance",
+          "number": 3,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "status",
+          "number": 4,
+          "type": "TYPE_INT64"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "title",
+          "number": 5,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "type",
+          "number": 6,
+          "type": "TYPE_STRING"
+        }
+      ],
+      "name": "ErrorModel"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_REPEATED",
+          "name": "orders",
+          "number": 1,
+          "type": "TYPE_MESSAGE",
+          "type_name": ".orders.v1.Order"
+        }
+      ],
+      "name": "ListOutBody"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "amount",
+          "number": 1,
+          "type": "TYPE_DOUBLE"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "customerName",
+          "number": 2,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "id",
+          "number": 3,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "status",
+          "number": 4,
+          "type": "TYPE_ENUM",
+          "type_name": ".orders.v1.OrderStatus"
+        }
+      ],
+      "name": "Order"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "minAmount",
+          "number": 1,
+          "type": "TYPE_DOUBLE"
+        }
+      ],
+      "name": "listOrdersRequest"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "id",
+          "number": 1,
+          "type": "TYPE_STRING"
+        }
+      ],
+      "name": "getOrderRequest"
+    },
+    {
+      "field": [
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "id",
+          "number": 1,
+          "type": "TYPE_STRING"
+        },
+        {
+          "label": "LABEL_OPTIONAL",
+          "name": "body",
+          "number": 2,
+          "type": "TYPE_MESSAGE",
+          "type_name": ".orders.v1.DiscountInBody"
+        }
+      ],
+      "name": "applyDiscountRequest"
+    }
+  ],
+  "name": "orders/v1.proto",
+  "options": {
+    "deprecated": true
+  },
+  "package": "orders.v1",
+  "service": [
+    {
+      "method": [
+        {
+          "client_streaming": false,
+          "input_type": ".orders.v1.listOrdersRequest",
+          "name": "listOrders",
+          "options": {
+            "deprecated": true
+          },
+          "output_type": ".orders.v1.ListOutBody",
+          "server_streaming": false
+        },
+        {
+          "client_streaming": false,
+          "input_type": ".orders.v1.getOrderRequest",
+          "name": "getOrder",
+          "options": {
+            "deprecated": true
+          },
+          "output_type": ".orders.v1.Order",
+          "server_streaming": false
+        },
+        {
+          "client_streaming": false,
+          "input_type": ".orders.v1.applyDiscountRequest",
+          "name": "applyDiscount",
+          "options": {
+            "deprecated": true
+          },
+          "output_type": ".orders.v1.Order",
+          "server_streaming": false
+        }
+      ],
+      "name": "Service",
+      "options": {
+        "deprecated": true
+      }
+    }
+  ],
+  "syntax": "proto3"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "03-get-missing-order",
+  "path": "/v1/orders/o-404",
+  "want": {
+    "status": 404,
+    "body": {
+      "title": "Not Found",
+      "status": 404,
+      "detail": "order o-404 not found"
+    }
+  }
+}

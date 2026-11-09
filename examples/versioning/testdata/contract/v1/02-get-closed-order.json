@@ -1,0 +1,13 @@
+{
+  "name": "02-get-closed-order",
+  "path": "/v1/orders/o-2",
+  "want": {
+    "status": 200,
+    "body": {
+      "id": "o-2",
+      "amount": 9.99,
+      "customerName": "Grace Hopper",
+      "status": "closed"
+    }
+  }
+}

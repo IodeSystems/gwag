@@ -1,0 +1,13 @@
+{
+  "name": "01-get-order",
+  "path": "/v1/orders/o-1",
+  "want": {
+    "status": 200,
+    "body": {
+      "id": "o-1",
+      "amount": 12.5,
+      "customerName": "Ada Lovelace",
+      "status": "open"
+    }
+  }
+}

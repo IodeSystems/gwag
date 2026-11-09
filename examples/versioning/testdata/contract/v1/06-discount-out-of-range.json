@@ -1,0 +1,23 @@
+{
+  "name": "06-discount-out-of-range",
+  "method": "POST",
+  "path": "/v1/orders/o-1/discount",
+  "body": {
+    "percent": 0
+  },
+  "want": {
+    "status": 422,
+    "body": {
+      "title": "Unprocessable Entity",
+      "status": 422,
+      "detail": "validation failed",
+      "errors": [
+        {
+          "message": "expected number \u003e= 1",
+          "location": "body.percent",
+          "value": 0
+        }
+      ]
+    }
+  }
+}

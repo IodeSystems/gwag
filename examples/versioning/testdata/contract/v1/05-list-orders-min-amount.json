@@ -1,0 +1,17 @@
+{
+  "name": "05-list-orders-min-amount",
+  "path": "/v1/orders?minAmount=10",
+  "want": {
+    "status": 200,
+    "body": {
+      "orders": [
+        {
+          "id": "o-1",
+          "amount": 12.5,
+          "customerName": "Ada Lovelace",
+          "status": "open"
+        }
+      ]
+    }
+  }
+}

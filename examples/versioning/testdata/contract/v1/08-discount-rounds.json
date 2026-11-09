@@ -1,0 +1,17 @@
+{
+  "name": "08-discount-rounds",
+  "method": "POST",
+  "path": "/v1/orders/o-1/discount",
+  "body": {
+    "percent": 15
+  },
+  "want": {
+    "status": 200,
+    "body": {
+      "id": "o-1",
+      "amount": 10.63,
+      "customerName": "Ada Lovelace",
+      "status": "open"
+    }
+  }
+}
