@@ -305,6 +305,7 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID extractor + quota
 - [`docs/services.md`](./docs/services.md) — registering a service: `controlclient`, versions, start gate, drain; in-process `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`
 - [`docs/cluster.md`](./docs/cluster.md) — 3-node setup, load balancer probe, node loss, rolling upgrade, forgetting a peer
+- [`docs/cutover.md`](./docs/cutover.md) — moving to a separate cluster: replay verification, state copy, event stream mirror, switchover, load balancer switch; runnable in [`examples/cutover/`](./examples/cutover)
 - [`docs/middleware.md`](./docs/middleware.md) — `Transform` / `InjectType` / `InjectPath` / `InjectHeader`
 - [`docs/registration-clients.md`](./docs/registration-clients.md) — TypeScript and Python registration clients (announce, wait for ok, heartbeat, deregister); control-plane schema served by the Schema Registry
 - [`docs/clients.md`](./docs/clients.md) — proto → Go and OpenAPI → TypeScript clients from the schema exports; regenerate loop; pointer to `gwag gen` for event code
