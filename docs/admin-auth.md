@@ -21,7 +21,7 @@ decides the role:
 | admin | admin token, or an `AdminAuthorizer` OK | every admin route |
 | dev | dev token, or an `AdminAuthorizer` OK with `ADMIN_ROLE_DEV` | every admin read (services with owner contacts, graph, usage, instances, peers, injectors, MCP config and schema, external dependents), and `PUT` / `DELETE /admin/external-dependents/{id}` |
 | anonymous | no bearer | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph`: public services only |
-| system | a system key (`gws_...`, `gwag key create --system`) | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState` only (cluster to cluster, see [cutover.md](./cutover.md#system-keys)) |
+| system | a system key (`gws_...`, `gwag key create --system`) | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState`, `getClusterMirror`, `startClusterMirror`, `stopClusterMirror` only (cluster to cluster, see [cutover.md](./cutover.md#system-keys)) |
 
 Role by operation:
 
@@ -37,6 +37,8 @@ Role by operation:
 | `getSwitchover` (switchover, see [cutover.md](./cutover.md#switchover)) | 401 | yes | yes | 403 |
 | `setSwitchover`, `clearSwitchover` | 401 | 403 | yes | 403 |
 | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState` | 401 | 403 | yes | yes |
+| `getClusterMirror` (event stream mirror, see [cutover.md](./cutover.md#event-stream-mirror)) | 401 | yes | yes | yes |
+| `startClusterMirror`, `stopClusterMirror` | 401 | 403 | yes | yes |
 
 A system key is checked only by `AdminMiddleware`: the
 `AdminAuthorizer` and `AppKeyAuthorizer` delegates never see one, and

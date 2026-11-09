@@ -19,10 +19,12 @@ What exists now:
   marks, app and system keys, external dependents, Schema Registry
   contents) goes to green in one document, under a freeze of blue's
   admin writes.
+- **Event stream mirror.** Green's `EV_*` JetStream streams source
+  blue's over a NATS leafnode connection that a system key
+  authorizes, until the switch.
 - **System keys**, the credential one cluster presents to the other.
 
-The final switch at the load balancer and the NATS event stream
-mirror are not built yet.
+The final switch at the load balancer is not built yet.
 
 ## Replay verification
 
@@ -394,6 +396,10 @@ proxied connections too.
 6. At 100, switch the load balancer to green and drain blue. This
    step is not built yet (it is the next part of the cutover).
 
+Events: start the [event stream mirror](#event-stream-mirror) before
+step 3, and stop it after step 6. While requests go to green, events
+published through green stay on green; the mirror runs one way.
+
 ### Limits
 
 - Blue reads the whole request body before it decides (up to
@@ -436,26 +442,30 @@ every node of the cluster at once, and `gwag key list` shows it
 lines and `app_key_expiry_seconds{key_id}` cover it. Rotate it like an
 app key: mint a new one, deploy it, revoke the old one.
 
-It authorizes three admin routes, and nothing else:
+It authorizes these admin routes and the mirror connection, and
+nothing else:
 
 | Route | |
 |---|---|
 | `POST /admin/replay/verify` | replay verification |
 | `GET /admin/cluster/state` (`exportClusterState`) | state export |
 | `POST /admin/cluster/state` (`importClusterState`) | state import |
+| `GET /admin/cluster/mirror` (`getClusterMirror`) | mirror status |
+| `POST /admin/cluster/mirror` (`startClusterMirror`) | mirror start |
+| `POST /admin/cluster/mirror/stop` (`stopClusterMirror`) | mirror stop |
+| NATS leafnode to `--mirror-listen` | the [event stream mirror](#event-stream-mirror) connection |
 
 Every other admin route answers a valid system key with 403; the
 control plane, the Schema Registry and the `admin` GraphQL fields
 refuse it; the `AdminAuthorizer` and `AppKeyAuthorizer` delegates are
-never sent one. An app key is refused on the three routes. The admin
-role may call them too.
+never sent one. An app key is refused on these routes and on the
+mirror listener. The admin role may call the routes too (the mirror
+status also takes dev).
 
 Why a distinct prefix (`gws_`, app keys are `gwk_`): the middleware
 routes the bearer to the right check without a KV read, a leaked key
 names its kind, and the record's kind is checked as well, so neither
 kind passes for the other.
-
-The NATS event stream mirror (not built) will use the same key.
 
 ## State copy
 
@@ -470,7 +480,7 @@ What green needs from blue before it serves, and how it gets there:
 | Schema Registry (`gwag-schemas`) | export / import | every context, the default one included, with ids and versions kept; the control plane subject is not copied (each gateway registers its own) |
 | registrations (`gwag-registry`) | not copied | services register with both clusters, see below |
 | MCP include / exclude config, drains, notifications | not copied | set them on green with the admin API |
-| event streams (`EV_*`) | not copied | NATS stream mirror, not built |
+| event streams (`EV_*`) | not copied | [event stream mirror](#event-stream-mirror) |
 
 ### Steps
 
@@ -616,7 +626,211 @@ CLI. Not tested: a TypeScript or Python service registered with two
 clusters, a freeze on a cluster with nodes older than the freeze,
 large registries near the 64 MiB body cap.
 
+## Event stream mirror
+
+Until the switch, green's event streams (`EV_*`, one per named
+channel) copy blue's. NATS does the copying: green's stream has a
+JetStream *source* on blue's stream of the same name, reached over a
+NATS leafnode connection from green to blue. A system key of blue
+authorizes the connection. gwag configures the connection at boot and
+adds or removes the source per stream at runtime.
+
+### How it works
+
+- Blue runs with `--mirror-listen ADDR` (`ClusterOptions.MirrorListen`)
+  on every node: a NATS leafnode listener next to the client port.
+- Green runs with `--mirror-from ADDR` and a system key minted on
+  blue (`--mirror-key-file`, or `GWAG_MIRROR_KEY`;
+  `ClusterOptions.MirrorFrom`, `MirrorKey`) on every node. Each green
+  server connects to blue as a leafnode. With several blue addresses
+  (comma-separated) NATS picks one at random and tries the next when
+  it fails.
+- `gwag cluster mirror` (on green) adds a source to green's stream of
+  each event stream blue has. Green creates a stream it does not have,
+  with blue's subject and gwag's event stream config. The source is
+  the only mirror state: there is no other record, and the stream
+  config shows it.
+- A sourced message keeps its subject, payload and headers,
+  `Nats-Msg-Id` included; NATS adds `Nats-Stream-Source`. It gets
+  green's next sequence, so the sequence numbers of the two sides
+  differ. Blue's messages arrive in blue's order. Messages published
+  on green itself are stored too and interleave with them.
+- Within the 2-minute duplicates window, a message whose
+  `Nats-Msg-Id` green already holds is dropped, sourced or published.
+- After a restart of green, NATS resumes each source after the last
+  blue message green stored, without duplicates.
+
+Only these subjects cross the leafnode. Blue binds the connection to a
+user with these permissions, and nothing else gets through: no core
+NATS subject, no event published on the other side, no gateway KV
+bucket.
+
+| Direction | Subjects | For |
+|---|---|---|
+| green to blue | `$GWAG.MIRROR.API.>` | the JetStream API: blue maps `$GWAG.MIRROR.API.CONSUMER.CREATE.>` and `.STREAM.LIST` to `$JS.API.…` |
+| green to blue | `$JS.FC.>` | flow control replies |
+| blue to green | `$GWAG.MIRROR.DELIVER.>` | the sourced messages |
+| blue to green | `$JSC.R.>`, `$GWAG.MIRROR.INBOX.>` | API replies |
+
+`CONSUMER.DELETE` is not mapped, so a key holder cannot delete blue's
+consumers. The consumer NATS creates on blue for a source
+(`JS_SRC_…`) is removed 10 seconds after the source stops
+(its inactive threshold).
+
+Auth on blue's listener: a leafnode connection must give a system key
+of blue as its password (or token). Blue checks it on connect like any
+system key, ends the connection at the key's expiry, and checks live
+connections again every 30 seconds: a revoked key loses its
+connection, and its reconnects are refused. No key, an app key, or a
+wrong key: refused. Use `--mirror-tls-cert`, `--mirror-tls-key` and
+`--mirror-tls-ca` (mutual TLS, both sides; `ClusterOptions.MirrorTLS`),
+or the key crosses the network in the clear.
+
+The client port does not change. Without `--mirror-listen` the server
+has the same config as before. With it, gwag checks client
+connections itself, with the same rules: standalone, any client; in a
+cluster, no credentials (global account) or gwag's in-process system
+user, and nothing else.
+
+### Configure
+
+On blue, every node:
+
+```
+gwag up ... --mirror-listen :14223
+gwag key create --system --ttl 30d --note "green mirror" --endpoint http://blue:8080 > mirror.key
+```
+
+On green, every node (a restart if green is running):
+
+```
+gwag up ... --mirror-from blue-0:14223,blue-1:14223,blue-2:14223 --mirror-key-file mirror.key
+```
+
+### Start, status, stop
+
+```
+$ gwag cluster mirror --gateway http://green:8080 --from blue-0:14223
+source=nats-leaf://blue-0:14223,... leafnodes=1
+STREAM                                   MIRRORED   BLUE_SEQ  GREEN_SEQ      LAG   ACTIVE ERROR
+EV_orders_v1_Audit                       true            120        120        0     215ms
+EV_orders_v1_OrderEvents                 true          50211      50211        0     98ms
+```
+
+- Start (no flag): every event stream blue has, or each `--channel`
+  (a stream name or a channel subject, repeatable). `--from`, when
+  given, must be green's configured source. Running it again changes
+  nothing.
+- `--status`: per event stream on either side, whether green sources
+  it, each side's last sequence, and `LAG`, the number of blue
+  messages not on green yet as NATS last reported it (the source
+  consumer's pending count). `ACTIVE` is the time since blue last
+  delivered or sent a heartbeat (every second). `ERROR` is the
+  source's replication error. A stream is caught up when `LAG` is 0
+  and `ACTIVE` is about a second or less; compare blue's message count
+  with what green holds from blue when green has its own messages too.
+- `--stop`: every mirrored stream, or each `--channel`. The source is
+  removed; the stream and its messages stay as a normal stream.
+
+`--gateway` is green's HTTP endpoint. `--bearer`: green's admin token
+or a system key of green (after the state copy, blue's system keys are
+green's too); the status also takes the dev token. Admin routes: `GET
+/admin/cluster/mirror`, `POST /admin/cluster/mirror` (`{from,
+streams}`), `POST /admin/cluster/mirror/stop` (`{streams}`).
+
+Stream config on green: gwag's event stream config (max age
+`WithEventStreamMaxAge`, 7 days by default; 2-minute duplicates
+window; file storage; limits retention), and replicas from the
+cluster replica policy, as for a stream gwag creates for a channel.
+When a service registers the channel with green, or the replica count
+changes, gwag keeps the source. A stream green already has keeps its
+own config; only the source is added.
+
+### Consumers
+
+The mirror copies messages, not consumers. Durable consumers on blue
+are not copied, and their positions do not carry over: green's
+sequence numbers are its own.
+
+A durable that the gwag event runtime creates on green on the first
+subscribe starts with *deliver new*: after green's last message at
+that time (`events/jetstream`; `DeliverAll` starts at green's first
+message, every mirrored day of it). An existing durable on green keeps
+its position: the runtime uses it as it is. So the moment a service's
+consumer first subscribes on green sets where it starts.
+
+No gap and no duplicate, per stream:
+
+1. The mirror runs and `LAG` is 0.
+2. Stop the producers of the stream (on blue). Events published
+   through green (switchover traffic) are producers too.
+3. Wait for `LAG` 0 and every consumer on blue at 0 pending
+   (`nats consumer info`).
+4. `gwag cluster mirror --stop --channel STREAM`.
+5. Move the consumers to green. Each starts after green's last
+   message: everything up to there was consumed on blue.
+6. Move the producers to green.
+
+Without a pause, accept duplicates instead: create each green durable
+before step 5 with a start time a little before the moment its blue
+consumer stopped (`nats consumer add EV_… GROUP --deliver
+2026-11-08T10:00:00Z`; the runtime uses it as it is; a sourced message
+has the time green stored it), and drop repeats in the handler by
+`Message.ID` (`Nats-Msg-Id`).
+
+### Order with the other steps
+
+1. [State copy](#state-copy): freeze, export, import, unfreeze.
+2. Blue nodes with `--mirror-listen`; green nodes with `--mirror-from`
+   and a system key of blue.
+3. `gwag cluster mirror` start; wait for `LAG` 0.
+4. [Replay verification](#replay-verification) and
+   [switchover](#switchover) steps. The mirror keeps running. Events
+   published through green during the switchover stay on green: the
+   consumers on blue do not see them. To keep such mutations on blue
+   until the consumers move, exclude them (`--rule op=NAME,exclude`).
+5. At the switch: the consumer steps above, per stream, then `gwag
+   cluster mirror --stop`.
+6. Load balancer to green, drain blue.
+
+### Limits
+
+- One source per green cluster, set at boot (`--mirror-from`).
+  Changing it needs a restart of green's nodes. NATS can add a leafnode
+  remote at runtime (`ReloadOptions`); gwag does not use it.
+- One way, blue to green.
+- A stream that start creates is in the replica bookkeeping of the
+  node that ran the start, until a service registers its channel with
+  green (then every node has it).
+- Revoking the key ends the connection within 30 seconds, not at once.
+- `LAG` is what NATS last saw; it is not a count taken now.
+
+Tested in `gw/cluster_mirror_test.go` (in-process, nats-server
+v2.15.2): a 3-node blue and a 1-node green; messages published on
+blue appear on green in order with the same `Nats-Msg-Id` and
+subject; the status before start, after start, and caught up (blue
+and green last sequence equal, `LAG` 0, `ACTIVE` set); start for one
+channel subject leaves the others alone; `--from` that is not the
+source and an unknown stream refused; green registering the same
+channel keeps the source; a publish on green with a sourced message's
+id is a duplicate; a core subject published on either side does not
+reach the other, and a green publish does not reach blue's stream;
+green restarted while blue receives three more messages resumes with
+no duplicate; stop leaves the stream and its config, and later blue
+messages do not arrive; a revoked key closes the connection and it
+stays closed; no key, an app key, a wrong key, and an app key as token
+refused by the listener; the client port takes no credentials and
+refuses a system key; `MirrorKey` set to an app key refused at start.
+A 1-node blue and a 2-node green (each green node connected): each
+message lands once, and a stream the mirror creates gets R2 under the
+`auto` policy. TLS: plain TCP and a certificate of another CA refused,
+the same CA connects. `gw/cmd/gwag/mirror_test.go`: the CLI start,
+status, stop, `--from` refused, a system key of green accepted, an app
+key refused, and the `gwag up` flags. Not tested: a blue node restart
+or failure while mirroring, a network between the clusters, load and
+lag under load, a replica count change while a stream is mirrored,
+the consumer procedures above.
+
 ## Next
 
-The final switch at the load balancer (with an example) and the NATS
-event stream mirror between clusters are not built.
+The final switch at the load balancer (with an example) is not built.
