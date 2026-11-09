@@ -74,7 +74,15 @@ func (c *Cluster) LB(t testing.TB, opts LBOpts) *LB {
 	client := &http.Client{Timeout: time.Second}
 	probe := func() {
 		for _, n := range lb.backends() {
-			n.probeOK.Store(healthOK(client, n.gw))
+			ok := healthOK(client, n.gw)
+			if was := n.probeOK.Swap(ok); ok && !was {
+				// Back in rotation: an LB opens new connections to
+				// it. The node's shared gRPC connection may sit in
+				// reconnect backoff (up to 2 minutes) after the node
+				// was down; without this, native gRPC calls failed
+				// for 40s after a restart while HTTP calls passed.
+				n.gw.resetGRPCBackoff()
+			}
 		}
 	}
 	probe()
@@ -164,6 +172,21 @@ func (lb *LB) Pick() (*Gateway, func(error)) {
 		}
 	}
 	return nil, nil
+}
+
+// Next returns the next node in rotation, round robin, without
+// counting a call against it (a WebSocket the caller holds open).
+// nil = no node.
+func (lb *LB) Next() *Gateway {
+	start := int(lb.rr.Add(1))
+	nodes := lb.backends()
+	for i := 0; i < len(nodes); i++ {
+		n := nodes[(start+i)%len(nodes)]
+		if n.probeOK.Load() && !n.pulled.Load() {
+			return n.gw
+		}
+	}
+	return nil
 }
 
 // Do sends one call to the next node in rotation. fn gets the node;

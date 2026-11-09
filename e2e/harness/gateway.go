@@ -230,6 +230,17 @@ func (g *Gateway) ControlPlane() cpv1.ControlPlaneClient {
 	return cpv1.NewControlPlaneClient(g.grpcConn())
 }
 
+// resetGRPCBackoff makes the shared gRPC connection, if there is one,
+// reconnect now instead of after its backoff.
+func (g *Gateway) resetGRPCBackoff() {
+	g.mu.Lock()
+	c := g.cpConn
+	g.mu.Unlock()
+	if c != nil {
+		c.ResetConnectBackoff()
+	}
+}
+
 func (g *Gateway) grpcConn() *grpc.ClientConn {
 	g.mu.Lock()
 	defer g.mu.Unlock()
