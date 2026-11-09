@@ -96,6 +96,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 				}
 			}
 			dispatcher = g.quotaMiddleware(svc.Namespace, svc.Version)(dispatcher)
+			dispatcher = g.limits.gateMiddleware(svc.Namespace, svc.Version, op.Name)(dispatcher)
 			dispatcher = g.callerIDEnforceMiddleware()(dispatcher)
 			g.dispatchers.Set(op.SchemaID, dispatcher)
 		}

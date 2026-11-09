@@ -538,6 +538,13 @@ gw.AddMCP(gateway.MCPHTTP, "https://mcp.example.com", gateway.As("tools"))
 | `ProtoImports(m)` | Imported `.proto` bytes for `AddProtoBytes`. |
 | `MaxConcurrency(n)`, `MaxConcurrencyPerInstance(n)` | Dispatch caps. |
 | `Timeout(d)` | Per-call timeout for this upstream. |
+| `RateLimit(rps, burst)`, `OperationRateLimit(op, rps, burst)` | Cluster-wide rate limit on calls to this upstream, split across the live nodes. See [`quota.md`](./quota.md). |
+| `OperationCost(op, units)` | Units one call counts against unit quotas and in the usage report. |
+
+Rate limits and costs are operator-side: a control-plane
+registration (`ServiceBinding`) cannot declare them. Set them with
+`gwag limit set` / `gwag cost set` for services that register
+remotely.
 
 In-process registration has no heartbeat, no start gate and no drain:
 the registration exists while the process runs.

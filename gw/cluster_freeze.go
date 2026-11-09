@@ -28,6 +28,8 @@ import (
 //	app and system keys   createAppKey, createSystemKey, revokeAppKey
 //	external dependents   putExternalDependent, reviewExternalDependent,
 //	                      deleteExternalDependent
+//	limits                setRateLimit, deleteRateLimit, setQuota,
+//	                      deleteQuota, setCost, deleteCost
 //	Schema Registry       REST writes (register, delete, config,
 //	                      mode, import); a register of a schema the
 //	                      subject already holds is answered
@@ -260,7 +262,7 @@ func registerClusterFreeze(api huma.API, g *Gateway) {
 		OperationID: "freezeCluster",
 		Method:      http.MethodPost,
 		Path:        "/admin/cluster/freeze",
-		Summary:     "Freeze the admin writes that change cluster state copied in a cutover (stable, deprecated, app and system keys, external dependents, Schema Registry writes) on every node, for ttl. Registrations and traffic are not frozen. Admin only.",
+		Summary:     "Freeze the admin writes that change cluster state copied in a cutover (stable, deprecated, app and system keys, external dependents, limits, quotas and costs, Schema Registry writes) on every node, for ttl. Registrations and traffic are not frozen. Admin only.",
 	}, func(ctx context.Context, in *freezeIn) (*freezeOut, error) {
 		ttl := freezeDefaultTTL
 		if in.Body.TTL != "" {

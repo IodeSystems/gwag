@@ -139,7 +139,10 @@ func (g *Gateway) rebuildGRPCIngressLocked() error {
 					}
 					inner := newProtoInvocationHandler(p, sd, md, headers, metrics, bpOpts)
 					info.bp = poolBackpressureConfig(p, methodLabel(sd, md), metrics, bpOpts)
-					add(grpcUnaryRoute(md, chain(inner), info))
+					// The route skips the dispatcher middlewares, so the
+					// limits gate wraps the chain here.
+					gt := g.limits.gate(p.key.namespace, p.key.version, string(md.Name()))
+					add(grpcUnaryRoute(md, gateHandler(gt, chain(inner)), info))
 				}
 			}
 		case slotKindInternalProto:

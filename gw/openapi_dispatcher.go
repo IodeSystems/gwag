@@ -142,9 +142,11 @@ func (d *openAPIDispatcher) roundTrip(ctx context.Context, args map[string]any) 
 		if rc := replayCallFrom(ctx); rc != nil {
 			rc.target = r.baseURL
 		}
+		obs, attemptCtx := policy.tm.startUpstreamObs(attemptCtx)
 		r.inflight.Add(1)
 		respBytes, err := dispatchOpenAPIRaw(attemptCtx, d.method, r.baseURL, d.pathTemplate, d.op, args, d.forwardHeaders, d.headerInjectors, r.httpClient, src.uploadStore)
 		r.inflight.Add(-1)
+		policy.tm.finishUpstreamObs(d.ns, d.ver, d.label, obs)
 		releaseInstance()
 		if err == nil {
 			r.health.success()

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 
@@ -131,6 +132,7 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			}
 			resp := acquireDynamicMessage(outputDesc)
 			r.inflight.Add(1)
+			invokeStart := time.Now()
 			if probe != nil {
 				err = r.conn.Invoke(callCtx, method, req, resp, probe.opts...)
 			} else {
@@ -138,6 +140,13 @@ func newProtoInvocationHandler(p *pool, sd protoreflect.ServiceDescriptor, md pr
 			}
 			r.inflight.Add(-1)
 			releaseInstance()
+			if tm := policy.tm; tm != nil && tm.sla != nil {
+				respBytes := -1
+				if err == nil {
+					respBytes = proto.Size(resp)
+				}
+				tm.observeGRPC(ns, ver, method, err, time.Since(invokeStart), proto.Size(req), respBytes)
+			}
 			if rc != nil {
 				// Each attempt overwrites; commit keeps the last.
 				rc.recordProto(callCtx, r.addr, method, req, resp, err)

@@ -164,6 +164,7 @@ services later.
 
 - [`docs/services.md`](./docs/services.md) — `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`, `controlclient`, options
 - [`docs/middleware.md`](./docs/middleware.md) — transforms, injection, outbound headers
+- [`docs/quota.md`](./docs/quota.md) — one way out to a rate-limited vendor API: cluster-wide limit, 429 pause, quotas per caller, usage report
 - [`docs/events-kafka.md`](./docs/events-kafka.md) — Kafka, Schema Registry, own / import / shadow
 - [`docs/lifecycle.md`](./docs/lifecycle.md) — register, version, deprecate, retire; external dependents; sunset rule
 - [`docs/versioning.md`](./docs/versioning.md) — breaking changes with hard-to-move clients: adapters, frozen snapshots, contract tests
@@ -312,6 +313,7 @@ Deeper breakdown: [`docs/comparison.md`](./docs/comparison.md).
 - [`docs/cutover.md`](./docs/cutover.md) — moving to a second cluster: replay verification, state copy, event stream mirror, switchover, load balancer switch; runnable in [`examples/cutover/`](./examples/cutover)
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — admin roles, boot token, delegate
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID and quota
+- [`docs/quota.md`](./docs/quota.md) — rate limits, upstream 429 pauses, quotas, costs, usage report
 - [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring, span reference
 
 **Performance**

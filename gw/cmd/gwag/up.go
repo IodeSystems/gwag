@@ -65,6 +65,8 @@ func upCmd(args []string) int {
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
+	usageOn := fs.Bool("usage", false, "Record usage per caller, service, operation and day for 'gwag usage' (GET /api/admin/usage); stored in the gwag-usage bucket in a cluster")
+	usageRetention := fs.Duration("usage-retention", 0, "How long usage day rows are kept (default 35 days); in a cluster, the gwag-usage bucket max age when this node creates it")
 	callerIDPublic := fs.Bool("caller-id-public", false, "Take each call's caller id from the X-Caller-Id header (gRPC metadata caller-id) for usage stats, deprecatedStats and the caller metric label. Forgeable: for dev, or behind a proxy that sets the header. Default off: every caller is \"unknown\"")
 	requireAppKeys := fs.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY; mint with 'gwag key create'), operator RPCs the admin token. Default off: the control plane is open")
 	switchoverOn := fs.Bool("switchover", false, "Blue side of a cutover: forward a share of GraphQL requests to green (docs/cutover.md). The share starts at 0; set it with gwag cluster switchover. Implied by --switchover-target")
@@ -186,6 +188,9 @@ func upCmd(args []string) int {
 	}
 	if *callerIDPublic {
 		gwOpts = append(gwOpts, gateway.WithCallerIDPublic())
+	}
+	if *usageOn {
+		gwOpts = append(gwOpts, gateway.WithUsage(gateway.UsageOptions{Retention: *usageRetention}))
 	}
 	if *switchoverOn || *switchoverTarget != "" {
 		gwOpts = append(gwOpts, gateway.WithSwitchover(gateway.SwitchoverOptions{Target: *switchoverTarget, StickyHeader: *switchoverSticky}))

@@ -72,6 +72,9 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
 	hash := hashIntrospection(rawIntro)
+	if err := g.limits.setCode(ns, ver, sc.limits); err != nil {
+		return fmt.Errorf("gateway: AddGraphQL(%s): %w", endpoint, err)
+	}
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -414,9 +417,11 @@ func (s *graphQLSource) roundTrip(ctx context.Context, label, query string, vars
 		if rc := replayCallFrom(ctx); rc != nil {
 			rc.target = r.endpoint
 		}
+		obs, attemptCtx := policy.tm.startUpstreamObs(attemptCtx)
 		r.inflight.Add(1)
 		resp, err := dispatchGraphQL(attemptCtx, r.httpClient, r.endpoint, query, vars, s.forwardHeaders)
 		r.inflight.Add(-1)
+		policy.tm.finishUpstreamObs(s.namespace, s.version, label, obs)
 		if err == nil {
 			r.health.success()
 			if probe != nil {
@@ -564,18 +569,25 @@ func dispatchGraphQL(
 	if client == nil {
 		client = http.DefaultClient
 	}
+	obs := upstreamObsFrom(ctx)
+	obs.sent(req)
 	resp, err := doUpstreamHTTP(client, req)
 	if err != nil {
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: %s", endpoint, err.Error()), err)
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
+	obs.answered(resp.StatusCode, len(respBytes))
 	if err != nil {
 		return nil, rejectUpstream(upstreamClassTransport, CodeInternal, fmt.Sprintf("graphql: %s: read body: %s", endpoint, err.Error()), err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, rejectUpstreamStatus(resp.StatusCode,
+		rej := rejectUpstreamStatus(resp.StatusCode,
 			fmt.Sprintf("graphql: %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBytes))))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			markThrottled(rej, resp.Header)
+		}
+		return nil, rej
 	}
 	var out graphQLResponse
 	if err := json.Unmarshal(respBytes, &out); err != nil {

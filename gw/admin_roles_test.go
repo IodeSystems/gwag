@@ -150,6 +150,14 @@ var rolesMatrix = []roleCase{
 	{"stopClusterMirror", "POST", "/admin/cluster/mirror/stop", `{}`, adminRoleAdmin},
 	{"drainInstance", "POST", "/admin/instances/nobody/drain", `{}`, adminRoleAdmin},
 	{"drain", "POST", "/admin/drain", `{"timeoutSeconds":1}`, adminRoleAdmin},
+	{"listLimits", "GET", "/admin/limits", "", adminRoleDev},
+	{"setRateLimit", "PUT", "/admin/limits/rate", `{"service":"vendor","rps":1,"burst":1}`, adminRoleAdmin},
+	{"deleteRateLimit", "DELETE", "/admin/limits/rate?service=vendor", "", adminRoleAdmin},
+	{"setQuota", "PUT", "/admin/limits/quota", `{"default":true,"limit":1,"per":"1m"}`, adminRoleAdmin},
+	{"deleteQuota", "DELETE", "/admin/limits/quota?default=true", "", adminRoleAdmin},
+	{"setCost", "PUT", "/admin/limits/cost", `{"service":"vendor","operation":"op","units":2}`, adminRoleAdmin},
+	{"deleteCost", "DELETE", "/admin/limits/cost?service=vendor&operation=op", "", adminRoleAdmin},
+	{"getUsage", "GET", "/admin/usage", "", adminRoleDev},
 }
 
 // rolesSystemOps are the operations a system key may call
