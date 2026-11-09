@@ -924,6 +924,14 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	} else if !gone {
 		return nil, fmt.Errorf("controlplane: peer %s is still alive — wait for TTL (%s) to expire", req.GetNodeId(), t.peerTTL)
 	}
+	// Read the live set before the delete: the watch delivers the
+	// delete below and can drop the peer from it before this
+	// goroutine looks, which made Removed false for a peer that was
+	// live.
+	t.mu.Lock()
+	_, wasLive := t.live[req.GetNodeId()]
+	t.mu.Unlock()
+
 	// Delete the key, expired or not. An expiry raises no watch event
 	// below levelDeleteMarkers, so every other node would keep the peer
 	// in its live set until its sweep; a delete reaches every watcher
@@ -936,7 +944,6 @@ func (cp *controlPlane) ForgetPeer(ctx context.Context, req *cpv1.ForgetPeerRequ
 	// Drop it from our local live set too, in case the watch has not
 	// delivered the delete yet, and reconcile.
 	t.mu.Lock()
-	_, wasLive := t.live[req.GetNodeId()]
 	delete(t.live, req.GetNodeId())
 	desired := t.gw.cfg.clusterReplicas.For(len(t.live))
 	t.mu.Unlock()
