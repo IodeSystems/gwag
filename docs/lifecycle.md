@@ -57,7 +57,7 @@ A service can register at one of three **tiers** per namespace:
 type UserQuery {
   unstable: UserUnstableQuery @deprecated(reason: "unstable — pin to stable or vN for releases")
   stable:   UserV2Query        # alias to the latest cut (currently v2)
-  v1:       UserV1Query @deprecated(reason: "use v2")
+  v1:       UserV1Query @deprecated(reason: "v2 is current")
   v2:       UserV2Query
   # newest fields hoisted to the top
   profile(id: ID!): Profile     # from stable / v2
