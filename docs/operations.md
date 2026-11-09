@@ -30,6 +30,12 @@ states:
   It stays so until it runs a binary that can
   ([`cluster.md`](./cluster.md#feature-levels)).
 
+A cluster node that has replayed the registry also reports
+`"jetstream": "ok"`, or `"unavailable"` with `"degraded": true` when
+JetStream takes no writes (no quorum). That keeps HTTP 200
+`"serving"`: the node still routes every service it knows. See
+[`running.md`](./running.md#health-without-a-quorum).
+
 Wire `/health` to your load balancer's health check. It is the only
 endpoint: it answers both "is the process up" and "may it take
 traffic". On Kubernetes use it as the readiness probe; a liveness

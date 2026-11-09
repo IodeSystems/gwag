@@ -216,6 +216,11 @@ you choose). It answers:
 | 503 | `draining` | SIGTERM or `Drain` received. Pull the node. |
 | 503 | `incompatible` | The binary cannot run at the cluster's feature level; `error` says why. See [Feature levels](#feature-levels). |
 
+A 200 `serving` body with `"jetstream": "unavailable"` and
+`"degraded": true` is a node whose JetStream has no quorum (2 of 3
+nodes down). Keep it in rotation: it routes every service it knows;
+writes fail. See [`running.md`](./running.md#health-without-a-quorum).
+
 Observed on a node sent SIGTERM (default `--shutdown-delay 5s`, probe
 every 0.5 s):
 
@@ -268,6 +273,8 @@ three control-plane addresses. n1 was killed with `kill -9`.
   entry expires. `cluster_peers` fell from 3 to 2 once the NATS route
   closed.
 - **Quorum.** With 3 nodes at R3, losing one keeps a JetStream quorum.
+  Losing two leaves the survivor routing from its registry, with
+  writes refused; measured in [`running.md`](./running.md#measured-failures).
 
 ## Forget a dead peer
 

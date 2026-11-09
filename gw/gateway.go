@@ -169,6 +169,12 @@ type Gateway struct {
 	// while it is Pending. See health.go.
 	registrySync atomic.Int32
 
+	// clusterWriteFailed is true while this node's last peer-entry
+	// refresh failed: JetStream takes no writes (no quorum). The node
+	// keeps routing from the registry it holds; health stays 200 and
+	// reports "jetstream":"unavailable". Set by the peer refresh loop.
+	clusterWriteFailed atomic.Bool
+
 	// clusterLevel is the cluster's active feature level as last read
 	// from the gwag-cluster bucket (clusterLevelMax when standalone).
 	// clusterLevelErr is non-nil while this binary cannot run at it;

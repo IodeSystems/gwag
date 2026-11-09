@@ -119,6 +119,12 @@ func (f *Fixture) MustEcho(line, msg string, opts ...ReqOpt) Echo {
 // (/api/ingress): POST /<package>.FixtureService/Echo for proto, the
 // spec path /<ns>/<line>/echo for OpenAPI.
 func (f *Fixture) EchoREST(ctx context.Context, line, msg string, opts ...ReqOpt) (Echo, error) {
+	return f.EchoRESTVia(ctx, f.Gateway, line, msg, opts...)
+}
+
+// EchoRESTVia is EchoREST through another gateway, e.g. a different
+// cluster node.
+func (f *Fixture) EchoRESTVia(ctx context.Context, gw *Gateway, line, msg string, opts ...ReqOpt) (Echo, error) {
 	var path string
 	switch f.Opts.Kind {
 	case KindProto:
@@ -129,7 +135,7 @@ func (f *Fixture) EchoREST(ctx context.Context, line, msg string, opts ...ReqOpt
 		return Echo{}, fmt.Errorf("EchoREST: no REST route for kind %s", f.Opts.Kind)
 	}
 	var w echoWire
-	if err := f.Gateway.Post(ctx, path, map[string]any{"msg": msg}, &w, opts...); err != nil {
+	if err := gw.Post(ctx, path, map[string]any{"msg": msg}, &w, opts...); err != nil {
 		return Echo{}, err
 	}
 	return w.echo()
@@ -152,6 +158,11 @@ func (f *Fixture) EchoConnect(ctx context.Context, line, msg string, opts ...Req
 // the gateway's control-plane port (GRPCUnknownHandler). caller ""
 // sends DefaultCaller as caller-id metadata.
 func (f *Fixture) EchoGRPC(ctx context.Context, line, msg, caller string) (Echo, error) {
+	return f.EchoGRPCVia(ctx, f.Gateway, line, msg, caller)
+}
+
+// EchoGRPCVia is EchoGRPC through another gateway's gRPC port.
+func (f *Fixture) EchoGRPCVia(ctx context.Context, gw *Gateway, line, msg, caller string) (Echo, error) {
 	if f.Opts.Kind != KindProto {
 		return Echo{}, fmt.Errorf("EchoGRPC: proto fixtures only")
 	}
@@ -166,7 +177,7 @@ func (f *Fixture) EchoGRPC(ctx context.Context, line, msg, caller string) (Echo,
 		caller = DefaultCaller
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "caller-id", caller)
-	if err := f.Gateway.grpcConn().Invoke(ctx, EchoMethod(f.Opts.Namespace, line), in, out); err != nil {
+	if err := gw.grpcConn().Invoke(ctx, EchoMethod(f.Opts.Namespace, line), in, out); err != nil {
 		return Echo{}, err
 	}
 	b, err := protojson.Marshal(out)

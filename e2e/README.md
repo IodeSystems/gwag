@@ -53,6 +53,8 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 | `TestS12KafkaEvents` | the same channels over Kafka with the Schema Registry serde, services registered on a 3-node cluster: start gate, graph and sunset, Go group, TypeScript and Python delivery, Confluent's Java deserializer reads the records, `gwag gen --registry` import of a Confluent-written topic, retry topic and DLQ, gateway node loss |
 | `TestS13ReplicaSwap` | replica swap upgrade under load: 3 nodes on the v2.11.0 gateway, 3 at HEAD join one at a time, each old node is evacuated (after each, every stream at R3 and on no evacuated node), stopped and forgotten, then the cluster is finalized; no failed call, no lost event, state intact, every stream on the new nodes |
 | `TestS13bRollbackBeforeFinalize` | 2 HEAD nodes join a v2.11.0 cluster and leave again before finalize (the last with `evacuate --leave`); the old cluster keeps its level, streams and meta quorum |
+| `TestS14FailureModes` | failure modes under traffic through a health-checked LB, 3 nodes: the only instance of a service killed, one of two instances killed, 1 of 3 nodes killed, 2 of 3 nodes killed (no JetStream quorum: the survivor keeps routing, writes fail); per traffic kind (GraphQL, REST, gRPC, `ps.pub`, `ps_sub`, typed events) the failed calls and recovery time, logged as `S14 \|` lines for [`docs/running.md`](../docs/running.md) |
+| `TestS14bStandaloneRestart` | one node with JetStream on disk killed and restarted: KV state kept, the service registers again by heartbeat |
 
 `TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
 and `pnpm` are on `PATH`, and the Python listener when `uv` is; it
@@ -121,6 +123,7 @@ env.ClusterWithNodeArgs(n, opts, func(name, dataDir) []string) *Cluster   // plu
   c.WaitStreamReplicas(t, n, timeout, streams...)       // the same for any named stream
   c.NATS(t, opts...) *nats.Conn · c.NATSURLs() · c.JetStream(t)   // clients on the nodes' NATS ports
   c.LB(t, LBOpts) · lb.WaitProbeFails(t, g, timeout)    // probe fails, pulled or not
+  lb.Next()                                             // next node in rotation, no call counted (a WebSocket)
 env.Fixture(gw, FixtureOpts{...}) *Fixture           // waits for ready unless NoWait
   FixtureOpts.FailoverGateways []*Gateway            // --gateway-alt per node
 env.Start(name, bin, args...) *Proc                  // any other process
@@ -150,6 +153,7 @@ ReqOpt: Caller("orders/v1") · Header(k, v) · Bearer(tok)    // default X-Calle
 Fixture: Echo(ctx, line, msg, opts...) (Echo, error)  // GraphQL; line "" = latest
          EchoVia(ctx, gw, line, msg) · MustEcho(line, msg)
          EchoREST · EchoConnect (proto) · EchoGRPC(ctx, line, msg, caller) (proto)
+         EchoRESTVia(ctx, gw, line, msg) · EchoGRPCVia(ctx, gw, line, msg, caller)
          EchoQuery(line) (query, dataPath) · MetricMethod(line)
          SetFaults(Faults{LatencyMs, ErrorRate, Hang, CrashAfter}) · Stats()
          Restart() · WaitReady() · Proc · Addr · ControlAddr

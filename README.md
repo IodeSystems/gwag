@@ -203,10 +203,15 @@ each environment is protected from changes that would break it.
   version stays until nothing depends on it.
 - **Who may register.** App keys scoped to namespaces, with expiry for
   monthly rotation; admin and dev roles for operators.
+- **Running the gateway.** One node for development, three behind a
+  load balancer for production; any node serves every service. What
+  fails when a node, a service or the load balancer goes down, and how
+  long recovery takes, is measured.
 - **Upgrading gwag itself.** Rolling restarts; a replica swap with
   cluster feature levels for version changes; or a cutover to a second
   cluster with replay verification, state copy and gradual switchover.
 
+- [`docs/running.md`](./docs/running.md) — topologies, routing with several nodes, measured failure modes, single points of failure
 - [`docs/cluster.md`](./docs/cluster.md) — 3-node setup, node loss, rolling upgrade, replica swap, feature levels
 - [`docs/cutover.md`](./docs/cutover.md) — second cluster: replay verify, state copy, switchover, event stream mirror
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — roles, boot token, AdminAuthorizer delegate
@@ -307,6 +312,7 @@ Deeper breakdown: [`docs/comparison.md`](./docs/comparison.md).
 
 **Operations**
 
+- [`docs/running.md`](./docs/running.md) — topologies, routing, measured failure modes, single points of failure
 - [`docs/deploy.md`](./docs/deploy.md) — `gwag deploy` and exported configs
 - [`docs/operations.md`](./docs/operations.md) — health, drain, backpressure, metrics
 - [`docs/cluster.md`](./docs/cluster.md) — clustering, node loss, upgrades, feature levels

@@ -229,5 +229,6 @@ that for you.
 
 ## Related
 
+- [`running.md`](./running.md) — topologies, routing, measured failure modes.
 - [`cluster.md`](./cluster.md) — flags, bootstrap rule, upgrades, load balancer probe.
 - [`operations.md`](./operations.md) — health states and drain.
