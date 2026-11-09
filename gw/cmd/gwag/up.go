@@ -70,6 +70,10 @@ func upCmd(args []string) int {
 	switchoverOn := fs.Bool("switchover", false, "Blue side of a cutover: forward a share of GraphQL requests to green (docs/cutover.md). The share starts at 0; set it with gwag cluster switchover. Implied by --switchover-target")
 	switchoverTarget := fs.String("switchover-target", "", "Green's GraphQL URL for --switchover (e.g. http://green:8080/api/graphql); gwag cluster switchover --target can set it instead")
 	switchoverSticky := fs.String("switchover-sticky-header", "", "With --switchover: request header that keeps a client on one side when it has no caller id (e.g. X-Client-Id); else the source address")
+	replayTarget := fs.String("replay-verify-target", "", "Blue side of replay verification (docs/cutover.md): green's verify URL (e.g. http://green:8080/api/admin/replay/verify). Records a sample of GraphQL requests with their upstream calls and posts them there. Default off")
+	replayTokenFile := fs.String("replay-verify-token-file", "", "With --replay-verify-target: file holding the bearer for green (a system key minted on green). Read for every post, so it may appear or change after start")
+	replayRate := fs.Float64("replay-verify-sample-rate", 1, "With --replay-verify-target: fraction (0..1] of GraphQL requests recorded")
+	replayEndpoint := fs.Bool("replay-verify-endpoint", false, "Green side of replay verification: serve POST /api/admin/replay/verify (system key or admin token). Default off")
 	mirrorListen := fs.String("mirror-listen", "", "Blue side of the event stream mirror (docs/cutover.md): NATS leafnode listen address (e.g. :14223) for a green cluster, which connects with a system key of this cluster. Default off. Set on every node")
 	mirrorFrom := fs.String("mirror-from", "", "Green side of the event stream mirror: blue's --mirror-listen address(es), comma-separated. Needs --mirror-key-file or GWAG_MIRROR_KEY. Default off. Set on every node; start the mirror with gwag cluster mirror")
 	mirrorKeyFile := fs.String("mirror-key-file", "", "With --mirror-from: file holding a system key minted on blue (gwag key create --system). Env GWAG_MIRROR_KEY works the same when the flag is empty")
@@ -186,6 +190,12 @@ func upCmd(args []string) int {
 	if *switchoverOn || *switchoverTarget != "" {
 		gwOpts = append(gwOpts, gateway.WithSwitchover(gateway.SwitchoverOptions{Target: *switchoverTarget, StickyHeader: *switchoverSticky}))
 	}
+	replayOpts, err := replayVerifyOptions(*replayTarget, *replayTokenFile, *replayRate, *replayEndpoint)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	gwOpts = append(gwOpts, replayOpts...)
 	srOpt, err := srFlags.option()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
