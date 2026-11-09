@@ -88,14 +88,15 @@ CI refuses a breaking change, an old version stays as adapters until
 its callers move, the gateway refuses to retire a version that is
 still used, and gwag itself upgrades without downtime.
 
-Nobody starts there. The next section starts from where you are; each
-path ends in the same place.
+Nobody starts there. Most start with one service, with a tangle of
+existing services, or with another tool that no longer fits. Each
+path below ends in the same place.
 
 ## Start from where you are
 
-### A new project, one binary
+### One service
 
-You write the service and its clients, often alone. Use **gat**:
+A new project: you write the service and its clients, often alone. Use **gat**:
 write each handler once as a huma operation, and every consumer in
 your stack takes the surface that suits it.
 
@@ -127,63 +128,68 @@ register it with a gwag gateway; the surfaces do not change.
 > each lost parameter; plain huma does not warn.
 > [Details](./docs/gat.md#trap-parameters-on-an-unexported-field).
 
-### Calling external services you do not own
+### A tangle of existing services
 
-You depend on services other teams or vendors run: an OpenAPI spec,
-a GraphQL endpoint, an MCP server, Kafka topics. Map them into one
-typed surface without changing them:
-
-```bash
-gwag serve --openapi vendor.yaml --to https://api.vendor.com   # one upstream, three surfaces
-```
-
-```go
-gw := gateway.New()
-gw.AddOpenAPI("./billing-openapi.json", gateway.As("billing"), gateway.To("https://billing.internal"))
-gw.AddGraphQL("https://catalog.internal/graphql", gateway.As("catalog"))
-gw.AddProto("./protos/auth.proto", gateway.To("authsvc:50051"))
-```
-
-- **Typed clients for all of them** from the gateway's exports, in the
-  format your code already uses.
-- **Shape them:** hide fields, fill arguments from the caller's
-  context, stamp outbound headers (`InjectType`, `InjectPath`,
-  `InjectHeader`), forward or replace auth per upstream.
-- **Typed events over their topics:** `gwag gen` writes publish and
-  listen code for Go, TypeScript and Python; import a corp Schema
-  Registry's types, or keep your own copy with a compatibility check.
-
-- [`docs/services.md`](./docs/services.md) — `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`, options
-- [`docs/middleware.md`](./docs/middleware.md) — transforms, injection, outbound headers
-- [`docs/events-kafka.md`](./docs/events-kafka.md) — Kafka, Schema Registry, own / import / shadow
-
-### Many existing services, no common contract
-
-A company with services in different formats, no version rules, and
-no record of who calls what. Put a gateway in front first; change the
+The common case in a company: services in different formats, vendor
+APIs and Kafka topics nobody fully mapped, no version rules, and no
+record of who calls what. Put a gateway in front first; change the
 services later.
 
-1. **Register services as they are.** Point the gateway at their
-   existing `.proto` or OpenAPI files (`--proto file=host:port`, or a
-   few lines of `controlclient` in the service). No code change in
-   the service itself.
-2. **See what exists.** The admin UI and API list every service,
-   version and instance, the dependency graph, and usage per caller
-   (`WithCallerHeaders`, HMAC or a delegate for caller identity).
-3. **Find what is still used.** `deprecatedStats` and usage edges show
-   who calls each version; consumers outside the gateway are declared
-   as external dependents with a review date.
+1. **Register everything as it is.** Point the gateway at the
+   existing `.proto` and OpenAPI files, GraphQL endpoints and MCP
+   servers, yours and other teams'. No code change in those services.
+
+   ```go
+   gw := gateway.New()
+   gw.AddProto("./protos/auth.proto", gateway.To("authsvc:50051"))
+   gw.AddOpenAPI("./billing-openapi.json", gateway.As("billing"), gateway.To("https://billing.internal"))
+   gw.AddGraphQL("https://catalog.internal/graphql", gateway.As("catalog"))
+   ```
+
+   Or from the command line (`gwag --proto file=host:port`,
+   `gwag serve --openapi vendor.yaml --to URL`), or a few lines of
+   `controlclient` in services you own.
+2. **Type what you call.** Every client gets typed code from the
+   gateway's exports. Hide fields, fill arguments from the caller's
+   context, set outbound auth per upstream. For Kafka, `gwag gen`
+   writes typed publish and listen code over the corp topics, with
+   types imported from the corp Schema Registry.
+3. **See what exists and who uses it.** The admin UI and API list every
+   service, version and instance, the dependency graph, and usage per
+   caller. Consumers outside the gateway are declared as external
+   dependents with a review date.
 4. **Version the ones that change.** Register `v2` next to `v1`; keep
    `v1` alive as adapters over `v2` in the same binary for clients
    that cannot move; retire it when nothing depends on it.
 
+- [`docs/services.md`](./docs/services.md) — `AddProto` / `AddOpenAPI` / `AddGraphQL` / `AddMCP`, `controlclient`, options
+- [`docs/middleware.md`](./docs/middleware.md) — transforms, injection, outbound headers
+- [`docs/events-kafka.md`](./docs/events-kafka.md) — Kafka, Schema Registry, own / import / shadow
 - [`docs/lifecycle.md`](./docs/lifecycle.md) — register, version, deprecate, retire; external dependents; sunset rule
 - [`docs/versioning.md`](./docs/versioning.md) — breaking changes with hard-to-move clients: adapters, frozen snapshots, contract tests
 - [`examples/versioning/`](./examples/versioning) — `orders` v1 + v2 in one gat service, Go and TS clients, walkthrough to retiring v1
 
-### Running gwag as the organization's gateway
+### Coming from another tool
 
-The end state above, kept in place. You run gwag for every team, and
+You have a gateway or translation layer that does part of the job.
+gwag can sit next to it or in front of it, so services move one at a
+time.
+
+| You run | With gwag |
+|---|---|
+| Apollo Federation, Hive Gateway, graphql-mesh, Cosmo | Register the existing graph's endpoint with `AddGraphQL` as one namespace, then move services to their own registrations one by one. gwag stitches by namespace and does not merge entities; keep Federation for types that several subgraphs extend. |
+| Kong, Envoy, a cloud API gateway | Keep it at the edge for TLS and rate limits; put gwag behind it for schemas, versions and typed clients. |
+| grpc-gateway, a hand-written BFF, REST-to-gRPC glue | Register the `.proto`; gwag serves REST and GraphQL from it. Delete the glue once its clients use the gateway. |
+| Hasura | Different layer: it wraps databases. Register its GraphQL endpoint next to your services. |
+| A Confluent Schema Registry | Connect to it for framing and imported types; later gwag can serve the registry API itself, with the corp ids kept in their own context. |
+
+- [`docs/comparison.md`](./docs/comparison.md) — gwag vs Federation, Kong, meshes, service discovery
+- [`docs/federation.md`](./docs/federation.md) — when namespace stitching is enough and when it is not
+- [`docs/schema-registry.md`](./docs/schema-registry.md) — gwag as a Schema Registry; import with ids kept
+
+## Running it for the whole organization
+
+The end state, kept in place. You run gwag for every team, and
 each environment is protected from changes that would break it.
 
 - **Tiers per environment.** `--allow-tier stable,vN` on production
@@ -256,8 +262,6 @@ host. Per-caller numbers and method:
 - **Apollo Federation** — entity-merging across services that share
   entity identity. gwag stitches by namespace; if you actually need
   entity-merging, use Federation. See [`docs/federation.md`](./docs/federation.md).
-- **Hasura** — wraps databases. gwag wraps services. Same shape,
-  opposite end of the stack.
 - **Kong / Envoy / service meshes** — route bytes; don't read
   schemas or emit clients.
 - **Hive Gateway / graphql-mesh** — closest peers on multi-format
