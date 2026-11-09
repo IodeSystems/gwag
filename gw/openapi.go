@@ -807,6 +807,11 @@ func buildOpenAPIRequest(
 		contentType = mpType
 		multipartCloseups = ups
 	} else if bv, ok := gqlArgs["body"]; ok && bv != nil {
+		if op.RequestBody != nil && op.RequestBody.Value != nil {
+			if mt := op.RequestBody.Value.Content.Get("application/json"); mt != nil && mt.Schema != nil {
+				bv = integersAsNumbers(bv, mt.Schema.Value)
+			}
+		}
 		b, err := json.Marshal(bv)
 		if err != nil {
 			return nil, "", nil, Reject(CodeInvalidArgument, fmt.Sprintf("openapi: marshal body: %s", err.Error()))
@@ -836,6 +841,45 @@ func buildOpenAPIRequest(
 	}
 	releaseInjectorMap(injected)
 	return req, full, multipartCloseups, nil
+}
+
+// integersAsNumbers turns a decimal string at a schema position of
+// type integer into a JSON number. 64-bit integers reach the
+// dispatcher as strings from the gRPC / Connect ingress (proto JSON
+// form, see protocodec.ValueToAny); a JSON body must carry them as
+// numbers or the upstream refuses them ("expected integer"). Maps are
+// changed in place; a string that is not an integer is left alone for
+// the upstream to refuse.
+func integersAsNumbers(v any, s *openapi3.Schema) any {
+	if s == nil {
+		return v
+	}
+	switch x := v.(type) {
+	case string:
+		if s.Type.Is("integer") {
+			if _, err := strconv.ParseInt(x, 10, 64); err == nil {
+				return json.Number(x)
+			}
+			if _, err := strconv.ParseUint(x, 10, 64); err == nil {
+				return json.Number(x)
+			}
+		}
+	case map[string]any:
+		for k, e := range x {
+			if p := s.Properties[k]; p != nil {
+				x[k] = integersAsNumbers(e, p.Value)
+			} else if ap := s.AdditionalProperties.Schema; ap != nil {
+				x[k] = integersAsNumbers(e, ap.Value)
+			}
+		}
+	case []any:
+		if s.Items != nil {
+			for i, e := range x {
+				x[i] = integersAsNumbers(e, s.Items.Value)
+			}
+		}
+	}
+	return v
 }
 
 // isMultipartOp reports whether the OpenAPI op declares its request
