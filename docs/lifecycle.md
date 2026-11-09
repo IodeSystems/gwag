@@ -193,6 +193,10 @@ version only grows. Classification:
 Stop heartbeating; the gateway evicts after TTL. The schema
 rebuilds; the field disappears.
 
+Serving an old version next to a new one until its callers move, and
+the order of deprecate, measure, declare, move and retire, worked
+through on a real service: [`versioning.md`](./versioning.md).
+
 ### Channel subscriptions
 
 A registration that lists `subscribes` (channel key + consumer group;

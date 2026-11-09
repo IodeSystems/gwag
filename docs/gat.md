@@ -436,6 +436,11 @@ the REST paths of each spec, so both `/v1/...` and `/v2/...` must be
 reachable from the gateway. After a plain `RegisterHuma`,
 `OpenAPISpec("v1")` returns that API's document.
 
+A complete service with v1 as an adapter over the domain, frozen
+snapshots, contract tests and the steps to retire v1:
+[`versioning.md`](./versioning.md),
+[`examples/versioning`](../examples/versioning).
+
 Limits: `DispatchObserver` and `DispatchHook` get the OperationID,
 which two versions share; tell them apart with a huma middleware per
 API if needed. The deprecated `Subscribe` works on one API only; use

@@ -297,6 +297,7 @@ peers: [`compare/comparison.md`](./compare/comparison.md) (harness:
 **Operations** — wiring the gateway into a real deployment:
 
 - [`docs/lifecycle.md`](./docs/lifecycle.md) — register / version / deprecate / retire; tier model; CI gate
+- [`docs/versioning.md`](./docs/versioning.md) — breaking changes with clients that are hard to move: v1 as adapters in one binary, frozen snapshots, contract tests, retiring a version
 - [`docs/directives.md`](./docs/directives.md) — `@deprecated` rendering; rationale for not carrying custom directives
 - [`docs/operations.md`](./docs/operations.md) — health, drain, backpressure, metrics
 - [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring + span reference
