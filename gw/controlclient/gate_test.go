@@ -88,7 +88,7 @@ func TestSelfRegister_BlocksUntilDependsPresent(t *testing.T) {
 		t.Fatalf("SelfRegister returned while library absent: err=%v", r.err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if !logs.contains("waiting for dependencies: orders/v1 needs library(v1|v2)") {
+	if !logs.contains("waiting: orders/v1 needs library(v1|v2)") {
 		t.Errorf("no waiting log: %v", logs.lines)
 	}
 

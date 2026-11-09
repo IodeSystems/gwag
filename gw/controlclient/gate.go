@@ -68,6 +68,12 @@ type BindingStatus struct {
 	Version   string
 	State     State
 	Depends   []DependencyStatus
+	// Verification is the gateway's verification of this instance
+	// (Service.HealthURL / SpecURL): "" (not verified), "pending",
+	// "green" or "red". A binding that is not green is WAITING.
+	Verification string
+	// VerifyReasons are the failed checks when Verification is red.
+	VerifyReasons []string
 }
 
 // Bindings returns the start-gate state of each Service, from the
@@ -115,7 +121,13 @@ func (r *Registration) PresentLines(service string) []string {
 func bindingsFromProto(in []*cpv1.BindingStatus) []BindingStatus {
 	out := make([]BindingStatus, 0, len(in))
 	for _, b := range in {
-		bs := BindingStatus{Namespace: b.GetNamespace(), Version: b.GetVersion(), State: stateFromProto(b.GetState())}
+		bs := BindingStatus{
+			Namespace:     b.GetNamespace(),
+			Version:       b.GetVersion(),
+			State:         stateFromProto(b.GetState()),
+			Verification:  verificationName(b.GetVerification()),
+			VerifyReasons: append([]string(nil), b.GetVerifyReasons()...),
+		}
 		for _, d := range b.GetDepends() {
 			bs.Depends = append(bs.Depends, DependencyStatus{
 				Service:      d.GetService(),
@@ -128,6 +140,18 @@ func bindingsFromProto(in []*cpv1.BindingStatus) []BindingStatus {
 		out = append(out, bs)
 	}
 	return out
+}
+
+func verificationName(s cpv1.VerificationState) string {
+	switch s {
+	case cpv1.VerificationState_VERIFICATION_STATE_PENDING:
+		return "pending"
+	case cpv1.VerificationState_VERIFICATION_STATE_GREEN:
+		return "green"
+	case cpv1.VerificationState_VERIFICATION_STATE_RED:
+		return "red"
+	}
+	return ""
 }
 
 func stateFromProto(s cpv1.InstanceState) State {
@@ -148,8 +172,9 @@ func (r *Registration) setBindings(in []*cpv1.BindingStatus) {
 	r.mu.Unlock()
 }
 
-// waiting renders the waiting bindings and their missing deps:
-// "orders/v1 needs library(v1|v2)". "" when none waits.
+// waiting renders the waiting bindings and why: missing deps
+// ("orders/v1 needs library(v1|v2)") and failed verification
+// ("orders/v1 red: health ...: status 500"). "" when none waits.
 func (r *Registration) waiting() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -170,7 +195,18 @@ func (r *Registration) waiting() string {
 				miss = append(miss, d.Service+"("+strings.Join(d.Lines, "|")+")")
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s/%s needs %s", b.Namespace, b.Version, strings.Join(miss, ", ")))
+		if len(miss) > 0 {
+			parts = append(parts, fmt.Sprintf("%s/%s needs %s", b.Namespace, b.Version, strings.Join(miss, ", ")))
+		}
+		switch b.Verification {
+		case "red":
+			parts = append(parts, fmt.Sprintf("%s/%s red: %s", b.Namespace, b.Version, strings.Join(b.VerifyReasons, "; ")))
+		case "pending":
+			parts = append(parts, fmt.Sprintf("%s/%s verification pending", b.Namespace, b.Version))
+		}
+		if len(miss) == 0 && b.Verification != "red" && b.Verification != "pending" {
+			parts = append(parts, fmt.Sprintf("%s/%s waiting", b.Namespace, b.Version))
+		}
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "; ")
@@ -289,16 +325,16 @@ func (r *Registration) waitReady(ctx context.Context) error {
 		w := r.waiting()
 		if w == "" {
 			if lastLog != "" {
-				r.logger("controlclient: dependencies present, starting")
+				r.logger("controlclient: ready, starting")
 			}
 			return nil
 		}
 		if w != lastLog || time.Since(lastLogAt) >= waitLogEvery {
-			r.logger("controlclient: waiting for dependencies: %s", w)
+			r.logger("controlclient: waiting: %s", w)
 			lastLog, lastLogAt = w, time.Now()
 		}
 		if err := sleepCtx(ctx, poll); err != nil {
-			return fmt.Errorf("controlclient: still waiting for dependencies (%s): %w", w, err)
+			return fmt.Errorf("controlclient: still waiting (%s): %w", w, err)
 		}
 		r.mu.Lock()
 		id := r.id
@@ -307,7 +343,7 @@ func (r *Registration) waitReady(ctx context.Context) error {
 		resp, err := gw.client.Heartbeat(ctx, &cpv1.HeartbeatRequest{RegistrationId: id})
 		if err != nil {
 			if ctx.Err() != nil {
-				return fmt.Errorf("controlclient: still waiting for dependencies (%s): %w", w, ctx.Err())
+				return fmt.Errorf("controlclient: still waiting (%s): %w", w, ctx.Err())
 			}
 			r.logger("controlclient: heartbeat to %s while waiting: %v", gw.addr, err)
 			if len(r.gws) > 1 {
@@ -320,7 +356,7 @@ func (r *Registration) waitReady(ctx context.Context) error {
 				continue
 			}
 			if cerr := sleepCtx(ctx, backoff); cerr != nil {
-				return fmt.Errorf("controlclient: still waiting for dependencies (%s): %w", w, cerr)
+				return fmt.Errorf("controlclient: still waiting (%s): %w", w, cerr)
 			}
 			backoff = nextBackoff(backoff)
 			continue
