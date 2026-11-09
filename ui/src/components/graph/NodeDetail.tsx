@@ -16,6 +16,13 @@ import { formatCount, type Graph, type GraphLine } from './model';
 
 type Instance = NonNullable<GraphLine['instances']>[number];
 
+/** Verification state → chip. "none": the instance declares no verify. */
+const verifyChip: Record<string, { status: 'ready' | 'waiting' | 'degraded'; label: string }> = {
+  green: { status: 'ready', label: 'Green' },
+  pending: { status: 'waiting', label: 'Pending' },
+  red: { status: 'degraded', label: 'Red' },
+};
+
 const drainLabel: Record<string, string> = {
   draining: 'Draining',
   blocked: 'Blocked',
@@ -58,6 +65,28 @@ export function NodeDetail({ graph, line, canDrain, onClose, onChanged }: NodeDe
 
   const instanceCols: Column<Instance>[] = [
     { id: 'state', header: 'State', cell: (i) => <StatusChip size="small" status={i.state} />, sortValue: (i) => i.state },
+    {
+      id: 'verify',
+      header: 'Verified',
+      sortValue: (i) => i.verification,
+      cell: (i) => {
+        const c = verifyChip[i.verification];
+        if (!c) {
+          return (
+            <Typography variant="caption" color="text.secondary">
+              not declared
+            </Typography>
+          );
+        }
+        return (
+          <Tooltip title={(i.verifyReasons ?? []).join('; ')}>
+            <span>
+              <StatusChip size="small" status={c.status} label={c.label} />
+            </span>
+          </Tooltip>
+        );
+      },
+    },
     { id: 'addr', header: 'Address', mono: true, sortValue: (i) => i.addr },
     { id: 'id', header: 'Instance', mono: true, sortValue: (i) => i.instanceId || i.registrationId },
     {
