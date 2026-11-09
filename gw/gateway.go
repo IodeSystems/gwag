@@ -240,6 +240,9 @@ type Gateway struct {
 	replayRec     *replayRecorder
 	replayMetrics *replayMetrics
 	replayGate    atomic.Bool
+	// switchover forwards a share of GraphQL requests to green
+	// (WithSwitchover, switchover.go); nil when off.
+	switchover *switchover
 	// declView and declSinks feed the declaration change sinks
 	// (declaration_sinks.go). declSinks is nil when none is configured.
 	declView  declarationView
@@ -331,6 +334,8 @@ type config struct {
 	// WithReplayVerifyEndpoint (green).
 	replayVerify   *ReplayVerifyOptions
 	replayEndpoint bool
+	// switchover: WithSwitchover (blue).
+	switchover *SwitchoverOptions
 
 	// legacyErrorCodes: WithLegacyErrorCodes.
 	legacyErrorCodes bool
@@ -1555,6 +1560,16 @@ func New(opts ...Option) *Gateway {
 		g.replayRec = newReplayRecorder(g, *cfg.replayVerify)
 		g.replayRec.start(life)
 	}
+	if cfg.switchover != nil {
+		var sm *switchoverMetrics
+		if pm != nil {
+			sm = newSwitchoverMetrics(pm)
+		}
+		g.switchover = newSwitchover(g, *cfg.switchover, sm)
+		if cfg.cluster != nil {
+			go g.switchover.pollLoop(life)
+		}
+	}
 	if cfg.replayVerify != nil || cfg.replayEndpoint {
 		g.replayGate.Store(true)
 		replayActive.Add(1)
@@ -2263,8 +2278,9 @@ func (g *Gateway) Handler() http.Handler {
 		return errorHandler(err)
 	}
 	// The replay recorder sits outside instrument so instrument still
-	// sees its own *httpRec writer.
-	return g.replayRecordHandler(g.instrument(ingGraphQL, false, h))
+	// sees its own *httpRec writer. Switchover is outermost: a request
+	// forwarded to green is neither instrumented nor recorded here.
+	return g.switchoverHandler(g.replayRecordHandler(g.instrument(ingGraphQL, false, h)))
 }
 
 // graphqlHandler assembles the schema if needed and returns the bare
