@@ -100,9 +100,9 @@ type ReplayVerifyOptions struct {
 	// Target is green's verify endpoint, e.g.
 	// https://green.example:8080/api/admin/replay/verify. Required.
 	Target string
-	// Token is the bearer sent to Target (green's admin token, hex,
-	// or a credential green's AdminAuthorizer accepts). The endpoint
-	// needs the admin role.
+	// Token is the bearer sent to Target: a system key of green's
+	// (gws_..., system_keys.go), green's admin token (hex), or a
+	// credential green's AdminAuthorizer accepts with the admin role.
 	Token string
 	// Client sends recordings to Target. Nil: a client with Timeout.
 	Client *http.Client
@@ -176,7 +176,7 @@ func WithReplayVerify(opts ReplayVerifyOptions) Option {
 
 // WithReplayVerifyEndpoint serves POST /admin/replay/verify on the
 // admin router (AdminHumaRouter), for a blue gateway's recordings. The
-// route needs the admin role. Off by default: it runs a client request
+// route needs a system key or the admin role. Off by default: it runs a client request
 // as whatever identity the recording carries.
 //
 // Stability: experimental

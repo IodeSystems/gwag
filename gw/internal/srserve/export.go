@@ -2,6 +2,7 @@ package srserve
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -128,4 +129,66 @@ func bareSubject(s string) string {
 		}
 	}
 	return s
+}
+
+// Bundle reads the store's context as a Bundle, for a copy into
+// another gwag registry (ImportWith with Default): every subject
+// version, deleted ones included, each schema id they name in both
+// formats, and the compatibility levels set in the context. skip,
+// when set, leaves out the subjects it names (a schema id only those
+// subjects use is left out with them). Reads the store directly, not
+// over the REST API, so subjects of other contexts are not mixed in.
+func (s *Store) Bundle(ctx context.Context, skip func(subject string) bool) (Bundle, error) {
+	b := Bundle{Levels: map[string]string{}}
+	subjects, err := s.Subjects(ctx, true)
+	if err != nil {
+		return b, err
+	}
+	ids := map[int]bool{}
+	for _, subj := range subjects {
+		if skip != nil && skip(subj) {
+			continue
+		}
+		rec, _, err := s.subject(ctx, subj)
+		if err != nil {
+			return b, storeErr(err)
+		}
+		for _, v := range rec.live(true) {
+			b.Versions = append(b.Versions, ImportVersion{Subject: subj, Version: v.Version, ID: v.ID, Deleted: v.Deleted})
+			ids[v.ID] = true
+		}
+	}
+	cfgs, err := s.kv.Keys(ctx, s.pfx+"cfg.")
+	if err != nil {
+		return b, storeErr(err)
+	}
+	for _, k := range cfgs {
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(k, s.pfx+"cfg."))
+		if err != nil || (skip != nil && skip(string(raw))) {
+			continue
+		}
+		l, ok, err := s.Config(ctx, string(raw))
+		if err != nil {
+			return b, err
+		}
+		if ok {
+			b.Levels[string(raw)] = l
+		}
+	}
+	for id := range ids {
+		rec, err := s.schema(ctx, id)
+		if err != nil {
+			return b, storeErr(fmt.Errorf("schema id %d: %w", id, err))
+		}
+		b.Schemas = append(b.Schemas, ImportSchema{ID: id, SchemaType: rec.Type, Schema: rec.Schema, Serialized: rec.Serialized, References: rec.References})
+	}
+	sort.Slice(b.Schemas, func(i, j int) bool { return b.Schemas[i].ID < b.Schemas[j].ID })
+	// The context's own level: Config("") answers the default
+	// BACKWARD in the default context when none is set; read the key.
+	if v, _, err := s.kv.Get(ctx, s.key(keyConfig)); err == nil {
+		b.Global = string(v)
+	} else if !errors.Is(err, ErrNotFound) {
+		return b, storeErr(err)
+	}
+	return b, nil
 }

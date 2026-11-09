@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -111,7 +112,7 @@ func newSchemaRegistry(g *Gateway) *schemaRegistry {
 	}
 	strategy, _ := sr.StrategyByName(o.Strategy) // validated in New
 	r := &schemaRegistry{g: g, o: *o, strategy: strategy, kick: make(chan struct{}, 1), done: map[string]string{}}
-	r.public = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: o.Writes, Caller: g.schemaRegistryCaller})
+	r.public = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: o.Writes, Caller: g.schemaRegistryCaller, Frozen: g.schemaRegistryFrozen})
 	r.internal = srserve.NewHandler(r.store.Load, srserve.HandlerOptions{Writes: true, Caller: func(*http.Request) srserve.Caller { return srserve.Caller{Role: srserve.RoleAdmin} }})
 	if g.cfg.cluster == nil {
 		r.store.Store(srserve.NewStore(srserve.NewMemKV()))
@@ -157,6 +158,9 @@ func (g *Gateway) schemaRegistryCaller(r *http.Request) srserve.Caller {
 	if tok == "" {
 		return srserve.Caller{}
 	}
+	if _, ok := parseSystemKey(tok); ok {
+		return srserve.Caller{} // a system key does not write the registry
+	}
 	if _, minted := parseAppKey(tok); !minted {
 		switch g.adminRoleFromBearer(r.Context(), tok, r.Method, r.URL.Path) {
 		case adminRoleAdmin:
@@ -182,6 +186,20 @@ func (g *Gateway) schemaRegistryCaller(r *http.Request) srserve.Caller {
 		g.recordAppKeyAuth(appKeyOpSchemaWrite, outcome)
 		return ok
 	}}
+}
+
+// schemaRegistryFrozen refuses REST writes while the cutover freeze
+// holds (cluster_freeze.go): a plain error for a freeze (40903), a
+// not-ready error when the freeze cannot be read.
+func (g *Gateway) schemaRegistryFrozen(r *http.Request) error {
+	f, ok, err := g.getFreeze(r.Context())
+	if err != nil {
+		return &srserve.Error{Code: 50003, Message: "cutover freeze: cannot read the freeze record: " + err.Error()}
+	}
+	if ok {
+		return errors.New(errFrozen("a Schema Registry write", f).Error())
+	}
+	return nil
 }
 
 // ownedSubjects is the set of subjects that belong to the named

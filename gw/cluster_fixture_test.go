@@ -141,6 +141,7 @@ func resetSharedCluster(t *testing.T) {
 			notificationsBucketName,
 			appKeysBucketName,
 			clusterBucketName,
+			schemasBucketName,
 		} {
 			kv, err := cl.JS.KeyValue(jsCtx, bucket)
 			if err != nil {
@@ -157,13 +158,13 @@ func resetSharedCluster(t *testing.T) {
 
 // newSharedClusterNode creates a gateway + control plane attached to
 // the shared NATS cluster node (a or b). The gateway and its listeners
-// are cleaned up via t.Cleanup.
-func newSharedClusterNode(t *testing.T, cl *Cluster) *clusterNode {
+// are cleaned up via t.Cleanup. opts are added to the gateway's.
+func newSharedClusterNode(t *testing.T, cl *Cluster, opts ...Option) *clusterNode {
 	t.Helper()
 	// "auto" keeps the 2-node shared cluster at R2, which the
 	// replication tests wait for; TestClusterReplicas_Odd covers the
 	// default policy.
-	gw := New(WithCluster(cl), WithClusterReplicas(ClusterReplicasAuto), WithoutMetrics(), WithoutBackpressure())
+	gw := New(append([]Option{WithCluster(cl), WithClusterReplicas(ClusterReplicasAuto), WithoutMetrics(), WithoutBackpressure()}, opts...)...)
 	t.Cleanup(gw.Close)
 
 	cpAddr := freeAddr(t)

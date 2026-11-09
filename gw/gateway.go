@@ -227,6 +227,9 @@ type Gateway struct {
 	// state (app_keys.go).
 	appKeys       appKeys
 	appKeyMetrics *appKeyMetrics // nil unless the default Prometheus sink is in use
+	// freeze is the standalone cutover freeze (cluster_freeze.go); a
+	// cluster keeps it in the gwag-cluster bucket.
+	freeze atomic.Pointer[freezeRecord]
 	// shadowMetrics counts shadow checks (shadow_check.go); nil
 	// unless the default Prometheus sink is in use. shadowWarn holds
 	// the warnings of the latest Register of each line.

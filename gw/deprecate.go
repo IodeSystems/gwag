@@ -73,6 +73,9 @@ func (cp *controlPlane) Deprecate(ctx context.Context, req *cpv1.DeprecateReques
 	if err := cp.gw.controlPlaneAdmin(ctx, "deprecate"); err != nil {
 		return nil, err
 	}
+	if err := cp.gw.checkNotFrozen(ctx, "deprecate"); err != nil {
+		return nil, err
+	}
 	ns, ver, reason := req.GetNamespace(), req.GetVersion(), req.GetReason()
 	if ns == "" || ver == "" {
 		return nil, errors.New("controlplane: namespace and version are required")
@@ -118,6 +121,9 @@ func (cp *controlPlane) Deprecate(ctx context.Context, req *cpv1.DeprecateReques
 // untouched — only the manual override is removed.
 func (cp *controlPlane) Undeprecate(ctx context.Context, req *cpv1.UndeprecateRequest) (*cpv1.UndeprecateResponse, error) {
 	if err := cp.gw.controlPlaneAdmin(ctx, "undeprecate"); err != nil {
+		return nil, err
+	}
+	if err := cp.gw.checkNotFrozen(ctx, "undeprecate"); err != nil {
 		return nil, err
 	}
 	ns, ver := req.GetNamespace(), req.GetVersion()

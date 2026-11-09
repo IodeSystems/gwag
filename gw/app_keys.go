@@ -46,6 +46,10 @@ import (
 //
 // The AppKeyAuthorizer delegate (app_keys_delegate.go) is asked
 // first when one is registered.
+//
+// System keys (system_keys.go) are minted, stored, listed and revoked
+// the same way, in the same bucket, with kind "system" and the prefix
+// gws_. Neither kind is accepted where the other is.
 
 const appKeysBucketName = "gwag-app-keys"
 
@@ -64,7 +68,9 @@ var appKeyIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // appKeyRecord is one key, as stored (KV JSON value).
 type appKeyRecord struct {
-	ID         string   `json:"id"`
+	ID string `json:"id"`
+	// Kind is "" for an app key, appKeyKindSystem for a system key.
+	Kind       string   `json:"kind,omitempty"`
 	Namespaces []string `json:"namespaces"`
 	// Hash is hex SHA-256 of the whole key string.
 	Hash          string `json:"hash"`
@@ -77,6 +83,14 @@ type appKeyRecord struct {
 }
 
 func (r appKeyRecord) expires() time.Time { return time.UnixMilli(r.ExpiresUnixMs) }
+
+// kindName is "app key" or "system key", for messages.
+func (r appKeyRecord) kindName() string {
+	if r.Kind == appKeyKindSystem {
+		return "system key"
+	}
+	return "app key"
+}
 
 // WithRequireAppKeys makes the control plane require an app key (or
 // the admin token) from remote callers: Register, Heartbeat,
@@ -297,6 +311,12 @@ func (g *Gateway) createAppKey(ctx context.Context, namespaces []string, ttl tim
 	if err != nil {
 		return appKeyRecord{}, "", err
 	}
+	return g.mintKey(ctx, "", appKeyPrefix, ns, ttl, note, by)
+}
+
+// mintKey creates and stores a key of kind with prefix. Returns the
+// stored record and the key; the key is not kept.
+func (g *Gateway) mintKey(ctx context.Context, kind, prefix string, ns []string, ttl time.Duration, note, by string) (appKeyRecord, string, error) {
 	if ttl <= 0 {
 		return appKeyRecord{}, "", errors.New("ttl must be positive")
 	}
@@ -312,10 +332,11 @@ func (g *Gateway) createAppKey(ctx context.Context, namespaces []string, ttl tim
 		return appKeyRecord{}, "", err
 	}
 	id := hex.EncodeToString(idb[:])
-	key := appKeyPrefix + id + "_" + hex.EncodeToString(sec[:])
+	key := prefix + id + "_" + hex.EncodeToString(sec[:])
 	now := nowFunc()
 	r := appKeyRecord{
 		ID:            id,
+		Kind:          kind,
 		Namespaces:    ns,
 		Hash:          appKeyHash(key),
 		Note:          sanitizeSubject(note),
@@ -358,10 +379,15 @@ func appKeyHash(key string) string {
 // parseAppKey splits a minted key into its id. ok=false when tok is
 // not in the minted form.
 func parseAppKey(tok string) (id string, ok bool) {
-	if !strings.HasPrefix(tok, appKeyPrefix) {
+	return parseMintedKey(tok, appKeyPrefix)
+}
+
+// parseMintedKey is parseAppKey for any key prefix.
+func parseMintedKey(tok, prefix string) (id string, ok bool) {
+	if !strings.HasPrefix(tok, prefix) {
 		return "", false
 	}
-	rest := tok[len(appKeyPrefix):]
+	rest := tok[len(prefix):]
 	id, sec, found := strings.Cut(rest, "_")
 	if !found || !appKeyIDPattern.MatchString(id) || len(sec) != 64 {
 		return "", false
@@ -371,12 +397,18 @@ func parseAppKey(tok string) (id string, ok bool) {
 
 // checkBuiltinAppKey verifies a key the gateway minted.
 func (g *Gateway) checkBuiltinAppKey(ctx context.Context, tok string) (appKeyGrant, error) {
-	id, ok := parseAppKey(tok)
+	return g.checkMintedKey(ctx, tok, appKeyPrefix, "")
+}
+
+// checkMintedKey verifies a minted key of kind with prefix. A record
+// of another kind is not found.
+func (g *Gateway) checkMintedKey(ctx context.Context, tok, prefix, kind string) (appKeyGrant, error) {
+	id, ok := parseMintedKey(tok, prefix)
 	if !ok {
 		return appKeyGrant{}, errAppKeyInvalid
 	}
 	r, err := g.getAppKey(ctx, id)
-	if errors.Is(err, errAppKeyNotFound) {
+	if errors.Is(err, errAppKeyNotFound) || (err == nil && r.Kind != kind) {
 		return appKeyGrant{}, errAppKeyInvalid
 	}
 	if err != nil {
@@ -402,6 +434,11 @@ func (g *Gateway) checkBuiltinAppKey(ctx context.Context, tok string) (appKeyGra
 func (g *Gateway) checkAppKey(ctx context.Context, tok, op string, namespaces []string, remoteAddr string) (appKeyGrant, error) {
 	if tok == "" {
 		return appKeyGrant{}, errAppKeyMissing
+	}
+	if _, ok := parseSystemKey(tok); ok {
+		// Never sent to the delegate: it is a credential for other
+		// routes.
+		return appKeyGrant{}, errAppKeyInvalid
 	}
 	switch outcome, grant := g.consultAppKeyDelegate(ctx, tok, op, namespaces, remoteAddr); outcome {
 	case appKeyDelegateAccept:
@@ -485,12 +522,15 @@ func (g *Gateway) warnExpiringAppKeys(ctx context.Context) []string {
 		}
 		g.appKeys.warned[r.ID] = now
 		logged = append(logged, r.ID)
-		ns := strings.Join(r.Namespaces, ",")
+		scope := "namespaces " + strings.Join(r.Namespaces, ",")
+		if r.Kind == appKeyKindSystem {
+			scope = "cluster-to-cluster"
+		}
 		if left <= 0 {
-			g.appKeyWarnf("app key %s (namespaces %s) expired at %s; calls with it fail. Revoke it once its replacement is deployed", r.ID, ns, r.expires().UTC().Format(time.RFC3339))
+			g.appKeyWarnf("%s %s (%s) expired at %s; calls with it fail. Revoke it once its replacement is deployed", r.kindName(), r.ID, scope, r.expires().UTC().Format(time.RFC3339))
 			continue
 		}
-		g.appKeyWarnf("app key %s (namespaces %s) expires in %s, at %s; deploy a new key before then", r.ID, ns, roundDays(left), r.expires().UTC().Format(time.RFC3339))
+		g.appKeyWarnf("%s %s (%s) expires in %s, at %s; deploy a new key before then", r.kindName(), r.ID, scope, roundDays(left), r.expires().UTC().Format(time.RFC3339))
 	}
 	for id := range g.appKeys.warned {
 		if !seen[id] {

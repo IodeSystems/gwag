@@ -105,12 +105,18 @@ func notReadyStreams(err error) []string {
 
 // clusterCmd runs `gwag cluster ...`.
 func clusterCmd(args []string) int {
-	if len(args) > 0 && args[0] == "switchover" {
-		return runSwitchover(args[1:], os.Stdout, os.Stderr)
+	if len(args) > 0 {
+		switch args[0] {
+		case "switchover":
+			return runSwitchover(args[1:], os.Stdout, os.Stderr)
+		case "freeze", "unfreeze", "export", "import":
+			return clusterStateCmd(args, os.Stdin, os.Stdout, os.Stderr)
+		}
 	}
 	if len(args) == 0 || args[0] != "finalize" {
 		fmt.Fprintln(os.Stderr, "Usage: gwag cluster finalize [--level N] [--dry-run] [--gateway HOST:PORT] [--context NAME]")
 		fmt.Fprintln(os.Stderr, "       gwag cluster switchover [--percent N] [--rule SPEC]... [--target URL] [--clear] [--gateway URL]")
+		fmt.Fprintln(os.Stderr, "       gwag cluster (freeze|unfreeze|export|import) ... (cutover state copy; gwag cluster export --help)")
 		return 2
 	}
 	fs := flag.NewFlagSet("cluster finalize", flag.ContinueOnError)

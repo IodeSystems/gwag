@@ -38,8 +38,8 @@ func (g *Gateway) recordReplayVerify(outcome string) {
 // is machine-to-machine) and the recent-diffs read (huma).
 func registerReplayRoutes(mux *http.ServeMux, api huma.API, g *Gateway) {
 	if g.cfg.replayEndpoint {
-		// Not in the huma table, so AdminMiddleware requires the
-		// admin role (non-GET default).
+		// Not in the huma table: systemKeyRoutes gives it the admin
+		// role or a system key.
 		mux.HandleFunc("POST /admin/replay/verify", g.serveReplayVerify)
 	}
 	huma.Register(api, huma.Operation{

@@ -139,13 +139,30 @@ var rolesMatrix = []roleCase{
 	{"clearSwitchover", "DELETE", "/admin/switchover", "", adminRoleAdmin},
 	{"createAppKey", "POST", "/admin/app-keys", `{"namespaces":["greeter"],"ttl":"30d"}`, adminRoleAdmin},
 	{"revokeAppKey", "DELETE", "/admin/app-keys/nobody", "", adminRoleAdmin},
+	{"createSystemKey", "POST", "/admin/system-keys", `{"ttl":"30d"}`, adminRoleAdmin},
+	{"exportClusterState", "GET", "/admin/cluster/state?allowUnfrozen=true", "", adminRoleAdmin},
+	{"importClusterState", "POST", "/admin/cluster/state", `{"state":{"v":1,"stable":[],"deprecated":[],"keys":[],"externalDependents":[]},"dryRun":true}`, adminRoleAdmin},
+	{"getClusterFreeze", "GET", "/admin/cluster/freeze", "", adminRoleDev},
+	{"freezeCluster", "POST", "/admin/cluster/freeze", `{"ttl":"1m"}`, adminRoleAdmin},
+	{"unfreezeCluster", "POST", "/admin/cluster/unfreeze", "", adminRoleAdmin},
 	{"drainInstance", "POST", "/admin/instances/nobody/drain", `{}`, adminRoleAdmin},
 	{"drain", "POST", "/admin/drain", `{"timeoutSeconds":1}`, adminRoleAdmin},
+}
+
+// rolesSystemOps are the operations a system key may call
+// (system_keys.go); every other one is 403 with a system key.
+var rolesSystemOps = map[string]bool{
+	"exportClusterState": true,
+	"importClusterState": true,
 }
 
 func TestAdminRoles_OpMatrix(t *testing.T) {
 	g := newRolesGateway(t)
 	h := newAnonAdminRouter(t, g)
+	_, sysKey, err := g.createSystemKey(context.Background(), time.Hour, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 	roles := []struct {
 		role  adminRole
 		authz string
@@ -155,6 +172,13 @@ func TestAdminRoles_OpMatrix(t *testing.T) {
 		{adminRoleAdmin, bearerHex(rolesAdminTok)},
 	}
 	for _, c := range rolesMatrix {
+		code, body := rolesDo(t, h, c.method, c.path, c.body, "Bearer "+sysKey)
+		switch {
+		case rolesSystemOps[c.op] && (code == http.StatusUnauthorized || code == http.StatusForbidden):
+			t.Errorf("%s as system: %d, want allowed (%s)", c.op, code, body)
+		case !rolesSystemOps[c.op] && code != http.StatusForbidden:
+			t.Errorf("%s as system: %d, want 403 (%s)", c.op, code, body)
+		}
 		for _, r := range roles {
 			code, body := rolesDo(t, h, c.method, c.path, c.body, r.authz)
 			allowed := r.role >= c.min
@@ -211,6 +235,9 @@ func TestAdminRoles_EveryOpClassified(t *testing.T) {
 			req := httptest.NewRequest(strings.ToUpper(method), strings.NewReplacer("{namespace}", "a", "{version}", "v1", "{nodeId}", "n", "{instance}", "i", "{id}", "x").Replace(path), nil)
 			if got := g.adminRouteNeed(req); got != min {
 				t.Errorf("%s: route needs %s, matrix says %s", op.OperationID, got, min)
+			}
+			if got := g.adminRouteSystem(req); got != rolesSystemOps[op.OperationID] {
+				t.Errorf("%s: system key allowed=%v, rolesSystemOps says %v", op.OperationID, got, rolesSystemOps[op.OperationID])
 			}
 		}
 	}

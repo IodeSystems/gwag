@@ -369,8 +369,8 @@ $ gwag key create --ns orders --ttl 30d --note "orders prod"
 gwk_3f9c0a1b2c3d4e5f_6a1e...
 id 3f9c0a1b2c3d4e5f, namespaces orders, expires 2026-12-07T10:00:00Z. The key is shown once; store it now.
 $ gwag key list
-ID               NAMESPACES                 EXPIRES               STATE         NOTE
-3f9c0a1b2c3d4e5f orders                     2026-12-07T10:00:00Z  valid         orders prod
+ID               KIND   NAMESPACES                 EXPIRES               STATE         NOTE
+3f9c0a1b2c3d4e5f app    orders                     2026-12-07T10:00:00Z  valid         orders prod
 $ gwag key revoke 3f9c0a1b2c3d4e5f
 revoked 3f9c0a1b2c3d4e5f
 ```
@@ -445,6 +445,34 @@ covering `_app_key_auth`, or the admin token.
 
 App keys also authorize Schema Registry writes; see
 [`schema-registry.md`](./schema-registry.md#auth-and-writes).
+
+**System keys.** `gwag key create --system --ttl 30d` mints a key of
+another kind, `gws_<id>_<secret>`, for one cluster to call another
+during a cutover. It is stored, listed (`KIND system`), expired and
+revoked like an app key, but authorizes only replay verify and the
+cluster state export and import; see
+[`cutover.md`](./cutover.md#system-keys). An app key is refused there,
+and a system key everywhere else.
+
+**Cutover.** A cutover copies the keys to the new cluster with their
+stored hashes, so services keep their keys
+([`cutover.md`](./cutover.md#state-copy)). Registrations are not
+copied: during a cutover a service registers with both clusters, one
+registration per cluster:
+
+```go
+for _, addr := range []string{"blue-gateway:50090", "green-gateway:50090"} {
+    reg, err := controlclient.SelfRegister(ctx, controlclient.Options{
+        GatewayAddr: addr, ServiceAddr: "orders:50051", AppKey: key, Services: services,
+    })
+    // keep reg; Close it when that cluster is retired
+}
+```
+
+`GatewayAddrs` is failover between nodes of one cluster, not
+registration with several clusters. The TypeScript and Python clients
+([`registration-clients.md`](./registration-clients.md)) are the same:
+call `register()` once per cluster.
 
 ## In-process registration
 

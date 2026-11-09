@@ -1063,6 +1063,9 @@ func (cp *controlPlane) RetractStable(ctx context.Context, req *cpv1.RetractStab
 	if err := cp.gw.controlPlaneAdmin(ctx, "retract_stable"); err != nil {
 		return nil, err
 	}
+	if err := cp.gw.checkNotFrozen(ctx, "retract stable"); err != nil {
+		return nil, err
+	}
 	ns := req.GetNamespace()
 	target := int(req.GetTargetVN())
 	if ns == "" {

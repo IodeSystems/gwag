@@ -21,26 +21,36 @@ decides the role:
 | admin | admin token, or an `AdminAuthorizer` OK | every admin route |
 | dev | dev token, or an `AdminAuthorizer` OK with `ADMIN_ROLE_DEV` | every admin read (services with owner contacts, graph, usage, instances, peers, injectors, MCP config and schema, external dependents), and `PUT` / `DELETE /admin/external-dependents/{id}` |
 | anonymous | no bearer | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph`: public services only |
+| system | a system key (`gws_...`, `gwag key create --system`) | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState` only (cluster to cluster, see [cutover.md](./cutover.md#system-keys)) |
 
 Role by operation:
 
-| Operation | anonymous | dev | admin |
-|---|---|---|---|
-| `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph` | public only | yes | yes |
-| `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand` | 401 | yes | yes |
-| `putExternalDependent`, `deleteExternalDependent` | 401 | yes | yes |
-| `forgetPeer`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes |
-| `createAppKey`, `listAppKeys`, `revokeAppKey` (app keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes |
-| `listReplayDiffs`, and `POST /admin/replay/verify` (replay verification, see [cutover.md](./cutover.md)) | 401 | 403 | yes |
-| `getSwitchover` (switchover, see [cutover.md](./cutover.md#switchover)) | 401 | yes | yes |
-| `setSwitchover`, `clearSwitchover` | 401 | 403 | yes |
+| Operation | anonymous | dev | admin | system key |
+|---|---|---|---|---|
+| `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph` | public only | yes | yes | 403 |
+| `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand`, `getClusterFreeze` | 401 | yes | yes | 403 |
+| `putExternalDependent`, `deleteExternalDependent`, `reviewExternalDependent`, `listNotifications`, `dismissNotification` | 401 | yes | yes | 403 |
+| `forgetPeer`, `evacuatePeer`, `finalizeCluster`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes | 403 |
+| `createAppKey`, `createSystemKey`, `listAppKeys`, `revokeAppKey` (app and system keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes | 403 |
+| `freezeCluster`, `unfreezeCluster` (cutover freeze) | 401 | 403 | yes | 403 |
+| `listReplayDiffs` (replay verification, see [cutover.md](./cutover.md)) | 401 | 403 | yes | 403 |
+| `getSwitchover` (switchover, see [cutover.md](./cutover.md#switchover)) | 401 | yes | yes | 403 |
+| `setSwitchover`, `clearSwitchover` | 401 | 403 | yes | 403 |
+| `POST /admin/replay/verify`, `exportClusterState`, `importClusterState` | 401 | 403 | yes | yes |
+
+A system key is checked only by `AdminMiddleware`: the
+`AdminAuthorizer` and `AppKeyAuthorizer` delegates never see one, and
+the control plane, the Schema Registry and the `admin` GraphQL fields
+refuse it. A system key on any other route is 403; an expired or
+revoked one is 401.
 
 A wrong bearer is 401 on every route, reads included, so a client
 learns at once that its token is stale. `GET /admin/whoami` returns
 the role (`anonymous`, `dev`, `admin`); the UI uses it for the role
 chip and to disable the controls a role cannot use. An admin route
 that is not in the table needs dev for GET and admin otherwise.
-`listAppKeys` and `listReplayDiffs` are the GETs that need admin.
+`listAppKeys`, `listReplayDiffs` and `exportClusterState` are the GETs
+that need admin.
 Routes you wrap in `AdminMiddleware` yourself keep the old rule:
 GET / HEAD / OPTIONS open, everything else admin.
 

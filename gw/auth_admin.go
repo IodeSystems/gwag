@@ -65,11 +65,20 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 // A role below the route's requirement gets 401 when it is anonymous
 // and 403 otherwise. The role rides on the request context.
 //
+// A bearer in the system-key form (gws_, system_keys.go) is checked
+// against the gateway's system keys only, never the delegate: on the
+// routes a system key may call it passes with the system role; on
+// every other route a valid one is 403.
+//
 // Stability: stable
 func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		need := g.adminRouteNeed(r)
 		bearer := bearerFromRequest(r)
+		if _, ok := parseSystemKey(bearer); ok {
+			g.serveSystemKey(w, r, next, bearer)
+			return
+		}
 		if need == adminRoleAnonymous && bearer == "" {
 			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), adminRoleAnonymous)))
 			return
@@ -114,6 +123,11 @@ func (g *Gateway) authenticateAdmin(ctx context.Context, bearer, method, path, r
 // subject the AdminAuthorizer delegate named for the caller ("" for a
 // token match or a delegate that names none).
 func (g *Gateway) authenticateAdminSubject(ctx context.Context, bearer, method, path, remoteAddr string, needAuth bool) (role adminRole, subject, outcome string, status int) {
+	if _, ok := parseSystemKey(bearer); ok {
+		// A system key is checked only by AdminMiddleware, on the
+		// routes it may call; never sent to the delegate.
+		return adminRoleAnonymous, "", "denied_system_key", http.StatusUnauthorized
+	}
 	if needAuth || bearer != "" {
 		switch outcome, delegateRole, _, delegateSubject := g.consultAdminDelegate(ctx, bearer, method, path, remoteAddr); outcome {
 		case adminDelegateAccept:

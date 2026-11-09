@@ -49,7 +49,16 @@ type HandlerOptions struct {
 	Writes bool
 	// Caller resolves the caller. nil: everyone is anonymous.
 	Caller func(r *http.Request) Caller
+	// Frozen, when set, is asked before every write (register,
+	// delete, config, mode, import). A non-nil answer refuses the
+	// write with it; a plain error becomes 40903 (HTTP 409). Lookups
+	// sent as POST are not writes and are not asked.
+	Frozen func(r *http.Request) error
 }
+
+// CodeFrozen is the error code of a write refused by
+// HandlerOptions.Frozen with a plain error.
+const CodeFrozen = 40903
 
 // NewHandler serves the REST API at its root (mount it with
 // http.StripPrefix). store returns nil until the store is ready
@@ -165,13 +174,32 @@ func (h *handler) writable() error {
 	return nil
 }
 
+// frozen applies HandlerOptions.Frozen.
+func (h *handler) frozen(r *http.Request) error {
+	if h.o.Frozen == nil {
+		return nil
+	}
+	err := h.o.Frozen(r)
+	if err == nil {
+		return nil
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return e
+	}
+	return errf(CodeFrozen, "%v", err)
+}
+
 // authorizeWrite applies the mode and the admin role to a config or
 // mode write.
 func (h *handler) authorizeWrite(r *http.Request) error {
 	if err := h.writable(); err != nil {
 		return err
 	}
-	return h.authorizeAdmin(r)
+	if err := h.authorizeAdmin(r); err != nil {
+		return err
+	}
+	return h.frozen(r)
 }
 
 // authorizeSubject applies the mode and the role to a write of
@@ -184,13 +212,13 @@ func (h *handler) authorizeSubject(r *http.Request, st *Store, subject string) e
 	c := h.caller(r)
 	switch c.Role {
 	case RoleAdmin, RoleDev:
-		return nil
+		return h.frozen(r)
 	case RoleApp:
 		if !st.Default() {
 			return errf(codeForbidden, "User is denied operation on subject '%s': an app key writes only subjects of the default context (context %s needs the gwag dev or admin token)", st.Qualify(subject), st.Name())
 		}
 		if c.Owns != nil && c.Owns(subject) {
-			return nil
+			return h.frozen(r)
 		}
 		return errf(codeForbidden, "User is denied operation on subject '%s': the app key's namespaces own no channel with this subject (other subjects need the gwag dev or admin token)", subject)
 	}
@@ -502,6 +530,9 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, st *Store, seg [
 			if err := h.authorizeAdmin(r); err != nil {
 				return err
 			}
+			if err := h.frozen(r); err != nil {
+				return err
+			}
 			var b Bundle
 			if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&b); err != nil {
 				return errf(codeInvalidSchema, "import bundle: %v", err)
@@ -625,12 +656,26 @@ func (h *handler) subjects(w http.ResponseWriter, r *http.Request, st *Store, se
 			writeJSON(w, 200, vs)
 			return nil
 		case http.MethodPost:
-			if err := h.authorizeSubject(r, st, subject); err != nil {
-				return err
+			authErr := h.authorizeSubject(r, st, subject)
+			var fe *Error
+			frozen := errors.As(authErr, &fe) && fe.Code == CodeFrozen
+			if authErr != nil && !frozen {
+				return authErr
 			}
 			in, err := readSchema(r)
 			if err != nil {
 				return err
+			}
+			if frozen {
+				// A register that would change nothing is still
+				// answered: a serde that registers on start keeps
+				// working while writes are frozen.
+				v, _, lerr := st.Lookup(ctx, subject, in, false)
+				if lerr != nil {
+					return authErr
+				}
+				writeJSON(w, 200, map[string]int{"id": v.ID})
+				return nil
 			}
 			v, err := st.Register(ctx, subject, in)
 			if err != nil {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,14 +14,18 @@ import (
 
 const keyUsage = `Usage:
   gwag key create --ns NAMESPACE [--ns ...] --ttl 30d [--note TEXT]
+  gwag key create --system --ttl 30d [--note TEXT]
   gwag key list
   gwag key revoke ID
 
 App keys let a service register, heartbeat, deregister and drain
 bindings in the listed namespaces (on a gateway with
 --require-app-keys) and write the Schema Registry subjects of their
-channels. create prints the key on stdout, alone, once; the details
-go to stderr. Every command needs the admin token.
+channels. A system key (--system, gws_...) is the cluster-to-cluster
+credential of a cutover: it may call only replay verify and the
+cluster state export and import (docs/cutover.md). create prints the
+key on stdout, alone, once; the details go to stderr. list shows both
+kinds; revoke takes either id. Every command needs the admin token.
 
 Common flags: --endpoint URL (default: .gw primary endpoint, else
 http://localhost:8080), --bearer TOKEN (default: from .gw),
@@ -36,6 +38,7 @@ func keyCmd(args []string) int {
 // appKeyInfo is the admin API's view of a key.
 type appKeyInfo struct {
 	ID          string   `json:"id"`
+	Kind        string   `json:"kind"`
 	Namespaces  []string `json:"namespaces"`
 	Note        string   `json:"note"`
 	CreatedAt   string   `json:"createdAt"`
@@ -61,6 +64,7 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 	fs.Var(ns, "ns", "Namespace the key covers (repeatable; create)")
 	ttl := fs.String("ttl", "", "Lifetime: days (30d) or a Go duration (720h) (create)")
 	note := fs.String("note", "", "Free text shown in the list (create)")
+	system := fs.Bool("system", false, "Mint a system key (cluster-to-cluster; no --ns) (create)")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, keyUsage)
 		fs.PrintDefaults()
@@ -69,11 +73,30 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	login := resolveLogin(*ctxName)
-	base := strings.TrimRight(resolveCtx(*endpoint, login.Endpoint, "http://localhost:8080"), "/") + "/api/admin/app-keys"
+	root := strings.TrimRight(resolveCtx(*endpoint, login.Endpoint, "http://localhost:8080"), "/") + "/api/admin"
+	base := root + "/app-keys"
 	tok := resolveCtx(*bearer, login.Bearer, "")
 
 	switch verb {
 	case "create":
+		if *system {
+			if len(ns.values) > 0 || *ttl == "" || len(positionals) > 0 {
+				fs.Usage()
+				return 2
+			}
+			body, _ := json.Marshal(map[string]any{"ttl": *ttl, "note": *note})
+			var out struct {
+				Key    string     `json:"key"`
+				AppKey appKeyInfo `json:"appKey"`
+			}
+			if err := keyCall(http.MethodPost, root+"/system-keys", tok, body, &out); err != nil {
+				fmt.Fprintf(stderr, "key create: %v\n", err)
+				return 1
+			}
+			fmt.Fprintln(stdout, out.Key)
+			fmt.Fprintf(stderr, "system key id %s, expires %s. The key is shown once; store it now.\n", out.AppKey.ID, out.AppKey.ExpiresAt)
+			return 0
+		}
 		if len(ns.values) == 0 || *ttl == "" || len(positionals) > 0 {
 			fs.Usage()
 			return 2
@@ -107,7 +130,7 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "(no app keys)")
 			return 0
 		}
-		fmt.Fprintf(stdout, "%-16s %-26s %-21s %-13s %s\n", "ID", "NAMESPACES", "EXPIRES", "STATE", "NOTE")
+		fmt.Fprintf(stdout, "%-16s %-6s %-26s %-21s %-13s %s\n", "ID", "KIND", "NAMESPACES", "EXPIRES", "STATE", "NOTE")
 		for _, k := range out.AppKeys {
 			state := "valid"
 			switch {
@@ -116,7 +139,11 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 			case k.ExpiresSoon:
 				state = "expires-soon"
 			}
-			fmt.Fprintf(stdout, "%-16s %-26s %-21s %-13s %s\n", k.ID, strings.Join(k.Namespaces, ","), k.ExpiresAt, state, k.Note)
+			nss := strings.Join(k.Namespaces, ",")
+			if nss == "" {
+				nss = "-"
+			}
+			fmt.Fprintf(stdout, "%-16s %-6s %-26s %-21s %-13s %s\n", k.ID, k.Kind, nss, k.ExpiresAt, state, k.Note)
 		}
 		return 0
 	case "revoke":
@@ -138,41 +165,5 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 // keyCall sends one admin API request and decodes the JSON answer
 // into out (nil: ignore it).
 func keyCall(method, u, tok string, body []byte, out any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	var r io.Reader
-	if body != nil {
-		r = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, r)
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode/100 != 2 {
-		var e struct {
-			Detail string `json:"detail"`
-			Title  string `json:"title"`
-		}
-		msg := strings.TrimSpace(string(data))
-		if json.Unmarshal(data, &e) == nil && (e.Detail != "" || e.Title != "") {
-			msg = strings.TrimSpace(e.Title + ": " + e.Detail)
-		}
-		return fmt.Errorf("%s %s: %d %s", method, u, resp.StatusCode, msg)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(data, out)
+	return adminCall(method, u, tok, body, out, 15*time.Second)
 }
