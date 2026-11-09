@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, type Http2Server } from "node:http2";
 import type { AddressInfo } from "node:net";
 import { after, describe, test } from "node:test";
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 import { connectNodeAdapter } from "@connectrpc/connect-node";
-import { buildRequest, register } from "../src/index.ts";
+import { buildRequest, loadProfile, register } from "../src/index.ts";
 import {
   ControlPlane,
   InstanceState,
+  VerificationState,
   type BindingStatus,
   type RegisterRequest,
 } from "../src/gen/gw/proto/controlplane/v1/control_pb.ts";
@@ -23,6 +27,8 @@ class Fake {
   ttl = 1;
   /** state returned for every binding */
   state: InstanceState = InstanceState.READY;
+  verification: VerificationState = VerificationState.UNSPECIFIED;
+  verifyReasons: string[] = [];
   failRegister: ConnectError | undefined;
   server: Http2Server;
 
@@ -64,6 +70,8 @@ class Fake {
           namespace: s.namespace,
           version: s.version,
           state: this.state,
+          verification: this.verification,
+          verifyReasons: this.verifyReasons,
           depends:
             this.state === InstanceState.WAITING
               ? [
@@ -132,6 +140,81 @@ describe("buildRequest", () => {
       /exactly one/,
     );
     assert.throws(() => buildRequest({ serviceAddr: "s:1", services: [] }), /at least one/);
+  });
+});
+
+describe("loadProfile", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "gwag-profile-"));
+  const write = (rel: string, body: string) => {
+    const p = join(tmp, rel);
+    mkdirSync(join(p, ".."), { recursive: true });
+    writeFileSync(p, body);
+    return p;
+  };
+  const dec = (b: unknown) => new TextDecoder().decode(b as Uint8Array);
+
+  test("openapi profile", () => {
+    write("api/billing-v1.json", '{"openapi":"3.0.0"}');
+    write("api/billing-v2.json", '{"openapi":"3.1.0"}');
+    const path = write(
+      "oa/gwag.json",
+      JSON.stringify({
+        service: "billing",
+        owner: { team: "payments", contact: "#payments" },
+        public: true,
+        health: "/healthz",
+        provides: {
+          unstable: { kind: "openapi", file: "../api/billing-v2.json" },
+          v2: { kind: "openapi", file: "../api/billing-v2.json", url: "/spec?v=2", health: "/h2" },
+          v1: { kind: "openapi", file: "../api/billing-v1.json", url: "/spec?v=1" },
+        },
+        depends: { library: ["v1", "v2"], accounts: ["v1"] },
+        subscribes: [{ channel: "orders.v1.OrderEvents", group: "billing" }],
+      }),
+    );
+    const out = loadProfile(path, "billing:8080");
+    assert.deepEqual(out.map((s) => s.version), ["v1", "v2", "unstable"]);
+    const v1 = out[0]!;
+    assert.equal(v1.namespace, "billing");
+    assert.equal(dec(v1.openapiSpec), '{"openapi":"3.0.0"}');
+    assert.equal(v1.healthUrl, "/healthz");
+    assert.equal(v1.specUrl, "/spec?v=1");
+    assert.equal(out[1]!.healthUrl, "/h2");
+    assert.equal(out[2]!.specUrl, "");
+    assert.deepEqual(v1.depends, [
+      { service: "accounts", lines: ["v1"] },
+      { service: "library", lines: ["v1", "v2"] },
+    ]);
+    assert.deepEqual(v1.owner, { team: "payments", contact: "#payments" });
+    assert.equal(v1.public, true);
+    assert.deepEqual(v1.subscribes, [{ channel: "orders.v1.OrderEvents", group: "billing" }]);
+    assert.doesNotThrow(() => buildRequest({ serviceAddr: "billing:8080", services: out }));
+  });
+
+  test("proto profile reads imports from the entry's directory", () => {
+    write("pr/proto/a.proto", 'syntax = "proto3"; import "common/c.proto";');
+    write("pr/proto/common/c.proto", 'syntax = "proto3";');
+    const path = write("pr/gwag.json", JSON.stringify({ service: "a", provides: { v1: { kind: "proto", file: "proto/a.proto" } } }));
+    const [s] = loadProfile(path, "a:1");
+    assert.equal(dec(s!.protoSource), 'syntax = "proto3"; import "common/c.proto";');
+    assert.deepEqual(Object.keys(s!.protoImports ?? {}), ["common/c.proto"]);
+    assert.equal(dec(s!.protoImports!["common/c.proto"]), 'syntax = "proto3";');
+  });
+
+  test("graphql endpoint path resolves against the service address", () => {
+    const path = write("gq/gwag.json", JSON.stringify({ service: "g", provides: { v1: { kind: "graphql", endpoint: "/graphql" } } }));
+    assert.equal(loadProfile(path, "g:9000")[0]!.graphqlEndpoint, "http://g:9000/graphql");
+  });
+
+  test("rejects an invalid profile with a clear message", () => {
+    assert.throws(() => loadProfile(write("bad1.json", "{}"), "x:1"), /service: required/);
+    assert.throws(() => loadProfile(write("bad2.json", '{"service":"x"}'), "x:1"), /at least one version/);
+    assert.throws(
+      () => loadProfile(write("bad3.json", '{"service":"x","provides":{"v1":{"kind":"soap"}}}'), "x:1"),
+      /want proto, openapi or graphql/,
+    );
+    assert.throws(() => loadProfile(write("bad4.json", '{"service":"x","provides":{"v1":{"kind":"proto"}}}'), "x:1"), /file: required/);
+    assert.throws(() => loadProfile(write("bad5.yaml", "service: x\n"), "x:1"), /gwag service init -o gwag.json/);
   });
 });
 
@@ -214,6 +297,51 @@ describe("register", () => {
     f.state = InstanceState.READY;
     const reg = await p;
     assert.equal(reg.bindings[0]!.state, "ready");
+    await reg.close();
+  });
+
+  test("verify fields reach the gateway only when set", async () => {
+    const { f, addr } = await start();
+    const reg = await register({
+      gateway: addr,
+      serviceAddr: "b:1",
+      services: [{ ...svc, healthUrl: "/healthz", specUrl: "/spec" }, { ...svc, version: "v2" }],
+      logger: quiet,
+    });
+    const [a, b] = f.registers[0]!.services;
+    assert.equal(a!.verify?.healthUrl, "/healthz");
+    assert.equal(a!.verify?.specUrl, "/spec");
+    assert.equal(b!.verify, undefined);
+    await reg.close();
+  });
+
+  test("waits while a binding is RED, then starts when GREEN", async () => {
+    const { f, addr } = await start();
+    f.state = InstanceState.WAITING;
+    f.verification = VerificationState.RED;
+    f.verifyReasons = ["health /healthz: status 500", "spec differs"];
+    const logs: string[] = [];
+    let resolved = false;
+    const p = register({
+      gateway: addr,
+      serviceAddr: "b:1",
+      services: [{ ...svc, subscribes: [], healthUrl: "/healthz" }],
+      readyPollIntervalMs: 30,
+      heartbeatIntervalMs: 1000,
+      logger: (m) => logs.push(m),
+    }).then((r) => {
+      resolved = true;
+      return r;
+    });
+    await waitFor(() => f.heartbeats.length >= 2);
+    assert.equal(resolved, false);
+    assert.ok(logs.some((l) => l.includes("billing/v1 red: health /healthz: status 500; spec differs")), logs.join("\n"));
+    f.state = InstanceState.READY;
+    f.verification = VerificationState.GREEN;
+    f.verifyReasons = [];
+    const reg = await p;
+    assert.equal(reg.bindings[0]!.verification, "green");
+    assert.ok(logs.includes("registration: ready, starting"), logs.join("\n"));
     await reg.close();
   });
 

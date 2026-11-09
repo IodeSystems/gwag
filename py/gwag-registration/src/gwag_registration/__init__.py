@@ -12,6 +12,7 @@ from .client import (
     build_request,
     register,
 )
+from .profile import load_profile
 
 __all__ = [
     "BindingStatus",
@@ -23,5 +24,6 @@ __all__ = [
     "Service",
     "Subscription",
     "build_request",
+    "load_profile",
     "register",
 ]

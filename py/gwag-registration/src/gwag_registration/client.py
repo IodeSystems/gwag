@@ -84,9 +84,16 @@ class Service:
     owner: Owner | None = None
     public: bool = False
     subscribes: list[Subscription] = field(default_factory=list)
+    # Where each instance serves its health check and spec: a path or an
+    # absolute URL on the service's host. When either is set the gateway
+    # verifies each instance before routing to it (ServiceBinding.verify).
+    health_url: str = ""
+    spec_url: str = ""
 
 
 State = Literal["ready", "waiting", "degraded"]
+# The gateway's verification of an instance: "" (not verified), "pending", "green" or "red".
+Verification = Literal["", "pending", "green", "red"]
 
 
 @dataclass
@@ -104,6 +111,8 @@ class BindingStatus:
     version: str
     state: State
     depends: list[DependencyStatus]
+    verification: Verification = ""  # a binding that is not green is waiting
+    verify_reasons: list[str] = field(default_factory=list)  # the failed checks when red
 
 
 @dataclass
@@ -178,6 +187,9 @@ def build_request(opts: Options) -> cp.RegisterRequest:
                 owner=cp.Owner(team=s.owner.team, contact=s.owner.contact) if s.owner else None,
                 public=s.public,
                 subscribes=[cp.Subscription(channel=x.channel, group=x.group) for x in s.subscribes],
+                verify=cp.Verify(health_url=s.health_url, spec_url=s.spec_url)
+                if s.health_url or s.spec_url
+                else None,
             )
         )
     return cp.RegisterRequest(
@@ -196,6 +208,16 @@ def _state(s: cp.InstanceState) -> State:
     return "ready"
 
 
+def _verification(v: cp.VerificationState) -> Verification:
+    if v == cp.VerificationState.PENDING:
+        return "pending"
+    if v == cp.VerificationState.GREEN:
+        return "green"
+    if v == cp.VerificationState.RED:
+        return "red"
+    return ""
+
+
 def _bindings(items: list[cp.BindingStatus]) -> list[BindingStatus]:
     return [
         BindingStatus(
@@ -206,6 +228,8 @@ def _bindings(items: list[cp.BindingStatus]) -> list[BindingStatus]:
                 DependencyStatus(d.service, list(d.lines), list(d.present_lines), d.channel, d.group)
                 for d in b.depends
             ],
+            verification=_verification(b.verification),
+            verify_reasons=list(b.verify_reasons),
         )
         for b in items
     ]
@@ -332,7 +356,14 @@ class Registration:
                     miss.append(f"channel {d.channel} ({d.service}/{'|'.join(d.lines)})")
                 else:
                     miss.append(f"{d.service}({'|'.join(d.lines)})")
-            parts.append(f"{b.namespace}/{b.version} needs {', '.join(miss)}")
+            if miss:
+                parts.append(f"{b.namespace}/{b.version} needs {', '.join(miss)}")
+            if b.verification == "red":
+                parts.append(f"{b.namespace}/{b.version} red: {'; '.join(b.verify_reasons)}")
+            elif b.verification == "pending":
+                parts.append(f"{b.namespace}/{b.version} verification pending")
+            elif not miss:
+                parts.append(f"{b.namespace}/{b.version} waiting")
         return "; ".join(sorted(parts))
 
     async def _wait_ready(self) -> None:
@@ -344,10 +375,10 @@ class Registration:
             w = self._waiting()
             if not w:
                 if last_log:
-                    self._log("registration: dependencies present, starting")
+                    self._log("registration: ready, starting")
                 return
             if w != last_log or loop.time() - last_at >= _WAIT_LOG_EVERY:
-                self._log(f"registration: waiting for dependencies: {w}")
+                self._log(f"registration: waiting: {w}")
                 last_log, last_at = w, loop.time()
             await asyncio.sleep(self._opts.ready_poll_interval)
             gw = self._gws[self._cur]
