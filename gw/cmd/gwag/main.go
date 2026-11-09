@@ -36,6 +36,7 @@
 //	gwag cluster finalize --gateway localhost:50090
 //	gwag cluster switchover --gateway http://blue:8080 --percent 5
 //	gwag cluster freeze --gateway http://blue:8080 --ttl 10m
+//	gwag cluster mirror --gateway http://green:8080 --from blue:14223
 //	gwag cluster export --gateway http://blue:8080 > state.json
 //	gwag cluster import --gateway http://green:8080 state.json
 //	gwag drain --list --gateway localhost:50090
@@ -262,6 +263,7 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster finalize [--level N] [--dry-run]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster switchover [--percent N] [--rule SPEC]... [--clear]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster (freeze|unfreeze|export|import) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")

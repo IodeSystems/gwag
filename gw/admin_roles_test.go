@@ -145,6 +145,9 @@ var rolesMatrix = []roleCase{
 	{"getClusterFreeze", "GET", "/admin/cluster/freeze", "", adminRoleDev},
 	{"freezeCluster", "POST", "/admin/cluster/freeze", `{"ttl":"1m"}`, adminRoleAdmin},
 	{"unfreezeCluster", "POST", "/admin/cluster/unfreeze", "", adminRoleAdmin},
+	{"getClusterMirror", "GET", "/admin/cluster/mirror", "", adminRoleDev},
+	{"startClusterMirror", "POST", "/admin/cluster/mirror", `{}`, adminRoleAdmin},
+	{"stopClusterMirror", "POST", "/admin/cluster/mirror/stop", `{}`, adminRoleAdmin},
 	{"drainInstance", "POST", "/admin/instances/nobody/drain", `{}`, adminRoleAdmin},
 	{"drain", "POST", "/admin/drain", `{"timeoutSeconds":1}`, adminRoleAdmin},
 }
@@ -154,6 +157,9 @@ var rolesMatrix = []roleCase{
 var rolesSystemOps = map[string]bool{
 	"exportClusterState": true,
 	"importClusterState": true,
+	"getClusterMirror":   true,
+	"startClusterMirror": true,
+	"stopClusterMirror":  true,
 }
 
 func TestAdminRoles_OpMatrix(t *testing.T) {

@@ -124,7 +124,7 @@ func registerAppKeys(api huma.API, g *Gateway) {
 		OperationID: "createSystemKey",
 		Method:      http.MethodPost,
 		Path:        "/admin/system-keys",
-		Summary:     "Mint a system key (cluster-to-cluster credential, gws_), valid for ttl. It authorizes only replay verify and the cluster state export and import. The response carries the key once; the gateway stores its hash. List and revoke it with the app-key routes. Admin only.",
+		Summary:     "Mint a system key (cluster-to-cluster credential, gws_), valid for ttl. It authorizes only replay verify, the cluster state export and import, the event stream mirror routes, and a NATS leafnode connection to the mirror listener. The response carries the key once; the gateway stores its hash. List and revoke it with the app-key routes. Admin only.",
 	}, func(ctx context.Context, in *createSystemKeyIn) (*createAppKeyOut, error) {
 		ttl, err := ParseAppKeyTTL(in.Body.TTL)
 		if err != nil {

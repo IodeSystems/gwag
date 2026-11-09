@@ -56,6 +56,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	registerSwitchoverRoutes(api, g)
 	registerClusterFreeze(api, g)
 	registerClusterState(api, g)
+	registerEventMirror(api, g)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "listPeers",

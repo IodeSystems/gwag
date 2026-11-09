@@ -37,6 +37,11 @@ type Cluster struct {
 	// $JS.API.SERVER.REMOVE) that answer only there. Nil when
 	// standalone.
 	sys *nats.Conn
+
+	// mirror is the event stream mirror state (cluster_mirror.go):
+	// the auth of blue's mirror listener, green's source. Nil when
+	// neither MirrorListen nor MirrorFrom is set.
+	mirror *clusterMirror
 }
 
 // ClusterOptions configures the embedded NATS server. ClientListen is
@@ -100,6 +105,37 @@ type ClusterOptions struct {
 	// configured. ClientAuth=RequireAndVerifyClientCert is recommended
 	// for true mTLS; callers can lower it for one-way TLS.
 	TLS *tls.Config
+
+	// MirrorListen is the blue side of the event stream mirror
+	// (docs/cutover.md): a NATS leafnode listener (e.g. ":14223")
+	// that a green cluster connects to with a system key of this
+	// cluster as the password. Only the subjects of JetStream stream
+	// sourcing cross it. Empty (default): no listener. Set it on
+	// every blue node.
+	//
+	// Stability: experimental
+	MirrorListen string
+
+	// MirrorFrom is the green side: blue's MirrorListen address
+	// ("host:port", or a nats-leaf:// or tls:// URL; several
+	// comma-separated). This server connects to it as a leafnode with
+	// MirrorKey. Empty (default): off. Set it on every green node.
+	//
+	// Stability: experimental
+	MirrorFrom string
+
+	// MirrorKey is a system key (gws_) minted on blue. Required with
+	// MirrorFrom.
+	//
+	// Stability: experimental
+	MirrorKey string
+
+	// MirrorTLS, when non-nil, is the TLS config of the mirror
+	// listener (blue) or of the connection to it (green). Nil: plain
+	// TCP, and the system key crosses the network in the clear.
+	//
+	// Stability: experimental
+	MirrorTLS *tls.Config
 }
 
 // StartCluster boots an embedded NATS server with JetStream enabled and
@@ -187,15 +223,26 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		srvOpts.Users = []*natsd.User{{Username: sysUser.Username, Password: sysUser.Password, Account: sysAcc}}
 	}
 
+	mirror, err := configureMirror(srvOpts, opts, sysUser)
+	if err != nil {
+		return nil, err
+	}
+
 	srv, err := natsd.NewServer(srvOpts)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: NewServer: %w", err)
 	}
 	applyClusterLogger(srv, opts)
+	mirror.bind(srv)
 	go srv.Start()
 	if !srv.ReadyForConnections(opts.StartTimeout) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("cluster: server not ready after %s", opts.StartTimeout)
+	}
+
+	if err := mirror.started(); err != nil {
+		srv.Shutdown()
+		return nil, err
 	}
 
 	conn, err := nats.Connect("", nats.InProcessServer(srv))
@@ -226,6 +273,7 @@ func StartCluster(opts ClusterOptions) (*Cluster, error) {
 		JS:     js,
 		NodeID: srv.ID(),
 		sys:    sys,
+		mirror: mirror,
 	}, nil
 }
 
@@ -311,6 +359,7 @@ func (c *Cluster) Close() {
 	if c.sys != nil {
 		c.sys.Close()
 	}
+	c.mirror.close()
 	if c.Server != nil {
 		c.Server.Shutdown()
 		c.Server.WaitForShutdown()

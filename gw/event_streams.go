@@ -159,7 +159,11 @@ func (g *Gateway) ensureEventStream(js jetstream.JetStream, pt *peerTracker, nam
 			r = max(r, cur.Replicas)
 		}
 		created = cur == nil
-		return g.eventStreamConfig(name, subject, r), true
+		cfg := g.eventStreamConfig(name, subject, r)
+		if cur != nil {
+			cfg.Sources = cur.Sources // the mirror's (event_mirror.go)
+		}
+		return cfg, true
 	})
 	if err == nil {
 		if created {
@@ -221,7 +225,9 @@ func (g *Gateway) setEventStreamReplicas(ctx context.Context, js jetstream.JetSt
 			if cur == nil {
 				return jetstream.StreamConfig{}, false
 			}
-			return g.eventStreamConfig(n, subjects[n], nextReplicas(cur.Replicas, r, lower)), true
+			cfg := g.eventStreamConfig(n, subjects[n], nextReplicas(cur.Replicas, r, lower))
+			cfg.Sources = cur.Sources
+			return cfg, true
 		})
 		if err != nil && !errors.Is(err, errStreamMissing) && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %w", n, err)

@@ -22,12 +22,16 @@ import (
 // kind can stand in for the other: the record kind is checked too.
 //
 // A system key authorizes only the admin routes in systemKeyOps and
-// systemKeyRoutes (AdminMiddleware): replay verification and the
-// cluster state export and import. Every other admin route, the
-// control plane, the Schema Registry and the admin GraphQL fields
-// refuse it. Only the admin role mints, lists and revokes system
-// keys. There is no delegate path: the AdminAuthorizer and
-// AppKeyAuthorizer delegates are never sent a system key.
+// systemKeyRoutes (AdminMiddleware): replay verification, the
+// cluster state export and import, and the event stream mirror
+// (status, start, stop). Every other admin route, the control plane,
+// the Schema Registry and the admin GraphQL fields refuse it. Only
+// the admin role mints, lists and revokes system keys. There is no
+// delegate path: the AdminAuthorizer and AppKeyAuthorizer delegates
+// are never sent a system key.
+//
+// It is also the password of green's NATS leafnode connection to
+// blue's mirror listener (cluster_mirror.go).
 
 // appKeyKindSystem is appKeyRecord.Kind of a system key.
 const appKeyKindSystem = "system"
@@ -36,10 +40,12 @@ const appKeyKindSystem = "system"
 const systemKeyPrefix = "gws_"
 
 // systemKeyOps are the admin huma operations a system key may call.
-// The NATS stream mirror (cutover S7) adds its operation here.
 var systemKeyOps = map[string]bool{
 	"exportClusterState": true,
 	"importClusterState": true,
+	"getClusterMirror":   true,
+	"startClusterMirror": true,
+	"stopClusterMirror":  true,
 }
 
 // systemKeyRoutes are the plain admin mux routes (not huma
@@ -82,7 +88,7 @@ func (g *Gateway) serveSystemKey(w http.ResponseWriter, r *http.Request, next ht
 	}
 	if !g.adminRouteSystem(r) {
 		g.recordAdminAuth(r.Method, "forbidden_system_key", adminRoleSystem)
-		http.Error(w, "forbidden: a system key may call only replay verify and the cluster state export and import", http.StatusForbidden)
+		http.Error(w, "forbidden: a system key may call only replay verify, the cluster state export and import, and the event stream mirror", http.StatusForbidden)
 		return
 	}
 	g.recordAdminAuth(r.Method, "ok_system_key", adminRoleSystem)

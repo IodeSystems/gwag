@@ -111,12 +111,15 @@ func clusterCmd(args []string) int {
 			return runSwitchover(args[1:], os.Stdout, os.Stderr)
 		case "freeze", "unfreeze", "export", "import":
 			return clusterStateCmd(args, os.Stdin, os.Stdout, os.Stderr)
+		case "mirror":
+			return runMirror(args[1:], os.Stdout, os.Stderr)
 		}
 	}
 	if len(args) == 0 || args[0] != "finalize" {
 		fmt.Fprintln(os.Stderr, "Usage: gwag cluster finalize [--level N] [--dry-run] [--gateway HOST:PORT] [--context NAME]")
 		fmt.Fprintln(os.Stderr, "       gwag cluster switchover [--percent N] [--rule SPEC]... [--target URL] [--clear] [--gateway URL]")
 		fmt.Fprintln(os.Stderr, "       gwag cluster (freeze|unfreeze|export|import) ... (cutover state copy; gwag cluster export --help)")
+		fmt.Fprintln(os.Stderr, "       gwag cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop] [--gateway GREEN] (event stream mirror)")
 		return 2
 	}
 	fs := flag.NewFlagSet("cluster finalize", flag.ContinueOnError)

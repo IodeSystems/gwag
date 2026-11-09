@@ -1578,6 +1578,7 @@ func New(opts ...Option) *Gateway {
 		replayActive.Add(1)
 	}
 	go g.appKeyWarnLoop()
+	g.bindMirror()
 	warnShortHexSecret("signer-secret", cfg.signerSecret)
 	warnShortHexSecret("subscribe-secret", cfg.subAuth.Secret)
 	for kid, sec := range cfg.subAuth.Secrets {

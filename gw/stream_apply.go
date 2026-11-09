@@ -148,7 +148,8 @@ func streamConfigMatches(cur, want jetstream.StreamConfig) bool {
 		cur.Storage == want.Storage &&
 		cur.Retention == want.Retention &&
 		cur.AllowMsgTTL == want.AllowMsgTTL &&
-		cur.SubjectDeleteMarkerTTL == want.SubjectDeleteMarkerTTL
+		cur.SubjectDeleteMarkerTTL == want.SubjectDeleteMarkerTTL &&
+		sourcesMatch(cur.Sources, want.Sources)
 }
 
 // isJetStreamLeader reports whether this node's NATS server is the

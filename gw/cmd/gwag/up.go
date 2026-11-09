@@ -69,6 +69,12 @@ func upCmd(args []string) int {
 	switchoverOn := fs.Bool("switchover", false, "Blue side of a cutover: forward a share of GraphQL requests to green (docs/cutover.md). The share starts at 0; set it with gwag cluster switchover. Implied by --switchover-target")
 	switchoverTarget := fs.String("switchover-target", "", "Green's GraphQL URL for --switchover (e.g. http://green:8080/api/graphql); gwag cluster switchover --target can set it instead")
 	switchoverSticky := fs.String("switchover-sticky-header", "", "With --switchover: request header that keeps a client on one side when it has no caller id (e.g. X-Client-Id); else the source address")
+	mirrorListen := fs.String("mirror-listen", "", "Blue side of the event stream mirror (docs/cutover.md): NATS leafnode listen address (e.g. :14223) for a green cluster, which connects with a system key of this cluster. Default off. Set on every node")
+	mirrorFrom := fs.String("mirror-from", "", "Green side of the event stream mirror: blue's --mirror-listen address(es), comma-separated. Needs --mirror-key-file or GWAG_MIRROR_KEY. Default off. Set on every node; start the mirror with gwag cluster mirror")
+	mirrorKeyFile := fs.String("mirror-key-file", "", "With --mirror-from: file holding a system key minted on blue (gwag key create --system). Env GWAG_MIRROR_KEY works the same when the flag is empty")
+	mirrorTLSCert := fs.String("mirror-tls-cert", "", "TLS certificate of the mirror listener (blue) or of the connection to it (green); with --mirror-tls-key and --mirror-tls-ca (mutual TLS). Default: plain TCP")
+	mirrorTLSKey := fs.String("mirror-tls-key", "", "Key for --mirror-tls-cert")
+	mirrorTLSCA := fs.String("mirror-tls-ca", "", "CA that signs both sides' --mirror-tls-cert")
 	adminTokenFile := fs.String("admin-token-file", "", "Read the admin bearer token (hex) from this file instead of generating one in the data dir. Env GWAG_ADMIN_TOKEN works the same when the flag is empty. Use it to hand every node of a deployment one platform-managed secret")
 	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
@@ -113,19 +119,30 @@ func upCmd(args []string) int {
 	if err != nil {
 		log.Fatalf("--cluster-replicas: %v", err)
 	}
-	cluster, err := gateway.StartCluster(gateway.ClusterOptions{
+	clusterOpts := gateway.ClusterOptions{
 		NodeName:      clusterNodeName,
 		ClientListen:  *natsListen,
 		ClusterListen: *natsCluster,
 		Peers:         natsPeers,
 		DataDir:       dir,
 		ClusterName:   *natsClusterName,
-	})
+	}
+	if err := mirrorClusterOptions(&clusterOpts, *mirrorListen, *mirrorFrom, *mirrorKeyFile, *mirrorTLSCert, *mirrorTLSKey, *mirrorTLSCA); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	cluster, err := gateway.StartCluster(clusterOpts)
 	if err != nil {
 		log.Fatalf("start cluster: %v", err)
 	}
 	log.Printf("nats client=%s cluster=%s data=%s peers=%v node=%s",
 		*natsListen, *natsCluster, dir, []string(natsPeers), cluster.NodeID)
+	if *mirrorListen != "" {
+		log.Printf("event stream mirror listener on %s (system keys)", *mirrorListen)
+	}
+	if *mirrorFrom != "" {
+		log.Printf("event stream mirror source %s", *mirrorFrom)
+	}
 
 	gwOpts := []gateway.Option{
 		gateway.WithAllowTier(tiers...),
