@@ -36,3 +36,6 @@ docs/plan.md
 **/node_modules/
 bin/.run/
 .git
+
+# examples/cutover runtime state: tokens and keys.
+examples/cutover/.run/
