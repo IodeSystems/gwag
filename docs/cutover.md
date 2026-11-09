@@ -6,11 +6,19 @@ with other transforms or routing. This is not the replica swap in
 [`cluster.md`](./cluster.md#replica-swap), where new nodes join the
 same cluster.
 
-What exists now: **replay verification**. Blue records a sample of its
-requests with every upstream call they made; green runs each recorded
-request through its own pipeline, answers every upstream call from the
-recording, and reports what differs. Traffic shifting, the state copy
-and the final switch are not built yet.
+What exists now:
+
+- **Replay verification.** Blue records a sample of its requests with
+  every upstream call they made; green runs each recorded request
+  through its own pipeline, answers every upstream call from the
+  recording, and reports what differs.
+- **State copy.** Blue's operator-set state (stable and deprecated
+  marks, app and system keys, external dependents, Schema Registry
+  contents) goes to green in one document, under a freeze of blue's
+  admin writes.
+- **System keys**, the credential one cluster presents to the other.
+
+Traffic shifting and the final switch are not built yet.
 
 ## Replay verification
 
@@ -102,7 +110,7 @@ gw := gateway.New(
 | Field | Default | Meaning |
 |---|---|---|
 | `Target` | required | green's verify URL |
-| `Token` | none | bearer sent to green; the endpoint needs the admin role |
+| `Token` | none | bearer sent to green: a system key of green's (`gws_...`), or the admin role |
 | `Client`, `Timeout` | client with 10 s | the HTTP client for posts to green |
 | `Match` | all requests | rules; the first that matches sets the rate. Fields: `OperationName` (the request's `operationName`, or the name of the document's only operation), `Header`, `HeaderValue`, `SampleRate` |
 | `SampleRate` | 1 | fraction (0..1] of matching requests recorded |
@@ -117,10 +125,10 @@ Recorded: `POST` requests with `Content-Type: application/json` to
 `GET` queries, WebSocket and SSE subscriptions, the HTTP/JSON ingress
 (`IngressHandler`), gRPC and Connect ingress.
 
-The admin token is per node unless pinned. Behind a load balancer in
-front of several green nodes, pin the same token on each
-(`WithAdminToken`) or use an `AdminAuthorizer` delegate, so one
-credential works on every node.
+Use a system key as `Token` ([System keys](#system-keys)): it is
+valid on every node of green, and it can call nothing but verify and
+the state copy. The admin token also works, but it is per node unless
+pinned (`WithAdminToken`) and it can call every admin route.
 
 ### Configure green
 
@@ -131,9 +139,10 @@ mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux))
 ```
 
 `POST /admin/replay/verify` takes a `ReplayExchange` JSON body (up to
-64 MiB) and returns a `ReplayResult`. It needs the admin role: it runs
-a request as whatever client the recording names, and its result holds
-the upstream requests green built, injected header values included.
+64 MiB) and returns a `ReplayResult`. It needs a system key or the
+admin role: it runs a request as whatever client the recording names,
+and its result holds the upstream requests green built, injected
+header values included.
 It is a plain route on the admin mux, not an admin GraphQL operation.
 Without `WithReplayVerifyEndpoint` it answers 404.
 
@@ -193,7 +202,206 @@ drops with green stuck; two gateways through the admin endpoint with
 token checks, the metric and the diffs route. Not tested: a real
 two-cluster deployment, load, and recordings near the size caps.
 
+## System keys
+
+A system key is the credential of one cluster calling another. Mint
+it on the cluster that will be called, with the admin token:
+
+```
+$ gwag key create --system --ttl 30d --note "blue -> green" --endpoint http://green:8080
+gws_8d2f61c04a7be913_51c0...
+system key id 8d2f61c04a7be913, expires 2026-12-08T10:00:00Z. The key is shown once; store it now.
+```
+
+The admin route is `POST /admin/system-keys` (`{ttl, note}`). A
+system key is stored like an app key (its SHA-256, an expiry, in the
+`gwag-app-keys` bucket with `"kind": "system"`), so it is valid on
+every node of the cluster at once, and `gwag key list` shows it
+(`KIND system`), `gwag key revoke ID` revokes it, and the expiry log
+lines and `app_key_expiry_seconds{key_id}` cover it. Rotate it like an
+app key: mint a new one, deploy it, revoke the old one.
+
+It authorizes three admin routes, and nothing else:
+
+| Route | |
+|---|---|
+| `POST /admin/replay/verify` | replay verification |
+| `GET /admin/cluster/state` (`exportClusterState`) | state export |
+| `POST /admin/cluster/state` (`importClusterState`) | state import |
+
+Every other admin route answers a valid system key with 403; the
+control plane, the Schema Registry and the `admin` GraphQL fields
+refuse it; the `AdminAuthorizer` and `AppKeyAuthorizer` delegates are
+never sent one. An app key is refused on the three routes. The admin
+role may call them too.
+
+Why a distinct prefix (`gws_`, app keys are `gwk_`): the middleware
+routes the bearer to the right check without a KV read, a leaked key
+names its kind, and the record's kind is checked as well, so neither
+kind passes for the other.
+
+The NATS event stream mirror (not built) will use the same key.
+
+## State copy
+
+What green needs from blue before it serves, and how it gets there:
+
+| State | Copied by | Note |
+|---|---|---|
+| stable marks (`gwag-stable`) | `gwag cluster export` / `import` | |
+| deprecated marks (`gwag-deprecated`) | export / import | a mark for a line green has not registered yet applies when it registers |
+| app keys and system keys (`gwag-app-keys`) | export / import | with the stored hashes: the same keys work on green |
+| external dependents (`gwag-external-dependents`) | export / import | |
+| Schema Registry (`gwag-schemas`) | export / import | every context, the default one included, with ids and versions kept; the control plane subject is not copied (each gateway registers its own) |
+| registrations (`gwag-registry`) | not copied | services register with both clusters, see below |
+| MCP include / exclude config, drains, notifications | not copied | set them on green with the admin API |
+| event streams (`EV_*`) | not copied | NATS stream mirror, not built |
+
+### Steps
+
+```
+gwag cluster freeze   --gateway http://blue:8080  --bearer $BLUE_ADMIN --ttl 10m
+gwag cluster export   --gateway http://blue:8080  --bearer $SYSTEM_KEY > state.json
+gwag cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN --dry-run state.json
+gwag cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN state.json
+gwag cluster unfreeze --gateway http://blue:8080  --bearer $BLUE_ADMIN
+```
+
+`--gateway` here is the gateway's HTTP endpoint (the admin API at
+`/api/admin`), not the control-plane address `gwag cluster finalize`
+takes. `--bearer` is the admin token or, for export and import, a
+system key. The first import into a fresh green needs green's admin
+token (green holds no keys yet); after it, blue's system keys are
+valid on green too.
+
+Admin routes: `GET /admin/cluster/state[?allowUnfrozen=true]` returns
+the document; `POST /admin/cluster/state` takes
+`{state, overwrite, dryRun}` (up to 64 MiB) and returns counts per
+section (`added`, `unchanged`, `overwritten`), the Schema Registry
+counts, the conflicts and warnings.
+
+### The document
+
+One JSON object, `"v": 1`:
+
+```json
+{
+  "v": 1,
+  "exportedAt": "2026-11-08T10:00:00Z",
+  "exportedBy": "system:8d2f61c04a7be913",
+  "node": "blue-0",
+  "frozen": true,
+  "stable": [{"namespace": "greeter", "vN": 2}],
+  "deprecated": [{"namespace": "greeter", "version": "v1", "reason": "use v2"}],
+  "keys": [{"id": "3f9c0a1b2c3d4e5f", "namespaces": ["orders"], "hash": "…", "created_unix_ms": 0, "expires_unix_ms": 0}],
+  "externalDependents": [{"id": "acme", "kind": "customer", "depends": [{"service": "greeter", "lines": ["v1"]}], "updated_unix_ms": 0}],
+  "schemaRegistry": {"contexts": [{"name": ".", "schemas": [], "versions": [], "levels": []}]}
+}
+```
+
+Key records and external dependents keep their stored form. The key
+hashes are SHA-256 of the whole key: the document lets nobody call
+with a key, but it lists every key id, namespace and expiry. Treat it
+as a secret. Export reads every bucket from its stream leader, so a
+replica that is behind does not drop a value.
+
+### Freeze
+
+`gwag cluster freeze [--ttl 10m] [--note TEXT]` (`POST
+/admin/cluster/freeze`, admin) writes one record, `freeze` in the
+`gwag-cluster` bucket, with an end time. Until it ends, or until
+`gwag cluster unfreeze` (`POST /admin/cluster/unfreeze`), every node
+refuses the writes that change copied state:
+
+| Write | Refused with |
+|---|---|
+| `retractStable`, `deprecate`, `undeprecate` (admin routes and control-plane RPCs) | 409 / `FailedPrecondition` |
+| `createAppKey`, `createSystemKey`, `revokeAppKey` | 409 |
+| `putExternalDependent`, `reviewExternalDependent`, `deleteExternalDependent` | 409 |
+| Schema Registry REST writes: register, delete, config, mode, `gwag/import` | 409, `error_code` 40903 |
+
+The message names the end time and who froze:
+`cluster frozen for cutover until 2026-11-08T10:10:00Z (set by admin): deprecate is refused; gwag cluster unfreeze ends the freeze`.
+
+Not frozen: registrations, heartbeats, drains and client traffic. A
+Schema Registry register of a schema the subject already holds is
+answered with its id, so a serde that registers on start keeps
+working; a new schema is refused. Lookups (`POST /subjects/{s}`) are
+reads.
+
+The TTL defaults to 10 minutes and is at most 24 hours; freezing again
+replaces the end time. An operator who crashes mid-copy freezes the
+cluster for the TTL at most. `GET /admin/cluster/freeze`
+(`getClusterFreeze`, dev) shows the freeze in force. Every check reads
+the record from the bucket's stream leader, so a freeze set on one
+node applies on every node at the next write; when the leader cannot
+be asked, the write fails (503 / `Unavailable`) instead of passing
+unchecked. A standalone gateway keeps the record in memory. Gateways
+older than the freeze do not read the record: in a blue with mixed
+versions, those nodes still accept writes.
+
+Export refuses while the cluster is not frozen (409).
+`--allow-unfrozen` (`?allowUnfrozen=true`) exports anyway and puts a
+warning in the document; freeze and export again before the switch.
+Import does not check a freeze.
+
+Writes that a registration causes go on during the freeze: a service
+that registers a new `vN` raises its stable mark, and new channels add
+Schema Registry subjects in the default context. Services register
+with green as well, so green sets those itself.
+
+### Import: idempotent, conflicts
+
+An item green holds with the same value is unchanged; importing the
+same document twice changes nothing. An item green holds with another
+value is a conflict: a stable mark at another `vN`, a deprecation with
+another reason, a key record or an external dependent that differs.
+With any conflict nothing is written and the answer (409) lists them.
+`--overwrite` takes the document's value for each. `--dry-run` reports
+the counts and conflicts and writes nothing.
+
+Schema Registry conflicts cannot be overwritten: a schema id green
+allocated to another schema, or a subject version that names another
+id. Kafka messages carry the ids, so green must hold blue's. The
+import checks every context before it writes. To avoid them, import
+before services register channels with green: a fresh green's
+registry holds only its own control plane subject (id 1 of the
+default context, which blue's copy leaves out). When services register
+their channels with green after the import, green finds blue's
+schemas and allocates nothing. `gwag schema import --into .` stays
+refused: a foreign registry's ids never go into the default context;
+only this copy from another gwag does.
+
+### Registrations
+
+Registrations are not copied. Each service runs one registration per
+cluster: two `controlclient.SelfRegister` calls (one with blue's
+control-plane address, one with green's), or two `register()` calls
+with the TypeScript or Python client. `GatewayAddrs` is failover
+within one cluster, not registration with several. With
+`--require-app-keys` on green, the service's key is valid there once
+the state is imported.
+
+Tested in `gw/cluster_state_test.go`: system key scope (accepted on
+verify, export and import; 403 on other admin routes; refused by the
+control plane and the Schema Registry; an app key refused on verify;
+expiry and revoke); freeze on a standalone gateway (every write kind
+refused, registrations and heartbeats go on, export refused unfrozen,
+expiry and unfreeze); a freeze set on one node of a two-node cluster
+refusing every write kind on the other until its TTL; an export from a
+two-node cluster and an import into a separate one-node cluster (the
+same app key registers a service on green, blue's system key passes
+green's verify, Schema Registry ids equal in the default and a named
+context and green's own channel registration adds nothing, stable and
+deprecated marks equal, a second import changes nothing, the service
+registered with both clusters by two controlclient registrations);
+import conflicts, dry run, overwrite, and a Schema Registry conflict
+that overwrite does not take. `gw/cmd/gwag/cutover_test.go` drives the
+CLI. Not tested: a TypeScript or Python service registered with two
+clusters, a freeze on a cluster with nodes older than the freeze,
+large registries near the 64 MiB body cap.
+
 ## Next
 
-The rest of the cutover (traffic shift from blue to green, state copy,
-the final switch at the load balancer) is not built.
+Traffic shift from blue to green and the final switch at the load
+balancer are not built.

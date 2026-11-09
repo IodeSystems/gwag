@@ -397,7 +397,9 @@ side by side for a while and end with `gwag cluster finalize`.
 A third way, a cutover to a separate cluster, is in progress:
 [`cutover.md`](./cutover.md). What exists is replay verification: the
 old cluster records requests with their upstream calls, the new one
-replays them without calling upstreams and reports what differs.
+replays them without calling upstreams and reports what differs; and
+the state copy: `gwag cluster freeze`, `export`, `import` (the
+freeze is the `freeze` key of the `gwag-cluster` bucket).
 
 ### Rolling restart
 
@@ -593,6 +595,6 @@ See [`CHANGELOG.md`](../CHANGELOG.md).
 
 - [`services.md`](./services.md) — registering services against a cluster.
 - [`operations.md`](./operations.md) — drain, replicas, metrics.
-- [`cutover.md`](./cutover.md) — moving traffic to a separate cluster; replay verification.
+- [`cutover.md`](./cutover.md) — moving traffic to a separate cluster; replay verification, state copy, system keys.
 - [`admin-auth.md`](./admin-auth.md) — admin roles on the control plane.
 - [`deploy.md`](./deploy.md) — `gwag deploy`: Compose, minikube, Kubernetes and ECS files.
