@@ -66,6 +66,9 @@ func upCmd(args []string) int {
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	requireAppKeys := fs.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY; mint with 'gwag key create'), operator RPCs the admin token. Default off: the control plane is open")
+	switchoverOn := fs.Bool("switchover", false, "Blue side of a cutover: forward a share of GraphQL requests to green (docs/cutover.md). The share starts at 0; set it with gwag cluster switchover. Implied by --switchover-target")
+	switchoverTarget := fs.String("switchover-target", "", "Green's GraphQL URL for --switchover (e.g. http://green:8080/api/graphql); gwag cluster switchover --target can set it instead")
+	switchoverSticky := fs.String("switchover-sticky-header", "", "With --switchover: request header that keeps a client on one side when it has no caller id (e.g. X-Client-Id); else the source address")
 	adminTokenFile := fs.String("admin-token-file", "", "Read the admin bearer token (hex) from this file instead of generating one in the data dir. Env GWAG_ADMIN_TOKEN works the same when the flag is empty. Use it to hand every node of a deployment one platform-managed secret")
 	srFlags := addSchemaRegistryFlags(fs)
 	fs.Usage = func() {
@@ -158,6 +161,9 @@ func upCmd(args []string) int {
 	}
 	if *requireAppKeys {
 		gwOpts = append(gwOpts, gateway.WithRequireAppKeys())
+	}
+	if *switchoverOn || *switchoverTarget != "" {
+		gwOpts = append(gwOpts, gateway.WithSwitchover(gateway.SwitchoverOptions{Target: *switchoverTarget, StickyHeader: *switchoverSticky}))
 	}
 	srOpt, err := srFlags.option()
 	if err != nil {
