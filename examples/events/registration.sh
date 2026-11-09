@@ -130,8 +130,10 @@ TS=$!; pids+=($TS)
 check "tsnotify registered" wait_for 30 logged "$WORK/ts.log" REGISTERED
 
 echo "== 5. gateway view"
+# The list is built from the registry KV watch, which applies a
+# registration shortly after the client's Register returns.
 for ns in orders pynotify tsnotify; do
-  check "gwag services list shows $ns" has_service "$ns"
+  check "gwag services list shows $ns" wait_for 10 has_service "$ns"
 done
 ADMIN="$(sed -n 's/.*admin token = \([0-9a-f]*\).*/\1/p' "$WORK/gateway.log" | head -n1)"
 curl -sf -H "Authorization: Bearer $ADMIN" "http://127.0.0.1:$HTTP/api/admin/services" >"$WORK/admin-services.json"
