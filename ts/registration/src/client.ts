@@ -13,6 +13,8 @@ import {
   RegisterRequestSchema,
   ServiceBindingSchema,
   SubscriptionSchema,
+  VerificationState,
+  VerifySchema,
   type BindingStatus as WireBindingStatus,
   type RegisterRequest,
 } from "./gen/gw/proto/controlplane/v1/control_pb.ts";
@@ -60,6 +62,15 @@ export interface Service {
   public?: boolean;
   /** Event channels this binding listens on. */
   subscribes?: Subscription[];
+  /**
+   * Where each instance serves its health check: a path or an absolute
+   * URL on the service's host. When this or specUrl is set the gateway
+   * verifies each instance before routing to it (see
+   * ServiceBinding.verify in control.proto).
+   */
+  healthUrl?: string;
+  /** Where each instance serves this binding's spec; the gateway compares it with the registered one. */
+  specUrl?: string;
 }
 
 export type State = "ready" | "waiting" | "degraded";
@@ -72,10 +83,17 @@ export interface DependencyStatus {
   group: string;
 }
 
+/** The gateway's verification of an instance: "" (not verified), "pending", "green" or "red". */
+export type Verification = "" | "pending" | "green" | "red";
+
 export interface BindingStatus {
   namespace: string;
   version: string;
   state: State;
+  /** "" when the binding declares no healthUrl / specUrl. A binding that is not green is waiting. */
+  verification: Verification;
+  /** The failed checks when verification is "red". */
+  verifyReasons: string[];
   depends: DependencyStatus[];
 }
 
@@ -160,11 +178,26 @@ function stateOf(s: InstanceState): State {
   }
 }
 
+function verificationOf(v: VerificationState): Verification {
+  switch (v) {
+    case VerificationState.PENDING:
+      return "pending";
+    case VerificationState.GREEN:
+      return "green";
+    case VerificationState.RED:
+      return "red";
+    default:
+      return "";
+  }
+}
+
 function bindingsOf(list: WireBindingStatus[]): BindingStatus[] {
   return list.map((b) => ({
     namespace: b.namespace,
     version: b.version,
     state: stateOf(b.state),
+    verification: verificationOf(b.verification),
+    verifyReasons: [...b.verifyReasons],
     depends: b.depends.map((d) => ({
       service: d.service,
       lines: [...d.lines],
@@ -201,6 +234,10 @@ export function buildRequest(opts: Pick<Options, "serviceAddr" | "services" | "i
         owner: s.owner ? create(OwnerSchema, { team: s.owner.team, contact: s.owner.contact ?? "" }) : undefined,
         public: s.public ?? false,
         subscribes: (s.subscribes ?? []).map((x) => create(SubscriptionSchema, { channel: x.channel, group: x.group })),
+        verify:
+          s.healthUrl || s.specUrl
+            ? create(VerifySchema, { healthUrl: s.healthUrl ?? "", specUrl: s.specUrl ?? "" })
+            : undefined,
       });
     }),
   });
@@ -333,7 +370,10 @@ export class Registration {
         else if (d.channel !== "") miss.push(`channel ${d.channel} (${d.service}/${d.lines.join("|")})`);
         else miss.push(`${d.service}(${d.lines.join("|")})`);
       }
-      parts.push(`${b.namespace}/${b.version} needs ${miss.join(", ")}`);
+      if (miss.length > 0) parts.push(`${b.namespace}/${b.version} needs ${miss.join(", ")}`);
+      if (b.verification === "red") parts.push(`${b.namespace}/${b.version} red: ${b.verifyReasons.join("; ")}`);
+      else if (b.verification === "pending") parts.push(`${b.namespace}/${b.version} verification pending`);
+      else if (miss.length === 0) parts.push(`${b.namespace}/${b.version} waiting`);
     }
     return parts.sort().join("; ");
   }
@@ -347,11 +387,11 @@ export class Registration {
     for (;;) {
       const w = this.#waiting();
       if (w === "") {
-        if (lastLog !== "") this.#log("registration: dependencies present, starting");
+        if (lastLog !== "") this.#log("registration: ready, starting");
         return;
       }
       if (w !== lastLog || Date.now() - lastLogAt >= waitLogEvery) {
-        this.#log(`registration: waiting for dependencies: ${w}`);
+        this.#log(`registration: waiting: ${w}`);
         lastLog = w;
         lastLogAt = Date.now();
       }

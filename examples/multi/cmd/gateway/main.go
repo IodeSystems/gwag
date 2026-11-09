@@ -88,6 +88,8 @@ func main() {
 	shutdownTimeout := flag.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
 	maxWait := flag.Duration("max-wait", gateway.DefaultBackpressure.MaxWaitTime, "Per-dispatch wait budget; exceeded → backoff reject; 0 disables")
 	upstreamTimeout := flag.Duration("upstream-timeout", 0, "Per-call timeout for unary upstream dispatch; 0 disables")
+	verifyInterval := flag.Duration("verify-interval", 0, "Probe a verified (green) instance this often (docs/integrate.md); 0 → 30s")
+	verifyRetry := flag.Duration("verify-retry", 0, "Probe an instance that is not green this often; 0 → min(verify-interval, 2s)")
 	insecureSubscribe := flag.Bool("insecure-subscribe", false, "Disable HMAC verification on subscriptions (dev only)")
 	subscribeSecret := flag.String("subscribe-secret", "", "Hex-encoded shared HMAC secret for subscription verification")
 	subscribeSkew := flag.Duration("subscribe-skew", 0, "Accepted timestamp drift on subscribe HMACs; 0 → 5min default")
@@ -181,6 +183,7 @@ func main() {
 	if *upstreamTimeout > 0 {
 		gwOpts = append(gwOpts, gateway.WithUpstreamTimeout(*upstreamTimeout))
 	}
+	gwOpts = append(gwOpts, gateway.WithVerification(gateway.VerifyOptions{Interval: *verifyInterval, Retry: *verifyRetry}))
 
 	switch {
 	case *insecureSubscribe:

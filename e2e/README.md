@@ -55,6 +55,7 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 | `TestS13bRollbackBeforeFinalize` | 2 HEAD nodes join a v2.11.0 cluster and leave again before finalize (the last with `evacuate --leave`); the old cluster keeps its level, streams and meta quorum |
 | `TestS14FailureModes` | failure modes under traffic through a health-checked LB, 3 nodes: the only instance of a service killed, one of two instances killed, 1 of 3 nodes killed, 2 of 3 nodes killed (no JetStream quorum: the survivor keeps routing, writes fail); per traffic kind (GraphQL, REST, gRPC, `ps.pub`, `ps_sub`, typed events) the failed calls and recovery time, logged as `S14 \|` lines for [`docs/running.md`](../docs/running.md) |
 | `TestS14bStandaloneRestart` | one node with JetStream on disk killed and restarted: KV state kept, the service registers again by heartbeat |
+| `TestS15GatedDeploy` | two replicas register with a health URL and a spec URL (`--verify`); both green and `gwag service wait --green` exits 0; one replica's health fails: red with the reason, no traffic to it while the other serves, `service wait` for it exits 3, `service_verification{state="red"}` is 1; it recovers to green |
 
 `TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
 and `pnpm` are on `PATH`, and the Python listener when `uv` is; it

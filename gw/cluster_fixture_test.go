@@ -145,6 +145,7 @@ func resetSharedCluster(t *testing.T) {
 			limitsBucketName,
 			quotaCountersBucketName,
 			usageBucketName,
+			pulledBucketName,
 		} {
 			kv, err := cl.JS.KeyValue(jsCtx, bucket)
 			if err != nil {

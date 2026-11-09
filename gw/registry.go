@@ -61,6 +61,16 @@ type registryValue struct {
 	// values from older gateways decode as ready.
 	Waiting bool `json:"waiting,omitempty"`
 
+	// Verification is the owner's latest probe result for a binding
+	// that declares verify (verify.go): "pending", "green" or "red";
+	// empty = not verified. A joined replica whose value is not green
+	// is flagged red on every node (not picked). VerifyReasons are
+	// the failed checks; VerifiedUnixMs the probe time. Omitted when
+	// unset, so values from older gateways decode as not verified.
+	Verification   string   `json:"verification,omitempty"`
+	VerifyReasons  []string `json:"verify_reasons,omitempty"`
+	VerifiedUnixMs int64    `json:"verified_unix_ms,omitempty"`
+
 	// Manifest is ServiceBinding.depends / owner. Embedded so the JSON
 	// keys are "depends" / "owner"; both omitted when unset, so values
 	// written by older gateways decode to the zero manifest.

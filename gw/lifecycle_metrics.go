@@ -59,12 +59,14 @@ type lifecycleMetrics struct {
 	transitions  *prometheus.CounterVec
 	drainReqs    *prometheus.CounterVec
 	hookFailures prometheus.Counter
+	verifyChange *prometheus.CounterVec
 
 	instances *prometheus.Desc
 	drains    *prometheus.Desc
 	unmet     *prometheus.Desc
 	sunset    *prometheus.Desc
 	reviewDue *prometheus.Desc
+	verify    *prometheus.Desc
 
 	mu   sync.Mutex
 	seen map[string]seenGate // gate instance id -> last counted state
@@ -79,6 +81,10 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 			Name: p + "_start_gate_transitions_total",
 			Help: "Start-gate state changes of control-plane instances, as seen by this node. from/to: none (new), waiting, ready, degraded, removed. READY/DEGRADED flips are sampled every 2s and at scrape.",
 		}, []string{"namespace", "version", "from", "to"}),
+		verifyChange: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: p + "_service_verification_changes_total",
+			Help: "Verification results that changed, for instances whose registration this node holds (verify.go). from/to: pending, green, red. A red result whose reasons change counts as red -> red.",
+		}, []string{"namespace", "version", "from", "to"}),
 		drainReqs: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: p + "_drain_requests_total",
 			Help: "Instance drain requests handled by this node, by outcome: requested (new), already_requested (repeat or poll), cancelled, unknown_instance, error.",
@@ -90,6 +96,9 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 		reviewDue: prometheus.NewDesc(p+"_declarations_review_due",
 			"External dependents past their review date (or with none). They still count as dependents; each is a declaration_review_due notification. Cluster-wide set, read on this node.",
 			nil, nil),
+		verify: prometheus.NewDesc(p+"_service_verification",
+			"Control-plane instances per (namespace, version) that declare verify, by verification state (pending, green, red). A red instance gets no traffic. Per-node view; series exist only while the line has such an instance.",
+			[]string{"namespace", "version", "state"}, nil),
 		instances: prometheus.NewDesc(p+"_service_instances",
 			"Control-plane instances per (namespace, version) by start-gate state (ready, waiting, degraded). Per-node view; series exist only while the line is registered.",
 			[]string{"namespace", "version", "state"}, nil),
@@ -103,7 +112,7 @@ func newLifecycleMetrics(g *Gateway, pm *prometheusMetrics) *lifecycleMetrics {
 			"1 when the admin dependency graph marks the line sunset-able, else 0: every dependent has another ready line and the line had no traffic on this node in the last 1h (the graph's default window); the only line of a namespace is never sunset-able. Per-node view.",
 			[]string{"namespace", "version"}, nil),
 	}
-	pm.registry.MustRegister(m.transitions, m.drainReqs, m.hookFailures, m)
+	pm.registry.MustRegister(m.transitions, m.drainReqs, m.hookFailures, m.verifyChange, m)
 	return m
 }
 
@@ -117,6 +126,14 @@ func (m *lifecycleMetrics) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(m.reviewDue, prometheus.GaugeValue, float64(g.externals.reviewDueCount(nowFunc())))
 	if g.cp == nil {
 		return
+	}
+	g.mu.Lock()
+	vc := g.verifyCountsLocked()
+	g.mu.Unlock()
+	for k, m2 := range vc {
+		for _, st := range []string{"pending", "green", "red"} {
+			ch <- prometheus.MustNewConstMetric(m.verify, prometheus.GaugeValue, float64(m2[st]), k.namespace, k.version, st)
+		}
 	}
 	reg, err := g.cp.ListServices(context.Background(), &cpv1.ListServicesRequest{})
 	if err != nil {
@@ -189,7 +206,7 @@ func (m *lifecycleMetrics) observeGate() {
 	cur := make(map[string]seenGate, len(g.gate.instances))
 	for id, inst := range g.gate.instances {
 		cur[id] = seenGate{
-			state: adminInstanceState(g.gateStateLocked(inst.waiting, g.gateDepsLocked(inst.manifest, inst.key))),
+			state: adminInstanceState(g.gateStateLocked(inst.waiting || inst.red, g.gateDepsLocked(inst.manifest, inst.key))),
 			key:   inst.key,
 		}
 	}
@@ -240,4 +257,16 @@ func (m *lifecycleMetrics) recordDrainRequest(cancel, existed bool, err error) {
 		outcome = drainOutcomeRepeated
 	}
 	m.drainReqs.WithLabelValues(outcome).Inc()
+}
+
+// observeVerify counts one changed verification result.
+func (m *lifecycleMetrics) observeVerify(ns, ver string, from, to cpv1.VerificationState) {
+	if m == nil {
+		return
+	}
+	f := verifyStateName(from)
+	if f == "" {
+		f = "pending"
+	}
+	m.verifyChange.WithLabelValues(ns, ver, f, verifyStateName(to)).Inc()
 }

@@ -109,6 +109,13 @@ type Gateway struct {
 	peers      *peerTracker
 	broker     *subBroker
 
+	// verifyHTTP is the probe client (verify.go), built once.
+	verifyHTTP     *http.Client
+	verifyHTTPOnce sync.Once
+
+	// pulled holds the pulled service profiles (profile_pull.go).
+	pulled pulledProfiles
+
 	// trackMu serialises startClusterTracking. It is held across the
 	// JetStream calls that open the buckets; g.mu is not, so a slow or
 	// unavailable JetStream does not block registration and HTTP boot.
@@ -366,6 +373,9 @@ type config struct {
 	upstreamTimeout time.Duration
 	ejectAfter      int
 	ejectFor        time.Duration
+
+	// verify: WithVerification (verify.go). Zero value → defaults.
+	verify VerifyOptions
 
 	// environment is the WithEnvironment label ("" = unset).
 	environment string
@@ -820,6 +830,17 @@ func WithBackpressure(b BackpressureOptions) Option {
 // Stability: stable
 func WithoutBackpressure() Option {
 	return func(cfg *config) { cfg.backpressure = BackpressureOptions{} }
+}
+
+// WithVerification tunes how the gateway verifies the instances of a
+// binding that declares ServiceBinding.verify (verify.go): how often
+// a green instance is probed again, the per-probe timeout, and which
+// hosts a pulled service profile (AddServiceProfile) may name. Zero
+// fields keep their defaults.
+//
+// Stability: experimental
+func WithVerification(o VerifyOptions) Option {
+	return func(cfg *config) { cfg.verify = o }
 }
 
 // WithUpstreamTimeout sets the default per-call timeout for unary

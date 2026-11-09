@@ -114,7 +114,7 @@ PY=$!; pids+=($PY)
 wait_for 20 curl -sf "$SR/subjects" -o /dev/null
 sleep 3
 check "pynotify has not started (no orders yet)" bash -c "! grep -q REGISTERED '$WORK/py.log'"
-check "pynotify logs what it waits for" logged "$WORK/py.log" "waiting for dependencies: .*channel orders.v1.OrderEvents (not declared yet)"
+check "pynotify logs what it waits for" logged "$WORK/py.log" "waiting: .*channel orders.v1.OrderEvents (not declared yet)"
 
 echo "== 3. TypeScript orders declares the channels"
 "${TSSVC[@]}" --namespace orders --proto "$ORDERS" \

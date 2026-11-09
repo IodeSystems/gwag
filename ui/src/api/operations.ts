@@ -391,6 +391,8 @@ export const DependencyGraphQuery = graphql(`
             state
             drainState
             drainReasons
+            verification
+            verifyReasons
           }
         }
         desiredEdges {

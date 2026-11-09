@@ -60,6 +60,12 @@ type gateInstance struct {
 	instanceID string
 	manifest   serviceManifest
 	waiting    bool
+
+	// vstat is the instance's verification (verify.go); zero state =
+	// not verified. red: passed the gate, then failed verification;
+	// its replicas are flagged and it is reported WAITING.
+	vstat verifyStatus
+	red   bool
 }
 
 // gateState is the gateway's start-gate bookkeeping. instances is
@@ -157,7 +163,7 @@ func (g *Gateway) readyOwnersLocked(ns, line string) (owners []string, ownerless
 		return nil, 0
 	}
 	add := func(owner string, h *replicaHealth) {
-		if h.draining.Load() {
+		if h.unroutable() {
 			return
 		}
 		if owner == "" {
@@ -299,8 +305,11 @@ func (g *Gateway) instanceStatusLocked(inst *gateInstance) *cpv1.InstanceStatus 
 		RegistrationId: inst.regID,
 		InstanceId:     inst.instanceID,
 		Addr:           inst.addr,
-		State:          g.gateStateLocked(inst.waiting, deps),
+		State:          g.gateStateLocked(inst.waiting || inst.red, deps),
 		Depends:        g.dependencyStatusLocked(deps),
+		Verification:   inst.vstat.state,
+		VerifyReasons:  append([]string(nil), inst.vstat.reasons...),
+		VerifiedUnixMs: inst.vstat.atMs,
 	}
 }
 
@@ -447,6 +456,11 @@ type regBinding struct {
 	// joinErr is the last deferred-join failure (standalone), logged
 	// once per distinct error.
 	joinErr string
+
+	// Verification (verify.go): when prep.verify is set, the next
+	// probe time, and red = joined, then failed verification.
+	nextProbe time.Time
+	red       bool
 }
 
 func (p *preparedBinding) key() poolKey {
@@ -478,7 +492,7 @@ func (g *Gateway) admitLocked(prep []preparedBinding) ([]bool, error) {
 	}
 	waiting := make([]bool, len(prep))
 	for i, p := range prep {
-		waiting[i] = !g.depsMetLocked(g.gateDepsLocked(p.manifest, p.key()))
+		waiting[i] = !p.verified() || !g.depsMetLocked(g.gateDepsLocked(p.manifest, p.key()))
 	}
 	return waiting, nil
 }
@@ -491,10 +505,12 @@ func (cp *controlPlane) bindingStatusesLocked(reg *registration) []*cpv1.Binding
 	for _, b := range reg.bindings {
 		deps := g.gateDepsLocked(b.prep.manifest, b.prep.key())
 		out = append(out, &cpv1.BindingStatus{
-			Namespace: b.prep.namespace,
-			Version:   b.prep.version,
-			State:     g.gateStateLocked(b.waiting, deps),
-			Depends:   g.dependencyStatusLocked(deps),
+			Namespace:     b.prep.namespace,
+			Version:       b.prep.version,
+			State:         g.gateStateLocked(b.waiting || b.red, deps),
+			Depends:       g.dependencyStatusLocked(deps),
+			Verification:  b.prep.vstat.state,
+			VerifyReasons: append([]string(nil), b.prep.vstat.reasons...),
 		})
 	}
 	return out
@@ -553,7 +569,7 @@ func (cp *controlPlane) promoteStandaloneLocked() {
 				continue // registered through the cluster path
 			}
 			for _, b := range reg.bindings {
-				if !b.waiting || !g.depsMetLocked(g.gateDepsLocked(b.prep.manifest, b.prep.key())) {
+				if !b.waiting || !b.prep.verified() || !g.depsMetLocked(g.gateDepsLocked(b.prep.manifest, b.prep.key())) {
 					continue
 				}
 				if err := cp.joinPreparedLocked(reg.id, reg.addr, reg.conn, b.prep); err != nil {
@@ -588,7 +604,7 @@ func (cp *controlPlane) promoteCluster() {
 	cp.gw.mu.Lock()
 	for _, reg := range cp.regs {
 		for _, b := range reg.bindings {
-			if b.waiting && reg.kvKeys != nil && cp.gw.depsMetLocked(cp.gw.gateDepsLocked(b.prep.manifest, b.prep.key())) {
+			if b.waiting && reg.kvKeys != nil && b.prep.verified() && cp.gw.depsMetLocked(cp.gw.gateDepsLocked(b.prep.manifest, b.prep.key())) {
 				cands = append(cands, cand{reg, b})
 			}
 		}
@@ -605,7 +621,7 @@ func (cp *controlPlane) promoteCluster() {
 		// after the promotion.
 		c.reg.putMu.Lock()
 		cp.mu.Lock()
-		if cp.regs[c.reg.id] != c.reg || !c.b.waiting {
+		if cp.regs[c.reg.id] != c.reg || !c.b.waiting || !c.b.prep.verified() {
 			cp.mu.Unlock()
 			c.reg.putMu.Unlock()
 			continue
@@ -638,9 +654,16 @@ func (cp *controlPlane) promoteCluster() {
 // the deps it waits for.
 func (cp *controlPlane) logWaiting(regID string, st []*cpv1.BindingStatus) {
 	for _, b := range st {
-		if b.GetState() == cpv1.InstanceState_INSTANCE_STATE_WAITING {
+		if b.GetState() != cpv1.InstanceState_INSTANCE_STATE_WAITING {
+			continue
+		}
+		if miss := missingDeps(b.GetDepends()); miss != "" {
 			cp.logf("controlplane: start gate: %s/%s (registration %s) waiting for %s",
-				b.GetNamespace(), b.GetVersion(), regID, missingDeps(b.GetDepends()))
+				b.GetNamespace(), b.GetVersion(), regID, miss)
+		}
+		if r := b.GetVerifyReasons(); len(r) > 0 {
+			cp.logf("controlplane: verify: %s/%s (registration %s) red: %s",
+				b.GetNamespace(), b.GetVersion(), regID, strings.Join(r, "; "))
 		}
 	}
 }

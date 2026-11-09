@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
+from pathlib import Path
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -17,6 +19,7 @@ from gwag_registration import (
     Service,
     Subscription,
     build_request,
+    load_profile,
     register,
 )
 from gwag_registration.gen.gateway.controlplane import v1 as cp
@@ -42,6 +45,8 @@ class Fake(cp.ControlPlaneBase):
         self.seq = 0
         self.ttl = 1
         self.state = cp.InstanceState.READY
+        self.verification = cp.VerificationState.UNSPECIFIED
+        self.verify_reasons: list[str] = []
         self.fail_register: GRPCError | None = None
         self.down = False  # answer UNAVAILABLE, as a gateway behind a dead load balancer
         self.server: Server | None = None
@@ -55,7 +60,16 @@ class Fake(cp.ControlPlaneBase):
                 depends = [
                     cp.DependencyStatus(lines=["v1"], channel="orders.v1.OrderEvents", group="billing")
                 ]
-            out.append(cp.BindingStatus(namespace=s.namespace, version=s.version, state=self.state, depends=depends))
+            out.append(
+                cp.BindingStatus(
+                    namespace=s.namespace,
+                    version=s.version,
+                    state=self.state,
+                    depends=depends,
+                    verification=self.verification,
+                    verify_reasons=list(self.verify_reasons),
+                )
+            )
         return out
 
     async def register(self, message: cp.RegisterRequest) -> cp.RegisterResponse:
@@ -264,3 +278,120 @@ async def test_application_key_is_sent_as_bearer_metadata(fake: tuple[Fake, str]
     await wait_for(lambda: len(f.heartbeats) >= 1)
     await reg.close()
     assert f.auth and all(a == "Bearer app-key-1" for a in f.auth), f.auth
+
+
+async def test_verify_fields_reach_the_gateway_only_when_set(fake: tuple[Fake, str]) -> None:
+    f, addr = fake
+    svcs = [
+        Service(namespace="billing", version="v1", proto_source=PROTO, health_url="/healthz", spec_url="/spec"),
+        Service(namespace="billing", version="v2", proto_source=PROTO),
+    ]
+    reg = await register(
+        Options(gateway=addr, service_addr="billing:50051", services=svcs, logger=lambda m: None)
+    )
+    a, b = f.registers[0].services
+    assert a.verify is not None
+    assert (a.verify.health_url, a.verify.spec_url) == ("/healthz", "/spec")
+    assert b.verify is None
+    await reg.close()
+
+
+async def test_waits_while_red_then_starts_when_green(fake: tuple[Fake, str]) -> None:
+    f, addr = fake
+    f.state = cp.InstanceState.WAITING
+    f.verification = cp.VerificationState.RED
+    f.verify_reasons = ["health /healthz: status 500", "spec differs"]
+    logs: list[str] = []
+    svc = Service(namespace="billing", version="v1", proto_source=PROTO, health_url="/healthz")
+    task = asyncio.create_task(
+        register(
+            Options(
+                gateway=addr,
+                service_addr="billing:50051",
+                services=[svc],
+                ready_poll_interval=0.03,
+                logger=logs.append,
+            )
+        )
+    )
+    await wait_for(lambda: len(f.heartbeats) >= 2)
+    assert not task.done()
+    assert any("billing/v1 red: health /healthz: status 500; spec differs" in m for m in logs), logs
+    f.state = cp.InstanceState.READY
+    f.verification = cp.VerificationState.GREEN
+    f.verify_reasons = []
+    reg = await task
+    assert reg.bindings[0].verification == "green"
+    assert "registration: ready, starting" in logs
+    await reg.close()
+
+
+def test_load_profile_openapi(tmp_path: Path) -> None:
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api/billing-v1.json").write_text('{"openapi":"3.0.0"}')
+    (tmp_path / "api/billing-v2.json").write_text('{"openapi":"3.1.0"}')
+    (tmp_path / "oa").mkdir()
+    profile = tmp_path / "oa/gwag.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "service": "billing",
+                "owner": {"team": "payments", "contact": "#payments"},
+                "public": True,
+                "health": "/healthz",
+                "provides": {
+                    "unstable": {"kind": "openapi", "file": "../api/billing-v2.json"},
+                    "v2": {"kind": "openapi", "file": "../api/billing-v2.json", "url": "/spec?v=2", "health": "/h2"},
+                    "v1": {"kind": "openapi", "file": "../api/billing-v1.json", "url": "/spec?v=1"},
+                },
+                "depends": {"library": ["v1", "v2"], "accounts": ["v1"]},
+                "subscribes": [{"channel": "orders.v1.OrderEvents", "group": "billing"}],
+            }
+        )
+    )
+    out = load_profile(profile, "billing:8080")
+    assert [s.version for s in out] == ["v1", "v2", "unstable"]
+    v1 = out[0]
+    assert v1.namespace == "billing"
+    assert v1.openapi_spec == b'{"openapi":"3.0.0"}'
+    assert (v1.health_url, v1.spec_url) == ("/healthz", "/spec?v=1")
+    assert out[1].health_url == "/h2"
+    assert out[2].spec_url == ""
+    assert [(d.service, d.lines) for d in v1.depends] == [("accounts", ["v1"]), ("library", ["v1", "v2"])]
+    assert v1.owner == Owner("payments", "#payments")
+    assert v1.public is True
+    assert v1.subscribes == [Subscription("orders.v1.OrderEvents", "billing")]
+    build_request(Options(gateway="g:1", service_addr="billing:8080", services=out))
+
+
+def test_load_profile_proto_reads_imports(tmp_path: Path) -> None:
+    (tmp_path / "proto/common").mkdir(parents=True)
+    (tmp_path / "proto/a.proto").write_text('syntax = "proto3"; import "common/c.proto";')
+    (tmp_path / "proto/common/c.proto").write_text('syntax = "proto3";')
+    profile = tmp_path / "gwag.json"
+    profile.write_text(json.dumps({"service": "a", "provides": {"v1": {"kind": "proto", "file": "proto/a.proto"}}}))
+    (s,) = load_profile(profile, "a:1")
+    assert s.proto_source == b'syntax = "proto3"; import "common/c.proto";'
+    assert s.proto_imports == {"common/c.proto": b'syntax = "proto3";'}
+
+
+def test_load_profile_graphql_endpoint_path(tmp_path: Path) -> None:
+    profile = tmp_path / "gwag.json"
+    profile.write_text(json.dumps({"service": "g", "provides": {"v1": {"kind": "graphql", "endpoint": "/graphql"}}}))
+    assert load_profile(profile, "g:9000")[0].graphql_endpoint == "http://g:9000/graphql"
+
+
+def test_load_profile_rejects_invalid(tmp_path: Path) -> None:
+    def write(name: str, body: str) -> Path:
+        p = tmp_path / name
+        p.write_text(body)
+        return p
+
+    with pytest.raises(ValueError, match="service: required"):
+        load_profile(write("1.json", "{}"), "x:1")
+    with pytest.raises(ValueError, match="at least one version"):
+        load_profile(write("2.json", '{"service":"x"}'), "x:1")
+    with pytest.raises(ValueError, match="want proto, openapi or graphql"):
+        load_profile(write("3.json", '{"service":"x","provides":{"v1":{"kind":"soap"}}}'), "x:1")
+    with pytest.raises(ValueError, match="file: required"):
+        load_profile(write("4.json", '{"service":"x","provides":{"v1":{"kind":"proto"}}}'), "x:1")

@@ -42,6 +42,12 @@
 //	gwag drain --list --gateway localhost:50090
 //	gwag drain --wait --gateway localhost:50090 INSTANCE
 //
+//	# The integration pattern (docs/integrate.md): profile, lint, gated deploy:
+//	gwag service init --spec api/openapi.json --url /openapi.json --health /healthz
+//	gwag service check --url http://billing:8080 --gateway localhost:50090
+//	gwag service wait --gateway localhost:50090 --service billing:v1 --green --timeout 2m
+//	gwag services add --profile-url http://legacy:8080/.well-known/gwag.json
+//
 //	# Persist named gateway logins so subcommands don't need --gateway:
 //	gwag login --name local --gateway localhost:50090 --token DEADBEEF...
 //	gwag login --name staging --gateway staging.gw:50090 --token ...
@@ -216,6 +222,8 @@ func main() {
 			os.Exit(clusterCmd(os.Args[2:]))
 		case "services":
 			os.Exit(servicesCmd(os.Args[2:]))
+		case "service":
+			os.Exit(serviceCmd(os.Args[2:]))
 		case "schema":
 			os.Exit(schemaCmd(os.Args[2:]))
 		case "sign":
@@ -402,8 +410,17 @@ func parseMCPUpstream(v string) (ns string, transport gateway.MCPTransport, targ
 }
 
 func servicesCmd(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "add", "remove", "profiles":
+			return servicesProfileCmd(args, os.Stdout, os.Stderr)
+		}
+	}
 	if len(args) == 0 || args[0] != "list" {
 		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag services add --profile-url URL [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag services remove --profile-url URL [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag services profiles [--gateway HOST:PORT] [--context NAME]")
 		return 2
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])

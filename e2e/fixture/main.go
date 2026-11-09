@@ -66,6 +66,9 @@ type faults struct {
 	ErrorRate  float64 `json:"errorRate"`
 	Hang       bool    `json:"hang"`
 	CrashAfter int64   `json:"crashAfter"`
+	// Unhealthy makes GET /healthz on the control listener answer 500
+	// (--verify).
+	Unhealthy bool `json:"unhealthy"`
 }
 
 type fixture struct {
@@ -73,6 +76,7 @@ type fixture struct {
 
 	mu     sync.Mutex
 	faults faults
+	specs  sync.Map // line -> registered spec bytes (--verify)
 	calls  atomic.Int64
 	errs   atomic.Int64
 }
@@ -151,6 +155,7 @@ func main() {
 	drain := flag.Bool("drain-on-sigterm", false, "On SIGTERM, drain through the gateway, deregister, then exit (controlclient DrainOnSIGTERM)")
 	drainTimeout := flag.Duration("drain-timeout", 30*time.Second, "With --drain-on-sigterm: max wait for safe_to_stop")
 	ttl := flag.Duration("ttl", 0, "Registration TTL (0 = gateway default, 30s)")
+	verify := flag.Bool("verify", false, "Register with HealthURL / SpecURL on the control listener (GET /healthz, GET /spec/LINE), so the gateway verifies the instance")
 	maxConc := flag.Uint("max-concurrency", 0, "Per-binding MaxConcurrency (0 = gateway default)")
 	flag.Parse()
 
@@ -216,6 +221,13 @@ func main() {
 		svcs[i].Owner = own
 		svcs[i].Public = *public
 		svcs[i].MaxConcurrency = uint32(*maxConc)
+		if *verify {
+			f.specs.Store(svcs[i].Version, specOf(svcs[i]))
+			svcs[i].HealthURL = "http://" + ctlLis.Addr().String() + "/healthz"
+			if svcs[i].GraphQLEndpoint == "" {
+				svcs[i].SpecURL = "http://" + ctlLis.Addr().String() + "/spec/" + svcs[i].Version
+			}
+		}
 	}
 
 	opts := controlclient.Options{
@@ -293,6 +305,22 @@ func (f *fixture) serveControl(lis net.Listener) {
 			"errors": f.errs.Load(),
 			"faults": f.snapshot(),
 		})
+	})
+	// --verify probes.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if f.snapshot().Unhealthy {
+			http.Error(w, "unhealthy (fault)", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("GET /spec/{line}", func(w http.ResponseWriter, r *http.Request) {
+		b, ok := f.specs.Load(r.PathValue("line"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(b.([]byte))
 	})
 	// POST /faults replaces the whole fault set with the JSON body.
 	mux.HandleFunc("POST /faults", func(w http.ResponseWriter, r *http.Request) {
@@ -560,4 +588,13 @@ func (f *fixture) serveGraphQL(lis net.Listener, lines []string) ([]controlclien
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(lis) }()
 	return svcs, func() { _ = srv.Close() }, nil
+}
+
+// specOf is the spec a Service registers: its proto source or
+// OpenAPI document.
+func specOf(s controlclient.Service) []byte {
+	if len(s.OpenAPISpec) > 0 {
+		return s.OpenAPISpec
+	}
+	return s.ProtoSource
 }

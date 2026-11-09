@@ -220,6 +220,12 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	if err != nil {
 		return nil, err
 	}
+	// Pulled service profiles (profile_pull.go). No TTL.
+	pulled, err := openKV(ctx, cl.JS, jetstream.KeyValueConfig{Bucket: pulledBucketName}, r)
+	if err != nil {
+		return nil, err
+	}
+	g.setPulledKV(pulled)
 
 	var schemas jetstream.KeyValue
 	if g.sr != nil {
@@ -503,6 +509,7 @@ var replicaBuckets = []string{
 	limitsBucketName,
 	quotaCountersBucketName,
 	usageBucketName,
+	pulledBucketName,
 }
 
 // reconcileReplicas raises every managed bucket and event stream to

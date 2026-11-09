@@ -197,11 +197,20 @@ func (r *reconciler) handlePut(ctx context.Context, ns, ver, replicaID string, r
 		instanceID: v.InstanceID,
 		manifest:   v.serviceManifest,
 		waiting:    v.Waiting,
+		vstat:      v.verifyStatus(),
+		red:        !v.Waiting && v.unroutable(),
 	})
 	g.mu.Unlock()
 	if waiting {
 		return
 	}
+	// Verification: flag (or clear) this instance's replicas once
+	// they are in the pool, whichever path below joined them.
+	defer func() {
+		g.mu.Lock()
+		g.setReplicaRedLocked(poolKey{namespace: ns, version: ver}, v.RegID, v.unroutable())
+		g.mu.Unlock()
+	}()
 
 	if v.IsOpenAPI() {
 		var hash [32]byte

@@ -10,7 +10,7 @@ import type { Message, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file gw/proto/controlplane/v1/control.proto.
  */
 export const file_gw_proto_controlplane_v1_control: GenFile = /*@__PURE__*/
-  fileDesc("CiZndy9wcm90by9jb250cm9scGxhbmUvdjEvY29udHJvbC5wcm90bxIXZ2F0ZXdheS5jb250cm9scGxhbmUudjEihAEKD1JlZ2lzdGVyUmVxdWVzdBIMCgRhZGRyGAEgASgJEjkKCHNlcnZpY2VzGAIgAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUJpbmRpbmcSEwoLdHRsX3NlY29uZHMYAyABKA0SEwoLaW5zdGFuY2VfaWQYBCABKAkihAQKDlNlcnZpY2VCaW5kaW5nEhEKCW5hbWVzcGFjZRgBIAEoCRIUCgxwcm90b19zb3VyY2UYAiABKAwSUAoNcHJvdG9faW1wb3J0cxgDIAMoCzI5LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNlcnZpY2VCaW5kaW5nLlByb3RvSW1wb3J0c0VudHJ5Eg8KB3ZlcnNpb24YBCABKAkSFAoMb3BlbmFwaV9zcGVjGAUgASgMEhgKEGdyYXBocWxfZW5kcG9pbnQYBiABKAkSFwoPbWF4X2NvbmN1cnJlbmN5GAcgASgNEiQKHG1heF9jb25jdXJyZW5jeV9wZXJfaW5zdGFuY2UYCCABKA0SEgoKdGltZW91dF9tcxgJIAEoDRI0CgdkZXBlbmRzGAogAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgLIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEg4KBnB1YmxpYxgMIAEoCBI5CgpzdWJzY3JpYmVzGA0gAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uGjMKEVByb3RvSW1wb3J0c0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEiLgoMU3Vic2NyaXB0aW9uEg8KB2NoYW5uZWwYASABKAkSDQoFZ3JvdXAYAiABKAkiLAoKRGVwZW5kZW5jeRIPCgdzZXJ2aWNlGAEgASgJEg0KBWxpbmVzGAIgAygJIiYKBU93bmVyEgwKBHRlYW0YASABKAkSDwoHY29udGFjdBgCIAEoCSKMAQoQUmVnaXN0ZXJSZXNwb25zZRIXCg9yZWdpc3RyYXRpb25faWQYASABKAkSEwoLdHRsX3NlY29uZHMYAiABKA0SOAoIYmluZGluZ3MYAyADKAsyJi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5CaW5kaW5nU3RhdHVzEhAKCHdhcm5pbmdzGAQgAygJImkKEERlcGVuZGVuY3lTdGF0dXMSDwoHc2VydmljZRgBIAEoCRINCgVsaW5lcxgCIAMoCRIVCg1wcmVzZW50X2xpbmVzGAMgAygJEg8KB2NoYW5uZWwYBCABKAkSDQoFZ3JvdXAYBSABKAkipgEKDUJpbmRpbmdTdGF0dXMSEQoJbmFtZXNwYWNlGAEgASgJEg8KB3ZlcnNpb24YAiABKAkSNQoFc3RhdGUYAyABKA4yJi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5JbnN0YW5jZVN0YXRlEjoKB2RlcGVuZHMYBCADKAsyKS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXBlbmRlbmN5U3RhdHVzItMBCg5JbnN0YW5jZVN0YXR1cxISCgpyZXBsaWNhX2lkGAEgASgJEhcKD3JlZ2lzdHJhdGlvbl9pZBgCIAEoCRITCgtpbnN0YW5jZV9pZBgDIAEoCRIMCgRhZGRyGAQgASgJEjUKBXN0YXRlGAUgASgOMiYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSW5zdGFuY2VTdGF0ZRI6CgdkZXBlbmRzGAYgAygLMikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeVN0YXR1cyIrChBIZWFydGJlYXRSZXF1ZXN0EhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCSJZChFIZWFydGJlYXRSZXNwb25zZRIKCgJvaxgBIAEoCBI4CghiaW5kaW5ncxgCIAMoCzImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkJpbmRpbmdTdGF0dXMiLAoRRGVyZWdpc3RlclJlcXVlc3QSFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJIhQKEkRlcmVnaXN0ZXJSZXNwb25zZSIaChhMaXN0UmVnaXN0cmF0aW9uc1JlcXVlc3QiWQoZTGlzdFJlZ2lzdHJhdGlvbnNSZXNwb25zZRI8Cg1yZWdpc3RyYXRpb25zGAEgAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmVnaXN0cmF0aW9uIpMBCgxSZWdpc3RyYXRpb24SFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJEgwKBGFkZHIYAiABKAkSEwoLaW5zdGFuY2VfaWQYAyABKAkSEwoLdHRsX3NlY29uZHMYBCABKA0SHgoWbGFzdF9oZWFydGJlYXRfdW5peF9tcxgFIAEoBBISCgpuYW1lc3BhY2VzGAYgAygJIhIKEExpc3RQZWVyc1JlcXVlc3QilQEKEUxpc3RQZWVyc1Jlc3BvbnNlEiwKBXBlZXJzGAEgAygLMh0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUGVlchIUCgxhY3RpdmVfbGV2ZWwYAiABKA0SEwoLbWV0YV9sZWFkZXIYAyABKAkSEQoJbWV0YV9zaXplGAQgASgNEhQKDG1ldGFfb2ZmbGluZRgFIAMoCSJ0CgRQZWVyEg8KB25vZGVfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIWCg5qb2luZWRfdW5peF9tcxgDIAEoAxIPCgd2ZXJzaW9uGAQgASgJEhEKCW1pbl9sZXZlbBgFIAEoDRIRCgltYXhfbGV2ZWwYBiABKA0iJAoRRm9yZ2V0UGVlclJlcXVlc3QSDwoHbm9kZV9pZBgBIAEoCSJRChJGb3JnZXRQZWVyUmVzcG9uc2USDwoHcmVtb3ZlZBgBIAEoCBIUCgxuZXdfcmVwbGljYXMYAiABKA0SFAoMbWV0YV9yZW1vdmVkGAMgASgIIjgKFkZpbmFsaXplQ2x1c3RlclJlcXVlc3QSDQoFbGV2ZWwYASABKA0SDwoHZHJ5X3J1bhgCIAEoCCJZChdGaW5hbGl6ZUNsdXN0ZXJSZXNwb25zZRIWCg5wcmV2aW91c19sZXZlbBgBIAEoDRIUCgxhY3RpdmVfbGV2ZWwYAiABKA0SEAoIYmxvY2tlcnMYAyADKAkiSQoTRXZhY3VhdGVQZWVyUmVxdWVzdBIPCgdub2RlX2lkGAEgASgJEhIKCmNoZWNrX29ubHkYAiABKAgSDQoFbGVhdmUYAyABKAgiUwoURXZhY3VhdGVQZWVyUmVzcG9uc2USDAoEbmFtZRgBIAEoCRIRCglyZW1haW5pbmcYAiADKAkSDAoEZG9uZRgDIAEoCBIMCgRsZWZ0GAQgASgIIhUKE0xpc3RTZXJ2aWNlc1JlcXVlc3Qi6gEKFExpc3RTZXJ2aWNlc1Jlc3BvbnNlEjYKCHNlcnZpY2VzGAEgAygLMiQuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUluZm8STgoJc3RhYmxlX3ZuGAMgAygLMjsuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVzcG9uc2UuU3RhYmxlVm5FbnRyeRITCgtlbnZpcm9ubWVudBgEIAEoCRovCg1TdGFibGVWbkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDToCOAFKBAgCEAMi+wIKC1NlcnZpY2VJbmZvEhEKCW5hbWVzcGFjZRgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJEhAKCGhhc2hfaGV4GAMgASgJEhUKDXJlcGxpY2FfY291bnQYBCABKA0SIQoZbWFudWFsX2RlcHJlY2F0aW9uX3JlYXNvbhgFIAEoCRI0CgdkZXBlbmRzGAYgAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgHIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEjoKCWluc3RhbmNlcxgIIAMoCzInLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkluc3RhbmNlU3RhdHVzEg4KBnB1YmxpYxgJIAEoCBI5CgpzdWJzY3JpYmVzGAogAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uEhAKCHdhcm5pbmdzGAsgAygJIlEKHFNpZ25TdWJzY3JpcHRpb25Ub2tlblJlcXVlc3QSDwoHY2hhbm5lbBgBIAEoCRITCgt0dGxfc2Vjb25kcxgCIAEoAxILCgNraWQYAyABKAkiPQoUUmV0cmFjdFN0YWJsZVJlcXVlc3QSEQoJbmFtZXNwYWNlGAEgASgJEhIKCnRhcmdldF92X24YAiABKA0iOwoVUmV0cmFjdFN0YWJsZVJlc3BvbnNlEhEKCXByaW9yX3ZfbhgBIAEoDRIPCgduZXdfdl9uGAIgASgNIkYKEERlcHJlY2F0ZVJlcXVlc3QSEQoJbmFtZXNwYWNlGAEgASgJEg8KB3ZlcnNpb24YAiABKAkSDgoGcmVhc29uGAMgASgJIhMKEURlcHJlY2F0ZVJlc3BvbnNlIjgKElVuZGVwcmVjYXRlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCSIrChNVbmRlcHJlY2F0ZVJlc3BvbnNlEhQKDHByaW9yX3JlYXNvbhgBIAEoCSKcAQodU2lnblN1YnNjcmlwdGlvblRva2VuUmVzcG9uc2USOAoEY29kZRgBIAEoDjIqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlN1YnNjcmliZUF1dGhDb2RlEgwKBGhtYWMYAiABKAkSFgoOdGltZXN0YW1wX3VuaXgYAyABKAMSDgoGcmVhc29uGAQgASgJEgsKA2tpZBgFIAEoCSI4ChREcmFpbkluc3RhbmNlUmVxdWVzdBIQCghpbnN0YW5jZRgBIAEoCRIOCgZjYW5jZWwYAiABKAgiqwEKFURyYWluSW5zdGFuY2VSZXNwb25zZRIXCg9yZWdpc3RyYXRpb25faWQYASABKAkSEwoLaW5zdGFuY2VfaWQYAiABKAkSMgoFc3RhdGUYAyABKA4yIy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EcmFpblN0YXRlEg8KB3JlYXNvbnMYBCADKAkSEAoIaW5mbGlnaHQYBSABKA0SDQoFbGluZXMYBiADKAkqggEKDUluc3RhbmNlU3RhdGUSHgoaSU5TVEFOQ0VfU1RBVEVfVU5TUEVDSUZJRUQQABIYChRJTlNUQU5DRV9TVEFURV9SRUFEWRABEhoKFklOU1RBTkNFX1NUQVRFX1dBSVRJTkcQAhIbChdJTlNUQU5DRV9TVEFURV9ERUdSQURFRBADKvcCChFTdWJzY3JpYmVBdXRoQ29kZRIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOU1BFQ0lGSUVEEAASGgoWU1VCU0NSSUJFX0FVVEhfQ09ERV9PSxABEh8KG1NVQlNDUklCRV9BVVRIX0NPREVfVE9PX09MRBACEh8KG1NVQlNDUklCRV9BVVRIX0NPREVfVE9PX05FVxADEioKJlNVQlNDUklCRV9BVVRIX0NPREVfU0lHTkFUVVJFX01JU01BVENIEAQSIQodU1VCU0NSSUJFX0FVVEhfQ09ERV9NQUxGT1JNRUQQBRIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOS05PV05fS0lEEAYSHgoaU1VCU0NSSUJFX0FVVEhfQ09ERV9ERU5JRUQQBxIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOQVZBSUxBQkxFEAgSJgoiU1VCU0NSSUJFX0FVVEhfQ09ERV9OT1RfQ09ORklHVVJFRBAJKpMBCgpEcmFpblN0YXRlEhsKF0RSQUlOX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTRFJBSU5fU1RBVEVfU0VSVklORxABEhgKFERSQUlOX1NUQVRFX0RSQUlOSU5HEAISFwoTRFJBSU5fU1RBVEVfQkxPQ0tFRBADEhwKGERSQUlOX1NUQVRFX1NBRkVfVE9fU1RPUBAEMogMCgxDb250cm9sUGxhbmUSXwoIUmVnaXN0ZXISKC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RlclJlcXVlc3QaKS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RlclJlc3BvbnNlEmIKCUhlYXJ0YmVhdBIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkhlYXJ0YmVhdFJlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5IZWFydGJlYXRSZXNwb25zZRJlCgpEZXJlZ2lzdGVyEiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVyZWdpc3RlclJlcXVlc3QaKy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXJlZ2lzdGVyUmVzcG9uc2USegoRTGlzdFJlZ2lzdHJhdGlvbnMSMS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UmVnaXN0cmF0aW9uc1JlcXVlc3QaMi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UmVnaXN0cmF0aW9uc1Jlc3BvbnNlEmIKCUxpc3RQZWVycxIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RQZWVyc1JlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UGVlcnNSZXNwb25zZRJlCgpGb3JnZXRQZWVyEiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRm9yZ2V0UGVlclJlcXVlc3QaKy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5Gb3JnZXRQZWVyUmVzcG9uc2USawoMTGlzdFNlcnZpY2VzEiwuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVxdWVzdBotLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RTZXJ2aWNlc1Jlc3BvbnNlEoYBChVTaWduU3Vic2NyaXB0aW9uVG9rZW4SNS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXF1ZXN0GjYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2lnblN1YnNjcmlwdGlvblRva2VuUmVzcG9uc2USbgoNUmV0cmFjdFN0YWJsZRItLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJldHJhY3RTdGFibGVSZXF1ZXN0Gi4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmV0cmFjdFN0YWJsZVJlc3BvbnNlEmIKCURlcHJlY2F0ZRIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcHJlY2F0ZVJlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXByZWNhdGVSZXNwb25zZRJoCgtVbmRlcHJlY2F0ZRIrLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlVuZGVwcmVjYXRlUmVxdWVzdBosLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlVuZGVwcmVjYXRlUmVzcG9uc2USbgoNRHJhaW5JbnN0YW5jZRItLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRyYWluSW5zdGFuY2VSZXF1ZXN0Gi4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRHJhaW5JbnN0YW5jZVJlc3BvbnNlEnQKD0ZpbmFsaXplQ2x1c3RlchIvLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkZpbmFsaXplQ2x1c3RlclJlcXVlc3QaMC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5GaW5hbGl6ZUNsdXN0ZXJSZXNwb25zZRJrCgxFdmFjdWF0ZVBlZXISLC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5FdmFjdWF0ZVBlZXJSZXF1ZXN0Gi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRXZhY3VhdGVQZWVyUmVzcG9uc2VCSFpGZ2l0aHViLmNvbS9pb2Rlc3lzdGVtcy9nd2FnL3YyL2d3L3Byb3RvL2NvbnRyb2xwbGFuZS92MTtjb250cm9scGxhbmV2MWIGcHJvdG8z");
+  fileDesc("CiZndy9wcm90by9jb250cm9scGxhbmUvdjEvY29udHJvbC5wcm90bxIXZ2F0ZXdheS5jb250cm9scGxhbmUudjEihAEKD1JlZ2lzdGVyUmVxdWVzdBIMCgRhZGRyGAEgASgJEjkKCHNlcnZpY2VzGAIgAygLMicuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUJpbmRpbmcSEwoLdHRsX3NlY29uZHMYAyABKA0SEwoLaW5zdGFuY2VfaWQYBCABKAkitQQKDlNlcnZpY2VCaW5kaW5nEhEKCW5hbWVzcGFjZRgBIAEoCRIUCgxwcm90b19zb3VyY2UYAiABKAwSUAoNcHJvdG9faW1wb3J0cxgDIAMoCzI5LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNlcnZpY2VCaW5kaW5nLlByb3RvSW1wb3J0c0VudHJ5Eg8KB3ZlcnNpb24YBCABKAkSFAoMb3BlbmFwaV9zcGVjGAUgASgMEhgKEGdyYXBocWxfZW5kcG9pbnQYBiABKAkSFwoPbWF4X2NvbmN1cnJlbmN5GAcgASgNEiQKHG1heF9jb25jdXJyZW5jeV9wZXJfaW5zdGFuY2UYCCABKA0SEgoKdGltZW91dF9tcxgJIAEoDRI0CgdkZXBlbmRzGAogAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgLIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEg4KBnB1YmxpYxgMIAEoCBI5CgpzdWJzY3JpYmVzGA0gAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uEi8KBnZlcmlmeRgOIAEoCzIfLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlZlcmlmeRozChFQcm90b0ltcG9ydHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAw6AjgBIi4KBlZlcmlmeRISCgpoZWFsdGhfdXJsGAEgASgJEhAKCHNwZWNfdXJsGAIgASgJIi4KDFN1YnNjcmlwdGlvbhIPCgdjaGFubmVsGAEgASgJEg0KBWdyb3VwGAIgASgJIiwKCkRlcGVuZGVuY3kSDwoHc2VydmljZRgBIAEoCRINCgVsaW5lcxgCIAMoCSImCgVPd25lchIMCgR0ZWFtGAEgASgJEg8KB2NvbnRhY3QYAiABKAkijAEKEFJlZ2lzdGVyUmVzcG9uc2USFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJEhMKC3R0bF9zZWNvbmRzGAIgASgNEjgKCGJpbmRpbmdzGAMgAygLMiYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuQmluZGluZ1N0YXR1cxIQCgh3YXJuaW5ncxgEIAMoCSJpChBEZXBlbmRlbmN5U3RhdHVzEg8KB3NlcnZpY2UYASABKAkSDQoFbGluZXMYAiADKAkSFQoNcHJlc2VudF9saW5lcxgDIAMoCRIPCgdjaGFubmVsGAQgASgJEg0KBWdyb3VwGAUgASgJIoACCg1CaW5kaW5nU3RhdHVzEhEKCW5hbWVzcGFjZRgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJEjUKBXN0YXRlGAMgASgOMiYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuSW5zdGFuY2VTdGF0ZRI6CgdkZXBlbmRzGAQgAygLMikuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeVN0YXR1cxJACgx2ZXJpZmljYXRpb24YBSABKA4yKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5WZXJpZmljYXRpb25TdGF0ZRIWCg52ZXJpZnlfcmVhc29ucxgGIAMoCSLHAgoOSW5zdGFuY2VTdGF0dXMSEgoKcmVwbGljYV9pZBgBIAEoCRIXCg9yZWdpc3RyYXRpb25faWQYAiABKAkSEwoLaW5zdGFuY2VfaWQYAyABKAkSDAoEYWRkchgEIAEoCRI1CgVzdGF0ZRgFIAEoDjImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkluc3RhbmNlU3RhdGUSOgoHZGVwZW5kcxgGIAMoCzIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcGVuZGVuY3lTdGF0dXMSQAoMdmVyaWZpY2F0aW9uGAcgASgOMiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuVmVyaWZpY2F0aW9uU3RhdGUSFgoOdmVyaWZ5X3JlYXNvbnMYCCADKAkSGAoQdmVyaWZpZWRfdW5peF9tcxgJIAEoAyIrChBIZWFydGJlYXRSZXF1ZXN0EhcKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCSJZChFIZWFydGJlYXRSZXNwb25zZRIKCgJvaxgBIAEoCBI4CghiaW5kaW5ncxgCIAMoCzImLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkJpbmRpbmdTdGF0dXMiLAoRRGVyZWdpc3RlclJlcXVlc3QSFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJIhQKEkRlcmVnaXN0ZXJSZXNwb25zZSIaChhMaXN0UmVnaXN0cmF0aW9uc1JlcXVlc3QiWQoZTGlzdFJlZ2lzdHJhdGlvbnNSZXNwb25zZRI8Cg1yZWdpc3RyYXRpb25zGAEgAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmVnaXN0cmF0aW9uIpMBCgxSZWdpc3RyYXRpb24SFwoPcmVnaXN0cmF0aW9uX2lkGAEgASgJEgwKBGFkZHIYAiABKAkSEwoLaW5zdGFuY2VfaWQYAyABKAkSEwoLdHRsX3NlY29uZHMYBCABKA0SHgoWbGFzdF9oZWFydGJlYXRfdW5peF9tcxgFIAEoBBISCgpuYW1lc3BhY2VzGAYgAygJIhIKEExpc3RQZWVyc1JlcXVlc3QilQEKEUxpc3RQZWVyc1Jlc3BvbnNlEiwKBXBlZXJzGAEgAygLMh0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUGVlchIUCgxhY3RpdmVfbGV2ZWwYAiABKA0SEwoLbWV0YV9sZWFkZXIYAyABKAkSEQoJbWV0YV9zaXplGAQgASgNEhQKDG1ldGFfb2ZmbGluZRgFIAMoCSJ0CgRQZWVyEg8KB25vZGVfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIWCg5qb2luZWRfdW5peF9tcxgDIAEoAxIPCgd2ZXJzaW9uGAQgASgJEhEKCW1pbl9sZXZlbBgFIAEoDRIRCgltYXhfbGV2ZWwYBiABKA0iJAoRRm9yZ2V0UGVlclJlcXVlc3QSDwoHbm9kZV9pZBgBIAEoCSJRChJGb3JnZXRQZWVyUmVzcG9uc2USDwoHcmVtb3ZlZBgBIAEoCBIUCgxuZXdfcmVwbGljYXMYAiABKA0SFAoMbWV0YV9yZW1vdmVkGAMgASgIIjgKFkZpbmFsaXplQ2x1c3RlclJlcXVlc3QSDQoFbGV2ZWwYASABKA0SDwoHZHJ5X3J1bhgCIAEoCCJZChdGaW5hbGl6ZUNsdXN0ZXJSZXNwb25zZRIWCg5wcmV2aW91c19sZXZlbBgBIAEoDRIUCgxhY3RpdmVfbGV2ZWwYAiABKA0SEAoIYmxvY2tlcnMYAyADKAkiSQoTRXZhY3VhdGVQZWVyUmVxdWVzdBIPCgdub2RlX2lkGAEgASgJEhIKCmNoZWNrX29ubHkYAiABKAgSDQoFbGVhdmUYAyABKAgiUwoURXZhY3VhdGVQZWVyUmVzcG9uc2USDAoEbmFtZRgBIAEoCRIRCglyZW1haW5pbmcYAiADKAkSDAoEZG9uZRgDIAEoCBIMCgRsZWZ0GAQgASgIIhUKE0xpc3RTZXJ2aWNlc1JlcXVlc3Qi6gEKFExpc3RTZXJ2aWNlc1Jlc3BvbnNlEjYKCHNlcnZpY2VzGAEgAygLMiQuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2VydmljZUluZm8STgoJc3RhYmxlX3ZuGAMgAygLMjsuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVzcG9uc2UuU3RhYmxlVm5FbnRyeRITCgtlbnZpcm9ubWVudBgEIAEoCRovCg1TdGFibGVWbkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDToCOAFKBAgCEAMi+wIKC1NlcnZpY2VJbmZvEhEKCW5hbWVzcGFjZRgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJEhAKCGhhc2hfaGV4GAMgASgJEhUKDXJlcGxpY2FfY291bnQYBCABKA0SIQoZbWFudWFsX2RlcHJlY2F0aW9uX3JlYXNvbhgFIAEoCRI0CgdkZXBlbmRzGAYgAygLMiMuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVwZW5kZW5jeRItCgVvd25lchgHIAEoCzIeLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLk93bmVyEjoKCWluc3RhbmNlcxgIIAMoCzInLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkluc3RhbmNlU3RhdHVzEg4KBnB1YmxpYxgJIAEoCBI5CgpzdWJzY3JpYmVzGAogAygLMiUuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU3Vic2NyaXB0aW9uEhAKCHdhcm5pbmdzGAsgAygJIlEKHFNpZ25TdWJzY3JpcHRpb25Ub2tlblJlcXVlc3QSDwoHY2hhbm5lbBgBIAEoCRITCgt0dGxfc2Vjb25kcxgCIAEoAxILCgNraWQYAyABKAkiPQoUUmV0cmFjdFN0YWJsZVJlcXVlc3QSEQoJbmFtZXNwYWNlGAEgASgJEhIKCnRhcmdldF92X24YAiABKA0iOwoVUmV0cmFjdFN0YWJsZVJlc3BvbnNlEhEKCXByaW9yX3ZfbhgBIAEoDRIPCgduZXdfdl9uGAIgASgNIkYKEERlcHJlY2F0ZVJlcXVlc3QSEQoJbmFtZXNwYWNlGAEgASgJEg8KB3ZlcnNpb24YAiABKAkSDgoGcmVhc29uGAMgASgJIhMKEURlcHJlY2F0ZVJlc3BvbnNlIjgKElVuZGVwcmVjYXRlUmVxdWVzdBIRCgluYW1lc3BhY2UYASABKAkSDwoHdmVyc2lvbhgCIAEoCSIrChNVbmRlcHJlY2F0ZVJlc3BvbnNlEhQKDHByaW9yX3JlYXNvbhgBIAEoCSKcAQodU2lnblN1YnNjcmlwdGlvblRva2VuUmVzcG9uc2USOAoEY29kZRgBIAEoDjIqLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlN1YnNjcmliZUF1dGhDb2RlEgwKBGhtYWMYAiABKAkSFgoOdGltZXN0YW1wX3VuaXgYAyABKAMSDgoGcmVhc29uGAQgASgJEgsKA2tpZBgFIAEoCSI4ChREcmFpbkluc3RhbmNlUmVxdWVzdBIQCghpbnN0YW5jZRgBIAEoCRIOCgZjYW5jZWwYAiABKAgiqwEKFURyYWluSW5zdGFuY2VSZXNwb25zZRIXCg9yZWdpc3RyYXRpb25faWQYASABKAkSEwoLaW5zdGFuY2VfaWQYAiABKAkSMgoFc3RhdGUYAyABKA4yIy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EcmFpblN0YXRlEg8KB3JlYXNvbnMYBCADKAkSEAoIaW5mbGlnaHQYBSABKA0SDQoFbGluZXMYBiADKAkiJwoYQWRkU2VydmljZVByb2ZpbGVSZXF1ZXN0EgsKA3VybBgBIAEoCSJmChlBZGRTZXJ2aWNlUHJvZmlsZVJlc3BvbnNlEg8KB3NlcnZpY2UYASABKAkSOAoIYmluZGluZ3MYAiADKAsyJi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5CaW5kaW5nU3RhdHVzIioKG1JlbW92ZVNlcnZpY2VQcm9maWxlUmVxdWVzdBILCgN1cmwYASABKAkiLwocUmVtb3ZlU2VydmljZVByb2ZpbGVSZXNwb25zZRIPCgdyZW1vdmVkGAEgASgIIhwKGkxpc3RTZXJ2aWNlUHJvZmlsZXNSZXF1ZXN0IlgKG0xpc3RTZXJ2aWNlUHJvZmlsZXNSZXNwb25zZRI5Cghwcm9maWxlcxgBIAMoCzInLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlNlcnZpY2VQcm9maWxlImgKDlNlcnZpY2VQcm9maWxlEgsKA3VybBgBIAEoCRIPCgdzZXJ2aWNlGAIgASgJEhUKDWFkZGVkX3VuaXhfbXMYAyABKAMSDQoFZXJyb3IYBCABKAkSEgoKb3duZXJfbm9kZRgFIAEoCSqCAQoNSW5zdGFuY2VTdGF0ZRIeChpJTlNUQU5DRV9TVEFURV9VTlNQRUNJRklFRBAAEhgKFElOU1RBTkNFX1NUQVRFX1JFQURZEAESGgoWSU5TVEFOQ0VfU1RBVEVfV0FJVElORxACEhsKF0lOU1RBTkNFX1NUQVRFX0RFR1JBREVEEAMqkQEKEVZlcmlmaWNhdGlvblN0YXRlEiIKHlZFUklGSUNBVElPTl9TVEFURV9VTlNQRUNJRklFRBAAEh4KGlZFUklGSUNBVElPTl9TVEFURV9QRU5ESU5HEAESHAoYVkVSSUZJQ0FUSU9OX1NUQVRFX0dSRUVOEAISGgoWVkVSSUZJQ0FUSU9OX1NUQVRFX1JFRBADKvcCChFTdWJzY3JpYmVBdXRoQ29kZRIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOU1BFQ0lGSUVEEAASGgoWU1VCU0NSSUJFX0FVVEhfQ09ERV9PSxABEh8KG1NVQlNDUklCRV9BVVRIX0NPREVfVE9PX09MRBACEh8KG1NVQlNDUklCRV9BVVRIX0NPREVfVE9PX05FVxADEioKJlNVQlNDUklCRV9BVVRIX0NPREVfU0lHTkFUVVJFX01JU01BVENIEAQSIQodU1VCU0NSSUJFX0FVVEhfQ09ERV9NQUxGT1JNRUQQBRIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOS05PV05fS0lEEAYSHgoaU1VCU0NSSUJFX0FVVEhfQ09ERV9ERU5JRUQQBxIjCh9TVUJTQ1JJQkVfQVVUSF9DT0RFX1VOQVZBSUxBQkxFEAgSJgoiU1VCU0NSSUJFX0FVVEhfQ09ERV9OT1RfQ09ORklHVVJFRBAJKpMBCgpEcmFpblN0YXRlEhsKF0RSQUlOX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTRFJBSU5fU1RBVEVfU0VSVklORxABEhgKFERSQUlOX1NUQVRFX0RSQUlOSU5HEAISFwoTRFJBSU5fU1RBVEVfQkxPQ0tFRBADEhwKGERSQUlOX1NUQVRFX1NBRkVfVE9fU1RPUBAEMo0PCgxDb250cm9sUGxhbmUSXwoIUmVnaXN0ZXISKC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RlclJlcXVlc3QaKS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5SZWdpc3RlclJlc3BvbnNlEmIKCUhlYXJ0YmVhdBIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkhlYXJ0YmVhdFJlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5IZWFydGJlYXRSZXNwb25zZRJlCgpEZXJlZ2lzdGVyEiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRGVyZWdpc3RlclJlcXVlc3QaKy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXJlZ2lzdGVyUmVzcG9uc2USegoRTGlzdFJlZ2lzdHJhdGlvbnMSMS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UmVnaXN0cmF0aW9uc1JlcXVlc3QaMi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UmVnaXN0cmF0aW9uc1Jlc3BvbnNlEmIKCUxpc3RQZWVycxIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RQZWVyc1JlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0UGVlcnNSZXNwb25zZRJlCgpGb3JnZXRQZWVyEiouZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRm9yZ2V0UGVlclJlcXVlc3QaKy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5Gb3JnZXRQZWVyUmVzcG9uc2USawoMTGlzdFNlcnZpY2VzEiwuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuTGlzdFNlcnZpY2VzUmVxdWVzdBotLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RTZXJ2aWNlc1Jlc3BvbnNlEoYBChVTaWduU3Vic2NyaXB0aW9uVG9rZW4SNS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5TaWduU3Vic2NyaXB0aW9uVG9rZW5SZXF1ZXN0GjYuZ2F0ZXdheS5jb250cm9scGxhbmUudjEuU2lnblN1YnNjcmlwdGlvblRva2VuUmVzcG9uc2USbgoNUmV0cmFjdFN0YWJsZRItLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJldHJhY3RTdGFibGVSZXF1ZXN0Gi4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuUmV0cmFjdFN0YWJsZVJlc3BvbnNlEmIKCURlcHJlY2F0ZRIpLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRlcHJlY2F0ZVJlcXVlc3QaKi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5EZXByZWNhdGVSZXNwb25zZRJoCgtVbmRlcHJlY2F0ZRIrLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlVuZGVwcmVjYXRlUmVxdWVzdBosLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlVuZGVwcmVjYXRlUmVzcG9uc2USbgoNRHJhaW5JbnN0YW5jZRItLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkRyYWluSW5zdGFuY2VSZXF1ZXN0Gi4uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRHJhaW5JbnN0YW5jZVJlc3BvbnNlEnQKD0ZpbmFsaXplQ2x1c3RlchIvLmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkZpbmFsaXplQ2x1c3RlclJlcXVlc3QaMC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5GaW5hbGl6ZUNsdXN0ZXJSZXNwb25zZRJrCgxFdmFjdWF0ZVBlZXISLC5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5FdmFjdWF0ZVBlZXJSZXF1ZXN0Gi0uZ2F0ZXdheS5jb250cm9scGxhbmUudjEuRXZhY3VhdGVQZWVyUmVzcG9uc2USegoRQWRkU2VydmljZVByb2ZpbGUSMS5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5BZGRTZXJ2aWNlUHJvZmlsZVJlcXVlc3QaMi5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5BZGRTZXJ2aWNlUHJvZmlsZVJlc3BvbnNlEoMBChRSZW1vdmVTZXJ2aWNlUHJvZmlsZRI0LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlbW92ZVNlcnZpY2VQcm9maWxlUmVxdWVzdBo1LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLlJlbW92ZVNlcnZpY2VQcm9maWxlUmVzcG9uc2USgAEKE0xpc3RTZXJ2aWNlUHJvZmlsZXMSMy5nYXRld2F5LmNvbnRyb2xwbGFuZS52MS5MaXN0U2VydmljZVByb2ZpbGVzUmVxdWVzdBo0LmdhdGV3YXkuY29udHJvbHBsYW5lLnYxLkxpc3RTZXJ2aWNlUHJvZmlsZXNSZXNwb25zZUJIWkZnaXRodWIuY29tL2lvZGVzeXN0ZW1zL2d3YWcvdjIvZ3cvcHJvdG8vY29udHJvbHBsYW5lL3YxO2NvbnRyb2xwbGFuZXYxYgZwcm90bzM");
 
 /**
  * @generated from message gateway.controlplane.v1.RegisterRequest
@@ -218,6 +218,18 @@ export type ServiceBinding = Message<"gateway.controlplane.v1.ServiceBinding"> &
    * @generated from field: repeated gateway.controlplane.v1.Subscription subscribes = 13;
    */
   subscribes: Subscription[];
+
+  /**
+   * Verification: where each instance serves its health check and
+   * this binding's spec. When set, the gateway routes to an instance
+   * only after it verified it (address reachable, health 200, spec
+   * equal to the registered one) and re-verifies it periodically; a
+   * failing instance gets no traffic until it passes again. Unset =
+   * not verified (old clients).
+   *
+   * @generated from field: gateway.controlplane.v1.Verify verify = 14;
+   */
+  verify?: Verify | undefined;
 };
 
 /**
@@ -226,6 +238,43 @@ export type ServiceBinding = Message<"gateway.controlplane.v1.ServiceBinding"> &
  */
 export const ServiceBindingSchema: GenMessage<ServiceBinding> = /*@__PURE__*/
   messageDesc(file_gw_proto_controlplane_v1_control, 1);
+
+/**
+ * Verify names the URLs the gateway probes on each instance of a
+ * binding. Each is a path ("/healthz"), resolved against the
+ * instance's registered address, or an absolute http(s) URL whose
+ * host is the registered address's host (the port may differ). The
+ * gateway refuses any other host.
+ *
+ * @generated from message gateway.controlplane.v1.Verify
+ */
+export type Verify = Message<"gateway.controlplane.v1.Verify"> & {
+  /**
+   * Must answer 200. Empty = only the address is checked.
+   *
+   * @generated from field: string health_url = 1;
+   */
+  healthUrl: string;
+
+  /**
+   * Serves this binding's spec: OpenAPI (JSON or YAML), or for proto
+   * the .proto source, a FileDescriptorSet (binary or protojson).
+   * The fetched spec must equal the registered one, compared in
+   * canonical form; deprecation marks are ignored. Empty = the spec
+   * is not checked. GraphQL bindings ignore it: the gateway
+   * introspects graphql_endpoint again and compares.
+   *
+   * @generated from field: string spec_url = 2;
+   */
+  specUrl: string;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.Verify.
+ * Use `create(VerifySchema)` to create a new message.
+ */
+export const VerifySchema: GenMessage<Verify> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 2);
 
 /**
  * Subscription names one event channel a binding listens on.
@@ -254,7 +303,7 @@ export type Subscription = Message<"gateway.controlplane.v1.Subscription"> & {
  * Use `create(SubscriptionSchema)` to create a new message.
  */
 export const SubscriptionSchema: GenMessage<Subscription> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 2);
+  messageDesc(file_gw_proto_controlplane_v1_control, 3);
 
 /**
  * Dependency names one provider service and the lines a consumer
@@ -284,7 +333,7 @@ export type Dependency = Message<"gateway.controlplane.v1.Dependency"> & {
  * Use `create(DependencySchema)` to create a new message.
  */
 export const DependencySchema: GenMessage<Dependency> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 3);
+  messageDesc(file_gw_proto_controlplane_v1_control, 4);
 
 /**
  * Owner is the team responsible for a service binding.
@@ -312,7 +361,7 @@ export type Owner = Message<"gateway.controlplane.v1.Owner"> & {
  * Use `create(OwnerSchema)` to create a new message.
  */
 export const OwnerSchema: GenMessage<Owner> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 4);
+  messageDesc(file_gw_proto_controlplane_v1_control, 5);
 
 /**
  * @generated from message gateway.controlplane.v1.RegisterResponse
@@ -359,7 +408,7 @@ export type RegisterResponse = Message<"gateway.controlplane.v1.RegisterResponse
  * Use `create(RegisterResponseSchema)` to create a new message.
  */
 export const RegisterResponseSchema: GenMessage<RegisterResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 5);
+  messageDesc(file_gw_proto_controlplane_v1_control, 6);
 
 /**
  * DependencyStatus is one declared dependency and which of its
@@ -410,7 +459,7 @@ export type DependencyStatus = Message<"gateway.controlplane.v1.DependencyStatus
  * Use `create(DependencyStatusSchema)` to create a new message.
  */
 export const DependencyStatusSchema: GenMessage<DependencyStatus> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 6);
+  messageDesc(file_gw_proto_controlplane_v1_control, 7);
 
 /**
  * BindingStatus is the start-gate state of one binding of a
@@ -438,6 +487,23 @@ export type BindingStatus = Message<"gateway.controlplane.v1.BindingStatus"> & {
    * @generated from field: repeated gateway.controlplane.v1.DependencyStatus depends = 4;
    */
   depends: DependencyStatus[];
+
+  /**
+   * Verification of this instance (ServiceBinding.verify). A binding
+   * that is not GREEN is reported WAITING (not routable); old clients
+   * therefore wait as they do for a missing dependency.
+   *
+   * @generated from field: gateway.controlplane.v1.VerificationState verification = 5;
+   */
+  verification: VerificationState;
+
+  /**
+   * Set when verification is RED (or PENDING after a failed first
+   * probe): one line per failed check.
+   *
+   * @generated from field: repeated string verify_reasons = 6;
+   */
+  verifyReasons: string[];
 };
 
 /**
@@ -445,7 +511,7 @@ export type BindingStatus = Message<"gateway.controlplane.v1.BindingStatus"> & {
  * Use `create(BindingStatusSchema)` to create a new message.
  */
 export const BindingStatusSchema: GenMessage<BindingStatus> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 7);
+  messageDesc(file_gw_proto_controlplane_v1_control, 8);
 
 /**
  * InstanceStatus is the start-gate state of one registered instance
@@ -485,6 +551,25 @@ export type InstanceStatus = Message<"gateway.controlplane.v1.InstanceStatus"> &
    * @generated from field: repeated gateway.controlplane.v1.DependencyStatus depends = 6;
    */
   depends: DependencyStatus[];
+
+  /**
+   * See BindingStatus.verification / verify_reasons.
+   *
+   * @generated from field: gateway.controlplane.v1.VerificationState verification = 7;
+   */
+  verification: VerificationState;
+
+  /**
+   * @generated from field: repeated string verify_reasons = 8;
+   */
+  verifyReasons: string[];
+
+  /**
+   * Unix milliseconds of the latest probe; 0 = none yet.
+   *
+   * @generated from field: int64 verified_unix_ms = 9;
+   */
+  verifiedUnixMs: bigint;
 };
 
 /**
@@ -492,7 +577,7 @@ export type InstanceStatus = Message<"gateway.controlplane.v1.InstanceStatus"> &
  * Use `create(InstanceStatusSchema)` to create a new message.
  */
 export const InstanceStatusSchema: GenMessage<InstanceStatus> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 8);
+  messageDesc(file_gw_proto_controlplane_v1_control, 9);
 
 /**
  * @generated from message gateway.controlplane.v1.HeartbeatRequest
@@ -509,7 +594,7 @@ export type HeartbeatRequest = Message<"gateway.controlplane.v1.HeartbeatRequest
  * Use `create(HeartbeatRequestSchema)` to create a new message.
  */
 export const HeartbeatRequestSchema: GenMessage<HeartbeatRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 9);
+  messageDesc(file_gw_proto_controlplane_v1_control, 10);
 
 /**
  * @generated from message gateway.controlplane.v1.HeartbeatResponse
@@ -539,7 +624,7 @@ export type HeartbeatResponse = Message<"gateway.controlplane.v1.HeartbeatRespon
  * Use `create(HeartbeatResponseSchema)` to create a new message.
  */
 export const HeartbeatResponseSchema: GenMessage<HeartbeatResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 10);
+  messageDesc(file_gw_proto_controlplane_v1_control, 11);
 
 /**
  * @generated from message gateway.controlplane.v1.DeregisterRequest
@@ -556,7 +641,7 @@ export type DeregisterRequest = Message<"gateway.controlplane.v1.DeregisterReque
  * Use `create(DeregisterRequestSchema)` to create a new message.
  */
 export const DeregisterRequestSchema: GenMessage<DeregisterRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 11);
+  messageDesc(file_gw_proto_controlplane_v1_control, 12);
 
 /**
  * @generated from message gateway.controlplane.v1.DeregisterResponse
@@ -569,7 +654,7 @@ export type DeregisterResponse = Message<"gateway.controlplane.v1.DeregisterResp
  * Use `create(DeregisterResponseSchema)` to create a new message.
  */
 export const DeregisterResponseSchema: GenMessage<DeregisterResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 12);
+  messageDesc(file_gw_proto_controlplane_v1_control, 13);
 
 /**
  * @generated from message gateway.controlplane.v1.ListRegistrationsRequest
@@ -582,7 +667,7 @@ export type ListRegistrationsRequest = Message<"gateway.controlplane.v1.ListRegi
  * Use `create(ListRegistrationsRequestSchema)` to create a new message.
  */
 export const ListRegistrationsRequestSchema: GenMessage<ListRegistrationsRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 13);
+  messageDesc(file_gw_proto_controlplane_v1_control, 14);
 
 /**
  * @generated from message gateway.controlplane.v1.ListRegistrationsResponse
@@ -599,7 +684,7 @@ export type ListRegistrationsResponse = Message<"gateway.controlplane.v1.ListReg
  * Use `create(ListRegistrationsResponseSchema)` to create a new message.
  */
 export const ListRegistrationsResponseSchema: GenMessage<ListRegistrationsResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 14);
+  messageDesc(file_gw_proto_controlplane_v1_control, 15);
 
 /**
  * @generated from message gateway.controlplane.v1.Registration
@@ -641,7 +726,7 @@ export type Registration = Message<"gateway.controlplane.v1.Registration"> & {
  * Use `create(RegistrationSchema)` to create a new message.
  */
 export const RegistrationSchema: GenMessage<Registration> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 15);
+  messageDesc(file_gw_proto_controlplane_v1_control, 16);
 
 /**
  * @generated from message gateway.controlplane.v1.ListPeersRequest
@@ -654,7 +739,7 @@ export type ListPeersRequest = Message<"gateway.controlplane.v1.ListPeersRequest
  * Use `create(ListPeersRequestSchema)` to create a new message.
  */
 export const ListPeersRequestSchema: GenMessage<ListPeersRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 16);
+  messageDesc(file_gw_proto_controlplane_v1_control, 17);
 
 /**
  * @generated from message gateway.controlplane.v1.ListPeersResponse
@@ -698,7 +783,7 @@ export type ListPeersResponse = Message<"gateway.controlplane.v1.ListPeersRespon
  * Use `create(ListPeersResponseSchema)` to create a new message.
  */
 export const ListPeersResponseSchema: GenMessage<ListPeersResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 17);
+  messageDesc(file_gw_proto_controlplane_v1_control, 18);
 
 /**
  * @generated from message gateway.controlplane.v1.Peer
@@ -754,7 +839,7 @@ export type Peer = Message<"gateway.controlplane.v1.Peer"> & {
  * Use `create(PeerSchema)` to create a new message.
  */
 export const PeerSchema: GenMessage<Peer> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 18);
+  messageDesc(file_gw_proto_controlplane_v1_control, 19);
 
 /**
  * @generated from message gateway.controlplane.v1.ForgetPeerRequest
@@ -771,7 +856,7 @@ export type ForgetPeerRequest = Message<"gateway.controlplane.v1.ForgetPeerReque
  * Use `create(ForgetPeerRequestSchema)` to create a new message.
  */
 export const ForgetPeerRequestSchema: GenMessage<ForgetPeerRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 19);
+  messageDesc(file_gw_proto_controlplane_v1_control, 20);
 
 /**
  * @generated from message gateway.controlplane.v1.ForgetPeerResponse
@@ -808,7 +893,7 @@ export type ForgetPeerResponse = Message<"gateway.controlplane.v1.ForgetPeerResp
  * Use `create(ForgetPeerResponseSchema)` to create a new message.
  */
 export const ForgetPeerResponseSchema: GenMessage<ForgetPeerResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 20);
+  messageDesc(file_gw_proto_controlplane_v1_control, 21);
 
 /**
  * @generated from message gateway.controlplane.v1.FinalizeClusterRequest
@@ -835,7 +920,7 @@ export type FinalizeClusterRequest = Message<"gateway.controlplane.v1.FinalizeCl
  * Use `create(FinalizeClusterRequestSchema)` to create a new message.
  */
 export const FinalizeClusterRequestSchema: GenMessage<FinalizeClusterRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 21);
+  messageDesc(file_gw_proto_controlplane_v1_control, 22);
 
 /**
  * @generated from message gateway.controlplane.v1.FinalizeClusterResponse
@@ -865,7 +950,7 @@ export type FinalizeClusterResponse = Message<"gateway.controlplane.v1.FinalizeC
  * Use `create(FinalizeClusterResponseSchema)` to create a new message.
  */
 export const FinalizeClusterResponseSchema: GenMessage<FinalizeClusterResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 22);
+  messageDesc(file_gw_proto_controlplane_v1_control, 23);
 
 /**
  * @generated from message gateway.controlplane.v1.EvacuatePeerRequest
@@ -899,7 +984,7 @@ export type EvacuatePeerRequest = Message<"gateway.controlplane.v1.EvacuatePeerR
  * Use `create(EvacuatePeerRequestSchema)` to create a new message.
  */
 export const EvacuatePeerRequestSchema: GenMessage<EvacuatePeerRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 23);
+  messageDesc(file_gw_proto_controlplane_v1_control, 24);
 
 /**
  * @generated from message gateway.controlplane.v1.EvacuatePeerResponse
@@ -940,7 +1025,7 @@ export type EvacuatePeerResponse = Message<"gateway.controlplane.v1.EvacuatePeer
  * Use `create(EvacuatePeerResponseSchema)` to create a new message.
  */
 export const EvacuatePeerResponseSchema: GenMessage<EvacuatePeerResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 24);
+  messageDesc(file_gw_proto_controlplane_v1_control, 25);
 
 /**
  * @generated from message gateway.controlplane.v1.ListServicesRequest
@@ -953,7 +1038,7 @@ export type ListServicesRequest = Message<"gateway.controlplane.v1.ListServicesR
  * Use `create(ListServicesRequestSchema)` to create a new message.
  */
 export const ListServicesRequestSchema: GenMessage<ListServicesRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 25);
+  messageDesc(file_gw_proto_controlplane_v1_control, 26);
 
 /**
  * @generated from message gateway.controlplane.v1.ListServicesResponse
@@ -992,7 +1077,7 @@ export type ListServicesResponse = Message<"gateway.controlplane.v1.ListServices
  * Use `create(ListServicesResponseSchema)` to create a new message.
  */
 export const ListServicesResponseSchema: GenMessage<ListServicesResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 26);
+  messageDesc(file_gw_proto_controlplane_v1_control, 27);
 
 /**
  * @generated from message gateway.controlplane.v1.ServiceInfo
@@ -1090,7 +1175,7 @@ export type ServiceInfo = Message<"gateway.controlplane.v1.ServiceInfo"> & {
  * Use `create(ServiceInfoSchema)` to create a new message.
  */
 export const ServiceInfoSchema: GenMessage<ServiceInfo> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 27);
+  messageDesc(file_gw_proto_controlplane_v1_control, 28);
 
 /**
  * @generated from message gateway.controlplane.v1.SignSubscriptionTokenRequest
@@ -1131,7 +1216,7 @@ export type SignSubscriptionTokenRequest = Message<"gateway.controlplane.v1.Sign
  * Use `create(SignSubscriptionTokenRequestSchema)` to create a new message.
  */
 export const SignSubscriptionTokenRequestSchema: GenMessage<SignSubscriptionTokenRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 28);
+  messageDesc(file_gw_proto_controlplane_v1_control, 29);
 
 /**
  * @generated from message gateway.controlplane.v1.RetractStableRequest
@@ -1161,7 +1246,7 @@ export type RetractStableRequest = Message<"gateway.controlplane.v1.RetractStabl
  * Use `create(RetractStableRequestSchema)` to create a new message.
  */
 export const RetractStableRequestSchema: GenMessage<RetractStableRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 29);
+  messageDesc(file_gw_proto_controlplane_v1_control, 30);
 
 /**
  * @generated from message gateway.controlplane.v1.RetractStableResponse
@@ -1188,7 +1273,7 @@ export type RetractStableResponse = Message<"gateway.controlplane.v1.RetractStab
  * Use `create(RetractStableResponseSchema)` to create a new message.
  */
 export const RetractStableResponseSchema: GenMessage<RetractStableResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 30);
+  messageDesc(file_gw_proto_controlplane_v1_control, 31);
 
 /**
  * @generated from message gateway.controlplane.v1.DeprecateRequest
@@ -1223,7 +1308,7 @@ export type DeprecateRequest = Message<"gateway.controlplane.v1.DeprecateRequest
  * Use `create(DeprecateRequestSchema)` to create a new message.
  */
 export const DeprecateRequestSchema: GenMessage<DeprecateRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 31);
+  messageDesc(file_gw_proto_controlplane_v1_control, 32);
 
 /**
  * Empty on success; the RPC error carries refusal details (slot
@@ -1239,7 +1324,7 @@ export type DeprecateResponse = Message<"gateway.controlplane.v1.DeprecateRespon
  * Use `create(DeprecateResponseSchema)` to create a new message.
  */
 export const DeprecateResponseSchema: GenMessage<DeprecateResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 32);
+  messageDesc(file_gw_proto_controlplane_v1_control, 33);
 
 /**
  * @generated from message gateway.controlplane.v1.UndeprecateRequest
@@ -1261,7 +1346,7 @@ export type UndeprecateRequest = Message<"gateway.controlplane.v1.UndeprecateReq
  * Use `create(UndeprecateRequestSchema)` to create a new message.
  */
 export const UndeprecateRequestSchema: GenMessage<UndeprecateRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 33);
+  messageDesc(file_gw_proto_controlplane_v1_control, 34);
 
 /**
  * @generated from message gateway.controlplane.v1.UndeprecateResponse
@@ -1283,7 +1368,7 @@ export type UndeprecateResponse = Message<"gateway.controlplane.v1.UndeprecateRe
  * Use `create(UndeprecateResponseSchema)` to create a new message.
  */
 export const UndeprecateResponseSchema: GenMessage<UndeprecateResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 34);
+  messageDesc(file_gw_proto_controlplane_v1_control, 35);
 
 /**
  * @generated from message gateway.controlplane.v1.SignSubscriptionTokenResponse
@@ -1335,7 +1420,7 @@ export type SignSubscriptionTokenResponse = Message<"gateway.controlplane.v1.Sig
  * Use `create(SignSubscriptionTokenResponseSchema)` to create a new message.
  */
 export const SignSubscriptionTokenResponseSchema: GenMessage<SignSubscriptionTokenResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 35);
+  messageDesc(file_gw_proto_controlplane_v1_control, 36);
 
 /**
  * @generated from message gateway.controlplane.v1.DrainInstanceRequest
@@ -1363,7 +1448,7 @@ export type DrainInstanceRequest = Message<"gateway.controlplane.v1.DrainInstanc
  * Use `create(DrainInstanceRequestSchema)` to create a new message.
  */
 export const DrainInstanceRequestSchema: GenMessage<DrainInstanceRequest> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 36);
+  messageDesc(file_gw_proto_controlplane_v1_control, 37);
 
 /**
  * @generated from message gateway.controlplane.v1.DrainInstanceResponse
@@ -1412,7 +1497,163 @@ export type DrainInstanceResponse = Message<"gateway.controlplane.v1.DrainInstan
  * Use `create(DrainInstanceResponseSchema)` to create a new message.
  */
 export const DrainInstanceResponseSchema: GenMessage<DrainInstanceResponse> = /*@__PURE__*/
-  messageDesc(file_gw_proto_controlplane_v1_control, 37);
+  messageDesc(file_gw_proto_controlplane_v1_control, 38);
+
+/**
+ * @generated from message gateway.controlplane.v1.AddServiceProfileRequest
+ */
+export type AddServiceProfileRequest = Message<"gateway.controlplane.v1.AddServiceProfileRequest"> & {
+  /**
+   * http(s) URL of the service profile, e.g.
+   * http://billing:8080/.well-known/gwag.json.
+   *
+   * @generated from field: string url = 1;
+   */
+  url: string;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.AddServiceProfileRequest.
+ * Use `create(AddServiceProfileRequestSchema)` to create a new message.
+ */
+export const AddServiceProfileRequestSchema: GenMessage<AddServiceProfileRequest> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 39);
+
+/**
+ * @generated from message gateway.controlplane.v1.AddServiceProfileResponse
+ */
+export type AddServiceProfileResponse = Message<"gateway.controlplane.v1.AddServiceProfileResponse"> & {
+  /**
+   * The profile's service (namespace).
+   *
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * State of each provided binding right after registering.
+   *
+   * @generated from field: repeated gateway.controlplane.v1.BindingStatus bindings = 2;
+   */
+  bindings: BindingStatus[];
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.AddServiceProfileResponse.
+ * Use `create(AddServiceProfileResponseSchema)` to create a new message.
+ */
+export const AddServiceProfileResponseSchema: GenMessage<AddServiceProfileResponse> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 40);
+
+/**
+ * @generated from message gateway.controlplane.v1.RemoveServiceProfileRequest
+ */
+export type RemoveServiceProfileRequest = Message<"gateway.controlplane.v1.RemoveServiceProfileRequest"> & {
+  /**
+   * @generated from field: string url = 1;
+   */
+  url: string;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.RemoveServiceProfileRequest.
+ * Use `create(RemoveServiceProfileRequestSchema)` to create a new message.
+ */
+export const RemoveServiceProfileRequestSchema: GenMessage<RemoveServiceProfileRequest> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 41);
+
+/**
+ * @generated from message gateway.controlplane.v1.RemoveServiceProfileResponse
+ */
+export type RemoveServiceProfileResponse = Message<"gateway.controlplane.v1.RemoveServiceProfileResponse"> & {
+  /**
+   * False when no profile with that url was stored.
+   *
+   * @generated from field: bool removed = 1;
+   */
+  removed: boolean;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.RemoveServiceProfileResponse.
+ * Use `create(RemoveServiceProfileResponseSchema)` to create a new message.
+ */
+export const RemoveServiceProfileResponseSchema: GenMessage<RemoveServiceProfileResponse> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 42);
+
+/**
+ * @generated from message gateway.controlplane.v1.ListServiceProfilesRequest
+ */
+export type ListServiceProfilesRequest = Message<"gateway.controlplane.v1.ListServiceProfilesRequest"> & {
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.ListServiceProfilesRequest.
+ * Use `create(ListServiceProfilesRequestSchema)` to create a new message.
+ */
+export const ListServiceProfilesRequestSchema: GenMessage<ListServiceProfilesRequest> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 43);
+
+/**
+ * @generated from message gateway.controlplane.v1.ListServiceProfilesResponse
+ */
+export type ListServiceProfilesResponse = Message<"gateway.controlplane.v1.ListServiceProfilesResponse"> & {
+  /**
+   * @generated from field: repeated gateway.controlplane.v1.ServiceProfile profiles = 1;
+   */
+  profiles: ServiceProfile[];
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.ListServiceProfilesResponse.
+ * Use `create(ListServiceProfilesResponseSchema)` to create a new message.
+ */
+export const ListServiceProfilesResponseSchema: GenMessage<ListServiceProfilesResponse> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 44);
+
+/**
+ * ServiceProfile is one pulled service.
+ *
+ * @generated from message gateway.controlplane.v1.ServiceProfile
+ */
+export type ServiceProfile = Message<"gateway.controlplane.v1.ServiceProfile"> & {
+  /**
+   * @generated from field: string url = 1;
+   */
+  url: string;
+
+  /**
+   * @generated from field: string service = 2;
+   */
+  service: string;
+
+  /**
+   * @generated from field: int64 added_unix_ms = 3;
+   */
+  addedUnixMs: bigint;
+
+  /**
+   * The last error reading or registering the profile on the node
+   * that holds the registration; empty when it is registered.
+   *
+   * @generated from field: string error = 4;
+   */
+  error: string;
+
+  /**
+   * The node that holds the registration (cluster); empty standalone.
+   *
+   * @generated from field: string owner_node = 5;
+   */
+  ownerNode: string;
+};
+
+/**
+ * Describes the message gateway.controlplane.v1.ServiceProfile.
+ * Use `create(ServiceProfileSchema)` to create a new message.
+ */
+export const ServiceProfileSchema: GenMessage<ServiceProfile> = /*@__PURE__*/
+  messageDesc(file_gw_proto_controlplane_v1_control, 45);
 
 /**
  * InstanceState is the start-gate state of one registered instance
@@ -1464,6 +1705,59 @@ export type InstanceState = (typeof InstanceState)[keyof typeof InstanceState] |
  */
 export const InstanceStateSchema: GenEnum<InstanceState> = /*@__PURE__*/
   enumDesc(file_gw_proto_controlplane_v1_control, 0);
+
+/**
+ * VerificationState is the result of the gateway's probes of one
+ * instance of a binding that declares ServiceBinding.verify.
+ *
+ * @generated from enum gateway.controlplane.v1.VerificationState
+ */
+export const VerificationState = {
+  /**
+   * Not verified: the binding declares no verify, or the gateway
+   * predates verification.
+   *
+   * @generated from enum value: VERIFICATION_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED: 0,
+
+  /**
+   * Not probed yet. Not routable.
+   *
+   * @generated from enum value: VERIFICATION_STATE_PENDING = 1;
+   */
+  PENDING: 1,
+
+  /**
+   * Every check passed on the latest probe. Routable (when the start
+   * gate also passed).
+   *
+   * @generated from enum value: VERIFICATION_STATE_GREEN = 2;
+   */
+  GREEN: 2,
+
+  /**
+   * A check failed on the latest probe. Not routable; other green
+   * instances of the line keep serving. Probed again until green.
+   *
+   * @generated from enum value: VERIFICATION_STATE_RED = 3;
+   */
+  RED: 3,
+} as const;
+
+/**
+ * VerificationState is the result of the gateway's probes of one
+ * instance of a binding that declares ServiceBinding.verify.
+ *
+ * @generated from enum gateway.controlplane.v1.VerificationState
+ */
+export type VerificationState = (typeof VerificationState)[keyof typeof VerificationState] | UnknownEnum;
+
+/**
+ * Describes the enum gateway.controlplane.v1.VerificationState.
+ */
+export const VerificationStateSchema: GenEnum<VerificationState> = /*@__PURE__*/
+  enumDesc(file_gw_proto_controlplane_v1_control, 1);
 
 /**
  * SubscribeAuthCode is the result of an attempted subscribe. Both the
@@ -1557,7 +1851,7 @@ export type SubscribeAuthCode = (typeof SubscribeAuthCode)[keyof typeof Subscrib
  * Describes the enum gateway.controlplane.v1.SubscribeAuthCode.
  */
 export const SubscribeAuthCodeSchema: GenEnum<SubscribeAuthCode> = /*@__PURE__*/
-  enumDesc(file_gw_proto_controlplane_v1_control, 1);
+  enumDesc(file_gw_proto_controlplane_v1_control, 2);
 
 /**
  * @generated from enum gateway.controlplane.v1.DrainState
@@ -1609,7 +1903,7 @@ export type DrainState = (typeof DrainState)[keyof typeof DrainState] | UnknownE
  * Describes the enum gateway.controlplane.v1.DrainState.
  */
 export const DrainStateSchema: GenEnum<DrainState> = /*@__PURE__*/
-  enumDesc(file_gw_proto_controlplane_v1_control, 2);
+  enumDesc(file_gw_proto_controlplane_v1_control, 3);
 
 /**
  * ControlPlane is the API services use to register themselves with a
@@ -1802,6 +2096,44 @@ export const ControlPlane: GenService<{
     methodKind: "unary";
     input: typeof EvacuatePeerRequestSchema;
     output: typeof EvacuatePeerResponseSchema;
+  },
+  /**
+   * AddServiceProfile registers a service the gateway pulls: it
+   * fetches the service profile (gwag.json) from url, fetches each
+   * provided spec from the service, and registers the service itself
+   * (no heartbeat from the service; the gateway holds the
+   * registration and verifies each binding like a pushed one). The
+   * profile URL is stored in the cluster, so the registration
+   * survives a gateway restart. Adding the same url again re-reads
+   * the profile. Operator RPC (admin token).
+   *
+   * @generated from rpc gateway.controlplane.v1.ControlPlane.AddServiceProfile
+   */
+  addServiceProfile: {
+    methodKind: "unary";
+    input: typeof AddServiceProfileRequestSchema;
+    output: typeof AddServiceProfileResponseSchema;
+  },
+  /**
+   * RemoveServiceProfile drops a pulled service: the stored profile
+   * URL and the registration the gateway holds for it.
+   *
+   * @generated from rpc gateway.controlplane.v1.ControlPlane.RemoveServiceProfile
+   */
+  removeServiceProfile: {
+    methodKind: "unary";
+    input: typeof RemoveServiceProfileRequestSchema;
+    output: typeof RemoveServiceProfileResponseSchema;
+  },
+  /**
+   * ListServiceProfiles lists the pulled services.
+   *
+   * @generated from rpc gateway.controlplane.v1.ControlPlane.ListServiceProfiles
+   */
+  listServiceProfiles: {
+    methodKind: "unary";
+    input: typeof ListServiceProfilesRequestSchema;
+    output: typeof ListServiceProfilesResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_gw_proto_controlplane_v1_control, 0);

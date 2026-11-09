@@ -43,6 +43,14 @@ instead of `ProtoSource`; same shape, both formats ship raw source.
 The control-plane API is in
 [`gw/proto/controlplane/v1/control.proto`](../gw/proto/controlplane/v1/control.proto).
 
+The usual path for a new service is a profile file (`gwag service
+init`), a CI check (`gwag service check`), and a deploy gated on the
+gateway's verification of the new instance (`gwag service wait
+--green`). A service with no registration client can serve its
+profile at `/.well-known/gwag.json` and be added by URL
+(`gwag services add --profile-url`). See
+[`integrate.md`](./integrate.md).
+
 ## Version
 
 A service can register at one of three **tiers** per namespace:

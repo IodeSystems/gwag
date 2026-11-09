@@ -5,7 +5,10 @@ schema {
 }
 
 type AdminMutationNamespace {
+  addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
+  clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
+  createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -20,6 +23,8 @@ type AdminMutationNamespace {
   evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
   finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  freezeCluster(body: admin_FreezeInBodyInput!): admin_FreezeInfo
+  importClusterState(body: admin_ImportClusterStateInBodyInput!): admin_ImportResult
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
@@ -33,6 +38,7 @@ type AdminMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  removeServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_RemoveServiceProfileOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   reviewExternalDependent(
     body: admin_ReviewExternalDependentInBodyInput!
@@ -41,9 +47,13 @@ type AdminMutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
+  startClusterMirror(body: admin_MirrorInBodyInput!): admin_MirrorView
+  stopClusterMirror(body: admin_MirrorStopInBodyInput!): admin_MirrorView
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
+  unfreezeCluster: admin_UnfreezeOutBody
   v1: AdminV1MutationNamespace!
 }
 
@@ -53,6 +63,13 @@ type AdminQueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  exportClusterState(
+    """Export although the cluster is not frozen. The document then carries a warning."""
+    allowUnfrozen: Boolean
+  ): admin_ClusterState
+  getClusterFreeze: admin_FreezeInfo
+  getClusterMirror: admin_MirrorView
+  getSwitchover: admin_SwitchoverView
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
@@ -61,6 +78,8 @@ type AdminQueryNamespace {
   listInstances: admin_InstancesOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
+  listReplayDiffs: admin_ReplayDiffsOutBody
+  listServiceProfiles: admin_ServiceProfilesOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
@@ -80,7 +99,10 @@ type AdminQueryNamespace {
 }
 
 type AdminStableMutationNamespace {
+  addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
+  clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
+  createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -95,6 +117,8 @@ type AdminStableMutationNamespace {
   evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
   finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  freezeCluster(body: admin_FreezeInBodyInput!): admin_FreezeInfo
+  importClusterState(body: admin_ImportClusterStateInBodyInput!): admin_ImportResult
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
@@ -108,6 +132,7 @@ type AdminStableMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  removeServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_RemoveServiceProfileOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   reviewExternalDependent(
     body: admin_ReviewExternalDependentInBodyInput!
@@ -116,8 +141,12 @@ type AdminStableMutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+  startClusterMirror(body: admin_MirrorInBodyInput!): admin_MirrorView
+  stopClusterMirror(body: admin_MirrorStopInBodyInput!): admin_MirrorView
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
+  unfreezeCluster: admin_UnfreezeOutBody
 }
 
 type AdminStableQueryNamespace {
@@ -126,6 +155,13 @@ type AdminStableQueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  exportClusterState(
+    """Export although the cluster is not frozen. The document then carries a warning."""
+    allowUnfrozen: Boolean
+  ): admin_ClusterState
+  getClusterFreeze: admin_FreezeInfo
+  getClusterMirror: admin_MirrorView
+  getSwitchover: admin_SwitchoverView
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
@@ -134,6 +170,8 @@ type AdminStableQueryNamespace {
   listInstances: admin_InstancesOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
+  listReplayDiffs: admin_ReplayDiffsOutBody
+  listServiceProfiles: admin_ServiceProfilesOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
@@ -151,7 +189,10 @@ type AdminStableQueryNamespace {
 }
 
 type AdminV1MutationNamespace {
+  addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
+  clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
+  createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
@@ -166,6 +207,8 @@ type AdminV1MutationNamespace {
   evacuatePeer(body: admin_EvacuateInBodyInput!, nodeId: String!): admin_EvacuateOutBody
   finalizeCluster(body: admin_FinalizeInBodyInput!): admin_FinalizeOutBody
   forgetPeer(nodeId: String!): admin_ForgetOutBody
+  freezeCluster(body: admin_FreezeInBodyInput!): admin_FreezeInfo
+  importClusterState(body: admin_ImportClusterStateInBodyInput!): admin_ImportResult
   mcpExclude(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpExcludeRemove(body: admin_McpExcludeInBodyInput!): admin_McpListOutBody
   mcpInclude(body: admin_McpIncludeInBodyInput!): admin_McpListOutBody
@@ -179,6 +222,7 @@ type AdminV1MutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  removeServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_RemoveServiceProfileOutBody
   retractStable(body: admin_RetractStableInBodyInput!, namespace: String!): admin_RetractStableOutBody
   reviewExternalDependent(
     body: admin_ReviewExternalDependentInBodyInput!
@@ -187,8 +231,12 @@ type AdminV1MutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
+  startClusterMirror(body: admin_MirrorInBodyInput!): admin_MirrorView
+  stopClusterMirror(body: admin_MirrorStopInBodyInput!): admin_MirrorView
   undeprecate(namespace: String!, version: String!): admin_UndeprecateOutBody
+  unfreezeCluster: admin_UnfreezeOutBody
 }
 
 type AdminV1QueryNamespace {
@@ -197,6 +245,13 @@ type AdminV1QueryNamespace {
     window: String
   ): admin_DependencyGraphOutBody
   deprecatedStats(window: String): admin_DeprecatedStatsOutBody
+  exportClusterState(
+    """Export although the cluster is not frozen. The document then carries a warning."""
+    allowUnfrozen: Boolean
+  ): admin_ClusterState
+  getClusterFreeze: admin_FreezeInfo
+  getClusterMirror: admin_MirrorView
+  getSwitchover: admin_SwitchoverView
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
@@ -205,6 +260,8 @@ type AdminV1QueryNamespace {
   listInstances: admin_InstancesOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
+  listReplayDiffs: admin_ReplayDiffsOutBody
+  listServiceProfiles: admin_ServiceProfilesOutBody
   listServices: admin_ServicesOutBody
   mcpList: admin_McpListOutBody
   mcpSchemaList: admin_McpSchemaListOutBody
@@ -315,6 +372,12 @@ type Subscription {
 """The `Upload` scalar represents a file streamed in via the graphql-multipart-request-spec wire format (https://github.com/jaydenseric/graphql-multipart-request-spec). Input-only: serialization back to JSON returns null."""
 scalar Upload
 
+type admin_AddServiceProfileOutBody {
+  """State of each provided version after registering; empty when another cluster node holds the registration."""
+  bindings: [admin_BindingStatusInfo!]
+  service: String!
+}
+
 type admin_AppKeyInfo {
   """RFC 3339."""
   createdAt: String!
@@ -326,11 +389,41 @@ type admin_AppKeyInfo {
   expiresAt: String!
   """Expires within 7 days and has not expired yet."""
   expiresSoon: Boolean!
-  """Key id: the part of the key after gwk_ and before the secret. Not secret."""
+  """Key id: the part of the key after gwk_ (gws_ for a system key) and before the secret. Not secret."""
   id: String!
-  """Namespaces the key covers."""
+  """app: an app key (gwk_). system: a cluster-to-cluster system key (gws_)."""
+  kind: admin_AppKeyInfoKind!
+  """Namespaces the key covers. Empty for a system key."""
   namespaces: [String!]
   note: String!
+}
+
+"""app: an app key (gwk_). system: a cluster-to-cluster system key (gws_)."""
+enum admin_AppKeyInfoKind {
+  app
+  system
+}
+
+type admin_AppKeyRecord {
+  createdBy: String
+  createdUnixMs: Long!
+  expiresUnixMs: Long!
+  hash: String!
+  id: String!
+  kind: String
+  namespaces: [String!]
+  note: String
+}
+
+input admin_AppKeyRecordInput {
+  createdBy: String
+  createdUnixMs: Long!
+  expiresUnixMs: Long!
+  hash: String!
+  id: String!
+  kind: String
+  namespaces: [String!]
+  note: String
 }
 
 type admin_AppKeysOutBody {
@@ -349,6 +442,29 @@ type admin_BindingInfo {
   """JetStream stream of a named channel in cluster mode (EV_...); empty for an unnamed binding."""
   stream: String!
   version: String!
+}
+
+type admin_BindingStatusInfo {
+  namespace: String!
+  state: admin_BindingStatusInfoState!
+  """none: the binding declares no verify."""
+  verification: admin_BindingStatusInfoVerification!
+  verifyReasons: [String!]
+  version: String!
+}
+
+enum admin_BindingStatusInfoState {
+  degraded
+  ready
+  waiting
+}
+
+"""none: the binding declares no verify."""
+enum admin_BindingStatusInfoVerification {
+  green
+  none
+  pending
+  red
 }
 
 type admin_BindingsOutBody {
@@ -374,6 +490,46 @@ type admin_ChannelsOutBody {
   channels: [admin_ChannelInfo!]
 }
 
+type admin_ClusterState {
+  deprecated: [admin_CutoverDeprecated!]
+  """RFC 3339."""
+  exportedAt: String
+  """Authenticated identity of the export call."""
+  exportedBy: String
+  externalDependents: [admin_ExternalDependent!]
+  """The source was frozen during the export."""
+  frozen: Boolean
+  """App and system keys as stored: id, kind, namespaces, SHA-256 hash of the key, expiry. The keys themselves are not stored anywhere."""
+  keys: [admin_AppKeyRecord!]
+  """Cluster node name of the gateway that exported."""
+  node: String
+  schemaRegistry: admin_CutoverRegistry
+  stable: [admin_CutoverStable!]
+  """Document version: 1."""
+  v: Long!
+  warnings: [String!]
+}
+
+input admin_ClusterStateInput {
+  deprecated: [admin_CutoverDeprecatedInput!]
+  """RFC 3339."""
+  exportedAt: String
+  """Authenticated identity of the export call."""
+  exportedBy: String
+  externalDependents: [admin_ExternalDependentInput!]
+  """The source was frozen during the export."""
+  frozen: Boolean
+  """App and system keys as stored: id, kind, namespaces, SHA-256 hash of the key, expiry. The keys themselves are not stored anywhere."""
+  keys: [admin_AppKeyRecordInput!]
+  """Cluster node name of the gateway that exported."""
+  node: String
+  schemaRegistry: admin_CutoverRegistryInput
+  stable: [admin_CutoverStableInput!]
+  """Document version: 1."""
+  v: Long!
+  warnings: [String!]
+}
+
 input admin_CreateAppKeyInBodyInput {
   """Namespaces the key covers."""
   namespaces: [String!]
@@ -387,6 +543,73 @@ type admin_CreateAppKeyOutBody {
   appKey: admin_AppKeyInfo!
   """The key. Shown once; the gateway keeps only its hash."""
   key: String!
+}
+
+input admin_CreateSystemKeyInBodyInput {
+  """Free text shown in the list, e.g. which cluster holds it."""
+  note: String
+  """Lifetime: days (30d) or a Go duration (720h)."""
+  ttl: String!
+}
+
+type admin_CutoverDeprecated {
+  namespace: String!
+  reason: String!
+  version: String!
+}
+
+input admin_CutoverDeprecatedInput {
+  namespace: String!
+  reason: String!
+  version: String!
+}
+
+type admin_CutoverLevel {
+  level: String!
+  subject: String!
+}
+
+input admin_CutoverLevelInput {
+  level: String!
+  subject: String!
+}
+
+type admin_CutoverRegistry {
+  contexts: [admin_CutoverRegistryContext!]
+}
+
+type admin_CutoverRegistryContext {
+  """The context's compatibility level, when set."""
+  global: String
+  levels: [admin_CutoverLevel!]
+  """Context name: . for the default context."""
+  name: String!
+  schemas: [admin_ImportSchema!]
+  versions: [admin_ImportVersion!]
+}
+
+input admin_CutoverRegistryContextInput {
+  """The context's compatibility level, when set."""
+  global: String
+  levels: [admin_CutoverLevelInput!]
+  """Context name: . for the default context."""
+  name: String!
+  schemas: [admin_ImportSchemaInput!]
+  versions: [admin_ImportVersionInput!]
+}
+
+input admin_CutoverRegistryInput {
+  contexts: [admin_CutoverRegistryContextInput!]
+}
+
+type admin_CutoverStable {
+  namespace: String!
+  vN: Long!
+}
+
+input admin_CutoverStableInput {
+  namespace: String!
+  vN: Long!
 }
 
 type admin_DeleteExternalDependentOutBody {
@@ -499,6 +722,21 @@ type admin_EvacuateOutBody {
   remaining: [String!]
 }
 
+type admin_ExternalDependent {
+  depends: [admin_ManifestDependency!]
+  id: String!
+  kind: String!
+  lastOp: String
+  name: String
+  note: String
+  owner: admin_ManifestOwner
+  reviewUnixMs: Long
+  reviewedBy: String
+  reviewedUnixMs: Long
+  updatedBy: String
+  updatedUnixMs: Long!
+}
+
 type admin_ExternalDependentInfo {
   depends: [admin_ExternalPinInfo!]
   id: String!
@@ -518,6 +756,21 @@ type admin_ExternalDependentInfo {
   reviewedBy: String!
   """Authenticated identity that last wrote it (put or review), same form as reviewedBy; empty on a declaration stored before this field existed."""
   updatedBy: String!
+  updatedUnixMs: Long!
+}
+
+input admin_ExternalDependentInput {
+  depends: [admin_ManifestDependencyInput!]
+  id: String!
+  kind: String!
+  lastOp: String
+  name: String
+  note: String
+  owner: admin_ManifestOwnerInput
+  reviewUnixMs: Long
+  reviewedBy: String
+  reviewedUnixMs: Long
+  updatedBy: String
   updatedUnixMs: Long!
 }
 
@@ -567,6 +820,24 @@ type admin_ForgetOutBody {
   metaRemoved: Boolean!
   newReplicas: Int!
   removed: Boolean!
+}
+
+input admin_FreezeInBodyInput {
+  """Shown in the refusals and the freeze state."""
+  note: String
+  """How long the freeze holds: a Go duration (10m) or days (1d). Default 10m, at most 24h. Freezing again replaces the end time."""
+  ttl: String
+}
+
+type admin_FreezeInfo {
+  frozen: Boolean!
+  note: String
+  """RFC 3339."""
+  setAt: String
+  """Authenticated identity that set the freeze."""
+  setBy: String
+  """RFC 3339. The freeze ends by itself then."""
+  until: String
 }
 
 type admin_GraphActiveEdge {
@@ -625,6 +896,9 @@ type admin_GraphInstance {
   instanceId: String
   registrationId: String!
   state: admin_GraphInstanceState!
+  """none: the instance declares no verify. pending or red: not routable (state waiting)."""
+  verification: admin_GraphInstanceVerification!
+  verifyReasons: [String!]
 }
 
 enum admin_GraphInstanceDrainState {
@@ -638,6 +912,14 @@ enum admin_GraphInstanceState {
   degraded
   ready
   waiting
+}
+
+"""none: the instance declares no verify. pending or red: not routable (state waiting)."""
+enum admin_GraphInstanceVerification {
+  green
+  none
+  pending
+  red
 }
 
 type admin_GraphMethodCount {
@@ -678,6 +960,67 @@ type admin_HistoryBucketOut {
   p95Millis: Long!
   p99Millis: Long!
   startUnixSec: Long!
+}
+
+input admin_ImportClusterStateInBodyInput {
+  """Report what the import would do; write nothing."""
+  dryRun: Boolean
+  """Take the document's value for every conflicting item (Schema Registry conflicts excepted)."""
+  overwrite: Boolean
+  state: admin_ClusterStateInput!
+}
+
+type admin_ImportCounts {
+  added: Long!
+  overwritten: Long!
+  unchanged: Long!
+}
+
+type admin_ImportRegistryCounts {
+  schemasAdded: Long!
+  unchanged: Long!
+  versionsAdded: Long!
+}
+
+type admin_ImportResult {
+  conflicts: [String!]
+  deprecated: admin_ImportCounts!
+  dryRun: Boolean!
+  externalDependents: admin_ImportCounts!
+  keys: admin_ImportCounts!
+  schemaRegistry: admin_ImportRegistryCounts!
+  stable: admin_ImportCounts!
+  warnings: [String!]
+}
+
+type admin_ImportSchema {
+  id: Long!
+  references: [admin_Reference!]
+  schema: String!
+  schemaType: String
+  serialized: String
+}
+
+input admin_ImportSchemaInput {
+  id: Long!
+  references: [admin_ReferenceInput!]
+  schema: String!
+  schemaType: String
+  serialized: String
+}
+
+type admin_ImportVersion {
+  deleted: Boolean
+  id: Long!
+  subject: String!
+  version: Long!
+}
+
+input admin_ImportVersionInput {
+  deleted: Boolean
+  id: Long!
+  subject: String!
+  version: Long!
 }
 
 type admin_InjectorInfo {
@@ -731,6 +1074,11 @@ type admin_InstanceInfo {
   registrationId: String!
   replicaId: String
   state: admin_InstanceInfoState!
+  verification: admin_InstanceInfoVerification!
+  """Time of the latest probe; 0 = none yet."""
+  verifiedUnixMs: Long!
+  """Failed checks of the latest probe."""
+  verifyReasons: [String!]
 }
 
 enum admin_InstanceInfoState {
@@ -739,8 +1087,39 @@ enum admin_InstanceInfoState {
   waiting
 }
 
+enum admin_InstanceInfoVerification {
+  green
+  none
+  pending
+  red
+}
+
 type admin_InstancesOutBody {
   instances: [admin_InstanceDrainInfo!]
+}
+
+type admin_ManifestDependency {
+  channel: String
+  group: String
+  lines: [String!]
+  service: String!
+}
+
+input admin_ManifestDependencyInput {
+  channel: String
+  group: String
+  lines: [String!]
+  service: String!
+}
+
+type admin_ManifestOwner {
+  contact: String
+  team: String
+}
+
+input admin_ManifestOwnerInput {
+  contact: String
+  team: String
 }
 
 type admin_McpChannelEvent {
@@ -819,6 +1198,47 @@ type admin_MethodStatsOut {
   throughput: Float!
 }
 
+input admin_MirrorInBodyInput {
+  """blue's mirror endpoint; when set it must be the configured source"""
+  from: String
+  """stream names (EV_...) or channel subjects; empty: every event stream blue has"""
+  streams: [String!]
+}
+
+input admin_MirrorStopInBodyInput {
+  """stream names or channel subjects; empty: every mirrored stream"""
+  streams: [String!]
+}
+
+type admin_MirrorStreamView {
+  """ms since the source last delivered or sent a heartbeat; -1: never"""
+  activeMs: Long!
+  blueLastSeq: Long!
+  blueMsgs: Long!
+  """the source's replication error, if any"""
+  error: String
+  greenLastSeq: Long!
+  greenMsgs: Long!
+  """messages on blue not yet on green, as the server last saw it (StreamSourceInfo.Lag)"""
+  lag: Long!
+  """green's stream sources blue's"""
+  mirrored: Boolean!
+  onBlue: Boolean!
+  onGreen: Boolean!
+  stream: String!
+  subjects: [String!]
+}
+
+type admin_MirrorView {
+  """blue's streams could not be read; their columns are 0"""
+  blueError: String
+  configured: Boolean!
+  from: String!
+  """leafnode connections of this node (the mirror connection to blue)"""
+  leafnodes: Long!
+  streams: [admin_MirrorStreamView!]
+}
+
 type admin_NotificationItem {
   detail: String!
   """True when POST /admin/notifications/{id}/dismiss may clear the item."""
@@ -879,6 +1299,18 @@ type admin_PutExternalDependentOutBody {
   warnings: [String!]
 }
 
+type admin_Reference {
+  name: String!
+  subject: String!
+  version: Long!
+}
+
+input admin_ReferenceInput {
+  name: String!
+  subject: String!
+  version: Long!
+}
+
 type admin_RegisteredAtInfo {
   file: String
   function: String
@@ -893,6 +1325,50 @@ type admin_RejectedJoinInfo {
   lastMaxConcurrencyPerInstance: Long!
   lastReason: String!
   lastUnixMs: Long!
+}
+
+type admin_RemoveServiceProfileOutBody {
+  removed: Boolean!
+}
+
+type admin_ReplayCounts {
+  diff: Long!
+  dropped: Long!
+  error: Long!
+  match: Long!
+  unverifiable: Long!
+}
+
+type admin_ReplayDiffEntry {
+  blue: String!
+  green: String!
+  path: String!
+}
+
+type admin_ReplayDiffItem {
+  atUnixMs: Long!
+  diffs: [admin_ReplayDiffEntry!]
+  error: String!
+  id: String!
+  legs: [admin_ReplayLegSummary!]
+  operationName: String!
+  outcome: String!
+  truncated: Boolean!
+}
+
+type admin_ReplayDiffsOutBody {
+  counts: admin_ReplayCounts!
+  enabled: Boolean!
+  items: [admin_ReplayDiffItem!]
+  target: String!
+}
+
+type admin_ReplayLegSummary {
+  kind: String!
+  namespace: String!
+  op: String!
+  outcome: String!
+  version: String!
 }
 
 input admin_RetractStableInBodyInput {
@@ -1003,6 +1479,27 @@ type admin_ServiceInfo {
   replicaCount: Int!
   subscribes: [admin_SubscriptionInfo!]
   version: String!
+  warnings: [String!]
+}
+
+input admin_ServiceProfileInBodyInput {
+  """http(s) URL of the service profile."""
+  url: String!
+}
+
+type admin_ServiceProfileInfo {
+  addedUnixMs: Long!
+  """Last error reading or registering the profile, on the node that holds it; empty when registered."""
+  error: String!
+  """Cluster node that holds the registration; empty standalone."""
+  ownerNode: String!
+  """Namespace from the profile; set on the node that holds the registration."""
+  service: String!
+  url: String!
+}
+
+type admin_ServiceProfilesOutBody {
+  profiles: [admin_ServiceProfileInfo!]
 }
 
 type admin_ServiceStatsOutBody {
@@ -1037,6 +1534,13 @@ type admin_ServicesStatsOutBody {
   window: String!
 }
 
+input admin_SetSwitchoverInBodyInput {
+  percent: Long!
+  rules: [admin_SwitchoverRuleInput!]
+  """green's GraphQL URL; empty keeps WithSwitchover's Target"""
+  target: String
+}
+
 input admin_SignInBodyInput {
   channel: String!
   kid: String
@@ -1063,8 +1567,72 @@ type admin_SubscriptionInfo {
   group: String!
 }
 
+type admin_SwitchoverCounts {
+  blue: Long!
+  error: Long!
+  fallback: Long!
+  green: Long!
+}
+
+type admin_SwitchoverErrorCounts {
+  badResponse: Long!
+  connect: Long!
+  status: Long!
+  timeout: Long!
+  transport: Long!
+}
+
+type admin_SwitchoverRecentError {
+  atUnixMs: Long!
+  error: String!
+  operationName: String!
+  outcome: String!
+  reason: String!
+}
+
+type admin_SwitchoverRule {
+  exclude: Boolean
+  header: String
+  headerValue: String
+  operationName: String
+  percent: Long
+}
+
+input admin_SwitchoverRuleInput {
+  exclude: Boolean
+  header: String
+  headerValue: String
+  operationName: String
+  percent: Long
+}
+
+type admin_SwitchoverView {
+  """a target is set and some request can go to green"""
+  active: Boolean!
+  counts: admin_SwitchoverCounts!
+  enabled: Boolean!
+  greenErrors: admin_SwitchoverErrorCounts!
+  percent: Long!
+  recent: [admin_SwitchoverRecentError!]
+  rules: [admin_SwitchoverRule!]
+  setAtUnixMs: Long!
+  setBy: String!
+  source: admin_SwitchoverViewSource!
+  stickyHeader: String!
+  target: String!
+}
+
+enum admin_SwitchoverViewSource {
+  runtime
+  static
+}
+
 type admin_UndeprecateOutBody {
   priorReason: String!
+}
+
+type admin_UnfreezeOutBody {
+  wasFrozen: Boolean!
 }
 
 type admin_UsageEdgeRow {

@@ -190,6 +190,15 @@ go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
   registry in its own context (own id space), so imports cannot collide
   with it. `examples/events/registration.sh` runs both
   clients against a real `gwag up`. See `docs/registration-clients.md`.
+- **Integration pattern** (`docs/integrate.md`): profile file
+  `gwag.yaml` (`gw/profile`, `gwag service init|check|wait`), loaded by
+  `controlclient.LoadProfile` and the TS / Python clients, or pulled
+  from `/.well-known/gwag.json` (`AddServiceProfile`,
+  `gw/profile_pull.go`, KV `gwag-pulled-services`). A binding with
+  `ServiceBinding.verify` is probed by the owner node (`gw/verify.go`):
+  not green → `WAITING`, not in the pool; green then red → replicas
+  flagged `replicaHealth.red` (not picked, not ready). Probes go only
+  to the registered host.
 - **MCP ingest is boot-time, tools-only** — `AddMCP` runs `tools/list`
   once at registration via the `mark3labs/mcp-go` client; `slot.kind`
   is `mcp`, the slot owns the live client (a subprocess for stdio).

@@ -147,6 +147,17 @@ type Service struct {
 	// declares the channel (start gate, sunset rule, dependency
 	// graph). Generated event code reports these. Optional.
 	Subscribes []Subscription
+
+	// HealthURL and SpecURL turn on verification: the gateway routes
+	// to this instance only after its address is reachable, HealthURL
+	// answers 200 and the spec served at SpecURL equals the one
+	// registered here; and it re-checks periodically. Each is a path
+	// ("/healthz") on ServiceAddr, or an absolute http(s) URL on
+	// ServiceAddr's host (another port is fine). SpecURL is ignored
+	// for GraphQL bindings (the gateway introspects again). Empty =
+	// not verified. LoadProfile fills both from the profile.
+	HealthURL string
+	SpecURL   string
 }
 
 // Subscription names one event channel by its key ("<proto
@@ -565,6 +576,10 @@ func (r *Registration) register(ctx context.Context) error {
 		}
 		depends, owner := s.manifestProto()
 		subscribes := s.subscribesProto()
+		var verify *cpv1.Verify
+		if s.HealthURL != "" || s.SpecURL != "" {
+			verify = &cpv1.Verify{HealthUrl: s.HealthURL, SpecUrl: s.SpecURL}
+		}
 		if hasGraphQL {
 			req.Services = append(req.Services, &cpv1.ServiceBinding{
 				Namespace:                 s.Namespace,
@@ -576,6 +591,7 @@ func (r *Registration) register(ctx context.Context) error {
 				Owner:                     owner,
 				Public:                    s.Public,
 				Subscribes:                subscribes,
+				Verify:                    verify,
 			})
 			continue
 		}
@@ -590,6 +606,7 @@ func (r *Registration) register(ctx context.Context) error {
 				Owner:                     owner,
 				Public:                    s.Public,
 				Subscribes:                subscribes,
+				Verify:                    verify,
 			})
 			continue
 		}
@@ -604,6 +621,7 @@ func (r *Registration) register(ctx context.Context) error {
 			Owner:                     owner,
 			Public:                    s.Public,
 			Subscribes:                subscribes,
+			Verify:                    verify,
 		})
 	}
 
