@@ -23,8 +23,13 @@ What exists now:
   blue's over a NATS leafnode connection that a system key
   authorizes, until the switch.
 - **System keys**, the credential one cluster presents to the other.
+- **External switch.** The load balancer moves to green while blue
+  forwards everything, then blue drains and stops. No gateway code:
+  the load balancer's weights and gwag's drain on SIGTERM.
 
-The final switch at the load balancer is not built yet.
+[`examples/cutover/`](../examples/cutover/) runs all of it in Docker
+Compose (3 blue nodes, 3 green nodes, Envoy) with client traffic
+throughout; the [runbook](#runbook-in-order) lists the steps in order.
 
 ## Replay verification
 
@@ -131,6 +136,13 @@ Recorded: `POST` requests with `Content-Type: application/json` to
 `GET` queries, WebSocket and SSE subscriptions, the HTTP/JSON ingress
 (`IngressHandler`), gRPC and Connect ingress.
 
+The binary: `gwag up --replay-verify-target URL
+--replay-verify-token-file FILE [--replay-verify-sample-rate F]`. The
+file holds the bearer and is read for every post, so it may be written
+after blue starts (green's system key does not exist before green
+runs) and replaced to rotate the key. While the file is missing or
+empty, each post fails with outcome `error`.
+
 Use a system key as `Token` ([System keys](#system-keys)): it is
 valid on every node of green, and it can call nothing but verify and
 the state copy. The admin token also works, but it is per node unless
@@ -143,6 +155,9 @@ gw := gateway.New(gateway.WithReplayVerifyEndpoint(), /* ... */)
 adminMux, _, _ := gw.AdminHumaRouter()
 mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
 ```
+
+The binary: `gwag up --replay-verify-endpoint` (the route is then
+`POST /api/admin/replay/verify`).
 
 `POST /admin/replay/verify` takes a `ReplayExchange` JSON body (up to
 64 MiB) and returns a `ReplayResult`. It needs a system key or the
@@ -205,8 +220,13 @@ included); header diffs from `InjectHeader` (gRPC, OpenAPI) and
 another version, OpenAPI operation on another path); a client
 response diff from a `Runtime` middleware; match rules; queue-full
 drops with green stuck; two gateways through the admin endpoint with
-token checks, the metric and the diffs route. Not tested: a real
-two-cluster deployment, load, and recordings near the size caps.
+token checks, the metric and the diffs route.
+`gw/cmd/gwag/replay_test.go`: the `gwag up` flags between two
+gateways, with the token file written after blue started (`error`
+before, `match` after). `examples/cutover/`: two 3-node clusters of
+`gwag up` in Docker at about 40 recordings per second
+([Measured](#measured-with-the-example)). Not tested: real load and
+recordings near the size caps.
 
 ## Switchover
 
@@ -393,8 +413,8 @@ proxied connections too.
 5. If green fails: `--percent 0` (or `--clear`) sends every new
    request back to blue at once. Open WebSocket connections to green
    stay until they close.
-6. At 100, switch the load balancer to green and drain blue. This
-   step is not built yet (it is the next part of the cutover).
+6. At 100, switch the load balancer to green and drain blue:
+   [External switch and retire blue](#external-switch-and-retire-blue).
 
 Events: start the [event stream mirror](#event-stream-mirror) before
 step 3, and stop it after step 6. While requests go to green, events
@@ -420,8 +440,10 @@ source address, client headers reaching green, green down (blue
 answers; metric, admin view); the admin ops and their roles; a
 WebSocket to green and its fallback; the setting moving between two
 cluster nodes through the KV bucket. `gwag cluster switchover` in
-`gw/cmd/gwag`. Not tested: a real two-cluster deployment, load, and
-the added latency.
+`gw/cmd/gwag`. `examples/cutover/`: two 3-node clusters in Docker
+behind Envoy, 5, 50 and 100 percent at about 155 requests per second,
+0 failed requests, 0 fallbacks. Not tested: real load and the added
+latency (not measured).
 
 ## System keys
 
@@ -789,9 +811,13 @@ has the time green stored it), and drop repeats in the handler by
    published through green during the switchover stay on green: the
    consumers on blue do not see them. To keep such mutations on blue
    until the consumers move, exclude them (`--rule op=NAME,exclude`).
-5. At the switch: the consumer steps above, per stream, then `gwag
-   cluster mirror --stop`.
-6. Load balancer to green, drain blue.
+5. Load balancer to green.
+6. The consumer steps above, per stream, then `gwag cluster mirror
+   --stop`. Blue's NATS must run until the consumers have moved.
+7. Drain and stop blue.
+
+Steps 5 and 6 can run in either order; the example runs them in this
+one.
 
 ### Limits
 
@@ -826,11 +852,251 @@ message lands once, and a stream the mirror creates gets R2 under the
 `auto` policy. TLS: plain TCP and a certificate of another CA refused,
 the same CA connects. `gw/cmd/gwag/mirror_test.go`: the CLI start,
 status, stop, `--from` refused, a system key of green accepted, an app
-key refused, and the `gwag up` flags. Not tested: a blue node restart
-or failure while mirroring, a network between the clusters, load and
-lag under load, a replica count change while a stream is mirrored,
-the consumer procedures above.
+key refused, and the `gwag up` flags. `examples/cutover/`: 3-node blue
+to 3-node green with `gwag up`, the no-gap consumer procedure above
+with one stream and one group (every event consumed once, green's
+stream holding all of them). Not tested: a blue node restart or
+failure while mirroring, a network between the clusters, load and lag
+under load, a replica count change while a stream is mirrored, the
+procedure with duplicates.
 
-## Next
+## External switch and retire blue
 
-The final switch at the load balancer (with an example) is not built.
+Switchover at 100 percent sends every forwardable request from blue to
+green, but clients still connect to blue. The last steps move the
+clients' connections to green at the load balancer, then remove blue.
+
+### Why switchover goes to 100 first
+
+At 100, blue and green give a client the same answer: green's. The
+load balancer change is then not a behaviour change for clients, and
+it does not have to be atomic. A connection the load balancer still
+sends to blue (an open keep-alive, a DNS answer a client cached, a
+node the load balancer has not updated yet) gets green's answer
+through blue. A client never sees blue's answer after it has seen
+green's.
+
+Not forwarded at 100 (see [Switchover](#which-requests-go-to-green)):
+`GET` queries, batches, multipart uploads, bodies over `MaxBytes`, the
+HTTP/JSON, gRPC and Connect ingresses, and rules with `Exclude`. Blue
+serves those until the load balancer has moved them.
+
+### Switch the load balancer
+
+Change the weights from blue to green in one step. Keep blue's
+health check: it pulls blue's nodes when they drain.
+
+Envoy ([`examples/cutover/envoy.yaml`](../examples/cutover/envoy.yaml)):
+the route has `weighted_clusters` with `runtime_key_prefix:
+routing.gw` and a runtime admin layer; the switch is one admin call,
+with no config reload and no connection closed:
+
+```
+curl -X POST 'http://envoy:9901/runtime_modify?routing.gw.blue=0&routing.gw.green=100'
+```
+
+Each request picks its cluster when it starts, so requests in flight
+on blue finish on blue. Envoy's health check on `/api/health` runs
+every second with `no_traffic_interval: 1s` (the default is 60 s for a
+cluster without traffic, which would leave green's state stale until
+the switch) and `healthy_panic_threshold: 0` (without it, Envoy routes
+to unhealthy hosts when most of a cluster is down, for example while
+blue drains).
+
+Kubernetes (untested; no cluster on the box this was written on):
+blue and green are two `gwag deploy export --platform k8s` outputs in
+namespaces `gwag-blue` and `gwag-green`, each with its Service `gwag`.
+A Service selector flip does not work here, because a Service selects
+pods in its own namespace and both exports use the same labels. Use a
+Gateway API HTTPRoute in a third namespace and change the weights:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gwag
+  namespace: gwag-edge
+spec:
+  parentRefs:
+    - name: edge # your Gateway
+  rules:
+    - backendRefs:
+        - {name: gwag, namespace: gwag-blue, port: 8080, weight: 100}
+        - {name: gwag, namespace: gwag-green, port: 8080, weight: 0}
+---
+# One per cluster namespace (repeat with namespace: gwag-green).
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: gwag-edge
+  namespace: gwag-blue
+spec:
+  from:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, namespace: gwag-edge}
+  to:
+    - {group: "", kind: Service, name: gwag}
+```
+
+```
+kubectl -n gwag-edge patch httproute gwag --type=json -p \
+  '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/weight","value":0},
+    {"op":"replace","path":"/spec/rules/0/backendRefs/1/weight","value":100}]'
+```
+
+The cutover flags (`--switchover`, `--mirror-listen`,
+`--replay-verify-*`, `--mirror-from`) are not `gwag deploy export`
+options: add them to the StatefulSet's `args` (a rolling restart,
+[`cluster.md`](./cluster.md#rolling-restart)). Checked:
+`kubeconform v0.6.7 -strict` accepts the three objects against the
+Gateway API schemas of the datreeio CRDs catalog (`main` branch, not
+pinned). Not run against a cluster.
+
+ECS (untested; no AWS account used): each `gwag deploy export
+--platform ecs` stack has its own ALB. Put a weighted DNS name in
+front of the two (Route 53 alias records, `SetIdentifier` blue and
+green) and change the weights:
+
+```json
+"Blue": {
+  "Type": "AWS::Route53::RecordSet",
+  "Properties": {
+    "HostedZoneId": {"Ref": "HostedZoneId"},
+    "Name": {"Ref": "RecordName"},
+    "Type": "A",
+    "SetIdentifier": "blue",
+    "Weight": {"Ref": "BlueWeight"},
+    "AliasTarget": {"DNSName": {"Ref": "BlueAlbDns"}, "HostedZoneId": {"Ref": "BlueAlbZoneId"}, "EvaluateTargetHealth": true}
+  }
+}
+```
+
+`Green` is the same with `green`, `GreenWeight`, `GreenAlbDns`,
+`GreenAlbZoneId`. `BlueAlbDns` is the blue stack's `LoadBalancerDns`
+output; the zone id is the ALB's `CanonicalHostedZoneID` (`aws elbv2
+describe-load-balancers`). Clients keep a DNS answer for its TTL and
+keep open connections longer: this is where switchover at 100 matters,
+because those clients reach blue and get green's answers. Wait for
+blue's ALB `RequestCount` to reach 0 before you drain blue. One ALB
+with a weighted forward to two target groups is the other option; it
+needs green's ECS services registered in a target group on blue's
+ALB, which the export does not do. CodeDeploy blue/green does not fit:
+it swaps the task set of one ECS service, and a gwag node is one ECS
+service with its own volume, so a CodeDeploy swap is a node
+replacement inside one cluster, not a move to another cluster.
+Checked: `cfn-lint 1.22.5` reports nothing for a template with the two
+records and their parameters.
+
+### Check that blue is idle
+
+Blue is idle when the load balancer sends it nothing new and has no
+request open to it. With Envoy: `cluster.blue.upstream_rq_active` is 0
+and `cluster.blue.upstream_rq_total` stops moving (`GET
+/stats?filter=^cluster\.blue\.upstream_rq_`). On blue,
+`switchover_total` stops moving too. Clients that bypass the load
+balancer (a service calling a blue node directly) show here as well:
+find and move them before the next step.
+
+### Retire blue
+
+1. Events: the [consumer steps](#consumers) per stream (stop the
+   producers on blue, wait for `LAG` 0 and the blue consumers at 0
+   pending, `gwag cluster mirror --stop`, move the consumers to green,
+   then the producers). Blue's NATS serves until this is done.
+2. Services: close each service's registration with blue (its second
+   `controlclient.SelfRegister`, `Registration.Close`). Without it the
+   registration's heartbeats fail and it tries blue's other addresses
+   until blue is gone.
+3. SIGTERM every blue node. Each reports `503 draining` on
+   `/api/health`, keeps serving for `--shutdown-delay`, then closes its
+   listener and waits up to `--shutdown-timeout` for open requests
+   ([`operations.md`](./operations.md#health--graceful-drain)). The
+   nodes can stop at the same time: no client traffic depends on blue
+   any more, and blue's KV state is not needed after the copy.
+4. Remove blue's volumes when you no longer want them for a rollback.
+
+Rollback before step 3: set the load balancer back to blue and
+`gwag cluster switchover --percent 0`. After step 1 the event
+consumers are on green; moving them back is the consumer procedure in
+the other direction, without a mirror (none runs green to blue).
+
+### Measured with the example
+
+`examples/cutover/cutover.sh` on this box (Docker 29.9.3, Compose
+v5.7.0, Envoy v1.36.2): 20 clients, one request every 100 ms each
+(about 155 requests per second) through Envoy for the whole run. The
+run took 3 min 21 s, of which 107 s were the two image builds and 87 s
+the cutover itself:
+
+```
+STEP                                                                 SECONDS  REQUESTS  FAILED
+1. replay verify: system key on green, blue records, green replays      10.8      2120       0
+2. state copy: freeze blue, export, import into green, unfreeze          3.2       620       0
+3. event stream mirror blue -> green                                     3.8       740       0
+4. switchover 5 -> 50 -> 100                                            26.7      5200       0
+5. external switch: Envoy routes to green                                4.2       811       0
+6. events: stop producer, drain, stop mirror, move consumer, move producer  6.3  1240  0
+7. drain and stop blue (SIGTERM, --shutdown-delay 5s)                    5.9      1142       0
+8. green alone                                                           5.1       989       0
+traffic: {"total":13540,"ok":13540,"failed":0,"byCluster":{"blue":9338,"green":4202}}
+events: {"producedTotal":1435,"produced":{"blue":1156,"green":279},"unique":1435,"duplicates":0,"missing":0,"greenStreamMsgs":1435}
+switchover: forwarded to green=2550, fallback+error+green_errors=0
+```
+
+- Replay, 10 s at sample rate 0.25: 318 `match` (`ListItems`,
+  `AddNote`), 151 `diff`, all on `GetItem` with the one diff
+  `legs[0].request.path: "/items/2" -> "/v2/items/2"` (green is
+  registered with the service's next spec revision, where the path
+  moved). Before green's key existed: 125 `error`.
+- State copy: 1 stable mark unchanged (the service set it on both), 1
+  deprecation, 2 keys, 1 external dependent added; green's export
+  equals blue's in each section.
+- Switchover: `switchover_total{outcome="green"}` summed over blue's
+  three nodes was 153 after 8 s at 5 percent, 871 after 8 s more at
+  50, 2490 after 8 s more at 100; `fallback`, `error` and
+  `switchover_green_errors_total` stayed 0.
+- External switch: blue's `upstream_rq_total` in Envoy moved by 7
+  after the runtime change (requests that had started), then stopped
+  within 1 s.
+- Events: 1156 events on blue's stream at the mirror stop, all on
+  green; the consumer moved after 0 pending and started on green after
+  them; 1435 produced, 1435 consumed once.
+- Drain: blue-0's `/api/health` went from `200 serving` to `503
+  draining` 0.3 s after `docker compose stop` and refused connections
+  4.9 s later; the three nodes stopped in 5.8 s.
+
+Before the fix in `integersAsNumbers` (this example found it), the
+first runs lost requests: every blue node died within a minute with
+`fatal error: concurrent map writes`, because concurrent requests with
+the same literal body argument wrote to one shared map.
+
+Not tested: a load balancer other than Envoy, a blue node that fails
+during the cutover, traffic that bypasses the load balancer, `GET`
+queries and WebSockets through the external switch (the example sends
+POST JSON only), and anything on Kubernetes or ECS.
+
+## Runbook in order
+
+1. Green runs with the same services registered: every service adds a
+   second registration, with green
+   ([Registrations](#registrations)).
+2. Blue runs with `--switchover`, `--mirror-listen` and
+   `--replay-verify-target` / `--replay-verify-token-file`; green with
+   `--mirror-from` / `--mirror-key-file` and `--replay-verify-endpoint`.
+   On running clusters this is a rolling restart of each.
+3. Mint a system key on green and give it to blue (replay); mint one on
+   blue for green's mirror connection ([System keys](#system-keys)).
+4. Replay verification: read the diffs until only expected ones are
+   left ([Read the results](#read-the-results)).
+5. State copy: freeze blue, export, import into green, unfreeze
+   ([Steps](#steps)).
+6. Event stream mirror: `gwag cluster mirror` on green, wait for `LAG`
+   0 ([Start, status, stop](#start-status-stop)).
+7. Switchover 5, 50, 100 percent, watching green's errors
+   ([Set the share at runtime](#set-the-share-at-runtime)).
+8. Load balancer to green, check blue is idle
+   ([Switch the load balancer](#switch-the-load-balancer),
+   [Check that blue is idle](#check-that-blue-is-idle)).
+9. Events: consumers and producers to green, mirror stop
+   ([Consumers](#consumers)).
+10. Close the services' blue registrations, SIGTERM blue
+    ([Retire blue](#retire-blue)).

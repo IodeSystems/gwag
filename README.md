@@ -309,7 +309,7 @@ Deeper breakdown: [`docs/comparison.md`](./docs/comparison.md).
 - [`docs/deploy.md`](./docs/deploy.md) — `gwag deploy` and exported configs
 - [`docs/operations.md`](./docs/operations.md) — health, drain, backpressure, metrics
 - [`docs/cluster.md`](./docs/cluster.md) — clustering, node loss, upgrades, feature levels
-- [`docs/cutover.md`](./docs/cutover.md) — moving to a second cluster
+- [`docs/cutover.md`](./docs/cutover.md) — moving to a second cluster: replay verification, state copy, event stream mirror, switchover, load balancer switch; runnable in [`examples/cutover/`](./examples/cutover)
 - [`docs/admin-auth.md`](./docs/admin-auth.md) — admin roles, boot token, delegate
 - [`docs/caller-identity.md`](./docs/caller-identity.md) — per-caller ID and quota
 - [`docs/tracing.md`](./docs/tracing.md) — OpenTelemetry wiring, span reference

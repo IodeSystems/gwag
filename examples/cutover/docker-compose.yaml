@@ -1,0 +1,209 @@
+# Cutover example: blue (3 gwag nodes), green (3 gwag nodes), Envoy
+# in front, one upstream app registered with both clusters, and a
+# traffic client. cutover.sh drives it; see README.md.
+#
+# Images: gwag:cutover from the repo Dockerfile, gwag-cutover-app from
+# examples/cutover/Dockerfile (cutover.sh builds both).
+# Admin tokens come from .run/{blue,green}.env, system keys from
+# .run/keys; cutover.sh writes both.
+name: gwag-cutover
+
+x-gw: &gw
+  image: gwag:cutover
+  stop_grace_period: 90s
+  restart: "no"
+
+services:
+  blue-0:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/blue.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=blue-0
+      - --nats-cluster-name=blue
+      - --nats-peer=blue-0:14248
+      - --nats-peer=blue-1:14248
+      - --nats-peer=blue-2:14248
+      - --shutdown-delay=5s
+      - --switchover
+      - --switchover-target=http://envoy:10001/api/graphql
+      - --switchover-sticky-header=X-Client-Id
+      - --mirror-listen=:14223
+      - --replay-verify-target=http://envoy:10001/api/admin/replay/verify
+      - --replay-verify-token-file=/keys/green-system.key
+      - --replay-verify-sample-rate=0.25
+    volumes:
+      - blue-0:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28180:8080
+
+  blue-1:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/blue.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=blue-1
+      - --nats-cluster-name=blue
+      - --nats-peer=blue-0:14248
+      - --nats-peer=blue-1:14248
+      - --nats-peer=blue-2:14248
+      - --shutdown-delay=5s
+      - --switchover
+      - --switchover-target=http://envoy:10001/api/graphql
+      - --switchover-sticky-header=X-Client-Id
+      - --mirror-listen=:14223
+      - --replay-verify-target=http://envoy:10001/api/admin/replay/verify
+      - --replay-verify-token-file=/keys/green-system.key
+      - --replay-verify-sample-rate=0.25
+    volumes:
+      - blue-1:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28181:8080
+
+  blue-2:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/blue.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=blue-2
+      - --nats-cluster-name=blue
+      - --nats-peer=blue-0:14248
+      - --nats-peer=blue-1:14248
+      - --nats-peer=blue-2:14248
+      - --shutdown-delay=5s
+      - --switchover
+      - --switchover-target=http://envoy:10001/api/graphql
+      - --switchover-sticky-header=X-Client-Id
+      - --mirror-listen=:14223
+      - --replay-verify-target=http://envoy:10001/api/admin/replay/verify
+      - --replay-verify-token-file=/keys/green-system.key
+      - --replay-verify-sample-rate=0.25
+    volumes:
+      - blue-2:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28182:8080
+
+  green-0:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/green.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=green-0
+      - --nats-cluster-name=green
+      - --nats-peer=green-0:14248
+      - --nats-peer=green-1:14248
+      - --nats-peer=green-2:14248
+      - --shutdown-delay=5s
+      - --mirror-from=blue-0:14223,blue-1:14223,blue-2:14223
+      - --mirror-key-file=/keys/mirror.key
+      - --replay-verify-endpoint
+    volumes:
+      - green-0:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28190:8080
+
+  green-1:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/green.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=green-1
+      - --nats-cluster-name=green
+      - --nats-peer=green-0:14248
+      - --nats-peer=green-1:14248
+      - --nats-peer=green-2:14248
+      - --shutdown-delay=5s
+      - --mirror-from=blue-0:14223,blue-1:14223,blue-2:14223
+      - --mirror-key-file=/keys/mirror.key
+      - --replay-verify-endpoint
+    volumes:
+      - green-1:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28191:8080
+
+  green-2:
+    <<: *gw
+    env_file: # GWAG_ADMIN_TOKEN, written by cutover.sh
+      - path: ./.run/green.env
+        required: false
+    command:
+      - up
+      - --data-dir=/data
+      - --no-context-write
+      - --node-name=green-2
+      - --nats-cluster-name=green
+      - --nats-peer=green-0:14248
+      - --nats-peer=green-1:14248
+      - --nats-peer=green-2:14248
+      - --shutdown-delay=5s
+      - --mirror-from=blue-0:14223,blue-1:14223,blue-2:14223
+      - --mirror-key-file=/keys/mirror.key
+      - --replay-verify-endpoint
+    volumes:
+      - green-2:/data
+      - ./.run/keys:/keys:ro
+    ports:
+      - 127.0.0.1:28192:8080
+
+  envoy:
+    image: envoyproxy/envoy:v1.36.2
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - 127.0.0.1:28000:10000
+      - 127.0.0.1:28001:9901
+
+  app:
+    image: gwag-cutover-app
+    command: ["-listen=:9000", "-control=:9001"]
+    ports:
+      - 127.0.0.1:28101:9001
+
+  traffic:
+    image: gwag-cutover-app
+    entrypoint: ["/traffic"]
+    command: ["-target=http://envoy:10000/api/graphql", "-clients=20", "-every=100ms"]
+    ports:
+      - 127.0.0.1:28100:9100
+
+  # gwag CLI in the compose network: docker compose run --rm cli ...
+  cli:
+    image: gwag:cutover
+    profiles: ["cli"]
+    entrypoint: ["/gwag"]
+    volumes:
+      - ./.run:/work:ro
+
+volumes:
+  blue-0:
+  blue-1:
+  blue-2:
+  green-0:
+  green-1:
+  green-2:

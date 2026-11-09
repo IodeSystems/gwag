@@ -126,7 +126,7 @@ with messages.
 | 2. Start n2 and n3 fresh, then restart n1 on its standalone data dir with peers | n2 and n3 formed a cluster on their own and served (`/api/health` 200) with n1 down. When n1 joined, its gateway buckets were reset to the cluster copy (`Catchup for stream '$G > KV_gwag-peers' resetting first sequence`), and its application streams were removed as orphans (`Detected orphaned stream`) about 30 to 65 s later. n1's data is discarded. |
 | 3. Start n1 with peers that are not up and leave it alone | No meta leader. `/api/health` returns 503 `starting`, `gwag peer list` shows `(no peers)`, JetStream calls return 503 (err_code 10008). The GraphQL endpoint answers (`{ __typename }` returned `Query`, 200) and `/api/schema` is served. Not tested: registering a service in this state. When n2 started, n1 reported 200 after 2.7 s. After n3 joined, `gwag peer list` showed `jetstream meta: leader=n1 size=3`, `cluster_peers` was 3, and the gateway buckets went R1 to R3. An application KV bucket and streams created after n2 joined kept their data and stayed R1 after n3 joined; raise their replicas with a stream update. |
 | 4. Manual leader or bootstrap option in NATS | `$JS.API.META.RESCUE` (system account) lowers the quorum on a surviving server, but refused on a node that never had a leader: `JetStream system rescue not applied: raft: log is empty` (err_code 10224). JetStream stayed unavailable. The gateway does not expose it. No option converts a standalone store to a clustered one. |
-| 5. Copy data by stream sourcing or mirroring | For event streams (`EV_*`) only: the cutover's [event stream mirror](./cutover.md#event-stream-mirror) adds a leafnode listener (`ClusterOptions.MirrorListen`, `--mirror-listen`) and a leafnode connection to it (`MirrorFrom`, `MirrorKey`, `--mirror-from`); `gwag cluster mirror` on the new cluster sources the old node's event streams. Tested in-process from a standalone node into a 2-node cluster (`TestEventMirror_TwoNodeGreen`), not with `gwag up` binaries. Gateway buckets, application KV buckets and other streams are not copied: the mirror handles `EV_*` streams only. There are still no JetStream domain or account settings. Copying with a NATS client (read from the old node, write to the new cluster) was not tried. |
+| 5. Copy data by stream sourcing or mirroring | For event streams (`EV_*`) only: the cutover's [event stream mirror](./cutover.md#event-stream-mirror) adds a leafnode listener (`ClusterOptions.MirrorListen`, `--mirror-listen`) and a leafnode connection to it (`MirrorFrom`, `MirrorKey`, `--mirror-from`); `gwag cluster mirror` on the new cluster sources the old node's event streams. Tested in-process from a standalone node into a 2-node cluster (`TestEventMirror_TwoNodeGreen`), and with `gwag up` binaries from a 3-node cluster into another 3-node cluster ([`examples/cutover/`](../examples/cutover/)); the standalone-to-three path was not run with binaries. Gateway buckets, application KV buckets and other streams are not copied: the mirror handles `EV_*` streams only. There are still no JetStream domain or account settings. Copying with a NATS client (read from the old node, write to the new cluster) was not tried. |
 
 Workaround, as tested in paths 2 and 3 (no application data is
 carried over):
@@ -394,14 +394,12 @@ Two ways: restart the nodes in place, one at a time, or swap in new
 nodes and remove the old ones (replica swap). Both run two versions
 side by side for a while and end with `gwag cluster finalize`.
 
-A third way, a cutover to a separate cluster, is in progress:
-[`cutover.md`](./cutover.md). What exists is replay verification (the
-old cluster records requests with their upstream calls, the new one
-replays them without calling upstreams and reports what differs),
-switchover (the old cluster forwards a growing share of client
-requests to the new one), and the state copy: `gwag cluster freeze`,
-`export`, `import` (the freeze is the `freeze` key of the
-`gwag-cluster` bucket).
+A third way is a cutover to a separate cluster:
+[`cutover.md`](./cutover.md). The old cluster records requests for
+the new one to replay and compare, its state and event streams are
+copied, it forwards a growing share of client requests to the new one,
+and then the load balancer moves and the old cluster drains.
+[`examples/cutover/`](../examples/cutover/) runs it in Docker Compose.
 
 ### Rolling restart
 
@@ -597,6 +595,6 @@ See [`CHANGELOG.md`](../CHANGELOG.md).
 
 - [`services.md`](./services.md) — registering services against a cluster.
 - [`operations.md`](./operations.md) — drain, replicas, metrics.
-- [`cutover.md`](./cutover.md) — moving traffic to a separate cluster; replay verification, state copy, system keys.
+- [`cutover.md`](./cutover.md) — moving traffic to a separate cluster: replay verification, state copy, event stream mirror, switchover, external switch.
 - [`admin-auth.md`](./admin-auth.md) — admin roles on the control plane.
 - [`deploy.md`](./deploy.md) — `gwag deploy`: Compose, minikube, Kubernetes and ECS files.
