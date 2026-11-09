@@ -63,6 +63,10 @@ func upCmd(args []string) int {
 	declFileMode := fs.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
 	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := fs.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
+	verifyInterval := fs.Duration("verify-interval", 0, "Probe a verified (green) instance this often (ServiceBinding.verify, docs/integrate.md); 0 → 30s")
+	verifyRetry := fs.Duration("verify-retry", 0, "Probe an instance that is not green this often; 0 → min(verify-interval, 2s)")
+	verifyTimeout := fs.Duration("verify-timeout", 0, "Timeout of one verification probe; 0 → 5s")
+	profileHosts := fs.String("profile-hosts", "", "Comma-separated hosts a pulled service profile URL may name (gwag services add --profile-url); *.example.com matches subdomains. Empty: any host")
 	mcpUpstreams := &stringListValue{}
 	fs.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
 	callerIDPublic := fs.Bool("caller-id-public", false, "Take each call's caller id from the X-Caller-Id header (gRPC metadata caller-id) for usage stats, deprecatedStats and the caller metric label. Forgeable: for dev, or behind a proxy that sets the header. Default off: every caller is \"unknown\"")
@@ -152,6 +156,12 @@ func upCmd(args []string) int {
 		gateway.WithAdminDataDir(dir),
 		gateway.WithEnvironment(*environment),
 		gateway.WithPublicServices(strings.Split(*publicServices, ",")...),
+		gateway.WithVerification(gateway.VerifyOptions{
+			Interval:     *verifyInterval,
+			Retry:        *verifyRetry,
+			Timeout:      *verifyTimeout,
+			ProfileHosts: splitList(*profileHosts),
+		}),
 	}
 	tokOpt, err := adminTokenOption(*adminTokenFile)
 	if err != nil {
@@ -377,4 +387,15 @@ func apiOrUIHandler(uiFS http.Handler) http.HandlerFunc {
 		}
 		ui.ServeHTTP(w, r)
 	}
+}
+
+// splitList splits a comma-separated flag value, dropping empty items.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
