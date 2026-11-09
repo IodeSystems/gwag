@@ -68,6 +68,8 @@ type graphInstance struct {
 	State          string   `json:"state" enum:"ready,waiting,degraded"`
 	DrainState     string   `json:"drainState" enum:"serving,draining,blocked,safe_to_stop"`
 	DrainReasons   []string `json:"drainReasons"`
+	Verification   string   `json:"verification" enum:"none,pending,green,red" doc:"none: the instance declares no verify. pending or red: not routable (state waiting)."`
+	VerifyReasons  []string `json:"verifyReasons"`
 }
 
 type graphNode struct {
@@ -289,6 +291,8 @@ func (g *Gateway) buildDependencyGraph(reg *cpv1.ListServicesResponse, windowNam
 				State:          state,
 				DrainState:     drainStateServing,
 				DrainReasons:   []string{},
+				Verification:   adminVerifyState(inst.GetVerification()),
+				VerifyReasons:  append([]string{}, inst.GetVerifyReasons()...),
 			}
 			if st, ok := drains[inst.GetRegistrationId()]; ok {
 				gi.DrainState = st.State

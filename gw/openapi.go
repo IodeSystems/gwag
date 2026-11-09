@@ -299,7 +299,7 @@ func (s *openAPISource) pickReplicaExcept(tried []*openAPIReplica) *openAPIRepli
 		return nil
 	}
 	if len(*rs) == 1 && len(tried) == 0 {
-		if r := (*rs)[0]; !r.health.draining.Load() {
+		if r := (*rs)[0]; !r.health.unroutable() {
 			return r
 		}
 		return nil

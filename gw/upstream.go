@@ -73,6 +73,17 @@ type replicaHealth struct {
 	// drained (instance_drain.go). Unlike ejection, a draining
 	// replica is never picked, even when it is the last one.
 	draining atomic.Bool
+
+	// red is set while the replica's instance fails verification
+	// after it passed it once (verify.go). Never picked, like
+	// draining.
+	red atomic.Bool
+}
+
+// unroutable reports whether the replica must not be picked: its
+// instance is draining or failed verification.
+func (h *replicaHealth) unroutable() bool {
+	return h.draining.Load() || h.red.Load()
 }
 
 // success resets the failure streak. One atomic load on the common
@@ -137,7 +148,7 @@ func pickHealthy[R healthReplica](rs []R, hint uint64, tried []R) (best R, ok bo
 		if len(tried) > 0 && containsReplica(tried, r) {
 			continue
 		}
-		if r.healthState().draining.Load() {
+		if r.healthState().unroutable() {
 			continue
 		}
 		ejected := false

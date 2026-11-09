@@ -52,6 +52,8 @@ func (g *Gateway) ControlPlane() cpv1.ControlPlaneServer {
 		}
 		go g.cp.janitor()
 		go g.cp.gateLoop()
+		go g.cp.verifyLoop()
+		go g.cp.pullLoop()
 	}
 	cp := g.cp
 	g.mu.Unlock()
@@ -181,6 +183,12 @@ type preparedBinding struct {
 
 	isOpenAPI bool
 	isGraphQL bool
+
+	// verify is ServiceBinding.verify resolved against the address;
+	// nil = not verified. vstat is the latest probe result
+	// (verify.go).
+	verify *verifySpec
+	vstat  verifyStatus
 }
 
 type sharedConn struct {
@@ -399,6 +407,17 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 		})
 	}
 
+	for i, b := range req.GetServices() {
+		vs, err := prepVerify(b, req.GetAddr())
+		if err != nil {
+			return nil, err
+		}
+		prep[i].verify = vs
+		if vs != nil {
+			prep[i].vstat = verifyStatus{state: cpv1.VerificationState_VERIFICATION_STATE_PENDING}
+		}
+	}
+
 	var bindingNS []string
 	for _, p := range prep {
 		bindingNS = append(bindingNS, p.namespace)
@@ -409,6 +428,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 	// Shadow messages are checked against gwag's registry. A
 	// difference is a warning; the registration goes on.
 	shadowWarn := cp.gw.checkShadows(ctx, prep)
+	// Verification: the first probe runs before the response, so a
+	// service that is up when it registers is READY at once.
+	cp.gw.probeAll(ctx, prep)
 
 	id := newRegID()
 
@@ -454,6 +476,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				Waiting:                   waiting[i],
 				serviceManifest:           p.manifest,
 			}
+			if p.verify != nil {
+				val.setVerify(p.vstat)
+			}
 			switch {
 			case p.isGraphQL:
 				val.GraphQLEndpoint = p.graphqlEndpoint
@@ -485,7 +510,7 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 				replicaID: replicaID,
 				value:     b,
 			})
-			bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: i, val: val})
+			bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: i, val: val, nextProbe: cp.gw.nextProbeAfter(p.vstat)})
 		}
 		reg := &registration{
 			id:       id,
@@ -574,8 +599,9 @@ func (cp *controlPlane) Register(ctx context.Context, req *cpv1.RegisterRequest)
 			instanceID: req.GetInstanceId(),
 			manifest:   p.manifest,
 			waiting:    waiting[i],
+			vstat:      p.vstat,
 		})
-		bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: -1})
+		bindings = append(bindings, &regBinding{prep: p, waiting: waiting[i], kvIdx: -1, nextProbe: cp.gw.nextProbeAfter(p.vstat)})
 	}
 
 	reg := &registration{

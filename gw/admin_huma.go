@@ -49,6 +49,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 	registerAdminRoleRoutes(api, g)
 	registerUsageEdges(api, g, cp)
 	registerInstanceDrain(api, g)
+	registerServiceProfiles(api, g)
 	registerDependencyGraph(api, g, cp)
 	registerExternalDependents(api, g)
 	registerAppKeys(api, g)
@@ -1024,6 +1025,12 @@ type instanceInfo struct {
 	Addr           string                 `json:"addr"`
 	State          string                 `json:"state" enum:"ready,waiting,degraded"`
 	Depends        []dependencyStatusInfo `json:"depends"`
+	// Verification of the instance (ServiceBinding.verify): none (not
+	// declared), pending, green or red. A red or pending instance is
+	// reported waiting and gets no traffic.
+	Verification   string   `json:"verification" enum:"none,pending,green,red"`
+	VerifyReasons  []string `json:"verifyReasons" doc:"Failed checks of the latest probe."`
+	VerifiedUnixMs int64    `json:"verifiedUnixMs" doc:"Time of the latest probe; 0 = none yet."`
 }
 
 // dependencyStatusInfo is one declared dependency with the accepted
@@ -1071,6 +1078,9 @@ func adminInstances(in []*cpv1.InstanceStatus) []instanceInfo {
 			Addr:           i.GetAddr(),
 			State:          adminInstanceState(i.GetState()),
 			Depends:        deps,
+			Verification:   adminVerifyState(i.GetVerification()),
+			VerifyReasons:  append([]string{}, i.GetVerifyReasons()...),
+			VerifiedUnixMs: i.GetVerifiedUnixMs(),
 		})
 	}
 	return out

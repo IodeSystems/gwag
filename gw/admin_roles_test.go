@@ -148,6 +148,9 @@ var rolesMatrix = []roleCase{
 	{"getClusterMirror", "GET", "/admin/cluster/mirror", "", adminRoleDev},
 	{"startClusterMirror", "POST", "/admin/cluster/mirror", `{}`, adminRoleAdmin},
 	{"stopClusterMirror", "POST", "/admin/cluster/mirror/stop", `{}`, adminRoleAdmin},
+	{"listServiceProfiles", "GET", "/admin/services/profiles", "", adminRoleDev},
+	{"addServiceProfile", "POST", "/admin/services/profiles", `{"url":"http://127.0.0.1:1/.well-known/gwag.json"}`, adminRoleAdmin},
+	{"removeServiceProfile", "POST", "/admin/services/profiles/remove", `{"url":"http://127.0.0.1:1/.well-known/gwag.json"}`, adminRoleAdmin},
 	{"drainInstance", "POST", "/admin/instances/nobody/drain", `{}`, adminRoleAdmin},
 	{"drain", "POST", "/admin/drain", `{"timeoutSeconds":1}`, adminRoleAdmin},
 }
