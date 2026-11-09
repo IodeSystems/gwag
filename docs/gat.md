@@ -338,6 +338,109 @@ Then `ns.op` is gone and `ns.v1.op` stays; subscriptions are named
 `ns_v1_op` instead of `ns_op`. Type names, REST and gRPC do not change.
 Experimental.
 
+## Several versions in one process
+
+`RegisterHuma` serves one huma API as version `v1`. To keep an old
+version alive next to a new one (for clients that cannot upgrade yet),
+give each version its own huma API, ingest each with
+`RegisterHumaVersion`, then finalize once:
+
+```go
+mux := http.NewServeMux()
+v1 := humago.New(mux, cfgFor("v1")) // OpenAPIPath /v1/openapi, ...
+v2 := humago.New(mux, cfgFor("v2")) // OpenAPIPath /v2/openapi, ...
+
+g, _ := gat.New()
+orders.RegisterV2(v2, g) // gat.Register(...) under /v2/...
+orders.RegisterV1(v1, g) // gat.Register(...) under /v1/..., adapts onto v2
+
+gat.RegisterHumaVersion(v1, g, "v1")
+gat.RegisterHumaVersion(v2, g, "v2")
+gat.RegisterHuma(v2, g, "/api")      // or gat.RegisterHTTP(mux, g, "/api")
+gat.RegisterGRPC(mux, g, "/api/grpc")
+```
+
+Each API needs its own `OpenAPIPath`, `SchemasPath` and `DocsPath` (or
+`""`) so their routes do not collide on one mux. A `huma.Group` shares
+its parent's OpenAPI document, so it counts as the parent's version.
+
+`RegisterHumaVersion` reads only the operations registered on that
+API. It builds and mounts nothing; `RegisterHuma` (on any API) or
+`RegisterHTTP` builds one schema from all versions. An operation
+registered on an API that no `RegisterHumaVersion` call covers makes
+that call fail. `RegisterHuma` without versions behaves as before.
+
+The surface is gwag's (see [`lifecycle.md`](./lifecycle.md#version)):
+
+| Surface | v1 (older) | v2 (latest) |
+| --- | --- | --- |
+| GraphQL | `{ ns { v1 { op } } }`, `@deprecated(reason: "v2 is current")` | `{ ns { v2 { op } } }` and `{ ns { op } }` |
+| GraphQL types | `ns_v1_Order` | `ns_Order` |
+| Subscriptions | `ns_v1_op`, deprecated | `ns_op` |
+| gRPC | `{prefix}/ns.v1.Service/op`, proto `option deprecated` on file, service, methods | `{prefix}/ns.v2.Service/op` |
+| OpenAPI view | `deprecated: true` on every operation | as huma built it |
+
+Two versions can both have an `Order`: the older one's GraphQL type
+gets the version in its name, and each version is its own proto
+package. `VersionedOnly(true)` drops the flat copy; `{ ns { v2 { op } } }`
+is then the only path to the latest.
+
+- **Version** is `v` and a number. The latest is the highest number.
+- **Namespace** comes from each API's OpenAPI title, as with
+  `RegisterHuma`, or from `gat.VersionNamespace("orders")`. All
+  versions must have the same one.
+- **Manual deprecation**: `gat.VersionDeprecated("ends 2027-06")` sets
+  the reason on a version. On the latest it deprecates the flat fields
+  too, ahead of a newer version. Proto options have no reason field.
+
+### Schema views per version
+
+The schema routes take gwag's selector, `?service=ns[:vN][,...]`, and
+the shorthand `?version=vN`:
+
+```
+GET /api/schema/openapi?version=v1        v1's spec, operations deprecated
+GET /api/schema/openapi?service=orders:v2 v2's spec
+GET /api/schema/openapi                   {"orders": {"v1": ..., "v2": ...}}
+GET /api/schema/proto?version=v1          v1's file only
+GET /api/schema/proto                     both files
+GET /api/schema/graphql                   one SDL, every version
+```
+
+One selected service is written as its spec. Several are a map by
+namespace, then by version when a namespace has more than one (gwag
+always writes the two-level map). A selector that matches nothing is
+a 404. `/schema/graphql` has no selector in gat; gwag's
+`?service=` on it is gwag-only.
+
+### Registering the versions with gwag
+
+`g.OpenAPISpec("v1")` returns the OpenAPI document huma built for the
+API registered as `v1`, without deprecation marks. That is the spec to
+hand to gwag's controlclient, one `Service` per version (see
+[`services.md`](./services.md#two-versions-in-one-binary)):
+
+```go
+specV1, _ := g.OpenAPISpec("v1")
+specV2, _ := g.OpenAPISpec("v2")
+Services: []controlclient.Service{
+	{Namespace: "orders", Version: "v1", OpenAPISpec: specV1},
+	{Namespace: "orders", Version: "v2", OpenAPISpec: specV2},
+},
+```
+
+gwag deprecates older versions itself. Leaving the marks out means a
+frozen version's spec does not change when a newer version is added;
+`/schema/openapi?version=v1` shows the marked copy. gwag forwards to
+the REST paths of each spec, so both `/v1/...` and `/v2/...` must be
+reachable from the gateway. After a plain `RegisterHuma`,
+`OpenAPISpec("v1")` returns that API's document.
+
+Limits: `DispatchObserver` and `DispatchHook` get the OperationID,
+which two versions share; tell them apart with a huma middleware per
+API if needed. The deprecated `Subscribe` works on one API only; use
+`RegisterSSE`. Experimental.
+
 ## Integer scalars (money in cents)
 
 A Go `int64` renders as `Long`, which is a string unless
@@ -1025,8 +1128,10 @@ test against a failure mode that otherwise ships silently.
 
 ## Constraints (current shape)
 
-- One huma API per gat gateway. Multi-huma is doable (BYO-IR path)
-  but not the recommended path.
+- One huma API per gat gateway, or one per version of a single
+  namespace (`RegisterHumaVersion`, above). Several namespaces from
+  several huma APIs are doable (BYO-IR path) but not the recommended
+  path.
 - Streams in gat are adopter-sourced (`gat.RegisterSSE`, above):
   single node, no broker. gat also has a separate
   publish/subscribe primitive, in-process by default, with HTTP peer

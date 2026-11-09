@@ -73,6 +73,15 @@ type Gateway struct {
 	// (nil until the first Subscribe).
 	subs   []*streamOp
 	subAPI huma.API
+	// subOwner is the OpenAPI document of the API whose registry subAPI
+	// shares.
+	subOwner *huma.OpenAPI
+
+	// versions are the huma APIs RegisterHumaVersion ingested, in call
+	// order. Empty on the RegisterHuma and BYO-IR paths.
+	versions []*humaVersion
+	// humaAPI is the API RegisterHuma ingested without versions.
+	humaAPI huma.API
 
 	// built is true once the schema has been assembled (either by
 	// New(regs...) or by RegisterHuma). Subsequent registrations are

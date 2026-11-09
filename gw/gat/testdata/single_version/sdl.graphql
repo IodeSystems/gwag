@@ -1,0 +1,57 @@
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+directive @export(as: String!) on FIELD
+
+directive @derived(operationId: String) on FIELD_DEFINITION | OBJECT | INPUT_OBJECT | INPUT_FIELD_DEFINITION | ENUM | SCALAR | UNION | INTERFACE | ARGUMENT_DEFINITION
+
+type DemoMutationNamespace {
+  renameProject(body: Demo_GoldenRenameInputBodyInput!, id: String!): Demo_Project @derived(operationId: "renameProject")
+  v1: DemoV1MutationNamespace!
+}
+
+type DemoQueryNamespace {
+  getProject(id: String!): Demo_Project @derived(operationId: "getProject")
+  listProjects(limit: Long): Demo_ListProjectsOutputBody @derived(operationId: "listProjects")
+  v1: DemoV1QueryNamespace!
+}
+
+type DemoV1MutationNamespace {
+  renameProject(body: Demo_GoldenRenameInputBodyInput!, id: String!): Demo_Project @derived(operationId: "renameProject")
+}
+
+type DemoV1QueryNamespace {
+  getProject(id: String!): Demo_Project @derived(operationId: "getProject")
+  listProjects(limit: Long): Demo_ListProjectsOutputBody @derived(operationId: "listProjects")
+}
+
+input Demo_GoldenRenameInputBodyInput {
+  name: String!
+}
+
+type Demo_ListProjectsOutputBody {
+  projects: [Demo_Project!]!
+}
+
+type Demo_Project {
+  id: String!
+  name: String!
+}
+
+"""64-bit integer encoded as a decimal string to preserve precision past 2^53. Accepts a JSON number or a decimal string as input."""
+scalar Long
+
+type Mutation {
+  Demo: DemoMutationNamespace!
+}
+
+type Query {
+  Demo: DemoQueryNamespace!
+}
+
+type Subscription {
+  Demo_projectEvents(id: String!): Demo_Project! @derived(operationId: "projectEvents")
+}

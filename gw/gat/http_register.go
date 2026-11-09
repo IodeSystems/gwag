@@ -22,12 +22,18 @@ import (
 //	POST {prefix}/_gat/publish      peer-mesh receive (only when EnablePeerMesh)
 //
 // Must be called after the gateway is built — either New(regs...) or
-// RegisterHuma. Call EnablePeerMesh before RegisterHTTP for the
+// RegisterHuma — or after RegisterHumaVersion calls, which it then
+// finalizes. Call EnablePeerMesh before RegisterHTTP for the
 // peer-publish endpoint to be mounted. Returns an error if the schema
 // isn't ready.
 //
 // Stability: experimental
 func RegisterHTTP(mux HandleMux, g *Gateway, prefix string) error {
+	if !g.built && len(g.versions) > 0 {
+		if err := g.buildVersions(); err != nil {
+			return err
+		}
+	}
 	if !g.built {
 		return fmt.Errorf("gat: RegisterHTTP requires a built gateway (call New(regs...) or RegisterHuma first)")
 	}

@@ -41,6 +41,12 @@ type capturedOp struct {
 	hdr          *outputHeaderPlan
 	irOp         *ir.Operation // assigned during ingestHuma; nil until then
 	instrumented bool          // invoke already wrapped by instrument
+	// doc is the OpenAPI document of the API the op was registered on
+	// (a huma.Group shares its parent's), so RegisterHumaVersion can
+	// pick the ops of one API. claimed is set once that document was
+	// ingested.
+	doc     *huma.OpenAPI
+	claimed bool
 }
 
 // Register is the paired drop-in for huma.Register. It registers the
@@ -79,6 +85,7 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 		inputType:    inputType,
 		outputType:   reflect.TypeOf((*O)(nil)).Elem(),
 		hdr:          newOutputHeaderPlan(reflect.TypeOf((*O)(nil)).Elem()),
+		doc:          api.OpenAPI(),
 		check:        check,
 		needsRequest: len(chain) > 0 || check != nil,
 		invoke: func(ctx context.Context, in any, args map[string]any) (any, error) {
@@ -118,6 +125,9 @@ func Register[I, O any](api huma.API, g *Gateway, op huma.Operation, handler fun
 // Pass an empty prefix to mount at root. The prefix should not have
 // a trailing slash; "/api" → "/api/graphql".
 //
+// After RegisterHumaVersion calls, RegisterHuma does not ingest api
+// again: it builds the schema from the versions and mounts on api.
+//
 // Stability: stable
 func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 	if g.built {
@@ -125,42 +135,24 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 	}
 	prefix = strings.TrimRight(prefix, "/")
 
-	// huma skips unexported fields during parameter discovery, so a parameter on
-	// an unexported field — or inside an embedded unexported type — is absent
-	// from the schema and never bound. Report before building, not after
-	// shipping.
-	if found := g.hiddenParams(); len(found) > 0 {
-		if !g.allowEmbeddedParams {
-			return hiddenParamError(found)
-		}
-		for _, e := range found {
-			log.Printf("gat: warning: %s", e)
-		}
-	}
-
-	// OpenAPI response links are fine as documentation, but gat does not
-	// resolve them into nested fields — on purpose. Point whoever
-	// declared one at the pattern gat supports instead.
-	for _, c := range g.captured {
-		for code, resp := range c.op.Responses {
-			if resp != nil && len(resp.Links) > 0 {
-				log.Printf("gat: note: %s declares OpenAPI response links (%s); gat does not resolve links "+
-					"into nested fields. To fetch dependent data in one request, batch the operations "+
-					"and pass values along with @export — see \"Dependent operations\" in docs/gat.md.",
-					c.op.OperationID, code)
-				break
-			}
-		}
-	}
-
-	if len(g.captured) > 0 || len(g.subs) > 0 {
-		if err := g.ingestHuma(api); err != nil {
+	if len(g.versions) > 0 {
+		// RegisterHumaVersion ingested the APIs already: build, mount.
+		if err := g.buildVersions(); err != nil {
 			return err
 		}
-	}
-
-	if err := g.build(); err != nil {
-		return err
+	} else {
+		if err := g.preflight(g.captured); err != nil {
+			return err
+		}
+		if len(g.captured) > 0 || len(g.subs) > 0 {
+			if err := g.ingestHuma(api); err != nil {
+				return err
+			}
+			g.humaAPI = api
+		}
+		if err := g.build(); err != nil {
+			return err
+		}
 	}
 
 	if !g.noIntrospection {
@@ -174,45 +166,88 @@ func RegisterHuma(api huma.API, g *Gateway, prefix string) error {
 	return nil
 }
 
+// preflight runs the mount-time checks on captured ops: parameters huma
+// cannot see (an error unless AllowEmbeddedParams), and a note for
+// OpenAPI response links.
+func (g *Gateway) preflight(captured []*capturedOp) error {
+	// huma skips unexported fields during parameter discovery, so a parameter on
+	// an unexported field — or inside an embedded unexported type — is absent
+	// from the schema and never bound. Report before building, not after
+	// shipping.
+	if found := hiddenParams(captured); len(found) > 0 {
+		if !g.allowEmbeddedParams {
+			return hiddenParamError(found)
+		}
+		for _, e := range found {
+			log.Printf("gat: warning: %s", e)
+		}
+	}
+
+	// OpenAPI response links are fine as documentation, but gat does not
+	// resolve them into nested fields — on purpose. Point whoever
+	// declared one at the pattern gat supports instead.
+	for _, c := range captured {
+		for code, resp := range c.op.Responses {
+			if resp != nil && len(resp.Links) > 0 {
+				log.Printf("gat: note: %s declares OpenAPI response links (%s); gat does not resolve links "+
+					"into nested fields. To fetch dependent data in one request, batch the operations "+
+					"and pass values along with @export — see \"Dependent operations\" in docs/gat.md.",
+					c.op.OperationID, code)
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // ingestHuma reads the huma API's accumulated OpenAPI doc, ingests it
 // into a fresh IR service, and wires an in-process dispatcher for each
 // captured operation (matched by OperationID).
 func (g *Gateway) ingestHuma(api huma.API) error {
-	specBytes, err := json.Marshal(g.mergedOpenAPI(api))
+	svc, err := g.ingestHumaService(g.mergedOpenAPI(api), api, g.captured, g.subs, "", "v1")
 	if err != nil {
-		return fmt.Errorf("gat: marshal huma OpenAPI: %w", err)
+		return err
+	}
+	g.services = append(g.services, svc)
+	return nil
+}
+
+// ingestHumaService ingests doc as the IR service (namespace, version)
+// and wires an in-process dispatcher for each of captured and subs
+// (matched by OperationID). An empty namespace derives from api's
+// OpenAPI title.
+func (g *Gateway) ingestHumaService(doc *huma.OpenAPI, api huma.API, captured []*capturedOp, subs []*streamOp, namespace, version string) (*ir.Service, error) {
+	specBytes, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("gat: marshal huma OpenAPI: %w", err)
 	}
 
 	loader := openapi3.NewLoader()
-	doc, err := loader.LoadFromData(specBytes)
+	odoc, err := loader.LoadFromData(specBytes)
 	if err != nil {
-		return fmt.Errorf("gat: parse huma OpenAPI: %w", err)
+		return nil, fmt.Errorf("gat: parse huma OpenAPI: %w", err)
 	}
 
-	svc := ir.IngestOpenAPI(doc)
+	svc := ir.IngestOpenAPI(odoc)
+	if namespace != "" {
+		svc.Namespace = namespace
+	}
 	if svc.Namespace == "" {
-		// Derive the namespace from the OpenAPI title via the shared
-		// ir.SanitizeNamespace rule (case preserved). Adopters can
-		// override via huma's config.
-		if oapi := api.OpenAPI(); oapi != nil && oapi.Info != nil && oapi.Info.Title != "" {
-			svc.Namespace = ir.SanitizeNamespace(oapi.Info.Title)
-		}
-		if svc.Namespace == "" {
-			svc.Namespace = "huma"
-		}
+		svc.Namespace = humaNamespace(api)
 	}
 	if svc.Version == "" {
-		svc.Version = "v1"
+		svc.Version = version
 	}
 	ir.PopulateSchemaIDs(svc)
 
-	captured := make(map[string]*capturedOp, len(g.captured))
-	for _, c := range g.captured {
-		captured[c.op.OperationID] = c
+	byID := make(map[string]*capturedOp, len(captured))
+	for _, c := range captured {
+		byID[c.op.OperationID] = c
+		c.claimed = true
 	}
 
 	for _, op := range svc.FlatOperations() {
-		c, ok := captured[op.Name]
+		c, ok := byID[op.Name]
 		if !ok {
 			continue
 		}
@@ -232,12 +267,22 @@ func (g *Gateway) ingestHuma(api huma.API) error {
 		g.registry.Set(op.SchemaID, newInprocDispatcher(c, op, g.emptyNilSlices))
 	}
 
-	if err := g.bindStreams(svc); err != nil {
-		return err
+	if err := g.bindStreams(svc, subs); err != nil {
+		return nil, err
 	}
+	return svc, nil
+}
 
-	g.services = append(g.services, svc)
-	return nil
+// humaNamespace derives a namespace from api's OpenAPI title via the
+// shared ir.SanitizeNamespace rule (case preserved); "huma" when there
+// is no usable title.
+func humaNamespace(api huma.API) string {
+	if oapi := api.OpenAPI(); oapi != nil && oapi.Info != nil && oapi.Info.Title != "" {
+		if ns := ir.SanitizeNamespace(oapi.Info.Title); ns != "" {
+			return ns
+		}
+	}
+	return "huma"
 }
 
 // mountGraphQLEndpoint registers POST and GET {prefix}/graphql on api

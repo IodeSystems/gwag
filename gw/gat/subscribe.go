@@ -97,6 +97,7 @@ func Subscribe[I, O any](api huma.API, g *Gateway, op huma.Operation, source fun
 	g.subs = append(g.subs, &streamOp{
 		op:        op,
 		inputType: inputType,
+		doc:       api.OpenAPI(),
 		run:       run,
 		check:     check,
 	})
@@ -140,7 +141,7 @@ func (g *Gateway) subscriptionAPI(api huma.API) huma.API {
 	// Share the registry after construction. Passing it through cfg
 	// would make NewAPI overwrite the adopter registry's config.
 	side.OpenAPI().Components = api.OpenAPI().Components
-	g.subAPI = side
+	g.subAPI, g.subOwner = side, api.OpenAPI()
 	return side
 }
 

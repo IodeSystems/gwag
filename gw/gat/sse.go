@@ -95,6 +95,7 @@ func RegisterSSE[I any](api huma.API, g *Gateway, op huma.Operation, eventTypeMa
 	g.subs = append(g.subs, &streamOp{
 		op:        op,
 		inputType: inputType,
+		doc:       api.OpenAPI(),
 		events:    events,
 		run:       run,
 		check:     check,
