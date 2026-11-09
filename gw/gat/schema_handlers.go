@@ -48,14 +48,27 @@ func schemaGraphQLHandler(g *Gateway) http.Handler {
 
 // schemaProtoHandler renders gat's IR services as a FileDescriptorSet
 // (default, `application/protobuf`) so proto-codegen tools can consume
-// the same surface as GraphQL.
+// the same surface as GraphQL. `?service=` / `?version=` select
+// services (serviceFilter); a deprecated version's file, services and
+// methods carry the deprecated option.
 func schemaProtoHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		fds, err := ir.RenderProtoFiles(g.Services())
+		filter, err := parseServiceFilter(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		all := g.Services()
+		services := filter.apply(all)
+		if filter.set() && len(services) == 0 {
+			http.Error(w, "no service matches", http.StatusNotFound)
+			return
+		}
+		fds, err := renderProto(services, deprecations(all))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -77,6 +90,12 @@ func schemaProtoHandler(g *Gateway) http.Handler {
 // projection produces a synthesized spec. `?openapi=3.0|3.1` writes
 // every spec in that version, converting where needed; the default is
 // OpenAPIVersion, else each spec as declared.
+//
+// `?service=` / `?version=` select services (serviceFilter). One
+// selected service is emitted as its spec; several as a map keyed by
+// namespace, or, when a namespace has several versions selected, by
+// namespace then version (gwag's shape). A deprecated version's
+// operations carry `deprecated: true`.
 func schemaOpenAPIHandler(g *Gateway) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -88,14 +107,32 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		services := g.Services()
+		filter, err := parseServiceFilter(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		all := g.Services()
+		services := filter.apply(all)
 		if len(services) == 0 {
+			if filter.set() && len(all) > 0 {
+				http.Error(w, "no service matches", http.StatusNotFound)
+				return
+			}
 			http.Error(w, "no services", http.StatusServiceUnavailable)
 			return
 		}
+		deps := deprecations(all)
+		render := func(svc *ir.Service) (any, error) {
+			doc, err := ir.RenderOpenAPIWith(svc, opts)
+			if err != nil || deps[svc] == "" {
+				return doc, err
+			}
+			return deprecateOpenAPI(doc)
+		}
 		// Single-service case: emit the one spec directly.
 		if len(services) == 1 {
-			doc, err := ir.RenderOpenAPIWith(services[0], opts)
+			doc, err := render(services[0])
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -104,15 +141,30 @@ func schemaOpenAPIHandler(g *Gateway) http.Handler {
 			_ = json.NewEncoder(w).Encode(doc)
 			return
 		}
-		// Multi-service: emit a map keyed by namespace.
+		perNS := map[string]int{}
+		versioned := false
+		for _, svc := range services {
+			perNS[svc.Namespace]++
+			versioned = versioned || perNS[svc.Namespace] > 1
+		}
+		// Multi-service: emit a map keyed by namespace (and version).
 		bundle := map[string]any{}
 		for _, svc := range services {
-			doc, err := ir.RenderOpenAPIWith(svc, opts)
+			doc, err := render(svc)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			bundle[svc.Namespace] = doc
+			if !versioned {
+				bundle[svc.Namespace] = doc
+				continue
+			}
+			byVer, _ := bundle[svc.Namespace].(map[string]any)
+			if byVer == nil {
+				byVer = map[string]any{}
+				bundle[svc.Namespace] = byVer
+			}
+			byVer[svc.Version] = doc
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(bundle)

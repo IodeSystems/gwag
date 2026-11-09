@@ -40,6 +40,10 @@ type streamOp struct {
 
 	irOp  *ir.Operation
 	union string // IR union type name; "" unless len(events) > 1
+
+	// doc is the OpenAPI document of the adopter API the op was
+	// registered on (see capturedOp.doc).
+	doc *huma.OpenAPI
 }
 
 // streamEvent is one declared event: its SSE event name, Go type, and
@@ -64,8 +68,8 @@ func (s *streamOp) eventFor(v any) (streamEvent, error) {
 // bindStreams marks each streaming op's ingested operation as a
 // subscription, sets its output for declared events, and wires the
 // GraphQL dispatcher. Called from ingestHuma.
-func (g *Gateway) bindStreams(svc *ir.Service) error {
-	for _, s := range g.subs {
+func (g *Gateway) bindStreams(svc *ir.Service, subs []*streamOp) error {
+	for _, s := range subs {
 		for _, op := range svc.FlatOperations() {
 			if op.Name == s.op.OperationID && op.HTTPPath == s.op.Path {
 				s.irOp = op

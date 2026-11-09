@@ -181,10 +181,10 @@ func CheckEmbeddedParams(inputs ...reflect.Type) error {
 	return hiddenParamError(found)
 }
 
-// hiddenParams collects unreachable parameters across every captured operation.
-func (g *Gateway) hiddenParams() []hiddenParam {
+// hiddenParams collects unreachable parameters across captured.
+func hiddenParams(captured []*capturedOp) []hiddenParam {
 	var out []hiddenParam
-	for _, c := range g.captured {
+	for _, c := range captured {
 		out = append(out, findHiddenParams(c.op.OperationID, c.inputType)...)
 	}
 	return out

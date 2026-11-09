@@ -63,13 +63,34 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 		return fmt.Errorf("gat: build files registry: %w", err)
 	}
 
-	capturedByName := make(map[string]*capturedOp, len(g.captured))
+	// Captured ops and streams by procedure, so two versions that share
+	// an OperationID land on their own package's method.
+	capturedByOp := make(map[*ir.Operation]*capturedOp, len(g.captured))
 	for _, c := range g.captured {
-		capturedByName[c.op.OperationID] = c
+		if c.irOp != nil {
+			capturedByOp[c.irOp] = c
+		}
 	}
-	streamsByName := make(map[string]*streamOp, len(g.subs))
+	streamsByOp := make(map[*ir.Operation]*streamOp, len(g.subs))
 	for _, st := range g.subs {
-		streamsByName[st.op.OperationID] = st
+		if st.irOp != nil {
+			streamsByOp[st.irOp] = st
+		}
+	}
+	capturedByProc := map[string]*capturedOp{}
+	streamsByProc := map[string]*streamOp{}
+	for _, svc := range g.services {
+		if svc.OriginKind != ir.KindOpenAPI {
+			continue
+		}
+		for _, op := range svc.FlatOperations() {
+			if c, ok := capturedByOp[op]; ok {
+				capturedByProc[protoProcKey(svc, op)] = c
+			}
+			if st, ok := streamsByOp[op]; ok {
+				streamsByProc[protoProcKey(svc, op)] = st
+			}
+		}
 	}
 
 	byo := g.byoOps()
@@ -103,7 +124,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 					}
 					continue
 				}
-				if st, ok := streamsByName[name]; ok && md.IsStreamingServer() {
+				if st, ok := streamsByProc[string(sd.FullName())+"/"+name]; ok && md.IsStreamingServer() {
 					mux.Handle(prefix+procedure, connect.NewServerStreamHandler(
 						procedure,
 						connectStream(g, st, md, procedure),
@@ -113,7 +134,7 @@ func RegisterGRPC(mux HandleMux, g *Gateway, prefix string) error {
 					))
 					continue
 				}
-				cap, ok := capturedByName[name]
+				cap, ok := capturedByProc[string(sd.FullName())+"/"+name]
 				if !ok {
 					continue
 				}

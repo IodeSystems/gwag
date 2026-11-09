@@ -39,22 +39,29 @@ func (g *Gateway) byoOps() map[string]*ir.Operation {
 		if svc.OriginKind != ir.KindOpenAPI {
 			continue
 		}
-		pkg := svc.Namespace
-		if svc.Version != "" {
-			pkg += "." + svc.Version
-		}
-		name := svc.ServiceName
-		if name == "" {
-			name = "Service"
-		}
 		for _, op := range svc.FlatOperations() {
 			if owned[op] || op.StreamingClient || g.registry.Get(op.SchemaID) == nil {
 				continue
 			}
-			out[pkg+"."+name+"/"+op.Name] = op
+			out[protoProcKey(svc, op)] = op
 		}
 	}
 	return out
+}
+
+// protoProcKey is "<proto package>.<Service>/<method>" for op of an
+// OpenAPI-origin svc, as ir.RenderProtoFiles names it: package
+// "<namespace>.<version>", service "Service" unless named.
+func protoProcKey(svc *ir.Service, op *ir.Operation) string {
+	pkg := svc.Namespace
+	if svc.Version != "" {
+		pkg += "." + svc.Version
+	}
+	name := svc.ServiceName
+	if name == "" {
+		name = "Service"
+	}
+	return pkg + "." + name + "/" + op.Name
 }
 
 // byoResponse is the dispatcher's result as the output message.

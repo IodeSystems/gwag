@@ -25,7 +25,9 @@ func TestSingleVersionGolden(t *testing.T) {
 	api := humago.New(mux, huma.DefaultConfig("Demo", "1.0.0"))
 	g := mustNewGat(t)
 	gat.Register(api, g, huma.Operation{OperationID: "listProjects", Method: http.MethodGet, Path: "/projects"},
-		func(context.Context, *listProjectsInput) (*listProjectsOutput, error) { return &listProjectsOutput{}, nil })
+		func(context.Context, *listProjectsInput) (*listProjectsOutput, error) {
+			return &listProjectsOutput{}, nil
+		})
 	gat.Register(api, g, huma.Operation{OperationID: "getProject", Method: http.MethodGet, Path: "/projects/{id}"},
 		func(_ context.Context, in *getProjectInput) (*getProjectOutput, error) {
 			return &getProjectOutput{Body: project{ID: in.ID}}, nil
