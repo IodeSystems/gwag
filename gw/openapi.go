@@ -847,9 +847,11 @@ func buildOpenAPIRequest(
 // type integer into a JSON number. 64-bit integers reach the
 // dispatcher as strings from the gRPC / Connect ingress (proto JSON
 // form, see protocodec.ValueToAny); a JSON body must carry them as
-// numbers or the upstream refuses them ("expected integer"). Maps are
-// changed in place; a string that is not an integer is left alone for
-// the upstream to refuse.
+// numbers or the upstream refuses them ("expected integer"). Maps and
+// slices are copied, never changed: the args can be shared by
+// concurrent requests (a literal argument in a cached document). A
+// string that is not an integer is left alone for the upstream to
+// refuse.
 func integersAsNumbers(v any, s *openapi3.Schema) any {
 	if s == nil {
 		return v
@@ -865,18 +867,24 @@ func integersAsNumbers(v any, s *openapi3.Schema) any {
 			}
 		}
 	case map[string]any:
+		out := make(map[string]any, len(x))
 		for k, e := range x {
 			if p := s.Properties[k]; p != nil {
-				x[k] = integersAsNumbers(e, p.Value)
+				out[k] = integersAsNumbers(e, p.Value)
 			} else if ap := s.AdditionalProperties.Schema; ap != nil {
-				x[k] = integersAsNumbers(e, ap.Value)
+				out[k] = integersAsNumbers(e, ap.Value)
+			} else {
+				out[k] = e
 			}
 		}
+		return out
 	case []any:
 		if s.Items != nil {
+			out := make([]any, len(x))
 			for i, e := range x {
-				x[i] = integersAsNumbers(e, s.Items.Value)
+				out[i] = integersAsNumbers(e, s.Items.Value)
 			}
+			return out
 		}
 	}
 	return v
