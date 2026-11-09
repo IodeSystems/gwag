@@ -185,7 +185,7 @@ Open `http://<host>:8080/` (the UI home is the live graph). Ports:
    admin and dev tokens printed. Every demo service is public, so the graph
    shows without signing in.
 2. `orders` (depends `library: [v1]`) starts first. Graph: WAITING; its
-   log says "waiting for dependencies".
+   log says "waiting: orders/v1 needs library(v1)".
 3. `library-a` (v1 only) starts. `orders` turns READY by itself and
    sends traffic with `X-Caller-Id: orders/v1`.
 4. `library-b` registers v1 and v2 in one Register (proto packages

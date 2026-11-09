@@ -383,6 +383,8 @@ instance or line. Default sink only.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `service_instances` | gauge | `namespace`, `version`, `state` | Instances by start-gate state: `ready`, `waiting`, `degraded`. |
+| `service_verification` | gauge | `namespace`, `version`, `state` | Instances that declare verify, by verification state: `pending`, `green`, `red` ([integrate.md](./integrate.md#green-and-red)). A red or pending instance gets no traffic. |
+| `service_verification_changes_total` | counter | `namespace`, `version`, `from`, `to` | Changed verification results, counted on the node that holds the registration. A red result whose reasons change counts as `red` → `red`. |
 | `service_drain_instances` | gauge | `namespace`, `version`, `drain_state` | Instances by drain state: `draining`, `blocked`, `safe_to_stop`. |
 | `start_gate_transitions_total` | counter | `namespace`, `version`, `from`, `to` | State changes (`none`, `waiting`, `ready`, `degraded`, `removed`). READY/DEGRADED flips are sampled every 2s and at scrape, so a shorter flip can go uncounted. |
 | `dependency_unmet` | gauge | `consumer_kind`, `consumer_namespace`, `consumer_version`, `provider`, `channel` | 1 when no accepted line of the provider has a ready instance. `channel`: the channel key of a subscription edge (`provider` is empty while no line declares it; see [lifecycle.md](./lifecycle.md#channel-subscriptions)), empty for `depends` edges. `consumer_kind`: `service` (a registered line) or `external` (a declared external dependent: `consumer_namespace` is its id, `consumer_version` is empty; see [lifecycle.md](./lifecycle.md#external-dependents)). Review-due declarations keep their series. |

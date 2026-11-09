@@ -83,6 +83,43 @@ reg = await register(Options(
 await reg.close()  # deregisters; `async with await register(...)` does the same
 ```
 
+## Profile and verification
+
+A service profile (`gwag.json`, written by `gwag service init -o
+gwag.json`) says what the service provides, depends on and listens on.
+`loadProfile` / `load_profile` reads it and returns one service per
+provided version, sorted `v1`, `v2`, ..., `unstable`. Spec files are read
+relative to the profile's directory; proto imports are the other `.proto`
+files under the import directories. The format is in
+[`gw/profile/profile.go`](../gw/profile/profile.go). The clients read JSON;
+Python also reads YAML when PyYAML is installed.
+
+`healthUrl` / `health_url` and `specUrl` / `spec_url` ask the gateway to
+verify each instance before it routes to it: the address is reachable, the
+health URL answers 200, the spec served at the spec URL equals the
+registered one. It checks again periodically. Each is a path on the
+service's host or an absolute URL on that host. A binding that is not
+verified is WAITING, and the client logs why (`registration: waiting:
+billing/v1 red: health /healthz: status 500`). The profile sets both
+(`health`, and `url` per version). The whole pattern, with the CI check
+and the deploy gate: [`integrate.md`](./integrate.md).
+
+```ts
+import { loadProfile, register } from "@gwag/registration";
+
+const services = loadProfile("gwag.json", "billing:50051");
+const reg = await register({ gateway: "gateway:50090", serviceAddr: "billing:50051", services });
+// or by hand: { namespace: "billing", openapiSpec, healthUrl: "/healthz", specUrl: "/openapi.json" }
+```
+
+```python
+from gwag_registration import Options, load_profile, register
+
+services = load_profile("gwag.json", "billing:50051")
+reg = await register(Options(gateway="gateway:50090", service_addr="billing:50051", services=services))
+# or by hand: Service(namespace="billing", openapi_spec=spec, health_url="/healthz", spec_url="/openapi.json")
+```
+
 ## Behaviour
 
 The same as `controlclient`:

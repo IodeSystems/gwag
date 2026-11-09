@@ -92,6 +92,25 @@ Nobody starts there. Most start with one service, with a tangle of
 existing services, or with another tool that no longer fits. Each
 path below ends in the same place.
 
+## How a service joins
+
+The same four steps for a new service and for one that runs today:
+
+```bash
+gwag service init --spec api/billing.json --url /openapi.json --health /healthz   # writes gwag.yaml
+gwag service check --url http://localhost:8080 --gateway staging-gw:50090         # in CI
+# deploy: the service registers from gwag.yaml, or the gateway pulls it:
+gwag services add --profile-url http://legacy:8080/.well-known/gwag.json
+gwag service wait --service billing:v1 --green --timeout 2m                       # gate promotion
+```
+
+The profile says what the service provides, depends on and listens
+on. The gateway routes to an instance only when it is green: its
+address and health URL answer, the spec it serves equals the spec it
+registered, and its dependencies are present. A red instance gets no
+traffic, and the reason is in the admin UI, the API and the metrics.
+[`docs/integrate.md`](./docs/integrate.md).
+
 ## Start from where you are
 
 ### One service

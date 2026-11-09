@@ -254,8 +254,8 @@ $ ./orders          # depends on hello(v1|v2); hello not running
 $ curl -s localhost:8080/api/graphql ... '{ orders { get(id:"1") { id } } }'
 {"data":null,"errors":[{"message":"Cannot query field \"orders\" on type \"Query\"."...}]}
 $ ./hello           # in another terminal
-2026/11/07 15:22:37 controlclient: waiting for dependencies: orders/v1 needs hello(v1|v2)
-2026/11/07 15:22:42 controlclient: dependencies present, starting
+2026/11/07 15:22:37 controlclient: waiting: orders/v1 needs hello(v1|v2)
+2026/11/07 15:22:42 controlclient: ready, starting
 2026/11/07 15:22:42 orders/v1 ready
 ```
 
@@ -291,6 +291,35 @@ waits; the log names it: `billing/v1 needs channel
 orders.v1.OrderEvents (not declared yet)`. A channel the binding's own
 proto declares does not wait. Subscriptions do not count in the drain
 check.
+
+### Verification: HealthURL and SpecURL
+
+With `HealthURL` and `SpecURL` set, the gateway verifies each instance
+before it routes to it: the address accepts a connection, `HealthURL`
+answers 200, and the spec served at `SpecURL` equals the one in this
+`Service` (canonical form; deprecation marks ignored). It probes
+again every 30 s (2 s while red):
+
+```go
+Services: []controlclient.Service{{
+	Namespace:   "billing",
+	OpenAPISpec: spec,
+	HealthURL:   "/healthz",      // path on ServiceAddr, or a URL on its host
+	SpecURL:     "/openapi.json",
+}},
+```
+
+An instance that is not green is `WAITING` and gets no traffic;
+`SelfRegister` blocks and logs the reasons
+(`controlclient: waiting: billing/v1 red: health ...: status 503, want 200`).
+One that was green and fails later stops getting traffic while other
+instances of the line keep serving, and comes back on the next
+passing probe. `reg.Bindings()` carries `Verification` and
+`VerifyReasons`. `controlclient.LoadProfile("gwag.yaml", addr)` fills
+the `Service` list, these two fields included, from a profile file
+written by `gwag service init`. The whole pattern (profile, CI check,
+`gwag service wait --green`, services added by URL):
+[`integrate.md`](./integrate.md).
 
 ### Draining
 
@@ -543,6 +572,8 @@ In-process registration has no heartbeat, no start gate and no drain:
 the registration exists while the process runs.
 
 ## Related
+
+- [`integrate.md`](./integrate.md) — profile, `gwag service check`, verification, `gwag service wait --green`, services added by URL
 
 - [`cluster.md`](./cluster.md) — multi-node gateways.
 - [`lifecycle.md`](./lifecycle.md) — versions, deprecation, retirement, external dependents.
