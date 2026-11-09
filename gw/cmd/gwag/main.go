@@ -224,6 +224,14 @@ func main() {
 			os.Exit(drainCmd(os.Args[2:]))
 		case "key":
 			os.Exit(keyCmd(os.Args[2:]))
+		case "limit":
+			os.Exit(limitCmd(os.Args[2:]))
+		case "quota":
+			os.Exit(quotaCmd(os.Args[2:]))
+		case "cost":
+			os.Exit(costCmd(os.Args[2:]))
+		case "usage":
+			os.Exit(usageCmd(os.Args[2:]))
 		case "secret":
 			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
 		case "gen":
@@ -265,6 +273,8 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster (freeze|unfreeze|export|import) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag (limit|quota|cost) (set|delete|list) ...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag usage [--from DAY] [--to DAY] [--caller ID] [--service NS[:vN]] [--csv]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag schema (check|push) --registry ... FILE.proto...")
