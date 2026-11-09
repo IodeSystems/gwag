@@ -32,6 +32,8 @@ Role by operation:
 | `forgetPeer`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes |
 | `createAppKey`, `listAppKeys`, `revokeAppKey` (app keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes |
 | `listReplayDiffs`, and `POST /admin/replay/verify` (replay verification, see [cutover.md](./cutover.md)) | 401 | 403 | yes |
+| `getSwitchover` (switchover, see [cutover.md](./cutover.md#switchover)) | 401 | yes | yes |
+| `setSwitchover`, `clearSwitchover` | 401 | 403 | yes |
 
 A wrong bearer is 401 on every route, reads included, so a client
 learns at once that its token is stale. `GET /admin/whoami` returns

@@ -395,9 +395,11 @@ nodes and remove the old ones (replica swap). Both run two versions
 side by side for a while and end with `gwag cluster finalize`.
 
 A third way, a cutover to a separate cluster, is in progress:
-[`cutover.md`](./cutover.md). What exists is replay verification: the
+[`cutover.md`](./cutover.md). What exists is replay verification (the
 old cluster records requests with their upstream calls, the new one
-replays them without calling upstreams and reports what differs.
+replays them without calling upstreams and reports what differs) and
+switchover (the old cluster forwards a growing share of client
+requests to the new one).
 
 ### Rolling restart
 

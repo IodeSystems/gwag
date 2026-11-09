@@ -6,11 +6,18 @@ with other transforms or routing. This is not the replica swap in
 [`cluster.md`](./cluster.md#replica-swap), where new nodes join the
 same cluster.
 
-What exists now: **replay verification**. Blue records a sample of its
-requests with every upstream call they made; green runs each recorded
-request through its own pipeline, answers every upstream call from the
-recording, and reports what differs. Traffic shifting, the state copy
-and the final switch are not built yet.
+What exists now:
+
+- **Replay verification.** Blue records a sample of its requests with
+  every upstream call they made; green runs each recorded request
+  through its own pipeline, answers every upstream call from the
+  recording, and reports what differs.
+- **Switchover.** Blue forwards a share of client requests to green
+  and returns green's response. The share is set at runtime (5, 50,
+  100 percent) and a client stays on one side.
+
+The state copy and the final switch at the load balancer are not built
+yet.
 
 ## Replay verification
 
@@ -193,7 +200,218 @@ drops with green stuck; two gateways through the admin endpoint with
 token checks, the metric and the diffs route. Not tested: a real
 two-cluster deployment, load, and recordings near the size caps.
 
+## Switchover
+
+Clients keep calling blue. Blue sends a share of the GraphQL requests
+to green's GraphQL endpoint and returns green's response to the
+client. The request goes as the client sent it, with the client's
+headers (`Authorization`, caller-id headers): green authenticates the
+client itself. Blue needs no credential for green.
+
+### Which requests go to green
+
+Rules are like replay verification's match rules. The first rule that
+matches decides; a request that matches no rule stays on blue. With no
+rules every request matches at the global percent.
+
+| Rule field | Meaning |
+|---|---|
+| `OperationName` | the request's `operationName`, or the name of the document's only operation |
+| `Header`, `HeaderValue` | a header that must be present, and its value |
+| `Percent` | 1..100, the share for this rule; 0 uses the global percent |
+| `Exclude` | the matching requests stay on blue |
+
+A client stays on one side. Its key is the caller id
+([caller-identity.md](./caller-identity.md): `WithCallerIDPublic`,
+HMAC, delegated, or `WithCallerHeaders`), else the `StickyHeader`
+(for example `X-Client-Id`), else the source address (`RemoteAddr`
+without the port). The key goes to a bucket, `fnv32a(key) mod 100`;
+the request goes to green when the bucket is below the percent. The
+hash has no seed, so every blue node puts a client in the same bucket.
+A client's bucket never changes, so raising the percent only moves
+clients from blue to green, never back. Lowering it moves them back.
+A change of rules can move a client either way.
+
+Behind a proxy or load balancer, `RemoteAddr` is the proxy for every
+client: without a caller id or `StickyHeader`, all clients then share
+one bucket. Use `StickyHeader: "X-Forwarded-For"` when the proxy sets
+it.
+
+All rules use the client's one bucket. A client can be on green for
+one operation (a rule at 50) and on blue for another (a rule at 5).
+
+Forwarded: `POST` with `Content-Type: application/json`, one operation
+(not a batch), body up to `MaxBytes`; and WebSocket upgrades
+(`graphql-transport-ws`). A WebSocket upgrade has no operation name, so
+rules with `OperationName` do not match it. Not forwarded, served on
+blue: `GET` queries, multipart uploads, batches, larger bodies, the
+HTTP/JSON, gRPC and Connect ingresses, and requests that carry
+`X-Gwag-Switchover` (a request blue already forwarded; two gateways
+that point at each other do not loop).
+
+### Configure blue
+
+```go
+gw := gateway.New(
+    gateway.WithSwitchover(gateway.SwitchoverOptions{
+        Target:       "https://green.internal:8080/api/graphql",
+        StickyHeader: "X-Client-Id",
+        // Percent and Rules: the static share. Usually 0 here; the
+        // share is set at runtime.
+    }),
+)
+```
+
+`gwag up --switchover [--switchover-target URL] [--switchover-sticky-header NAME]`
+does the same for the binary.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `Target` | none | green's GraphQL URL. Empty: nothing is forwarded until `setSwitchover` sets one |
+| `Percent` | 0 | share (0..100) of matching requests sent to green |
+| `Rules` | none | see above |
+| `StickyHeader` | none | header used as the key when there is no caller id |
+| `Client` | no timeout, no redirects | HTTP client for green. A `Client.Timeout` also ends SSE responses |
+| `Timeout` | 30 s | until green's complete answer (SSE or `multipart/mixed`: until its headers) |
+| `MaxBytes` | 4 MiB | larger request bodies stay on blue |
+| `Keep`, `LogEvery` | 50, 10 s | recent green errors kept; least time between two error log lines |
+
+### Set the share at runtime
+
+```
+gwag cluster switchover --gateway http://blue:8080 --percent 5
+gwag cluster switchover --gateway http://blue:8080 --percent 50 --rule op=CreateOrder,exclude --rule percent=50
+gwag cluster switchover --gateway http://blue:8080              # show
+gwag cluster switchover --gateway http://blue:8080 --clear      # back to the static options
+```
+
+`--gateway` is blue's HTTP endpoint here, not the control-plane
+address. A rule spec is comma-separated `op=NAME`, `header=NAME`,
+`value=VALUE`, `percent=N`, `exclude`. `--target URL` sets green's URL
+when the gateway has none or it changes.
+
+Admin ops: `getSwitchover` (`GET /admin/switchover`, dev role),
+`setSwitchover` (`PUT /admin/switchover`, body
+`{target, percent, rules}`, admin role), `clearSwitchover`
+(`DELETE /admin/switchover`, admin role). The runtime setting replaces
+the static `Target` (when it sets one), `Percent` and `Rules` as a
+whole. A gateway without `WithSwitchover` answers 409.
+
+In a cluster the setting is stored in the `gwag-cluster` KV bucket,
+key `switchover`. Every node with `WithSwitchover` reads it from the
+stream leader once a second and applies it, so all blue nodes use the
+same share within about a second. The node that took the write applies
+it at once. A failed read keeps the setting in force. A node without
+`WithSwitchover` ignores the key. Standalone, the setting is in memory
+and is lost at restart.
+
+### When green fails
+
+Green failed when:
+
+| Reason | Meaning | Green ran the request? |
+|---|---|---|
+| `connect` | the request was not completely sent: dial, TLS or write error | no |
+| `timeout` | no complete answer within `Timeout` after the request was sent | maybe |
+| `transport` | the connection failed after the request was sent | maybe |
+| `status` | HTTP 5xx, 404, 405, 1xx or 3xx | maybe |
+| `bad_response` | the body is not JSON with `data` or `errors` (a login page, a proxy error page) | maybe |
+
+A response with `errors` from green's resolvers is not a failure: it
+is green's answer and goes to the client. So is a 4xx with a GraphQL
+body (gwag answers parse and validation errors that way). A
+compressed body (`Content-Encoding`) is passed on without the check.
+
+On a failure blue serves the request itself when that cannot run it
+twice:
+
+- a query or subscription: always;
+- a mutation: only for `connect`. For the other reasons green may
+  have run it; the client gets HTTP 502 with a GraphQL error
+  (`extensions.code` `unavailable`, `extensions.switchoverReason`). A
+  request whose operation type cannot be read (no query text, as with
+  a persisted document id; several operations and no
+  `operationName`) counts as a mutation.
+
+A client that disconnects is not a green failure; nothing is counted.
+
+Every failure is reported on blue:
+
+- `switchover_green_errors_total{reason}` and
+  `switchover_total{outcome=green|fallback|error|blue}` (default
+  Prometheus sink only);
+- a log line, at most one per `LogEvery`;
+- `GET /admin/switchover`: the setting this node applies, its outcome
+  and reason counts, and the last `Keep` errors with reason, outcome,
+  operation name and error text. Counts are per node.
+
+An SSE or `multipart/mixed` response streams to the client as it
+comes. A failure after its headers went to the client cannot fall
+back; it is counted as `transport` with outcome `green`.
+
+### WebSocket subscriptions
+
+The rule is applied when a connection opens. A connection that goes to
+green is proxied for its whole life; a percent change does not move
+it, and one that stays on blue stays there. Only new connections
+follow the new share. A dial error or an error status from green
+falls back to blue (nothing ran on green). Blue's `Drain` ends the
+proxied connections too.
+
+### What blue and green see
+
+- A forwarded request is not in blue's request metrics, request log or
+  replay recording: green serves it. `switchover_total` counts it on
+  blue. A request that fell back is served, measured and may be
+  recorded like any other.
+- Green sees blue as the source address. Blue sets
+  `X-Forwarded-For` (appended), `X-Forwarded-Host`,
+  `X-Forwarded-Proto` and `X-Gwag-Switchover: 1`. Green's
+  `WithWSLimit` per-IP limit counts every forwarded WebSocket as
+  blue's address.
+- Each forwarded request costs one more HTTP hop.
+
+### Runbook
+
+1. Green runs with the same services registered and the state copied
+   (state copy: not built yet). Replay verification shows no
+   unexpected diffs.
+2. Blue nodes run with `WithSwitchover` (or `gwag up --switchover`)
+   and green's `Target`, share 0.
+3. `gwag cluster switchover --percent 5`. Watch
+   `switchover_green_errors_total` on blue and green's own metrics.
+4. `--percent 50`, then `--percent 100`. Clients already on green stay
+   there at each step.
+5. If green fails: `--percent 0` (or `--clear`) sends every new
+   request back to blue at once. Open WebSocket connections to green
+   stay until they close.
+6. At 100, switch the load balancer to green and drain blue. This
+   step is not built yet (it is the next part of the cutover).
+
+### Limits
+
+- Blue reads the whole request body before it decides (up to
+  `MaxBytes`), and the whole of green's response before it writes it
+  (except SSE and `multipart/mixed`).
+- Green's response to a forwarded request is not compared with blue's.
+  Use replay verification for that.
+- A WebSocket connection to an `https` `Target` is not tested.
+
+Tested in `gw/switchover_test.go`: the bucket is stable per key,
+monotone in the percent, and puts about half of 2000 keys on green at
+50; rule order, `Exclude`, header values and the WebSocket case; the
+mutation check; each failure reason with a query (falls back) and a
+mutation (falls back only for `connect`, else 502); green's GraphQL
+errors and 4xx passed through; requests that stay on blue; two
+gateways at 0, 50 and 100 percent by caller id, sticky header and
+source address, client headers reaching green, green down (blue
+answers; metric, admin view); the admin ops and their roles; a
+WebSocket to green and its fallback; the setting moving between two
+cluster nodes through the KV bucket. `gwag cluster switchover` in
+`gw/cmd/gwag`. Not tested: a real two-cluster deployment, load, and
+the added latency.
+
 ## Next
 
-The rest of the cutover (traffic shift from blue to green, state copy,
-the final switch at the load balancer) is not built.
+The state copy and the final switch at the load balancer are not
+built.
