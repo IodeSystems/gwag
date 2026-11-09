@@ -76,7 +76,10 @@ type Instance struct {
 	InstanceID     string `json:"instanceId"`
 	Addr           string `json:"addr"`
 	State          string `json:"state"` // ready, waiting, degraded
-	Depends        []struct {
+	// Verification: none, pending, green, red (ServiceBinding.verify).
+	Verification  string   `json:"verification"`
+	VerifyReasons []string `json:"verifyReasons"`
+	Depends       []struct {
 		Service      string   `json:"service"`
 		Lines        []string `json:"lines"`
 		PresentLines []string `json:"presentLines"`

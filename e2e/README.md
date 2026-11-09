@@ -53,6 +53,7 @@ empty, the harness copies `ui/fallback/index.html` into it, the same way
 | `TestS12KafkaEvents` | the same channels over Kafka with the Schema Registry serde, services registered on a 3-node cluster: start gate, graph and sunset, Go group, TypeScript and Python delivery, Confluent's Java deserializer reads the records, `gwag gen --registry` import of a Confluent-written topic, retry topic and DLQ, gateway node loss |
 | `TestS13ReplicaSwap` | replica swap upgrade under load: 3 nodes on the v2.11.0 gateway, 3 at HEAD join one at a time, each old node is evacuated (after each, every stream at R3 and on no evacuated node), stopped and forgotten, then the cluster is finalized; no failed call, no lost event, state intact, every stream on the new nodes |
 | `TestS13bRollbackBeforeFinalize` | 2 HEAD nodes join a v2.11.0 cluster and leave again before finalize (the last with `evacuate --leave`); the old cluster keeps its level, streams and meta quorum |
+| `TestS15GatedDeploy` | two replicas register with a health URL and a spec URL (`--verify`); both green and `gwag service wait --green` exits 0; one replica's health fails: red with the reason, no traffic to it while the other serves, `service wait` for it exits 3, `service_verification{state="red"}` is 1; it recovers to green |
 
 `TestS11TypedEvents` runs the TypeScript listener when `node` (>= 24)
 and `pnpm` are on `PATH`, and the Python listener when `uv` is; it

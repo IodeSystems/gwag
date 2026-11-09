@@ -41,6 +41,7 @@ type FixtureOpts struct {
 	DrainOnSIGTERM bool          // --drain-on-sigterm
 	DrainTimeout   time.Duration // --drain-timeout
 	TTL            time.Duration // --ttl
+	Verify         bool          // --verify: HealthURL / SpecURL on the control listener
 	MaxConcurrency int           // --max-concurrency
 	// Proto maps a line to a .proto path registered instead of
 	// fixture.proto for that line (--proto LINE=PATH).
@@ -137,6 +138,9 @@ func (e *Env) Fixture(gw *Gateway, opts FixtureOpts) *Fixture {
 	if opts.TTL > 0 {
 		args = append(args, "--ttl", opts.TTL.String())
 	}
+	if opts.Verify {
+		args = append(args, "--verify")
+	}
 	if opts.MaxConcurrency > 0 {
 		args = append(args, "--max-concurrency", strconv.Itoa(opts.MaxConcurrency))
 	}
@@ -182,6 +186,7 @@ type Faults struct {
 	ErrorRate  float64 `json:"errorRate"`
 	Hang       bool    `json:"hang"`
 	CrashAfter int64   `json:"crashAfter"`
+	Unhealthy  bool    `json:"unhealthy"` // GET /healthz answers 500 (--verify)
 }
 
 // FixtureStats is GET /stats from the control listener.
