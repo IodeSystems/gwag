@@ -22,12 +22,18 @@ import (
 //   - dev: the dev token, or a delegate granting ADMIN_ROLE_DEV. Every
 //     admin read, unfiltered, plus the external-dependent writes.
 //   - admin: the boot token, or a delegate OK. Everything.
+//   - system: a system key (system_keys.go). Only the routes in
+//     systemKeyOps and systemKeyRoutes. Outside the order of the
+//     other three: it is below anonymous, so a check of the form
+//     role >= need never admits it.
 type adminRole int
 
 const (
 	adminRoleAnonymous adminRole = iota
 	adminRoleDev
 	adminRoleAdmin
+
+	adminRoleSystem adminRole = -1
 )
 
 func (r adminRole) String() string {
@@ -36,6 +42,8 @@ func (r adminRole) String() string {
 		return "admin"
 	case adminRoleDev:
 		return "dev"
+	case adminRoleSystem:
+		return "system"
 	}
 	return "anonymous"
 }
@@ -131,11 +139,13 @@ var adminDevWriteOps = map[string]bool{
 }
 
 // adminAdminReadOps are the GET admin operations only the admin role
-// may call: the app-key list, and the replay diffs (they carry client
-// and upstream payload values).
+// may call: the app-key list, the replay diffs (they carry client
+// and upstream payload values), and the cluster state export (it
+// carries the stored key hashes).
 var adminAdminReadOps = map[string]bool{
-	"listAppKeys":     true,
-	"listReplayDiffs": true,
+	"listAppKeys":        true,
+	"listReplayDiffs":    true,
+	"exportClusterState": true,
 }
 
 // adminOpNeed is the role an admin operation needs. Operations not
@@ -159,14 +169,21 @@ func adminOpNeed(op *huma.Operation) adminRole {
 type adminRouteTable struct {
 	mux  *http.ServeMux
 	need map[string]adminRole
+	// system holds the patterns a system key may call.
+	system map[string]bool
 }
 
 // indexAdminRoutes records the role of every operation in the admin
 // OpenAPI document. Called by AdminHumaRouter; a later call replaces
 // the table.
 func (g *Gateway) indexAdminRoutes(oapi *huma.OpenAPI) {
-	t := &adminRouteTable{mux: http.NewServeMux(), need: map[string]adminRole{}}
+	t := &adminRouteTable{mux: http.NewServeMux(), need: map[string]adminRole{}, system: map[string]bool{}}
 	noop := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	for _, pattern := range systemKeyRoutes {
+		t.mux.Handle(pattern, noop)
+		t.need[pattern] = adminRoleAdmin
+		t.system[pattern] = true
+	}
 	for path, item := range oapi.Paths {
 		for method, op := range map[string]*huma.Operation{
 			http.MethodGet: item.Get, http.MethodPut: item.Put, http.MethodPost: item.Post,
@@ -178,6 +195,7 @@ func (g *Gateway) indexAdminRoutes(oapi *huma.OpenAPI) {
 			pattern := method + " " + path
 			t.mux.Handle(pattern, noop)
 			t.need[pattern] = adminOpNeed(op)
+			t.system[pattern] = systemKeyOps[op.OperationID]
 		}
 	}
 	g.adminRoutes.Store(t)
@@ -200,6 +218,16 @@ func (g *Gateway) adminRouteNeed(r *http.Request) adminRole {
 		need = adminRoleAdmin
 	}
 	return need
+}
+
+// adminRouteSystem reports whether a system key may call r.
+func (g *Gateway) adminRouteSystem(r *http.Request) bool {
+	t := g.adminRoutes.Load()
+	if t == nil || g.isDestructiveRead(r.URL.Path) {
+		return false
+	}
+	_, pattern := t.mux.Handler(r)
+	return pattern != "" && t.system[pattern]
 }
 
 // adminAuthRoleRecorder is implemented by Metrics sinks that take the

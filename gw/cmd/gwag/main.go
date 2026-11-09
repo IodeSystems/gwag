@@ -34,6 +34,9 @@
 //	gwag peer evacuate --gateway localhost:50090 --wait NODE_ID
 //	gwag peer forget --gateway localhost:50090 NODE_ID
 //	gwag cluster finalize --gateway localhost:50090
+//	gwag cluster freeze --gateway http://blue:8080 --ttl 10m
+//	gwag cluster export --gateway http://blue:8080 > state.json
+//	gwag cluster import --gateway http://green:8080 state.json
 //	gwag drain --list --gateway localhost:50090
 //	gwag drain --wait --gateway localhost:50090 INSTANCE
 //
@@ -256,6 +259,7 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|evacuate|forget) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster finalize [--level N] [--dry-run]")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster (freeze|unfreeze|export|import) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
 		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")

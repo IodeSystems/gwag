@@ -65,6 +65,9 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 			// A PUT keeps the record of the last review.
 			x.ReviewedUnixMs, x.ReviewedBy = prev.ReviewedUnixMs, prev.ReviewedBy
 		}
+		if err := g.checkNotFrozen(ctx, "an external dependent write"); err != nil {
+			return nil, err
+		}
 		if err := g.putExternalDependent(ctx, x); err != nil {
 			return nil, err
 		}
@@ -102,6 +105,9 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		x.LastOp = changeOpReview
 		x.UpdatedUnixMs = now.UnixMilli()
 		x.UpdatedBy = x.ReviewedBy
+		if err := g.checkNotFrozen(ctx, "an external dependent review"); err != nil {
+			return nil, err
+		}
 		if err := g.putExternalDependent(ctx, x); err != nil {
 			return nil, err
 		}
@@ -117,6 +123,9 @@ func registerExternalDependents(api huma.API, g *Gateway) {
 		Path:        "/admin/external-dependents/{id}",
 		Summary:     "Delete an external dependent. Its pins stop counting at once. The hook and delta sinks record the caller's identity.",
 	}, func(ctx context.Context, in *externalDependentIDIn) (*deleteExternalDependentOut, error) {
+		if err := g.checkNotFrozen(ctx, "an external dependent delete"); err != nil {
+			return nil, err
+		}
 		ok, err := g.deleteExternalDependent(ctx, in.ID, adminIdentityFromContext(ctx))
 		if err != nil {
 			return nil, err

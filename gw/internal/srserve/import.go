@@ -51,6 +51,22 @@ type ImportResult struct {
 	// and served as they came, but a lookup matches them only by
 	// identical text.
 	Warnings []string `json:"warnings,omitempty"`
+	// Conflicts lists what differs (DryRun only; otherwise a conflict
+	// is an error).
+	Conflicts []string `json:"conflicts,omitempty"`
+}
+
+// ImportOptions changes what ImportWith allows.
+type ImportOptions struct {
+	// Default allows the default context. Only for a bundle another
+	// gwag registry's default context gave (Store.Bundle): its ids
+	// are gwag-allocated too, and a copy keeps them. Conflicts are
+	// refused as in any import.
+	Default bool
+	// DryRun checks the bundle and counts what an import would add,
+	// and writes nothing. Conflicts are returned in
+	// ImportResult.Conflicts, not as an error.
+	DryRun bool
 }
 
 // Import copies b into the store's context, keeping ids and versions.
@@ -60,8 +76,13 @@ type ImportResult struct {
 // from b's (an error naming every conflict). Importing the same bundle
 // again changes nothing.
 func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
+	return s.ImportWith(ctx, b, ImportOptions{})
+}
+
+// ImportWith is Import with options.
+func (s *Store) ImportWith(ctx context.Context, b Bundle, o ImportOptions) (ImportResult, error) {
 	var res ImportResult
-	if s.Default() {
+	if s.Default() && !o.Default {
 		return res, errf(codeOperationNotPermitted, "import into a named context (POST /contexts/.corp/gwag/import; gwag schema import --into .corp): the default context holds the ids gwag allocates")
 	}
 	byID := map[int]*ImportSchema{}
@@ -169,8 +190,17 @@ func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
 		}
 		c.add = append(c.add, versionRec{Version: v.Version, ID: v.ID, Deleted: v.Deleted})
 	}
+	sort.Strings(conflicts)
+	if o.DryRun {
+		res.Conflicts = conflicts
+		res.SchemasAdded = len(newID)
+		for _, c := range changes {
+			res.VersionsAdded += len(c.add)
+		}
+		sort.Strings(res.Warnings)
+		return res, nil
+	}
 	if len(conflicts) > 0 {
-		sort.Strings(conflicts)
 		return res, errf(codeConflict, "import conflicts, nothing written: %s", strings.Join(conflicts, "; "))
 	}
 
