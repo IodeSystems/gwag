@@ -94,6 +94,23 @@ service ControlPlane {
   // also removed from the JetStream meta group (its JetStream turns
   // off); stop it next.
   rpc EvacuatePeer(EvacuatePeerRequest) returns (EvacuatePeerResponse);
+
+  // AddServiceProfile registers a service the gateway pulls: it
+  // fetches the service profile (gwag.json) from url, fetches each
+  // provided spec from the service, and registers the service itself
+  // (no heartbeat from the service; the gateway holds the
+  // registration and verifies each binding like a pushed one). The
+  // profile URL is stored in the cluster, so the registration
+  // survives a gateway restart. Adding the same url again re-reads
+  // the profile. Operator RPC (admin token).
+  rpc AddServiceProfile(AddServiceProfileRequest) returns (AddServiceProfileResponse);
+
+  // RemoveServiceProfile drops a pulled service: the stored profile
+  // URL and the registration the gateway holds for it.
+  rpc RemoveServiceProfile(RemoveServiceProfileRequest) returns (RemoveServiceProfileResponse);
+
+  // ListServiceProfiles lists the pulled services.
+  rpc ListServiceProfiles(ListServiceProfilesRequest) returns (ListServiceProfilesResponse);
 }
 
 message RegisterRequest {
@@ -219,6 +236,31 @@ message ServiceBinding {
   // Dependency for the start gate and the sunset rule. Generated
   // event code reports these (Subscriptions()). Empty = none declared.
   repeated Subscription subscribes = 13;
+
+  // Verification: where each instance serves its health check and
+  // this binding's spec. When set, the gateway routes to an instance
+  // only after it verified it (address reachable, health 200, spec
+  // equal to the registered one) and re-verifies it periodically; a
+  // failing instance gets no traffic until it passes again. Unset =
+  // not verified (old clients).
+  Verify verify = 14;
+}
+
+// Verify names the URLs the gateway probes on each instance of a
+// binding. Each is a path ("/healthz"), resolved against the
+// instance's registered address, or an absolute http(s) URL whose
+// host is the registered address's host (the port may differ). The
+// gateway refuses any other host.
+message Verify {
+  // Must answer 200. Empty = only the address is checked.
+  string health_url = 1;
+  // Serves this binding's spec: OpenAPI (JSON or YAML), or for proto
+  // the .proto source, a FileDescriptorSet (binary or protojson).
+  // The fetched spec must equal the registered one, compared in
+  // canonical form; deprecation marks are ignored. Empty = the spec
+  // is not checked. GraphQL bindings ignore it: the gateway
+  // introspects graphql_endpoint again and compares.
+  string spec_url = 2;
 }
 
 // Subscription names one event channel a binding listens on.
@@ -309,6 +351,29 @@ message BindingStatus {
   string version = 2;
   InstanceState state = 3;
   repeated DependencyStatus depends = 4;
+  // Verification of this instance (ServiceBinding.verify). A binding
+  // that is not GREEN is reported WAITING (not routable); old clients
+  // therefore wait as they do for a missing dependency.
+  VerificationState verification = 5;
+  // Set when verification is RED (or PENDING after a failed first
+  // probe): one line per failed check.
+  repeated string verify_reasons = 6;
+}
+
+// VerificationState is the result of the gateway's probes of one
+// instance of a binding that declares ServiceBinding.verify.
+enum VerificationState {
+  // Not verified: the binding declares no verify, or the gateway
+  // predates verification.
+  VERIFICATION_STATE_UNSPECIFIED = 0;
+  // Not probed yet. Not routable.
+  VERIFICATION_STATE_PENDING = 1;
+  // Every check passed on the latest probe. Routable (when the start
+  // gate also passed).
+  VERIFICATION_STATE_GREEN = 2;
+  // A check failed on the latest probe. Not routable; other green
+  // instances of the line keep serving. Probed again until green.
+  VERIFICATION_STATE_RED = 3;
 }
 
 // InstanceStatus is the start-gate state of one registered instance
@@ -321,6 +386,11 @@ message InstanceStatus {
   string addr = 4;
   InstanceState state = 5;
   repeated DependencyStatus depends = 6;
+  // See BindingStatus.verification / verify_reasons.
+  VerificationState verification = 7;
+  repeated string verify_reasons = 8;
+  // Unix milliseconds of the latest probe; 0 = none yet.
+  int64 verified_unix_ms = 9;
 }
 
 message HeartbeatRequest {
@@ -669,4 +739,44 @@ message DrainInstanceResponse {
   uint32 inflight = 5;
   // The "namespace/version" lines the instance serves.
   repeated string lines = 6;
+}
+
+message AddServiceProfileRequest {
+  // http(s) URL of the service profile, e.g.
+  // http://billing:8080/.well-known/gwag.json.
+  string url = 1;
+}
+
+message AddServiceProfileResponse {
+  // The profile's service (namespace).
+  string service = 1;
+  // State of each provided binding right after registering.
+  repeated BindingStatus bindings = 2;
+}
+
+message RemoveServiceProfileRequest {
+  string url = 1;
+}
+
+message RemoveServiceProfileResponse {
+  // False when no profile with that url was stored.
+  bool removed = 1;
+}
+
+message ListServiceProfilesRequest {}
+
+message ListServiceProfilesResponse {
+  repeated ServiceProfile profiles = 1;
+}
+
+// ServiceProfile is one pulled service.
+message ServiceProfile {
+  string url = 1;
+  string service = 2;
+  int64 added_unix_ms = 3;
+  // The last error reading or registering the profile on the node
+  // that holds the registration; empty when it is registered.
+  string error = 4;
+  // The node that holds the registration (cluster); empty standalone.
+  string owner_node = 5;
 }

@@ -4,6 +4,8 @@
 # This file has been @generated
 
 __all__ = (
+    "AddServiceProfileRequest",
+    "AddServiceProfileResponse",
     "BindingStatus",
     "ControlPlaneBase",
     "ControlPlaneStub",
@@ -30,6 +32,8 @@ __all__ = (
     "ListPeersResponse",
     "ListRegistrationsRequest",
     "ListRegistrationsResponse",
+    "ListServiceProfilesRequest",
+    "ListServiceProfilesResponse",
     "ListServicesRequest",
     "ListServicesResponse",
     "Owner",
@@ -37,16 +41,21 @@ __all__ = (
     "RegisterRequest",
     "RegisterResponse",
     "Registration",
+    "RemoveServiceProfileRequest",
+    "RemoveServiceProfileResponse",
     "RetractStableRequest",
     "RetractStableResponse",
     "ServiceBinding",
     "ServiceInfo",
+    "ServiceProfile",
     "SignSubscriptionTokenRequest",
     "SignSubscriptionTokenResponse",
     "SubscribeAuthCode",
     "Subscription",
     "UndeprecateRequest",
     "UndeprecateResponse",
+    "VerificationState",
+    "Verify",
 )
 
 from dataclasses import dataclass
@@ -243,6 +252,88 @@ class SubscribeAuthCode(betterproto2.Enum):
         }
 
 
+class VerificationState(betterproto2.Enum):
+    """
+    VerificationState is the result of the gateway's probes of one
+    instance of a binding that declares ServiceBinding.verify.
+    """
+
+    UNSPECIFIED = 0
+    """
+    Not verified: the binding declares no verify, or the gateway
+    predates verification.
+    """
+
+    PENDING = 1
+    """
+    Not probed yet. Not routable.
+    """
+
+    GREEN = 2
+    """
+    Every check passed on the latest probe. Routable (when the start
+    gate also passed).
+    """
+
+    RED = 3
+    """
+    A check failed on the latest probe. Not routable; other green
+    instances of the line keep serving. Probed again until green.
+    """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "VERIFICATION_STATE_UNSPECIFIED",
+            1: "VERIFICATION_STATE_PENDING",
+            2: "VERIFICATION_STATE_GREEN",
+            3: "VERIFICATION_STATE_RED",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "VERIFICATION_STATE_UNSPECIFIED": 0,
+            "VERIFICATION_STATE_PENDING": 1,
+            "VERIFICATION_STATE_GREEN": 2,
+            "VERIFICATION_STATE_RED": 3,
+        }
+
+
+@dataclass(eq=False, repr=False)
+class AddServiceProfileRequest(betterproto2.Message):
+    url: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    http(s) URL of the service profile, e.g.
+    http://billing:8080/.well-known/gwag.json.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "AddServiceProfileRequest", AddServiceProfileRequest
+)
+
+
+@dataclass(eq=False, repr=False)
+class AddServiceProfileResponse(betterproto2.Message):
+    service: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    The profile's service (namespace).
+    """
+
+    bindings: "list[BindingStatus]" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+    """
+    State of each provided binding right after registering.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "AddServiceProfileResponse", AddServiceProfileResponse
+)
+
+
 @dataclass(eq=False, repr=False)
 class BindingStatus(betterproto2.Message):
     """
@@ -261,6 +352,23 @@ class BindingStatus(betterproto2.Message):
     depends: "list[DependencyStatus]" = betterproto2.field(
         4, betterproto2.TYPE_MESSAGE, repeated=True
     )
+
+    verification: "VerificationState" = betterproto2.field(
+        5, betterproto2.TYPE_ENUM, default_factory=lambda: VerificationState(0)
+    )
+    """
+    Verification of this instance (ServiceBinding.verify). A binding
+    that is not GREEN is reported WAITING (not routable); old clients
+    therefore wait as they do for a missing dependency.
+    """
+
+    verify_reasons: "list[str]" = betterproto2.field(
+        6, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    Set when verification is RED (or PENDING after a failed first
+    probe): one line per failed check.
+    """
 
 
 default_message_pool.register_message(
@@ -636,6 +744,22 @@ class InstanceStatus(betterproto2.Message):
         6, betterproto2.TYPE_MESSAGE, repeated=True
     )
 
+    verification: "VerificationState" = betterproto2.field(
+        7, betterproto2.TYPE_ENUM, default_factory=lambda: VerificationState(0)
+    )
+    """
+    See BindingStatus.verification / verify_reasons.
+    """
+
+    verify_reasons: "list[str]" = betterproto2.field(
+        8, betterproto2.TYPE_STRING, repeated=True
+    )
+
+    verified_unix_ms: "int" = betterproto2.field(9, betterproto2.TYPE_INT64)
+    """
+    Unix milliseconds of the latest probe; 0 = none yet.
+    """
+
 
 default_message_pool.register_message(
     "gateway.controlplane.v1", "InstanceStatus", InstanceStatus
@@ -702,6 +826,30 @@ class ListRegistrationsResponse(betterproto2.Message):
 
 default_message_pool.register_message(
     "gateway.controlplane.v1", "ListRegistrationsResponse", ListRegistrationsResponse
+)
+
+
+@dataclass(eq=False, repr=False)
+class ListServiceProfilesRequest(betterproto2.Message):
+    pass
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "ListServiceProfilesRequest", ListServiceProfilesRequest
+)
+
+
+@dataclass(eq=False, repr=False)
+class ListServiceProfilesResponse(betterproto2.Message):
+    profiles: "list[ServiceProfile]" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1",
+    "ListServiceProfilesResponse",
+    ListServiceProfilesResponse,
 )
 
 
@@ -905,6 +1053,33 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class RemoveServiceProfileRequest(betterproto2.Message):
+    url: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1",
+    "RemoveServiceProfileRequest",
+    RemoveServiceProfileRequest,
+)
+
+
+@dataclass(eq=False, repr=False)
+class RemoveServiceProfileResponse(betterproto2.Message):
+    removed: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+    """
+    False when no profile with that url was stored.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1",
+    "RemoveServiceProfileResponse",
+    RemoveServiceProfileResponse,
+)
+
+
+@dataclass(eq=False, repr=False)
 class RetractStableRequest(betterproto2.Message):
     namespace: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
     """
@@ -1093,6 +1268,18 @@ class ServiceBinding(betterproto2.Message):
     event code reports these (Subscriptions()). Empty = none declared.
     """
 
+    verify: "Verify | None" = betterproto2.field(
+        14, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Verification: where each instance serves its health check and
+    this binding's spec. When set, the gateway routes to an instance
+    only after it verified it (address reachable, health 200, spec
+    equal to the registered one) and re-verifies it periodically; a
+    failing instance gets no traffic until it passes again. Unset =
+    not verified (old clients).
+    """
+
 
 default_message_pool.register_message(
     "gateway.controlplane.v1", "ServiceBinding", ServiceBinding
@@ -1175,6 +1362,35 @@ class ServiceInfo(betterproto2.Message):
 
 default_message_pool.register_message(
     "gateway.controlplane.v1", "ServiceInfo", ServiceInfo
+)
+
+
+@dataclass(eq=False, repr=False)
+class ServiceProfile(betterproto2.Message):
+    """
+    ServiceProfile is one pulled service.
+    """
+
+    url: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    service: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+    added_unix_ms: "int" = betterproto2.field(3, betterproto2.TYPE_INT64)
+
+    error: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
+    """
+    The last error reading or registering the profile on the node
+    that holds the registration; empty when it is registered.
+    """
+
+    owner_node: "str" = betterproto2.field(5, betterproto2.TYPE_STRING)
+    """
+    The node that holds the registration (cluster); empty standalone.
+    """
+
+
+default_message_pool.register_message(
+    "gateway.controlplane.v1", "ServiceProfile", ServiceProfile
 )
 
 
@@ -1302,6 +1518,35 @@ class UndeprecateResponse(betterproto2.Message):
 default_message_pool.register_message(
     "gateway.controlplane.v1", "UndeprecateResponse", UndeprecateResponse
 )
+
+
+@dataclass(eq=False, repr=False)
+class Verify(betterproto2.Message):
+    """
+    Verify names the URLs the gateway probes on each instance of a
+    binding. Each is a path ("/healthz"), resolved against the
+    instance's registered address, or an absolute http(s) URL whose
+    host is the registered address's host (the port may differ). The
+    gateway refuses any other host.
+    """
+
+    health_url: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    Must answer 200. Empty = only the address is checked.
+    """
+
+    spec_url: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    Serves this binding's spec: OpenAPI (JSON or YAML), or for proto
+    the .proto source, a FileDescriptorSet (binary or protojson).
+    The fetched spec must equal the registered one, compared in
+    canonical form; deprecation marks are ignored. Empty = the spec
+    is not checked. GraphQL bindings ignore it: the gateway
+    introspects graphql_endpoint again and compares.
+    """
+
+
+default_message_pool.register_message("gateway.controlplane.v1", "Verify", Verify)
 
 
 class ControlPlaneStub(betterproto2_grpclib.ServiceStub):
@@ -1654,6 +1899,80 @@ class ControlPlaneStub(betterproto2_grpclib.ServiceStub):
             metadata=metadata,
         )
 
+    async def add_service_profile(
+        self,
+        message: "AddServiceProfileRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "AddServiceProfileResponse":
+        """
+        AddServiceProfile registers a service the gateway pulls: it
+        fetches the service profile (gwag.json) from url, fetches each
+        provided spec from the service, and registers the service itself
+        (no heartbeat from the service; the gateway holds the
+        registration and verifies each binding like a pushed one). The
+        profile URL is stored in the cluster, so the registration
+        survives a gateway restart. Adding the same url again re-reads
+        the profile. Operator RPC (admin token).
+        """
+
+        return await self._unary_unary(
+            "/gateway.controlplane.v1.ControlPlane/AddServiceProfile",
+            message,
+            AddServiceProfileResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def remove_service_profile(
+        self,
+        message: "RemoveServiceProfileRequest",
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "RemoveServiceProfileResponse":
+        """
+        RemoveServiceProfile drops a pulled service: the stored profile
+        URL and the registration the gateway holds for it.
+        """
+
+        return await self._unary_unary(
+            "/gateway.controlplane.v1.ControlPlane/RemoveServiceProfile",
+            message,
+            RemoveServiceProfileResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def list_service_profiles(
+        self,
+        message: "ListServiceProfilesRequest | None" = None,
+        *,
+        timeout: "float | None" = None,
+        deadline: "Deadline | None" = None,
+        metadata: "MetadataLike | None" = None,
+    ) -> "ListServiceProfilesResponse":
+        """
+        ListServiceProfiles lists the pulled services.
+        """
+
+        if message is None:
+            message = ListServiceProfilesRequest()
+
+        return await self._unary_unary(
+            "/gateway.controlplane.v1.ControlPlane/ListServiceProfiles",
+            message,
+            ListServiceProfilesResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
     """
@@ -1814,6 +2133,41 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
 
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
+    async def add_service_profile(
+        self, message: "AddServiceProfileRequest"
+    ) -> "AddServiceProfileResponse":
+        """
+        AddServiceProfile registers a service the gateway pulls: it
+        fetches the service profile (gwag.json) from url, fetches each
+        provided spec from the service, and registers the service itself
+        (no heartbeat from the service; the gateway holds the
+        registration and verifies each binding like a pushed one). The
+        profile URL is stored in the cluster, so the registration
+        survives a gateway restart. Adding the same url again re-reads
+        the profile. Operator RPC (admin token).
+        """
+
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def remove_service_profile(
+        self, message: "RemoveServiceProfileRequest"
+    ) -> "RemoveServiceProfileResponse":
+        """
+        RemoveServiceProfile drops a pulled service: the stored profile
+        URL and the registration the gateway holds for it.
+        """
+
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_service_profiles(
+        self, message: "ListServiceProfilesRequest"
+    ) -> "ListServiceProfilesResponse":
+        """
+        ListServiceProfiles lists the pulled services.
+        """
+
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
     async def __rpc_register(
         self, stream: "grpclib.server.Stream[RegisterRequest, RegisterResponse]"
     ) -> None:
@@ -1931,6 +2285,33 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
         response = await self.evacuate_peer(request)
         await stream.send_message(response)
 
+    async def __rpc_add_service_profile(
+        self,
+        stream: "grpclib.server.Stream[AddServiceProfileRequest, AddServiceProfileResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        assert request is not None
+        response = await self.add_service_profile(request)
+        await stream.send_message(response)
+
+    async def __rpc_remove_service_profile(
+        self,
+        stream: "grpclib.server.Stream[RemoveServiceProfileRequest, RemoveServiceProfileResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        assert request is not None
+        response = await self.remove_service_profile(request)
+        await stream.send_message(response)
+
+    async def __rpc_list_service_profiles(
+        self,
+        stream: "grpclib.server.Stream[ListServiceProfilesRequest, ListServiceProfilesResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        assert request is not None
+        response = await self.list_service_profiles(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> "dict[str, grpclib.const.Handler]":
         return {
             "/gateway.controlplane.v1.ControlPlane/Register": grpclib.const.Handler(
@@ -2016,5 +2397,23 @@ class ControlPlaneBase(betterproto2_grpclib.ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 EvacuatePeerRequest,
                 EvacuatePeerResponse,
+            ),
+            "/gateway.controlplane.v1.ControlPlane/AddServiceProfile": grpclib.const.Handler(
+                self.__rpc_add_service_profile,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                AddServiceProfileRequest,
+                AddServiceProfileResponse,
+            ),
+            "/gateway.controlplane.v1.ControlPlane/RemoveServiceProfile": grpclib.const.Handler(
+                self.__rpc_remove_service_profile,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                RemoveServiceProfileRequest,
+                RemoveServiceProfileResponse,
+            ),
+            "/gateway.controlplane.v1.ControlPlane/ListServiceProfiles": grpclib.const.Handler(
+                self.__rpc_list_service_profiles,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListServiceProfilesRequest,
+                ListServiceProfilesResponse,
             ),
         }

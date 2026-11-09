@@ -33,6 +33,9 @@ const (
 	ControlPlane_DrainInstance_FullMethodName         = "/gateway.controlplane.v1.ControlPlane/DrainInstance"
 	ControlPlane_FinalizeCluster_FullMethodName       = "/gateway.controlplane.v1.ControlPlane/FinalizeCluster"
 	ControlPlane_EvacuatePeer_FullMethodName          = "/gateway.controlplane.v1.ControlPlane/EvacuatePeer"
+	ControlPlane_AddServiceProfile_FullMethodName     = "/gateway.controlplane.v1.ControlPlane/AddServiceProfile"
+	ControlPlane_RemoveServiceProfile_FullMethodName  = "/gateway.controlplane.v1.ControlPlane/RemoveServiceProfile"
+	ControlPlane_ListServiceProfiles_FullMethodName   = "/gateway.controlplane.v1.ControlPlane/ListServiceProfiles"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -119,6 +122,20 @@ type ControlPlaneClient interface {
 	// also removed from the JetStream meta group (its JetStream turns
 	// off); stop it next.
 	EvacuatePeer(ctx context.Context, in *EvacuatePeerRequest, opts ...grpc.CallOption) (*EvacuatePeerResponse, error)
+	// AddServiceProfile registers a service the gateway pulls: it
+	// fetches the service profile (gwag.json) from url, fetches each
+	// provided spec from the service, and registers the service itself
+	// (no heartbeat from the service; the gateway holds the
+	// registration and verifies each binding like a pushed one). The
+	// profile URL is stored in the cluster, so the registration
+	// survives a gateway restart. Adding the same url again re-reads
+	// the profile. Operator RPC (admin token).
+	AddServiceProfile(ctx context.Context, in *AddServiceProfileRequest, opts ...grpc.CallOption) (*AddServiceProfileResponse, error)
+	// RemoveServiceProfile drops a pulled service: the stored profile
+	// URL and the registration the gateway holds for it.
+	RemoveServiceProfile(ctx context.Context, in *RemoveServiceProfileRequest, opts ...grpc.CallOption) (*RemoveServiceProfileResponse, error)
+	// ListServiceProfiles lists the pulled services.
+	ListServiceProfiles(ctx context.Context, in *ListServiceProfilesRequest, opts ...grpc.CallOption) (*ListServiceProfilesResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -269,6 +286,36 @@ func (c *controlPlaneClient) EvacuatePeer(ctx context.Context, in *EvacuatePeerR
 	return out, nil
 }
 
+func (c *controlPlaneClient) AddServiceProfile(ctx context.Context, in *AddServiceProfileRequest, opts ...grpc.CallOption) (*AddServiceProfileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddServiceProfileResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_AddServiceProfile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) RemoveServiceProfile(ctx context.Context, in *RemoveServiceProfileRequest, opts ...grpc.CallOption) (*RemoveServiceProfileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveServiceProfileResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_RemoveServiceProfile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) ListServiceProfiles(ctx context.Context, in *ListServiceProfilesRequest, opts ...grpc.CallOption) (*ListServiceProfilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListServiceProfilesResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_ListServiceProfiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -353,6 +400,20 @@ type ControlPlaneServer interface {
 	// also removed from the JetStream meta group (its JetStream turns
 	// off); stop it next.
 	EvacuatePeer(context.Context, *EvacuatePeerRequest) (*EvacuatePeerResponse, error)
+	// AddServiceProfile registers a service the gateway pulls: it
+	// fetches the service profile (gwag.json) from url, fetches each
+	// provided spec from the service, and registers the service itself
+	// (no heartbeat from the service; the gateway holds the
+	// registration and verifies each binding like a pushed one). The
+	// profile URL is stored in the cluster, so the registration
+	// survives a gateway restart. Adding the same url again re-reads
+	// the profile. Operator RPC (admin token).
+	AddServiceProfile(context.Context, *AddServiceProfileRequest) (*AddServiceProfileResponse, error)
+	// RemoveServiceProfile drops a pulled service: the stored profile
+	// URL and the registration the gateway holds for it.
+	RemoveServiceProfile(context.Context, *RemoveServiceProfileRequest) (*RemoveServiceProfileResponse, error)
+	// ListServiceProfiles lists the pulled services.
+	ListServiceProfiles(context.Context, *ListServiceProfilesRequest) (*ListServiceProfilesResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -404,6 +465,15 @@ func (UnimplementedControlPlaneServer) FinalizeCluster(context.Context, *Finaliz
 }
 func (UnimplementedControlPlaneServer) EvacuatePeer(context.Context, *EvacuatePeerRequest) (*EvacuatePeerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EvacuatePeer not implemented")
+}
+func (UnimplementedControlPlaneServer) AddServiceProfile(context.Context, *AddServiceProfileRequest) (*AddServiceProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddServiceProfile not implemented")
+}
+func (UnimplementedControlPlaneServer) RemoveServiceProfile(context.Context, *RemoveServiceProfileRequest) (*RemoveServiceProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveServiceProfile not implemented")
+}
+func (UnimplementedControlPlaneServer) ListServiceProfiles(context.Context, *ListServiceProfilesRequest) (*ListServiceProfilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServiceProfiles not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -678,6 +748,60 @@ func _ControlPlane_EvacuatePeer_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_AddServiceProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddServiceProfileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).AddServiceProfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_AddServiceProfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).AddServiceProfile(ctx, req.(*AddServiceProfileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_RemoveServiceProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveServiceProfileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).RemoveServiceProfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_RemoveServiceProfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).RemoveServiceProfile(ctx, req.(*RemoveServiceProfileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_ListServiceProfiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServiceProfilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).ListServiceProfiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_ListServiceProfiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).ListServiceProfiles(ctx, req.(*ListServiceProfilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -740,6 +864,18 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EvacuatePeer",
 			Handler:    _ControlPlane_EvacuatePeer_Handler,
+		},
+		{
+			MethodName: "AddServiceProfile",
+			Handler:    _ControlPlane_AddServiceProfile_Handler,
+		},
+		{
+			MethodName: "RemoveServiceProfile",
+			Handler:    _ControlPlane_RemoveServiceProfile_Handler,
+		},
+		{
+			MethodName: "ListServiceProfiles",
+			Handler:    _ControlPlane_ListServiceProfiles_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
