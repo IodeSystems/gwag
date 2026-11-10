@@ -19,7 +19,7 @@ export function graphql(hljs: HLJSApi): Language {
   const directive: Mode = { scope: 'meta', match: /@[_A-Za-z]\w*/ };
   const typeRef: Mode = {
     scope: 'type',
-    match: /[A-Z_]\w*/,
+    match: /[_A-Za-z]\w*/,
     keywords: { built_in: ['String', 'Int', 'Float', 'Boolean', 'ID'] },
   };
   // Built-in scalars get their own scope; everything else in a type position is a type.
@@ -69,7 +69,7 @@ export function graphql(hljs: HLJSApi): Language {
         begin: /:\s*(?=[[A-Za-z_])/,
         beginScope: 'punctuation',
         end: /(?=[\s,)=@#}])/,
-        contains: [scalar, literal, typeRef, punct],
+        contains: [scalar, literal, typeRef, { scope: 'punctuation', match: /[[\]!]/ }],
       },
       number,
       literal,
