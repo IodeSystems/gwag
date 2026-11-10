@@ -9,10 +9,34 @@ type AdminMutationNamespace {
   clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
+  deleteCost(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_DeleteExternalDependentOutBody
+  deleteQuota(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
+  deleteRateLimit(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   dismissNotification(
     """Item id from the list, e.g. hook-failed-12-acme."""
@@ -47,6 +71,9 @@ type AdminMutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setCost(body: admin_CostInBodyInput!): admin_LimitRecord
+  setQuota(body: admin_QuotaInBodyInput!): admin_LimitRecord
+  setRateLimit(body: admin_RateLimitInBodyInput!): admin_LimitRecord
   setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   stable: AdminStableMutationNamespace!
@@ -70,12 +97,24 @@ type AdminQueryNamespace {
   getClusterFreeze: admin_FreezeInfo
   getClusterMirror: admin_MirrorView
   getSwitchover: admin_SwitchoverView
+  getUsage(
+    caller: String
+    """csv: text/csv, one row per line with a header."""
+    format: admin_getUsageFormat
+    """First UTC day, YYYY-MM-DD. Default: 6 days before to."""
+    from: String
+    """ns or ns:vN."""
+    service: String
+    """Last UTC day, YYYY-MM-DD. Default: today."""
+    to: String
+  ): admin_UsageReport
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listLimits: admin_LimitsOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listReplayDiffs: admin_ReplayDiffsOutBody
@@ -103,10 +142,34 @@ type AdminStableMutationNamespace {
   clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
+  deleteCost(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_DeleteExternalDependentOutBody
+  deleteQuota(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
+  deleteRateLimit(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   dismissNotification(
     """Item id from the list, e.g. hook-failed-12-acme."""
@@ -141,6 +204,9 @@ type AdminStableMutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setCost(body: admin_CostInBodyInput!): admin_LimitRecord
+  setQuota(body: admin_QuotaInBodyInput!): admin_LimitRecord
+  setRateLimit(body: admin_RateLimitInBodyInput!): admin_LimitRecord
   setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   startClusterMirror(body: admin_MirrorInBodyInput!): admin_MirrorView
@@ -162,12 +228,24 @@ type AdminStableQueryNamespace {
   getClusterFreeze: admin_FreezeInfo
   getClusterMirror: admin_MirrorView
   getSwitchover: admin_SwitchoverView
+  getUsage(
+    caller: String
+    """csv: text/csv, one row per line with a header."""
+    format: admin_getUsageFormat
+    """First UTC day, YYYY-MM-DD. Default: 6 days before to."""
+    from: String
+    """ns or ns:vN."""
+    service: String
+    """Last UTC day, YYYY-MM-DD. Default: today."""
+    to: String
+  ): admin_UsageReport
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listLimits: admin_LimitsOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listReplayDiffs: admin_ReplayDiffsOutBody
@@ -193,10 +271,34 @@ type AdminV1MutationNamespace {
   clearSwitchover: admin_SwitchoverView
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
+  deleteCost(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deleteExternalDependent(
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_DeleteExternalDependentOutBody
+  deleteQuota(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
+  deleteRateLimit(
+    """Quotas: the caller id."""
+    caller: String
+    """Quotas: the default quota."""
+    default: Boolean
+    operation: String
+    service: String
+  ): admin_LimitDeleteOutBody
   deprecate(body: admin_DeprecateInBodyInput!, namespace: String!, version: String!): admin_DeprecateOutBody
   dismissNotification(
     """Item id from the list, e.g. hook-failed-12-acme."""
@@ -231,6 +333,9 @@ type AdminV1MutationNamespace {
   ): admin_PutExternalDependentOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
+  setCost(body: admin_CostInBodyInput!): admin_LimitRecord
+  setQuota(body: admin_QuotaInBodyInput!): admin_LimitRecord
+  setRateLimit(body: admin_RateLimitInBodyInput!): admin_LimitRecord
   setSwitchover(body: admin_SetSwitchoverInBodyInput!): admin_SwitchoverView
   signSubscriptionToken(body: admin_SignInBodyInput!): admin_SignOutBody
   startClusterMirror(body: admin_MirrorInBodyInput!): admin_MirrorView
@@ -252,12 +357,24 @@ type AdminV1QueryNamespace {
   getClusterFreeze: admin_FreezeInfo
   getClusterMirror: admin_MirrorView
   getSwitchover: admin_SwitchoverView
+  getUsage(
+    caller: String
+    """csv: text/csv, one row per line with a header."""
+    format: admin_getUsageFormat
+    """First UTC day, YYYY-MM-DD. Default: 6 days before to."""
+    from: String
+    """ns or ns:vN."""
+    service: String
+    """Last UTC day, YYYY-MM-DD. Default: today."""
+    to: String
+  ): admin_UsageReport
   listAppKeys: admin_AppKeysOutBody
   listBindings: admin_BindingsOutBody
   listChannels: admin_ChannelsOutBody
   listExternalDependents: admin_ExternalDependentsOutBody
   listInjectors: admin_InjectorsOutBody
   listInstances: admin_InstancesOutBody
+  listLimits: admin_LimitsOutBody
   listNotifications: admin_NotificationsOutBody
   listPeers: admin_PeersOutBody
   listReplayDiffs: admin_ReplayDiffsOutBody
@@ -501,6 +618,8 @@ type admin_ClusterState {
   frozen: Boolean
   """App and system keys as stored: id, kind, namespaces, SHA-256 hash of the key, expiry. The keys themselves are not stored anywhere."""
   keys: [admin_AppKeyRecord!]
+  """Operator rate limits, quotas and costs."""
+  limits: [admin_LimitRecord!]
   """Cluster node name of the gateway that exported."""
   node: String
   schemaRegistry: admin_CutoverRegistry
@@ -521,6 +640,8 @@ input admin_ClusterStateInput {
   frozen: Boolean
   """App and system keys as stored: id, kind, namespaces, SHA-256 hash of the key, expiry. The keys themselves are not stored anywhere."""
   keys: [admin_AppKeyRecordInput!]
+  """Operator rate limits, quotas and costs."""
+  limits: [admin_LimitRecordInput!]
   """Cluster node name of the gateway that exported."""
   node: String
   schemaRegistry: admin_CutoverRegistryInput
@@ -528,6 +649,12 @@ input admin_ClusterStateInput {
   """Document version: 1."""
   v: Long!
   warnings: [String!]
+}
+
+input admin_CostInBodyInput {
+  operation: String!
+  service: String!
+  units: Int!
 }
 
 input admin_CreateAppKeyInBodyInput {
@@ -988,6 +1115,7 @@ type admin_ImportResult {
   dryRun: Boolean!
   externalDependents: admin_ImportCounts!
   keys: admin_ImportCounts!
+  limits: admin_ImportCounts!
   schemaRegistry: admin_ImportRegistryCounts!
   stable: admin_ImportCounts!
   warnings: [String!]
@@ -1096,6 +1224,61 @@ enum admin_InstanceInfoVerification {
 
 type admin_InstancesOutBody {
   instances: [admin_InstanceDrainInfo!]
+}
+
+type admin_LimitDeleteOutBody {
+  deleted: Boolean!
+}
+
+type admin_LimitRecord {
+  burst: Long
+  caller: String
+  cost: Int
+  default: Boolean
+  kind: String!
+  limit: Long
+  namespace: String
+  operation: String
+  perMs: Long
+  rps: Float
+  setBy: String
+  setUnixMs: Long
+  units: Boolean
+  version: String
+}
+
+input admin_LimitRecordInput {
+  burst: Long
+  caller: String
+  cost: Int
+  default: Boolean
+  kind: String!
+  limit: Long
+  namespace: String
+  operation: String
+  perMs: Long
+  rps: Float
+  setBy: String
+  setUnixMs: Long
+  units: Boolean
+  version: String
+}
+
+type admin_LimitView {
+  """code (a ServiceOption) or admin (set through the admin API; replaces a code value for the same scope)."""
+  source: String!
+}
+
+type admin_LimitsOutBody {
+  limits: [admin_LimitView!]
+  """Services paused on this node after an upstream 429."""
+  pauses: [admin_PauseView!]
+  """Peer count this node divides rate limits and short-window quotas by."""
+  peers: Long!
+  """WithQuota is configured: the _quota_auth/v1 delegate decides quotas and built-in quotas are not checked."""
+  quotaDelegate: Boolean!
+  """The usage report is on (WithUsage)."""
+  usage: Boolean!
 }
 
 type admin_ManifestDependency {
@@ -1263,6 +1446,14 @@ type admin_OwnerInfo {
   team: String!
 }
 
+type admin_PauseView {
+  namespace: String!
+  remainingMs: Long!
+  """RFC 3339."""
+  until: String!
+  version: String!
+}
+
 type admin_PeerInfo {
   joinedUnixMs: Long!
   maxLevel: Int!
@@ -1297,6 +1488,32 @@ type admin_PutExternalDependentOutBody {
   externalDependent: admin_ExternalDependentInfo!
   """Pins on a service or line not registered now (accepted)."""
   warnings: [String!]
+}
+
+input admin_QuotaInBodyInput {
+  """Caller id. Exactly one of caller and default."""
+  caller: String
+  """The quota of every caller without one of its own at this scope."""
+  default: Boolean
+  limit: Long!
+  operation: String
+  """Window: 1s, 1m, 1h, 1d (Go duration or Nd), at most 24h."""
+  per: String!
+  """ns or ns:vN; empty: every service together."""
+  service: String
+  """Count operation cost units instead of calls."""
+  units: Boolean
+}
+
+input admin_RateLimitInBodyInput {
+  """Bucket size, cluster-wide."""
+  burst: Long!
+  """Operation name (OpenAPI operationId, proto method, GraphQL field, MCP tool). Empty: every operation together."""
+  operation: String
+  """Calls per second, cluster-wide."""
+  rps: Float!
+  """ns or ns:vN. Without a version the limit covers every version together."""
+  service: String!
 }
 
 type admin_Reference {
@@ -1651,6 +1868,21 @@ type admin_UsageEdgesOutBody {
   window: String!
 }
 
+type admin_UsageReport {
+  from: String!
+  rows: [admin_UsageRow!]
+  to: String!
+}
+
+type admin_UsageRow {
+  caller: String!
+  """UTC day, YYYY-MM-DD."""
+  day: String!
+  namespace: String!
+  operation: String!
+  version: String!
+}
+
 type admin_UsageServiceRow {
   callerCount: Long!
   lastSeenUnixMs: Long!
@@ -1669,4 +1901,10 @@ enum admin_WhoamiOutBodyRole {
   admin
   anonymous
   dev
+}
+
+"""csv: text/csv, one row per line with a header."""
+enum admin_getUsageFormat {
+  csv
+  json
 }
