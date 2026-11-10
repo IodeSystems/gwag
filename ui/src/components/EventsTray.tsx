@@ -7,6 +7,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useEvents } from '@/providers/EventsProvider';
+import { CodeBlock } from '@/ui';
 
 interface EventsTrayProps {
   open: boolean;
@@ -65,18 +66,8 @@ export default function EventsTray({ open, onClose }: EventsTrayProps) {
                     {new Date(e.receivedAt).toLocaleTimeString()}
                   </Typography>
                 </Stack>
-                <Box
-                  component="pre"
-                  sx={{
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    m: 0,
-                    mt: 0.5,
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {previewPayload(e.payload)}
+                <Box sx={{ fontSize: 11, mt: 0.5, wordBreak: 'break-word' }}>
+                  <CodeBlock bare wrap language="json" code={previewPayload(e.payload)} />
                 </Box>
               </Box>
             ))}

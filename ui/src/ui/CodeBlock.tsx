@@ -1,7 +1,70 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, IconButton, Tooltip, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
+import type { Theme } from '@mui/material/styles';
+import hljs from 'highlight.js/lib/core';
+import bash from 'highlight.js/lib/languages/bash';
+import graphql from 'highlight.js/lib/languages/graphql';
+import json from 'highlight.js/lib/languages/json';
+import protobuf from 'highlight.js/lib/languages/protobuf';
+import yaml from 'highlight.js/lib/languages/yaml';
+
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('graphql', graphql);
+hljs.registerLanguage('json', json);
+hljs.registerLanguage('protobuf', protobuf);
+hljs.registerLanguage('yaml', yaml);
+
+/** Map a source-kind label to a registered hljs language; undefined = plain. */
+const aliases: Record<string, string> = {
+  graphql: 'graphql',
+  gql: 'graphql',
+  sdl: 'graphql',
+  proto: 'protobuf',
+  protobuf: 'protobuf',
+  json: 'json',
+  openapi: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  bash: 'bash',
+  sh: 'bash',
+};
+
+/** Above this size highlighting is skipped so large SDL cannot freeze the page. */
+export const HIGHLIGHT_MAX_BYTES = 200 * 1024;
+
+/** Token colours come from the active theme, so every preset and mode is covered. */
+function tokenStyles(t: Theme) {
+  const { status, tokens } = t.gwag;
+  const c = {
+    keyword: tokens.primary,
+    type: status.waiting.fg,
+    string: status.ready.fg,
+    number: status.degraded.fg,
+    attr: status.draining.fg,
+    meta: status.sunsetable.fg,
+    comment: tokens.textMuted,
+    error: tokens.error,
+  };
+  return {
+    '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in': { color: c.keyword },
+    '& .hljs-type, & .hljs-class .hljs-title, & .hljs-title.class_, & .hljs-title': { color: c.type },
+    '& .hljs-string, & .hljs-regexp, & .hljs-symbol': { color: c.string },
+    '& .hljs-number, & .hljs-literal, & .hljs-bullet': { color: c.number },
+    '& .hljs-attr, & .hljs-attribute, & .hljs-variable, & .hljs-params, & .hljs-property': {
+      color: c.attr,
+    },
+    '& .hljs-meta, & .hljs-meta .hljs-keyword, & .hljs-doctag, & .hljs-section, & .hljs-name': {
+      color: c.meta,
+    },
+    '& .hljs-comment, & .hljs-quote': { color: c.comment, fontStyle: 'italic' },
+    '& .hljs-punctuation, & .hljs-operator': { color: tokens.textMuted },
+    '& .hljs-deletion': { color: c.error },
+    '& .hljs-emphasis': { fontStyle: 'italic' },
+    '& .hljs-strong': { fontWeight: 700 },
+  };
+}
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -56,9 +119,43 @@ export interface CodeBlockProps {
   maxHeight?: number | string;
   /** Wrap long lines instead of scrolling horizontally. */
   wrap?: boolean;
+  /** Drop the frame and header; render just the highlighted code. */
+  bare?: boolean;
 }
 
-export function CodeBlock({ code, language, maxHeight = 360, wrap }: CodeBlockProps) {
+export function CodeBlock({ code, language, maxHeight = 360, wrap, bare }: CodeBlockProps) {
+  const html = useMemo(() => {
+    const lang = language ? aliases[language.toLowerCase()] : undefined;
+    if (!lang || code.length > HIGHLIGHT_MAX_BYTES) return undefined;
+    try {
+      return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+    } catch {
+      return undefined;
+    }
+  }, [code, language]);
+  const codeEl =
+    html === undefined ? (
+      <code>{code}</code>
+    ) : (
+      <code dangerouslySetInnerHTML={{ __html: html }} />
+    );
+  if (bare) {
+    return (
+      <Box
+        component="pre"
+        sx={(t) => ({
+          m: 0,
+          fontFamily: t.gwag.mono,
+          fontSize: 'inherit',
+          whiteSpace: wrap ? 'pre-wrap' : 'pre',
+          overflowWrap: wrap ? 'anywhere' : undefined,
+          ...tokenStyles(t),
+        })}
+      >
+        {codeEl}
+      </Box>
+    );
+  }
   return (
     <Box
       sx={(t) => ({
@@ -88,19 +185,20 @@ export function CodeBlock({ code, language, maxHeight = 360, wrap }: CodeBlockPr
       <Box
         component="pre"
         tabIndex={0}
-        sx={{
+        sx={(t) => ({
+          ...tokenStyles(t),
           m: 0,
           p: 1.5,
           maxHeight,
           overflow: 'auto',
-          fontFamily: (t) => t.gwag.mono,
+          fontFamily: t.gwag.mono,
           fontSize: '0.75rem',
           lineHeight: 1.6,
           whiteSpace: wrap ? 'pre-wrap' : 'pre',
           overflowWrap: wrap ? 'anywhere' : undefined,
-        }}
+        })}
       >
-        <code>{code}</code>
+        {codeEl}
       </Box>
     </Box>
   );
