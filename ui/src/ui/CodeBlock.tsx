@@ -5,10 +5,9 @@ import CheckIcon from '@mui/icons-material/Check';
 import type { Theme } from '@mui/material/styles';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
-import graphql from 'highlight.js/lib/languages/graphql';
 import json from 'highlight.js/lib/languages/json';
-import protobuf from 'highlight.js/lib/languages/protobuf';
 import yaml from 'highlight.js/lib/languages/yaml';
+import { graphql, protobuf } from './hljsLangs';
 
 hljs.registerLanguage('bash', bash);
 hljs.registerLanguage('graphql', graphql);
@@ -37,30 +36,32 @@ export const HIGHLIGHT_MAX_BYTES = 200 * 1024;
 /** Token colours come from the active theme, so every preset and mode is covered. */
 function tokenStyles(t: Theme) {
   const { status, tokens } = t.gwag;
+  // Distinct hues per token class. Graphite has no accent colour, so hues
+  // come from the status palette (all >= 4.5:1 on the sunken surface).
   const c = {
-    keyword: tokens.primary,
+    keyword: status.draining.fg,
+    title: status.degraded.fg,
     type: status.waiting.fg,
     string: status.ready.fg,
-    number: status.degraded.fg,
-    attr: status.draining.fg,
+    number: tokens.error,
     meta: status.sunsetable.fg,
     comment: tokens.textMuted,
-    error: tokens.error,
   };
   return {
-    '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in': { color: c.keyword },
-    '& .hljs-type, & .hljs-class .hljs-title, & .hljs-title.class_, & .hljs-title': { color: c.type },
+    '& .hljs-keyword, & .hljs-selector-tag': { color: c.keyword, fontWeight: 600 },
+    '& .hljs-title': { color: c.title },
+    '& .hljs-type': { color: c.type },
+    '& .hljs-built_in': { color: c.type, fontStyle: 'italic' },
     '& .hljs-string, & .hljs-regexp, & .hljs-symbol': { color: c.string },
-    '& .hljs-number, & .hljs-literal, & .hljs-bullet': { color: c.number },
+    '& .hljs-number': { color: c.number },
+    '& .hljs-literal, & .hljs-bullet': { color: c.meta },
     '& .hljs-attr, & .hljs-attribute, & .hljs-variable, & .hljs-params, & .hljs-property': {
-      color: c.attr,
+      color: tokens.text,
     },
-    '& .hljs-meta, & .hljs-meta .hljs-keyword, & .hljs-doctag, & .hljs-section, & .hljs-name': {
-      color: c.meta,
-    },
+    '& .hljs-meta, & .hljs-doctag, & .hljs-section, & .hljs-name': { color: c.meta },
     '& .hljs-comment, & .hljs-quote': { color: c.comment, fontStyle: 'italic' },
-    '& .hljs-punctuation, & .hljs-operator': { color: tokens.textMuted },
-    '& .hljs-deletion': { color: c.error },
+    '& .hljs-punctuation, & .hljs-operator': { color: c.comment },
+    '& .hljs-deletion': { color: tokens.error },
     '& .hljs-emphasis': { fontStyle: 'italic' },
     '& .hljs-strong': { fontWeight: 700 },
   };
