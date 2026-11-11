@@ -318,8 +318,22 @@ func TestSSOProviderErrorPage(t *testing.T) {
 	rec := h.callback(state, c, "&error=access_denied&error_description="+url.QueryEscape("<script>x</script>"))
 	noSession(t, rec, http.StatusUnauthorized)
 	body := rec.Body.String()
-	if !strings.Contains(body, "access_denied") || strings.Contains(body, "<script>") {
+	if !strings.Contains(body, "(access_denied)") || strings.Contains(body, "script") {
 		t.Errorf("error page = %s", body)
+	}
+	// The description is never shown; a code that is not one is not
+	// shown either.
+	for _, extra := range []string{
+		"&error=access_denied&error_description=" + url.QueryEscape("Call +1 555 0100 to unlock"),
+		"&error=" + url.QueryEscape("Visit evil.example now"),
+		"&error=" + strings.Repeat("a", 65),
+	} {
+		c, state := h.login(t)
+		body := h.callback(state, c, extra).Body.String()
+		if strings.Contains(body, "555") || strings.Contains(body, "evil") || strings.Contains(body, "aaaa") ||
+			!strings.Contains(body, "The provider did not complete the sign-in") {
+			t.Errorf("%s: error page = %s", extra, body)
+		}
 	}
 }
 

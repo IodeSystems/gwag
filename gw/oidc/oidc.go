@@ -43,6 +43,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,10 @@ const (
 	// clockSkew is how far a provider's clock may run ahead of ours.
 	clockSkew = time.Minute
 )
+
+// oauthErrorCode is the form of an error code the callback page may
+// show.
+var oauthErrorCode = regexp.MustCompile(`^[a-z_]{1,64}$`)
 
 // DefaultScopes are requested when Config.Scopes is empty.
 var DefaultScopes = []string{"openid", "email", "profile"}
@@ -357,12 +362,16 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
-		msg := e
-		if d := q.Get("error_description"); d != "" {
-			msg += ": " + d
+		// Anyone can put text in these parameters: the page shows a
+		// fixed message and the error code only when it looks like one
+		// (RFC 6749 codes are lower case and underscores); the
+		// description goes to the log.
+		slog.Warn("sso: provider returned an error", "error", e, "description", q.Get("error_description"))
+		msg := "The provider did not complete the sign-in."
+		if oauthErrorCode.MatchString(e) {
+			msg = "The provider did not complete the sign-in (" + e + ")."
 		}
-		slog.Warn("sso: provider returned an error", "error", e)
-		errorPage(w, http.StatusUnauthorized, "Sign-in was not completed", "The provider said: "+msg)
+		errorPage(w, http.StatusUnauthorized, "Sign-in was not completed", msg+" Start again, or ask the operator to check the gateway log.")
 		return
 	}
 	var sp statePayload
