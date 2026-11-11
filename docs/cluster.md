@@ -321,7 +321,7 @@ can break the older ones, so such a change is gated on the cluster's
 feature level, an integer in the `gwag-cluster` KV bucket.
 
 - Each binary runs at a range of levels and publishes it, with its
-  version, in its peers entry. This version: 0-1. A gateway older than
+  version, in its peers entry. This version: 0-2. A gateway older than
   feature levels (v2.11.0 and before) publishes none and counts as
   0-0.
 - A new cluster starts at the highest level its first node supports. A
@@ -341,6 +341,11 @@ bucket that has them, and v2.11.0 sends such updates. At level 0 an
 expired key leaves each node by the sweeps, 30-45 s after it expired,
 instead of by its marker; a forgotten peer leaves every node at once
 (the forget deletes its key).
+
+Level 2 adds the `gwag-admin-sessions` bucket: the key that signs SSO
+session cookies and the revocation cutoffs
+([admin-auth.md](./admin-auth.md#sso)). Below it, SSO sign-in is
+refused with a message that names the level.
 
 ```
 $ gwag peer list --gateway localhost:51094

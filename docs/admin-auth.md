@@ -30,7 +30,7 @@ Role by operation:
 | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph` | public only | yes | yes | 403 |
 | `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand`, `getClusterFreeze` | 401 | yes | yes | 403 |
 | `putExternalDependent`, `deleteExternalDependent`, `reviewExternalDependent`, `listNotifications`, `dismissNotification` | 401 | yes | yes | 403 |
-| `forgetPeer`, `evacuatePeer`, `finalizeCluster`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken` | 401 | 403 | yes | 403 |
+| `forgetPeer`, `evacuatePeer`, `finalizeCluster`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken`, `revokeAdminSessions` | 401 | 403 | yes | 403 |
 | `createAppKey`, `createSystemKey`, `listAppKeys`, `revokeAppKey` (app and system keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes | 403 |
 | `freezeCluster`, `unfreezeCluster` (cutover freeze) | 401 | 403 | yes | 403 |
 | `listReplayDiffs` (replay verification, see [cutover.md](./cutover.md)) | 401 | 403 | yes | 403 |
@@ -119,6 +119,121 @@ gw.AddOpenAPIBytes(adminSpec,
     gateway.As("admin"),
     gateway.To("http://localhost:8080/api"))
 ```
+
+## SSO
+
+People can sign in to the admin UI with an OpenID Connect provider
+instead of pasting a token. The session is a cookie; the role comes
+from rules on the email and groups the provider sends. Tokens keep
+working, and a request that presents a bearer is checked by the bearer
+alone.
+
+```
+GWAG_SSO_CLIENT_SECRET=... gwag up \
+  --sso-issuer https://idp.example.com/realms/ops \
+  --sso-client-id gwag \
+  --sso-rule group:gwag-admins=admin \
+  --sso-rule domain:example.com=dev
+```
+
+| Flag | Default | |
+|---|---|---|
+| `--sso-issuer` | (off) | Issuer URL; discovery at `<issuer>/.well-known/openid-configuration`. A trailing slash difference is tolerated. |
+| `--sso-client-id` | | Client registered at the provider. |
+| `--sso-client-secret-env` | `GWAG_SSO_CLIENT_SECRET` | Variable that holds the secret. Unset or empty: a public client, PKCE only. |
+| `--sso-redirect-url` | from the request | Callback registered at the provider. Default: `/auth/callback` on the address the browser used; `X-Forwarded-Proto` and `X-Forwarded-Host` from a proxy are honoured. |
+| `--sso-scopes` | `openid,email,profile` | Add `groups` (or what the provider calls it) for group rules. |
+| `--sso-groups-claim` | `groups` | Claim that lists the groups, read from the ID token, else from userinfo. |
+| `--sso-rule` | | `KIND:VALUE=ROLE`, repeatable, first match wins. Kinds: `email:alice@example.com`, `domain:example.com` (exact; not subdomains), `group:NAME` (case-sensitive). Roles: `admin`, `dev`. |
+| `--sso-allow-unverified-email` | off | Admit an email without `email_verified`. |
+| `--sso-session-ttl` | `12h` | Session lifetime. |
+
+The example gateway (`examples/multi`) takes the same flags. From Go:
+`oidc.New(oidc.Config{...})` in `gw/oidc`, then
+`gateway.WithAdminSession(sso)`, `sso.Mount(mux, gw)`, and
+`gateway.ForwardHeaders(gateway.AdminForwardHeaders...)` on the admin
+self-ingest (without it, `admin` GraphQL fields called with a cookie
+reach `/admin/*` as anonymous). The gateway core does not import
+`gw/oidc`; go-oidc and x/oauth2 are linked only into binaries that do.
+
+**Routes.** `GET /auth/login` starts the flow, `GET /auth/callback`
+ends it, `POST /auth/logout` clears the cookie (same-origin only),
+`GET /auth/whoami` (public) returns
+`{"sso":true,"authenticated":true,"email":"...","role":"admin","via":"sso"}`,
+with `"error"` when SSO cannot be used now. Bearer tokens are not
+reported there; `GET /api/admin/whoami` reports the role for both.
+
+**Flow.** Authorization code with PKCE (S256), state and nonce. The
+flow state is a signed cookie for 10 minutes on `/auth/`. The ID token
+is checked for signature (JWKS), issuer, audience, expiry (1 min skew),
+nonce and an issued-at not in the future. Missing email in the ID
+token: userinfo is asked, and its answer is used only when its `sub`
+is the token's.
+
+**Sign-in refused** (a page says why, no cookie is set) when the email
+is missing, when it is not verified (unless
+`--sso-allow-unverified-email`), or when no rule matches.
+
+**Session.** Cookie `gwag_session`: HMAC-SHA256 over
+`{email, groups, issued, expiry}`, `HttpOnly`, `SameSite=Lax`, `Path=/`,
+`Secure` on TLS, behind a proxy sending `X-Forwarded-Proto: https`, or
+with an https redirect URL. Only the groups that a rule names are kept,
+so a provider that sends hundreds stays under the 4 KB cookie limit;
+a group added to the rules later needs a fresh sign-in. The rules are
+evaluated on every request, so a changed rule applies at once. The
+subject is recorded as `admin:alice@example.com` on the writes that
+keep an audit identity.
+
+**CSRF.** A request authenticated by the cookie is accepted on GET and
+HEAD. Any other method needs `Sec-Fetch-Site: same-origin`; a missing
+header is refused (403), so a non-browser client must use a bearer. A
+WebSocket upgrade (the `admin_events` subscription) needs an `Origin`
+whose host is the request `Host` or the first `X-Forwarded-Host`. The
+`admin` GraphQL fields forward `Cookie` and `Sec-Fetch-Site` to
+`/admin/*`, so the same rule applies to them. A mutation sent as a
+cross-site GET is refused there too.
+
+**Revoke.** `POST /admin/sessions/revoke` `{"subject":"alice@example.com"}`
+(admin, GraphQL `admin.revokeAdminSessions`) refuses every session of
+that email issued until now, on every node. `"*"` revokes everyone's.
+Signing in again works.
+
+**Shared state.** The signing key and the revocation cutoffs live in
+the KV bucket `gwag-admin-sessions` (no TTL), so a cookie minted on one
+node passes on every other. The bucket exists from
+[cluster feature level](./cluster.md#feature-levels) 2. Below it,
+SSO is off: `/auth/login` answers 503 with the reason and
+`/auth/whoami` carries it in `error`. Run `gwag cluster finalize` once
+every node runs this version. Standalone (no cluster), the key is
+`<adminDataDir>/session-key` and the cutoffs
+`<adminDataDir>/admin-sessions.json` (in memory without a data dir).
+To end every session, revoke `"*"`.
+
+**Not covered.** The Schema Registry REST routes and the control plane
+take bearers only.
+
+### Provider setup
+
+Register a web application client with the redirect URI
+`https://<gateway host>/auth/callback` (or what `--sso-redirect-url`
+says).
+
+- **Keycloak.** Client `gwag`, client authentication on, standard flow
+  on, valid redirect URI `https://gw.example.com/auth/callback`. Issuer
+  `https://kc.example.com/realms/<realm>`. For group rules, add a
+  "Group Membership" mapper (token claim name `groups`, full group path
+  off to get `gwag-admins` rather than `/gwag-admins`).
+- **Google.** OAuth client of type "Web application", authorized
+  redirect URI as above. Issuer `https://accounts.google.com`. Google
+  sends no groups claim: use `email:` and `domain:` rules. Every Gmail
+  account can sign in at Google, so a rule decides who gets in.
+- **Microsoft Entra ID.** App registration, platform "Web", redirect URI
+  as above, a client secret. Issuer
+  `https://login.microsoftonline.com/<tenant id>/v2.0`. For group
+  rules, token configuration → add groups claim; Entra sends group
+  object ids, so the rule is `group:<object id>=admin`. A user in more
+  than 200 groups gets no groups claim in the token (Entra's overage
+  rule); assign the app to groups to keep it under the limit.
 
 ## Pluggable AdminAuthorizer delegate
 
