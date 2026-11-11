@@ -109,7 +109,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
             </Button>
           </Toolbar>
         </AppBar>
-        <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+        <Box component="main" sx={{ flexGrow: 1, minWidth: 0, p: 3 }}>
           <Toolbar />
           <Alert severity="info" sx={{ mb: 2 }}>
             Public view: only services marked public are shown, without
@@ -186,7 +186,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
           </List>
         </Box>
       </Drawer>
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+      <Box component="main" sx={{ flexGrow: 1, minWidth: 0, p: 3 }}>
         <Toolbar />
         {children}
       </Box>

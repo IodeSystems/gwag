@@ -235,6 +235,7 @@ function DotStrip({
         alignItems: 'center',
         gap: '2px',
         flexWrap: 'nowrap',
+        minWidth: 120,
         overflow: 'hidden',
       }}
     >
@@ -292,8 +293,9 @@ function Dot({ kind, title }: { kind: DotKind; title: string }) {
     <Tooltip title={title} placement="top" arrow disableInteractive>
       <Box
         sx={{
-          flex: '0 0 auto',
-          width: 10,
+          flex: '1 1 0',
+          minWidth: 2,
+          maxWidth: 10,
           height: 16,
           borderRadius: '2px',
           backgroundColor: (t) => dotColor(t, kind),
