@@ -117,7 +117,7 @@ function GraphPage() {
     <Box>
       <PageHeader
         title="Dependency graph"
-        meta={graph && <EnvBadge name={graph.environment || undefined} />}
+        meta={graph?.environment ? <EnvBadge name={graph.environment} /> : undefined}
         subtitle={
           <>
             Declared dependencies (solid) and observed calls (dashed). Traffic counts are from this gateway node
