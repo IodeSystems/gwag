@@ -9,7 +9,12 @@ const GW = 'http://127.0.0.1:28500';
 const OTHER = 'http://127.0.0.1:28599'; // a second origin, served here
 const RUN = process.env.SSO_RUN;
 const GWAG = process.env.GWAG_BIN;
-const PASS = { // fixtures, same as dex.yaml
+const IDP = process.env.IDP || 'dex';
+const PHASE = process.env.SSO_PHASE || 'main';
+const KC = 'http://127.0.0.1:28557';
+const PASS = IDP === 'keycloak' ? Object.fromEntries( // fixtures: the realm file is the only copy
+  JSON.parse(readFileSync(new URL('./keycloak-realm.json', import.meta.url), 'utf8')).users
+    .map((u) => [u.email, u.credentials[0].value])) : { // fixtures, same as dex.yaml
   'admin@example.test': 'admin-pass-7f3k',
   'dev@example.test': 'dev-pass-2q9m',
   'stranger@other.test': 'stranger-pass-5x1v',
@@ -94,9 +99,10 @@ async function dexLogin(p, email) {
 const submit = (p) => p.eval(`document.querySelector('button[type=submit]').click()`);
 
 const ADMIN_OP = ['/api/admin/mcp/auto-include', 'POST', { autoInclude: false }];
+const GQL = ['/api/graphql', 'POST', { query: 'mutation { admin { mcpSetAutoInclude(body: {autoInclude: false}) { autoInclude } } }' }];
 const DEV_OP = ['/api/admin/notifications/no-such-id/dismiss', 'POST']; // dev or admin; 404 = allowed, no such item
 
-try {
+async function dexSuite() {
   // ---- browser: admin ----
   let p = await newPage();
   await p.goto(GW + '/');
@@ -121,7 +127,6 @@ try {
   check('/api/admin/whoami role admin', aw.role === 'admin', JSON.stringify(aw));
   let s = await status(p, ...ADMIN_OP);
   check('admin mutation same-origin from UI page', s === 200, 'HTTP ' + s);
-  const GQL = ['/api/graphql', 'POST', { query: 'mutation { admin { mcpSetAutoInclude(body: {autoInclude: false}) { autoInclude } } }' }];
   let g = JSON.parse((await p.eval(api(...GQL))).text);
   check('admin mutation through GraphQL (cookie + Sec-Fetch-Site forwarded)', !g.errors && g.data?.admin?.mcpSetAutoInclude?.autoInclude === false, JSON.stringify(g));
   s = await status(p, ...DEV_OP);
@@ -182,7 +187,11 @@ try {
   check('unmatched user: denied page, no session', !ws3.authenticated && /denied|not allowed|no role|refused|rule/i.test(body), body.slice(0, 120));
   await p.close();
 
-  // ---- CLI ----
+  await cliSuite('admin@example.test', async (p) => { await dexLogin(p, 'admin@example.test'); await submit(p); });
+}
+
+async function cliSuite(email, loginFn) {
+  let p;
   const cli = join(RUN, 'cli'); rmSync(cli, { recursive: true, force: true }); mkdirSync(cli, { recursive: true });
   const env = { ...process.env, XDG_CONFIG_HOME: join(cli, 'xdg'), HOME: cli };
   const run = (args) => new Promise((res) => {
@@ -197,10 +206,10 @@ try {
   check('CLI printed sign-in URL', !!u, lout);
   p = await newPage();
   await p.goto(u);
-  await dexLogin(p, 'admin@example.test'); await submit(p);
+  await loginFn(p);
   const code = await Promise.race([done, sleep(30000).then(() => 'timeout')]);
   check('CLI login exits 0', code === 0, lout);
-  check('CLI prints email and role', /admin@example\.test/.test(lout) && /admin/.test(lout), lout);
+  check('CLI prints email and role', lout.includes(email) && /admin/.test(lout), lout);
   await p.shot('5-cli-done').catch(() => {});
   await p.close();
   const credPath = [join(cli, '.gw/credentials.json')].find(existsSync);
@@ -216,6 +225,134 @@ try {
   // the ended bearer: replay it directly
   const res = await fetch(GW + ADMIN_OP[0], { method: 'POST', headers: { authorization: 'Bearer ' + tok, 'content-type': 'application/json' }, body: '{"autoInclude":false}' });
   check('ended bearer refused', res.status === 401 || res.status === 403, 'HTTP ' + res.status);
+}
+
+// ---- Keycloak ----
+const U = (n) => n + '@corp.test';
+async function kcLogin(p, email) {
+  await p.until(`!!document.querySelector('#username')`, 'keycloak login form');
+  await p.eval(`document.querySelector('#username').value=${JSON.stringify(email)};document.querySelector('#password').value=${JSON.stringify(PASS[email])};`);
+  await p.eval(`document.querySelector('#kc-login').click()`);
+}
+const whoami = async (p) => JSON.parse((await p.eval(api('/auth/whoami'))).text);
+// Fresh context, sign in through the gateway, land back on it.
+async function signIn(email) {
+  const p = await newPage();
+  await p.goto(GW + '/auth/login');
+  await kcLogin(p, email);
+  await p.until(`location.origin==='${GW}'`, 'back at gateway');
+  await sleep(500);
+  return p;
+}
+async function kcAdminToken() {
+  const r = await fetch(KC + '/realms/master/protocol/openid-connect/token', { method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'password', client_id: 'admin-cli', username: process.env.KC_ADMIN_USER, password: process.env.KC_ADMIN_PASS }) });
+  if (!r.ok) throw new Error('keycloak admin token: HTTP ' + r.status);
+  return (await r.json()).access_token;
+}
+async function kcRemoveFromGroup(email, group) {
+  const h = { authorization: 'Bearer ' + await kcAdminToken() };
+  const users = await (await fetch(`${KC}/admin/realms/gwag/users?email=${encodeURIComponent(email)}&exact=true`, { headers: h })).json();
+  const groups = await (await fetch(`${KC}/admin/realms/gwag/groups?search=${group}&exact=true`, { headers: h })).json();
+  if (users.length !== 1 || !groups.length) throw new Error('user or group not found');
+  const r = await fetch(`${KC}/admin/realms/gwag/users/${users[0].id}/groups/${groups[0].id}`, { method: 'DELETE', headers: h });
+  return r.status;
+}
+// Role as the gateway sees it: whoami, then an admin op and a dev op.
+async function roleChecks(p, name, email, role) {
+  const w = await whoami(p);
+  check(`${name}: whoami ${email}, role ${role}, via sso`, w.authenticated && w.email === email && w.role === role && w.via === 'sso', JSON.stringify(w));
+  const s = await status(p, ...ADMIN_OP);
+  check(`${name}: admin op ${role === 'admin' ? 'allowed' : 'refused'}`, s === (role === 'admin' ? 200 : 403), 'HTTP ' + s);
+  const d = await status(p, ...DEV_OP);
+  check(`${name}: dev op allowed`, d === 404, 'HTTP ' + d);
+}
+async function denied(name, email, shot) {
+  const p = await newPage();
+  await p.goto(GW + '/auth/login');
+  await kcLogin(p, email);
+  await p.until(`location.origin==='${GW}' && location.pathname.startsWith('/auth/')`, 'denied page');
+  await sleep(300);
+  if (shot) await p.shot(shot);
+  const body = await p.eval('document.body.innerText');
+  const w = await whoami(p);
+  check(`${name}: denied page, no session`, !w.authenticated && /denied|not allowed|no role|refused|rule/i.test(body), body.slice(0, 120));
+  await p.close();
+}
+
+async function kcSuite() {
+  // admin-group user, through the UI
+  let p = await newPage();
+  await p.goto(GW + '/');
+  await p.until(`!!document.querySelector('[aria-label="sign in with SSO"]')`, 'SSO button');
+  await p.eval(`document.querySelector('[aria-label="sign in with SSO"]').click()`);
+  await p.until(`!!document.querySelector('#username')`, 'keycloak form');
+  await sleep(300);
+  await p.shot('kc-1-form');
+  await kcLogin(p, U('grp-admin'));
+  await p.until(`location.origin==='${GW}' && !!document.querySelector('[aria-label="sign out"]')`, 'signed-in header');
+  let chip = true;
+  await p.until(`/\\bAdmin\\b/.test(document.querySelector('header')?.innerText ?? '')`, 'Admin chip', 8000).catch(() => { chip = false; });
+  await sleep(1000);
+  await p.shot('kc-2-admin');
+  check('gwag-admins member: UI role chip reads Admin', chip, await p.eval(`document.querySelector('header')?.innerText`));
+  await roleChecks(p, 'gwag-admins', U('grp-admin'), 'admin');
+  const g = JSON.parse((await p.eval(api(...GQL))).text);
+  check('gwag-admins: admin mutation through GraphQL', !g.errors && g.data?.admin?.mcpSetAutoInclude?.autoInclude === false, JSON.stringify(g));
+  await p.close();
+
+  p = await signIn(U('grp-dev'));
+  await roleChecks(p, 'gwag-devs', U('grp-dev'), 'dev');
+  const dg = JSON.parse((await p.eval(api(...GQL))).text);
+  check('gwag-devs: admin mutation through GraphQL refused', !!dg.errors && dg.data?.admin?.mcpSetAutoInclude == null, JSON.stringify(dg));
+  await p.shot('kc-3-dev');
+  await p.close();
+
+  p = await signIn(U('grp-both'));
+  await roleChecks(p, 'both groups (admin rule first)', U('grp-both'), 'admin');
+  await p.close();
+
+  await denied('no group', U('grp-none'), 'kc-4-denied');
+
+  // group change: remove from gwag-admins while signed in
+  p = await signIn(U('grp-demote'));
+  await roleChecks(p, 'demote user before change', U('grp-demote'), 'admin');
+  const st = await kcRemoveFromGroup(U('grp-demote'), 'gwag-admins');
+  check('keycloak admin REST: removed from gwag-admins (204)', st === 204, 'HTTP ' + st);
+  const w = await whoami(p);
+  const s = await status(p, ...ADMIN_OP);
+  console.log(`INFO  after removal, same cookie: role=${w.role}, admin op HTTP ${s}`);
+  check('documented: groups live in the cookie, role stays admin until re-sign-in', w.role === 'admin' && s === 200, JSON.stringify(w) + ' HTTP ' + s);
+  await p.eval(api('/auth/logout', 'POST'));
+  await p.goto(GW + '/auth/login'); // Keycloak's own session is still open: no form
+  await p.until(`location.origin==='${GW}' && !location.pathname.startsWith('/auth/login')`, 'back at gateway', 30000).catch(() => {});
+  if (await p.eval(`!!document.querySelector('#username')`)) await kcLogin(p, U('grp-demote'));
+  await p.until(`location.origin==='${GW}'`, 'back at gateway');
+  await sleep(500);
+  await roleChecks(p, 'demote user after re-sign-in (now only gwag-devs)', U('grp-demote'), 'dev');
+  await p.close();
+
+  await cliSuite(U('grp-admin'), async (p) => { await kcLogin(p, U('grp-admin')); });
+}
+
+async function kcClaimSuite() {
+  // gateway runs with --sso-groups-claim roles_groups, rules on full paths
+  // (/gwag-admins), dev rule first. Only the roles_groups mapper emits paths.
+  let p = await signIn(U('grp-admin'));
+  await roleChecks(p, 'claim roles_groups: admin group', U('grp-admin'), 'admin');
+  await p.close();
+  p = await signIn(U('grp-dev'));
+  await roleChecks(p, 'claim roles_groups: dev group', U('grp-dev'), 'dev');
+  await p.close();
+  p = await signIn(U('grp-both'));
+  await roleChecks(p, 'claim roles_groups, dev rule first: both groups -> dev', U('grp-both'), 'dev');
+  await p.close();
+  await denied('claim roles_groups: no group', U('grp-none'));
+}
+
+try {
+  await (IDP === 'keycloak' ? (PHASE === 'claim' ? kcClaimSuite() : kcSuite()) : dexSuite());
 } catch (e) {
   console.log('FAIL  exception: ' + (e.stack || e));
   failed++;

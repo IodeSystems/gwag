@@ -291,8 +291,25 @@ says).
 - **Keycloak.** Client `gwag`, client authentication on, standard flow
   on, valid redirect URI `https://gw.example.com/auth/callback`. Issuer
   `https://kc.example.com/realms/<realm>`. For group rules, add a
-  "Group Membership" mapper (token claim name `groups`, full group path
-  off to get `gwag-admins` rather than `/gwag-admins`).
+  "Group Membership" mapper to the client (Client scopes → `gwag-dedicated`
+  → Add mapper → By configuration). Settings that matter:
+  - Token claim name `groups` (or set `--sso-groups-claim`).
+  - Full group path **off** to get `gwag-admins`; on gives
+    `/gwag-admins` (and `/parent/child` for subgroups), and the rule
+    must then be `group:/gwag-admins=admin`.
+  - Add to ID token **on** (else the gateway asks userinfo, which needs
+    Add to userinfo on).
+  - Needs no extra scope: a mapper on the client applies to every
+    request. A mapper on a client scope needs that scope in
+    `--sso-scopes`.
+  - Users need a verified email (Keycloak: Email verified on), or
+    sign-in is refused.
+
+  `examples/sso` runs this against Keycloak
+  (`IDP=keycloak ./e2e.sh`, realm in `keycloak-realm.json`): group rules,
+  rule order, a second claim name, and a group change. After a user is
+  removed from a group, their open session keeps the role (the groups
+  are in the cookie) until they sign in again.
 - **Google.** OAuth client of type "Web application", authorized
   redirect URI as above. Issuer `https://accounts.google.com`. Google
   sends no groups claim: use `email:` and `domain:` rules. Every Gmail

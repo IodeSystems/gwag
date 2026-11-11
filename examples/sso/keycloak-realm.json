@@ -1,0 +1,154 @@
+{
+  "realm": "gwag",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "groups": [
+    {
+      "name": "gwag-admins"
+    },
+    {
+      "name": "gwag-devs"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "gwag",
+      "name": "gwag admin",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "sso-example-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:28500/auth/callback"
+      ],
+      "webOrigins": [],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.claim": "true",
+            "introspection.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "roles_groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles_groups",
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.claim": "true",
+            "introspection.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "grp-admin",
+      "email": "grp-admin@corp.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "grp-admin",
+      "lastName": "Fixture",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "kc-admin-pass-6t2n",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/gwag-admins"
+      ]
+    },
+    {
+      "username": "grp-dev",
+      "email": "grp-dev@corp.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "grp-dev",
+      "lastName": "Fixture",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "kc-dev-pass-8r5c",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/gwag-devs"
+      ]
+    },
+    {
+      "username": "grp-both",
+      "email": "grp-both@corp.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "grp-both",
+      "lastName": "Fixture",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "kc-both-pass-3j7z",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/gwag-admins",
+        "/gwag-devs"
+      ]
+    },
+    {
+      "username": "grp-none",
+      "email": "grp-none@corp.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "grp-none",
+      "lastName": "Fixture",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "kc-none-pass-9b4d",
+          "temporary": false
+        }
+      ],
+      "groups": []
+    },
+    {
+      "username": "grp-demote",
+      "email": "grp-demote@corp.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "grp-demote",
+      "lastName": "Fixture",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "kc-demote-pass-1m6w",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/gwag-admins",
+        "/gwag-devs"
+      ]
+    }
+  ]
+}

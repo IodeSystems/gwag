@@ -1,4 +1,5 @@
-# Dex, bound to 127.0.0.1 only. run.sh starts it.
+# Dex or Keycloak, bound to 127.0.0.1 only. run.sh / e2e.sh start one
+# (IDP=dex, the default, or IDP=keycloak).
 name: gwag-sso
 services:
   dex:
@@ -8,3 +9,14 @@ services:
       - "127.0.0.1:28556:5556"
     volumes:
       - ./dex.yaml:/etc/dex/config.yaml:ro
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command: ["start-dev", "--import-realm"]
+    environment:
+      # Fixture admin login for 127.0.0.1; stack.sh exports both.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-kcadmin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASS:-kc-admin-pass-4h8w}
+    ports:
+      - "127.0.0.1:28557:8080"
+    volumes:
+      - ./keycloak-realm.json:/opt/keycloak/data/import/gwag-realm.json:ro
