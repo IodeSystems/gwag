@@ -10,6 +10,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { PresetPicker } from '@/ui';
 import { useAdminRole } from '@/api/role';
+import { useSSO } from '@/api/sso';
 import {
   getAdminToken,
   setAdminToken,
@@ -42,6 +43,7 @@ interface SettingsDrawerProps {
 export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const current = useAdminToken();
   const { role, invalid } = useAdminRole();
+  const sso = useSSO();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState(current ?? '');
 
@@ -122,14 +124,16 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
 
         <Typography
           variant="caption"
-          color={invalid ? 'error.main' : current ? 'success.main' : 'warning.main'}
+          color={invalid ? 'error.main' : current || sso.authenticated ? 'success.main' : 'warning.main'}
           sx={{ display: 'block', mt: 1 }}
         >
           {invalid
             ? 'The gateway rejected this token (rotated, or from another gateway).'
             : current
               ? `Signed in as ${role === 'admin' ? 'Admin' : role === 'dev' ? 'Dev' : role}.`
-              : 'No token set: public services only, no writes.'}
+              : sso.authenticated
+                ? `No token set. Signed in with SSO as ${sso.email ?? '?'} (${role}).`
+                : 'No token set: public services only, no writes.'}
         </Typography>
       </Box>
     </Drawer>

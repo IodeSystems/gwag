@@ -49,8 +49,10 @@ async function request<TResult, TVariables>(
   const token = getAdminToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  // The SSO session cookie rides along (same-origin only).
   const res = await fetch(endpoint, {
     method: 'POST',
+    credentials: 'same-origin',
     headers,
     body: JSON.stringify({ query: print(doc), variables }),
   });

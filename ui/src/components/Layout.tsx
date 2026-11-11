@@ -28,6 +28,8 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DynamicFeedIcon from '@mui/icons-material/DynamicFeed';
+import LoginIcon from '@mui/icons-material/Login';
+import LogoutIcon from '@mui/icons-material/Logout';
 import { Link } from '@tanstack/react-router';
 import SettingsDrawer, { useAdminToken } from './SettingsDrawer';
 import EventsTray from './EventsTray';
@@ -35,6 +37,7 @@ import Notifications from './Notifications';
 import { EnvBadge, PresetPicker, ThemeToggle, useThemeMode } from '@/ui';
 import { EventsProvider, useEvents } from '@/providers/EventsProvider';
 import { useAdminRole } from '@/api/role';
+import { ssoSignIn, ssoSignOut, useSSO } from '@/api/sso';
 
 const drawerWidth = 220;
 
@@ -63,13 +66,19 @@ function LayoutInner({ children }: { children: ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const token = useAdminToken();
+  const sso = useSSO();
   const { role, invalid } = useAdminRole();
   const { unread, markRead } = useEvents();
+  // Signed in: a pasted token, or an SSO session cookie. A token wins
+  // when both are present (the gateway checks the bearer first).
+  const viaSSO = !token && sso.authenticated;
   const settingsTooltip = invalid
     ? 'Settings — the gateway rejected this token'
     : token
       ? `Settings — signed in as ${role}`
-      : 'Settings — no token set';
+      : viaSSO
+        ? `Settings — signed in with SSO as ${role}`
+        : 'Settings — no token set';
   const eventsTooltip = unread > 0 ? `Events (${unread} new)` : 'Events';
 
   const openEvents = () => {
@@ -82,7 +91,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
   // side-nav, events tray, and the deeper pages (dev or admin reads,
   // mutations) stay out of view. A "Sign in" button and a banner
   // explain how to see more.
-  if (!token) {
+  if (!token && !viaSSO) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column' }}>
         <AppBar position="fixed">
@@ -99,13 +108,28 @@ function LayoutInner({ children }: { children: ReactNode }) {
             {environment && <EnvBadge name={environment} />}
             <PresetPicker compact />
             <ThemeToggle />
+            {sso.enabled && (
+              <Tooltip title={sso.error ?? 'Sign in at the identity provider'}>
+                <span>
+                  <Button
+                    color="inherit"
+                    startIcon={<LoginIcon />}
+                    onClick={ssoSignIn}
+                    disabled={!!sso.error}
+                    aria-label="sign in with SSO"
+                  >
+                    Sign in with SSO
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
             <Button
               color="inherit"
               startIcon={<SettingsIcon />}
               onClick={() => setSettingsOpen(true)}
               aria-label="sign in"
             >
-              Sign in
+              {sso.enabled ? 'Use a token' : 'Sign in'}
             </Button>
           </Toolbar>
         </AppBar>
@@ -117,8 +141,13 @@ function LayoutInner({ children }: { children: ReactNode }) {
             token to see every service and edit external dependents, or
             with the admin token for every operation (drain, deprecate).
             The gateway prints both at startup and keeps them under its
-            data dir.
+            data dir.{sso.enabled && ' Or sign in with SSO.'}
           </Alert>
+          {sso.error && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              SSO is configured but cannot be used: {sso.error}.
+            </Alert>
+          )}
           {children}
         </Box>
         <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -140,6 +169,18 @@ function LayoutInner({ children }: { children: ReactNode }) {
             color={invalid ? 'warning' : role === 'admin' ? 'secondary' : 'default'}
             label={invalid ? 'Token rejected' : role === 'admin' ? 'Admin' : role === 'dev' ? 'Dev' : 'Public'}
           />
+          {viaSSO && (
+            <>
+              <Typography variant="body2" noWrap sx={{ mx: 1 }} title="Signed in with SSO">
+                {sso.email}
+              </Typography>
+              <Tooltip title="Sign out (ends the SSO session in this browser)">
+                <IconButton color="inherit" onClick={() => void ssoSignOut()} aria-label="sign out">
+                  <LogoutIcon />
+                </IconButton>
+              </Tooltip>
+            </>
+          )}
           <PresetPicker compact />
           <ThemeToggle />
           <Notifications />
@@ -155,7 +196,7 @@ function LayoutInner({ children }: { children: ReactNode }) {
               <Badge
                 color="warning"
                 variant="dot"
-                invisible={token !== null && !invalid}
+                invisible={(token !== null || viaSSO) && !invalid}
                 overlap="circular"
               >
                 <SettingsIcon />

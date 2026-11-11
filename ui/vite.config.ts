@@ -33,6 +33,9 @@ export default defineConfig({
       // Single /api/* prefix — graphql, schema, admin, metrics,
       // health all live under it. ws: true upgrades subscriptions.
       '/api': { target: GATEWAY_URL, changeOrigin: true, ws: true },
+      // SSO sign-in (--sso-issuer). No changeOrigin: the gateway builds
+      // the callback URL from Host, which must stay the dev server's.
+      '/auth': { target: GATEWAY_URL },
     },
   },
 });
