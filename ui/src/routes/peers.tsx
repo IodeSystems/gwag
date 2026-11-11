@@ -97,7 +97,8 @@ function Peers() {
             rows={peers}
             loading={isLoading}
             getRowId={(p) => p.nodeId ?? ''}
-            emptyTitle="No peers"
+            emptyTitle="Standalone, not clustered"
+            emptyDescription="This gateway runs without a cluster, so it has no peers. Nodes appear here once they join over embedded NATS."
           />
         )}
       </Panel>
