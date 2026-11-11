@@ -494,8 +494,18 @@ func (s *SSO) verifyIDToken(ctx context.Context, p *oidc.Provider, tok *oauth2.T
 				return id, "userinfo claims: " + err.Error(), false
 			}
 			for k, v := range extra {
-				if _, ok := claims[k]; !ok || (k == "email" || k == "email_verified") && needEmail {
-					claims[k] = v
+				switch k {
+				case "email", "email_verified":
+					// Together, and only when the email comes from
+					// userinfo: a verified flag there may be about
+					// another address than the ID token's.
+					if needEmail {
+						claims[k] = v
+					}
+				default:
+					if _, ok := claims[k]; !ok {
+						claims[k] = v
+					}
 				}
 			}
 		}

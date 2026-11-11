@@ -710,3 +710,21 @@ func TestSSOCallbackWrongStateKeepsFlow(t *testing.T) {
 		t.Errorf("real callback did not clear the flow cookie: %+v", fc)
 	}
 }
+
+// The ID token has the email but not email_verified; userinfo (asked
+// for groups) says verified. Not taken: the flag counts only with the
+// email it came with.
+func TestSSOEmailVerifiedNotMixed(t *testing.T) {
+	h := newHarness(t, func(c *Config) {
+		c.Rules = []Rule{{Kind: RuleGroup, Value: "gwag-admins", Role: gateway.AdminSessionAdmin}}
+	})
+	h.idp.SetClaims(withClaims(func(c map[string]any) { delete(c, "email_verified") }))
+	h.idp.SetUserinfo(map[string]any{"sub": "u1", "email": "other@example.com", "email_verified": true, "groups": []any{"gwag-admins"}})
+	noSession(t, h.signIn(t), http.StatusForbidden)
+
+	// Email and flag both from userinfo: taken.
+	h.idp.SetClaims(withClaims(func(c map[string]any) { delete(c, "email"); delete(c, "email_verified") }))
+	if got := h.roleWith(t, sessionFrom(t, h.signIn(t))); got != "admin" {
+		t.Errorf("email from userinfo: role %q", got)
+	}
+}
