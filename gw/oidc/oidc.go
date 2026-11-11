@@ -575,12 +575,15 @@ func (s *SSO) WhoAmI(w http.ResponseWriter, r *http.Request) {
 		Email         string `json:"email,omitempty"`
 		Role          string `json:"role,omitempty"`
 		Via           string `json:"via,omitempty"`
-		// Error says why SSO cannot be used right now (cluster level
-		// below the one sessions need, store unavailable).
+		// Error is "sso unavailable" when SSO cannot be used right
+		// now (cluster level below the one sessions need, store
+		// unavailable); the reason is logged, not sent.
 		Error string `json:"error,omitempty"`
 	}{SSO: true}
 	if _, err := s.key(r.Context()); err != nil {
-		out.Error = err.Error()
+		// The page is public: the detail goes to the log only.
+		slog.Warn("sso: session store unavailable", "err", err)
+		out.Error = "sso unavailable"
 	} else if sess, ok := s.AdminSession(r); ok {
 		out.Authenticated, out.Email, out.Role, out.Via = true, sess.Subject, string(sess.Role), "sso"
 	}

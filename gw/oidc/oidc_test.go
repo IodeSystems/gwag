@@ -568,7 +568,7 @@ func TestSSOStoreUnavailable(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/whoami", nil))
-	if !strings.Contains(rec.Body.String(), `"error":"admin sessions need cluster feature level 2"`) {
+	if !strings.Contains(rec.Body.String(), `"error":"sso unavailable"`) || strings.Contains(rec.Body.String(), "feature level") {
 		t.Errorf("whoami = %s", rec.Body)
 	}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)

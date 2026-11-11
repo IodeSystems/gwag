@@ -161,7 +161,7 @@ reach `/admin/*` as anonymous). The gateway core does not import
 ends it, `POST /auth/logout` clears the cookie (same-origin only),
 `GET /auth/whoami` (public) returns
 `{"sso":true,"authenticated":true,"email":"...","role":"admin","via":"sso"}`,
-with `"error"` when SSO cannot be used now. Bearer tokens are not
+with `"error":"sso unavailable"` when SSO cannot be used now. Bearer tokens are not
 reported there; `GET /api/admin/whoami` reports the role for both.
 
 **Flow.** Authorization code with PKCE (S256), state and nonce. The
@@ -204,7 +204,8 @@ the KV bucket `gwag-admin-sessions` (no TTL), so a cookie minted on one
 node passes on every other. The bucket exists from
 [cluster feature level](./cluster.md#feature-levels) 2. Below it,
 SSO is off: `/auth/login` answers 503 with the reason and
-`/auth/whoami` carries it in `error`. Run `gwag cluster finalize` once
+`/auth/whoami` answers `"error":"sso unavailable"` (the reason is in
+the gateway log). Run `gwag cluster finalize` once
 every node runs this version. Standalone (no cluster), the key is
 `<adminDataDir>/session-key` and the cutoffs
 `<adminDataDir>/admin-sessions.json` (in memory without a data dir).
