@@ -215,3 +215,37 @@ func TestAdminSessionsFeatureLevel(t *testing.T) {
 		t.Fatalf("cutoff %d %v, want %d", nb, err, at)
 	}
 }
+
+func TestAdminLoginCode(t *testing.T) {
+	g := New(WithoutMetrics())
+	t.Cleanup(g.Close)
+	ctx := context.Background()
+	if err := g.PutAdminLoginCode(ctx, "c1", []byte("v1"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.PutAdminLoginCode(ctx, "c1", []byte("v2"), time.Minute); err == nil {
+		t.Error("duplicate id accepted")
+	}
+	if v, ok, err := g.TakeAdminLoginCode(ctx, "c1"); err != nil || !ok || string(v) != "v1" {
+		t.Fatalf("take = %q %v %v", v, ok, err)
+	}
+	if _, ok, _ := g.TakeAdminLoginCode(ctx, "c1"); ok {
+		t.Error("code taken twice")
+	}
+	_ = g.PutAdminLoginCode(ctx, "c2", []byte("v"), 10*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	if _, ok, _ := g.TakeAdminLoginCode(ctx, "c2"); ok {
+		t.Error("expired code taken")
+	}
+}
+
+// A session bearer goes to the bearer authenticator only; without one
+// it is 401, never the token check.
+func TestAdminSessionBearerPrefix(t *testing.T) {
+	g := New(WithoutMetrics(), WithAdminSession(fixedSession{AdminSession{Subject: "a@b.c", Role: AdminSessionAdmin}}))
+	t.Cleanup(g.Close)
+	role, _, outcome, status := g.authenticateAdminSubject(context.Background(), AdminSessionBearerPrefix+"x", "GET", "/admin/x", "", true)
+	if status != http.StatusUnauthorized || role != adminRoleAnonymous || outcome != "denied_session_bearer" {
+		t.Errorf("got %v %q %d", role, outcome, status)
+	}
+}

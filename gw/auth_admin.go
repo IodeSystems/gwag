@@ -71,6 +71,9 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 // a request the CSRF rule refuses is 403. No valid session: the steps
 // above, as if no cookie was sent.
 //
+// A bearer in the session-bearer form (gwo_, AdminSessionBearerPrefix)
+// is checked by the session authenticator only, never the delegate.
+//
 // A bearer in the system-key form (gws_, system_keys.go) is checked
 // against the gateway's system keys only, never the delegate: on the
 // routes a system key may call it passes with the system role; on
@@ -153,6 +156,14 @@ func (g *Gateway) authenticateAdminSubject(ctx context.Context, bearer, method, 
 		// A system key is checked only by AdminMiddleware, on the
 		// routes it may call; never sent to the delegate.
 		return adminRoleAnonymous, "", "denied_system_key", http.StatusUnauthorized
+	}
+	if strings.HasPrefix(bearer, AdminSessionBearerPrefix) {
+		// A session bearer is checked by the session authenticator
+		// only; never sent to the delegate.
+		if role, subject, ok := g.adminSessionBearerOf(ctx, bearer); ok {
+			return role, subject, "ok_session_bearer", 0
+		}
+		return adminRoleAnonymous, "", "denied_session_bearer", http.StatusUnauthorized
 	}
 	if needAuth || bearer != "" {
 		switch outcome, delegateRole, _, delegateSubject := g.consultAdminDelegate(ctx, bearer, method, path, remoteAddr); outcome {

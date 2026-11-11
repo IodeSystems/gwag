@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -48,6 +49,27 @@ type AdminSession struct {
 // Stability: experimental
 type AdminSessionAuthenticator interface {
 	AdminSession(r *http.Request) (AdminSession, bool)
+}
+
+// AdminSessionBearerPrefix starts a session bearer: a token that
+// carries a session in `Authorization: Bearer` instead of a cookie
+// (gwag login --sso). The gateway sends such a bearer only to the
+// AdminSessionAuthenticator, when it implements
+// AdminSessionBearerAuthenticator; never to the AdminAuthorizer
+// delegate or the token check.
+//
+// Stability: experimental
+const AdminSessionBearerPrefix = "gwo_"
+
+// AdminSessionBearerAuthenticator is an AdminSessionAuthenticator that
+// also reads session bearers (AdminSessionBearerPrefix). ok is false
+// when the bearer is not valid (signature, expiry, revocation, no
+// role). A session bearer is a header, so the cookie CSRF rule does
+// not apply to it.
+//
+// Stability: experimental
+type AdminSessionBearerAuthenticator interface {
+	AdminSessionBearer(ctx context.Context, bearer string) (AdminSession, bool)
 }
 
 // WithAdminSession accepts browser session cookies on admin routes,
@@ -106,6 +128,24 @@ func (g *Gateway) adminSessionOf(r *http.Request) (role adminRole, subject strin
 		return adminRoleAnonymous, "", true, why
 	}
 	return role, sanitizeSubject(s.Subject), true, ""
+}
+
+// adminSessionBearerOf resolves a session bearer. ok is false when
+// no authenticator reads bearers or the bearer is not valid.
+func (g *Gateway) adminSessionBearerOf(ctx context.Context, bearer string) (role adminRole, subject string, ok bool) {
+	a, isBearer := g.cfg.adminSession.(AdminSessionBearerAuthenticator)
+	if !isBearer {
+		return adminRoleAnonymous, "", false
+	}
+	s, ok := a.AdminSessionBearer(ctx, bearer)
+	if !ok {
+		return adminRoleAnonymous, "", false
+	}
+	role, ok = adminSessionRole(s.Role)
+	if !ok {
+		return adminRoleAnonymous, "", false
+	}
+	return role, sanitizeSubject(s.Subject), true
 }
 
 // adminSessionAllowed is the CSRF rule for cookie-authenticated

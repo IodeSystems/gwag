@@ -32,6 +32,9 @@ const (
 	adminSessionKeyKey      = "key"
 	// adminSessionAllKey holds the cutoff for every subject.
 	adminSessionAllKey = "all"
+	// adminLoginCodesKey holds the pending one-time login codes, a
+	// JSON map updated with compare-and-set.
+	adminLoginCodesKey = "login-codes"
 	// adminSessionKeyFile / adminSessionRevocationsFile are the
 	// standalone files under adminDataDir.
 	adminSessionKeyFile         = "session-key"
@@ -51,6 +54,26 @@ type adminSessionState struct {
 	// local is the standalone cutoff table, loaded on first use.
 	local       *adminSessionRevocations
 	localLoaded bool
+	// codes are the standalone one-time login codes, in memory only:
+	// a restart loses them, and a lost code fails, which is safe.
+	codes adminLoginCodes
+}
+
+// adminLoginCodes maps a code id to its record. It is the value of
+// adminLoginCodesKey; expired entries are dropped on every write.
+type adminLoginCodes map[string]adminLoginCode
+
+type adminLoginCode struct {
+	Value     []byte `json:"v"`
+	ExpUnixMs int64  `json:"x"`
+}
+
+func (c adminLoginCodes) prune(nowMs int64) {
+	for id, e := range c {
+		if e.ExpUnixMs <= nowMs {
+			delete(c, id)
+		}
+	}
 }
 
 // adminSessionRevocations is the standalone file format.
@@ -261,6 +284,111 @@ func (g *Gateway) RevokeAdminSessions(ctx context.Context, subject string) (int6
 		return 0, fmt.Errorf("admin session cutoff: %w", err)
 	}
 	return now, nil
+}
+
+// errAdminLoginCodeConflict: another node changed the code table
+// between read and write too many times in a row.
+var errAdminLoginCodeConflict = errors.New("admin login code: the code table kept changing; retry")
+
+// PutAdminLoginCode stores value under id for ttl, for one
+// TakeAdminLoginCode on any node. id must be unguessable (the caller
+// hashes a random code). For short-lived handoffs such as the code of
+// gwag login --sso; the table is one KV value, so keep values small
+// and ttl short.
+//
+// Stability: experimental
+func (g *Gateway) PutAdminLoginCode(ctx context.Context, id string, value []byte, ttl time.Duration) error {
+	if id == "" || ttl <= 0 {
+		return errors.New("admin login code: empty id or ttl")
+	}
+	exp := time.Now().Add(ttl).UnixMilli()
+	return g.editAdminLoginCodes(ctx, func(c adminLoginCodes) (bool, error) {
+		if _, dup := c[id]; dup {
+			return false, errors.New("admin login code: id in use")
+		}
+		c[id] = adminLoginCode{Value: value, ExpUnixMs: exp}
+		return true, nil
+	})
+}
+
+// TakeAdminLoginCode removes the code id and returns its value. ok is
+// false when there is no such code or it expired. A code is returned
+// at most once, cluster-wide.
+//
+// Stability: experimental
+func (g *Gateway) TakeAdminLoginCode(ctx context.Context, id string) (value []byte, ok bool, err error) {
+	err = g.editAdminLoginCodes(ctx, func(c adminLoginCodes) (bool, error) {
+		e, found := c[id]
+		if !found {
+			return false, nil
+		}
+		delete(c, id)
+		value, ok = e.Value, true
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return value, ok, nil
+}
+
+// editAdminLoginCodes applies edit to the code table with expired
+// entries already dropped. edit returns whether to write. In a
+// cluster the write is a compare-and-set on the KV revision, retried
+// on conflict; edit then runs again on the fresh table.
+func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminLoginCodes) (bool, error)) error {
+	kv, err := g.adminSessionsKV()
+	if err != nil {
+		return err
+	}
+	if kv == nil {
+		g.adminSessions.mu.Lock()
+		defer g.adminSessions.mu.Unlock()
+		if g.adminSessions.codes == nil {
+			g.adminSessions.codes = adminLoginCodes{}
+		}
+		g.adminSessions.codes.prune(time.Now().UnixMilli())
+		_, err := edit(g.adminSessions.codes)
+		return err
+	}
+	kctx, cancel := kvCtx(ctx)
+	defer cancel()
+	for range 8 {
+		codes := adminLoginCodes{}
+		var rev uint64
+		e, err := kv.Get(kctx, adminLoginCodesKey)
+		switch {
+		case err == nil:
+			rev = e.Revision()
+			if err := json.Unmarshal(e.Value(), &codes); err != nil {
+				return fmt.Errorf("admin login codes: %w", err)
+			}
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		default:
+			return fmt.Errorf("admin login codes: %w", err)
+		}
+		codes.prune(time.Now().UnixMilli())
+		write, err := edit(codes)
+		if err != nil || !write {
+			return err
+		}
+		b, _ := json.Marshal(codes)
+		if rev == 0 {
+			_, err = kv.Create(kctx, adminLoginCodesKey, b)
+		} else {
+			_, err = kv.Update(kctx, adminLoginCodesKey, b, rev)
+		}
+		if err == nil {
+			return nil
+		}
+		// A lost compare-and-set is an API error (key exists, wrong
+		// last sequence); anything else is final.
+		var apiErr *jetstream.APIError
+		if !errors.As(err, &apiErr) && !errors.Is(err, jetstream.ErrKeyExists) {
+			return fmt.Errorf("admin login codes: %w", err)
+		}
+	}
+	return errAdminLoginCodeConflict
 }
 
 // localRevocationsLocked loads the standalone table once. Caller
