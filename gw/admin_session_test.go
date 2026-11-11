@@ -249,3 +249,36 @@ func TestAdminSessionBearerPrefix(t *testing.T) {
 		t.Errorf("got %v %q %d", role, outcome, status)
 	}
 }
+
+// Denylist entries past their expiry are dropped on the next write
+// and survive a restart (standalone file).
+func TestAdminSessionDenylist(t *testing.T) {
+	dir := t.TempDir()
+	g := New(WithoutMetrics(), WithAdminDataDir(dir))
+	ctx := context.Background()
+	if err := g.DenyAdminSession(ctx, "a", time.Now().Add(20*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := g.AdminSessionDenied(ctx, "a"); err != nil || !d {
+		t.Fatalf("a denied = %v %v", d, err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if err := g.DenyAdminSession(ctx, "b", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	g.adminSessions.mu.Lock()
+	n := len(g.adminSessions.local.Denied)
+	g.adminSessions.mu.Unlock()
+	if n != 1 {
+		t.Errorf("denylist holds %d entries, want 1 (expired one dropped)", n)
+	}
+	g.Close()
+	g2 := New(WithoutMetrics(), WithAdminDataDir(dir))
+	t.Cleanup(g2.Close)
+	if d, _ := g2.AdminSessionDenied(ctx, "b"); !d {
+		t.Error("denylist lost on restart")
+	}
+	if d, _ := g2.AdminSessionDenied(ctx, "c"); d {
+		t.Error("unknown id denied")
+	}
+}

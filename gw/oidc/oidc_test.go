@@ -544,7 +544,7 @@ func TestSSOTamperedOrExpiredSession(t *testing.T) {
 	sess := sessionFrom(t, h.signIn(t))
 	key, _ := h.gw.AdminSessionKey(context.Background())
 	body, sig, _ := strings.Cut(sess.Value, ".")
-	forged := sessionPayload{Email: "ops@example.com", Exp: time.Now().Add(1000 * time.Hour).Unix(), Issued: time.Now().UnixMilli()}
+	forged := sessionPayload{Email: "ops@example.com", Exp: time.Now().Add(1000 * time.Hour).Unix(), Issued: time.Now().UnixMilli(), ID: "j"}
 	fb, _ := json.Marshal(forged)
 	for name, v := range map[string]string{
 		"payload swapped":  b64(fb) + "." + sig,
@@ -574,6 +574,10 @@ func (f failingStore) PutAdminLoginCode(context.Context, string, []byte, time.Du
 }
 func (f failingStore) TakeAdminLoginCode(context.Context, string) ([]byte, bool, error) {
 	return nil, false, f.err
+}
+func (f failingStore) DenyAdminSession(context.Context, string, time.Time) error { return f.err }
+func (f failingStore) AdminSessionDenied(context.Context, string) (bool, error) {
+	return false, f.err
 }
 
 // The store fails (a cluster below the sessions feature level): login
@@ -751,5 +755,34 @@ func TestSSORevocationClockSkew(t *testing.T) {
 	}
 	if got := h.roleWith(t, sess); got != "anonymous" {
 		t.Errorf("session from a fast clock survived the revoke: role %q", got)
+	}
+}
+
+// Logout ends that session on the server, and only that one.
+func TestSSOLogoutEndsOnlyThatSession(t *testing.T) {
+	h := newHarness(t, nil)
+	one := sessionFrom(t, h.signIn(t))
+	two := sessionFrom(t, h.signIn(t))
+	if payloadOf(t, h, one).ID == payloadOf(t, h, two).ID {
+		t.Fatal("two sessions share an id")
+	}
+	rec := h.admin(http.MethodPost, "/auth/logout", "", func(r *http.Request) {
+		r.AddCookie(one)
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+	})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body)
+	}
+	if got := h.roleWith(t, one); got != "anonymous" {
+		t.Errorf("logged-out cookie replayed: role %q", got)
+	}
+	if got := h.roleWith(t, two); got != "admin" {
+		t.Errorf("other session after logout: role %q", got)
+	}
+	// A payload without an id is refused.
+	key, _ := h.gw.AdminSessionKey(context.Background())
+	noID := sign(key, "session", sessionPayload{Email: "ops@example.com", Exp: time.Now().Add(time.Hour).Unix(), Issued: time.Now().UnixMilli()})
+	if got := h.roleWith(t, &http.Cookie{Name: SessionCookie, Value: noID}); got != "anonymous" {
+		t.Errorf("session without id: role %q", got)
 	}
 }

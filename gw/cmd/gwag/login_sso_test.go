@@ -119,6 +119,22 @@ func TestLoginSSO(t *testing.T) {
 	if len(c.Logins) != 1 || c.Logins[0].Bearer == e.Bearer || c.Logins[0].Name != "corp" {
 		t.Errorf("re-login = %+v", c.Logins)
 	}
+
+	// gwag logout ends the bearer on the gateway.
+	tok := c.Logins[0].Bearer
+	if rc := logoutCmd(nil); rc != 0 {
+		t.Fatalf("logout rc=%d", rc)
+	}
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/admin/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("bearer after gwag logout = %d, want 401", resp2.StatusCode)
+	}
 }
 
 func TestLoginSSONoBrowserPrintsURL(t *testing.T) {

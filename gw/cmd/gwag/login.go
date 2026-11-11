@@ -354,6 +354,7 @@ func logoutCmd(args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag logout [NAME] [--global]")
 		fmt.Fprintln(fs.Output(), "  No NAME: removes the primary login.")
+		fmt.Fprintln(fs.Output(), "  A bearer from gwag login --sso is also ended on the gateway.")
 		fmt.Fprintln(fs.Output(), "  --all:   removes the entire .gw/ directory (or the global file with --global).")
 		fs.PrintDefaults()
 	}
@@ -367,6 +368,11 @@ func logoutCmd(args []string) int {
 		return 1
 	}
 	if *all {
+		if creds, err := loadCredentialsAt(path); err == nil {
+			for _, e := range creds.Logins {
+				endSSOBearer(e)
+			}
+		}
 		target := contextDir
 		if *global {
 			target = path
@@ -399,6 +405,9 @@ func logoutCmd(args []string) int {
 			return 0
 		}
 		target = e.Name
+	}
+	if e, ok := creds.resolve(target); ok {
+		endSSOBearer(e)
 	}
 	if !creds.remove(target) {
 		fmt.Fprintf(os.Stderr, "no login named %q\n", target)

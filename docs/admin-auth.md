@@ -158,7 +158,8 @@ reach `/admin/*` as anonymous). The gateway core does not import
 `gw/oidc`; go-oidc and x/oauth2 are linked only into binaries that do.
 
 **Routes.** `GET /auth/login` starts the flow, `GET /auth/callback`
-ends it, `POST /auth/logout` clears the cookie (same-origin only),
+ends it, `POST /auth/logout` clears the cookie and ends the session on the
+server (same-origin only; see Logout),
 `GET /auth/whoami` (public) returns
 `{"sso":true,"authenticated":true,"email":"...","role":"admin","via":"sso"}`,
 with `"error":"sso unavailable"` when SSO cannot be used now. Bearer tokens are not
@@ -176,7 +177,7 @@ is missing, when it is not verified (unless
 `--sso-allow-unverified-email`), or when no rule matches.
 
 **Session.** Cookie `gwag_session`: HMAC-SHA256 over
-`{email, groups, issued, expiry}`, `HttpOnly`, `SameSite=Lax`, `Path=/`,
+`{email, groups, issued, expiry, id}`, `HttpOnly`, `SameSite=Lax`, `Path=/`,
 `Secure` on TLS, behind a proxy sending `X-Forwarded-Proto: https`, or
 with an https redirect URL. Only the groups that a rule names are kept,
 so a provider that sends hundreds stays under the 4 KB cookie limit;
@@ -194,6 +195,14 @@ whose host is the request `Host` or the first `X-Forwarded-Host`. The
 `/admin/*`, so the same rule applies to them. A mutation sent as a
 cross-site GET is refused there too.
 
+**Logout.** `POST /auth/logout` puts the session id on a denylist
+until the session would have expired, on every node; a copy of the
+cookie is refused from then on. Other sessions of the same person
+(other browsers, CLI bearers) stay. With
+`Authorization: Bearer gwo_...` instead of the cookie it ends that
+bearer, without the same-origin check (`gwag logout` sends it). A
+session without an id is refused.
+
 **Revoke.** `POST /admin/sessions/revoke` `{"subject":"alice@example.com"}`
 (admin, GraphQL `admin.revokeAdminSessions`) refuses every session of
 that email issued until 30 s from now, on every node. `"*"` revokes
@@ -203,7 +212,9 @@ session, the cutoff from the revoking node's. Signing in for that email
 is refused until the 30 s have passed, then works again. The same holds
 for `gwag login --sso` bearers.
 
-**Shared state.** The signing key and the revocation cutoffs live in
+**Shared state.** The signing key, the revocation cutoffs, the logout
+denylist (one key, entries dropped once expired) and the CLI login
+codes live in
 the KV bucket `gwag-admin-sessions` (no TTL), so a cookie minted on one
 node passes on every other. The bucket exists from
 [cluster feature level](./cluster.md#feature-levels) 2. Below it,
@@ -211,9 +222,10 @@ SSO is off: `/auth/login` answers 503 with the reason and
 `/auth/whoami` answers `"error":"sso unavailable"` (the reason is in
 the gateway log). Run `gwag cluster finalize` once
 every node runs this version. Standalone (no cluster), the key is
-`<adminDataDir>/session-key` and the cutoffs
-`<adminDataDir>/admin-sessions.json` (in memory without a data dir).
-To end every session, revoke `"*"`.
+`<adminDataDir>/session-key` and the cutoffs and denylist
+`<adminDataDir>/admin-sessions.json` (in memory without a data dir;
+CLI login codes always in memory). To end every session, revoke `"*"`.
+
 
 **Not covered.** The Schema Registry REST routes and the control plane
 take bearers only (a `gwag login --sso` bearer works on the control

@@ -20,12 +20,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	gateway "github.com/iodesystems/gwag/v2/gw"
 	"github.com/iodesystems/gwag/v2/gw/oidc"
 )
 
@@ -179,6 +181,32 @@ func exchangeSSOCode(ctx context.Context, endpoint, code, verifier string) (ssoL
 		return ssoLoginResult{}, errors.New("token exchange: no token in the answer")
 	}
 	return out, nil
+}
+
+// endSSOBearer ends a gwag login --sso bearer on its gateway (POST
+// /auth/logout). Best effort: the login is removed locally either way.
+func endSSOBearer(e loginEntry) {
+	if !strings.HasPrefix(e.Bearer, gateway.AdminSessionBearerPrefix) || e.Endpoint == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(e.Endpoint, "/")+"/auth/logout", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+e.Bearer)
+	resp, err := ssoHTTP.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: could not end the SSO session of %q on %s: %v\n", e.Name, e.Endpoint, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		fmt.Fprintf(os.Stderr, "warn: could not end the SSO session of %q on %s: HTTP %d\n", e.Name, e.Endpoint, resp.StatusCode)
+		return
+	}
+	fmt.Printf("ended SSO session of %q on %s\n", e.Name, e.Endpoint)
 }
 
 func randomB64(n int) string {

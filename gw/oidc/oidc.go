@@ -88,6 +88,10 @@ type Store interface {
 	// most once, on any node.
 	PutAdminLoginCode(ctx context.Context, id string, value []byte, ttl time.Duration) error
 	TakeAdminLoginCode(ctx context.Context, id string) ([]byte, bool, error)
+	// DenyAdminSession ends one session id until it expires (logout);
+	// AdminSessionDenied reports it.
+	DenyAdminSession(ctx context.Context, id string, until time.Time) error
+	AdminSessionDenied(ctx context.Context, id string) (bool, error)
 }
 
 // Config is the provider and the role rules.
@@ -306,6 +310,9 @@ type sessionPayload struct {
 	Exp    int64    `json:"x"`
 	// Issued is unix ms, checked against the NotBefore cutoff.
 	Issued int64 `json:"i"`
+	// ID names this one session; logout puts it on the denylist
+	// (Store.DenyAdminSession). A payload without one is refused.
+	ID string `json:"j"`
 }
 
 // Login starts the flow: GET /auth/login.
@@ -435,7 +442,7 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 		Name: SessionCookie,
 		Value: sign(key, "session", sessionPayload{
 			Email: id.Email, Groups: id.Groups,
-			Exp: now.Add(s.cfg.SessionTTL).Unix(), Issued: now.UnixMilli(),
+			Exp: now.Add(s.cfg.SessionTTL).Unix(), Issued: now.UnixMilli(), ID: randomString(),
 		}),
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
@@ -584,7 +591,7 @@ func (s *SSO) verifySession(ctx context.Context, purpose, value string) (session
 		return sessionPayload{}, false
 	}
 	var sp sessionPayload
-	if !verify(key, purpose, value, &sp) || sp.Exp < s.now().Unix() || sp.Email == "" {
+	if !verify(key, purpose, value, &sp) || sp.Exp < s.now().Unix() || sp.Email == "" || sp.ID == "" {
 		return sessionPayload{}, false
 	}
 	nb, err := st.AdminSessionNotBefore(ctx, sp.Email)
@@ -595,18 +602,63 @@ func (s *SSO) verifySession(ctx context.Context, purpose, value string) (session
 	if nb > 0 && sp.Issued <= nb {
 		return sessionPayload{}, false
 	}
+	denied, err := st.AdminSessionDenied(ctx, sp.ID)
+	if err != nil {
+		slog.Warn("sso: denylist lookup failed; refusing the session", "email", sp.Email, "err", err)
+		return sessionPayload{}, false
+	}
+	if denied {
+		return sessionPayload{}, false
+	}
 	return sp, true
 }
 
 // Logout clears the session cookie: POST /auth/logout. Same-origin
 // only, like every other cookie-authenticated write.
+//
+// The session ends on the server too: its id goes on the denylist
+// until it would have expired, on every node. Other sessions of the
+// same person stay. With `Authorization: Bearer gwo_...` instead (gwag
+// logout), that bearer ends; a header needs no same-origin check.
 func (s *SSO) Logout(w http.ResponseWriter, r *http.Request) {
+	if bearer := bearerOf(r); strings.HasPrefix(bearer, gateway.AdminSessionBearerPrefix) {
+		s.endSession(w, r, "cli-bearer", strings.TrimPrefix(bearer, gateway.AdminSessionBearerPrefix))
+		return
+	}
 	if r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 		http.Error(w, "forbidden: logout must come from the gateway's own pages (Sec-Fetch-Site: same-origin)", http.StatusForbidden)
 		return
 	}
 	clearCookie(w, SessionCookie, "/", s.secure(r))
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.endSession(w, r, "session", c.Value)
+}
+
+// endSession puts a valid session on the denylist. An invalid one is
+// already refused; nothing to do.
+func (s *SSO) endSession(w http.ResponseWriter, r *http.Request, purpose, value string) {
+	sp, ok := s.verifySession(r.Context(), purpose, value)
+	if ok {
+		if err := s.storeOf().DenyAdminSession(r.Context(), sp.ID, time.Unix(sp.Exp, 0)); err != nil {
+			slog.Warn("sso: logout could not end the session on the server", "email", sp.Email, "err", err)
+			http.Error(w, "the session could not be ended on the gateway; retry, or ask an admin to revoke it", http.StatusServiceUnavailable)
+			return
+		}
+		slog.Info("sso: signed out", "email", sp.Email)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func bearerOf(r *http.Request) string {
+	v, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 // WhoAmI is GET /auth/whoami, public: whether SSO is on, and whose

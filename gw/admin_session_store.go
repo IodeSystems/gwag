@@ -32,6 +32,9 @@ const (
 	adminSessionKeyKey      = "key"
 	// adminSessionAllKey holds the cutoff for every subject.
 	adminSessionAllKey = "all"
+	// adminSessionDeniedKey holds the ids of sessions ended by logout
+	// (DenyAdminSession), an adminExpiring map.
+	adminSessionDeniedKey = "denied"
 	// adminLoginCodesKey holds the pending one-time login codes, a
 	// JSON map updated with compare-and-set.
 	adminLoginCodesKey = "login-codes"
@@ -65,19 +68,23 @@ type adminSessionState struct {
 	localLoaded bool
 	// codes are the standalone one-time login codes, in memory only:
 	// a restart loses them, and a lost code fails, which is safe.
-	codes adminLoginCodes
+	codes adminExpiring
 }
 
-// adminLoginCodes maps a code id to its record. It is the value of
-// adminLoginCodesKey; expired entries are dropped on every write.
-type adminLoginCodes map[string]adminLoginCode
+// adminExpiring maps an id to an entry that expires. It is the value
+// of adminLoginCodesKey and adminSessionDeniedKey; expired entries are
+// dropped on every write.
+type adminExpiring map[string]adminExpiringEntry
 
-type adminLoginCode struct {
+type adminExpiringEntry struct {
 	Value     []byte `json:"v"`
 	ExpUnixMs int64  `json:"x"`
 }
 
-func (c adminLoginCodes) prune(nowMs int64) {
+func (c adminExpiring) prune(nowMs int64) {
+	if c == nil {
+		return
+	}
 	for id, e := range c {
 		if e.ExpUnixMs <= nowMs {
 			delete(c, id)
@@ -89,6 +96,8 @@ func (c adminLoginCodes) prune(nowMs int64) {
 type adminSessionRevocations struct {
 	AllUnixMs int64            `json:"all_unix_ms,omitempty"`
 	Subjects  map[string]int64 `json:"subjects,omitempty"`
+	// Denied are the session ids ended by logout, id → expiry unix ms.
+	Denied map[string]int64 `json:"denied,omitempty"`
 }
 
 // adminSessionCutoff is the KV value of a cutoff key.
@@ -311,11 +320,11 @@ func (g *Gateway) PutAdminLoginCode(ctx context.Context, id string, value []byte
 		return errors.New("admin login code: empty id or ttl")
 	}
 	exp := time.Now().Add(ttl).UnixMilli()
-	return g.editAdminLoginCodes(ctx, func(c adminLoginCodes) (bool, error) {
+	return g.editAdminLoginCodes(ctx, func(c adminExpiring) (bool, error) {
 		if _, dup := c[id]; dup {
 			return false, errors.New("admin login code: id in use")
 		}
-		c[id] = adminLoginCode{Value: value, ExpUnixMs: exp}
+		c[id] = adminExpiringEntry{Value: value, ExpUnixMs: exp}
 		return true, nil
 	})
 }
@@ -326,7 +335,7 @@ func (g *Gateway) PutAdminLoginCode(ctx context.Context, id string, value []byte
 //
 // Stability: experimental
 func (g *Gateway) TakeAdminLoginCode(ctx context.Context, id string) (value []byte, ok bool, err error) {
-	err = g.editAdminLoginCodes(ctx, func(c adminLoginCodes) (bool, error) {
+	err = g.editAdminLoginCodes(ctx, func(c adminExpiring) (bool, error) {
 		e, found := c[id]
 		if !found {
 			return false, nil
@@ -342,10 +351,8 @@ func (g *Gateway) TakeAdminLoginCode(ctx context.Context, id string) (value []by
 }
 
 // editAdminLoginCodes applies edit to the code table with expired
-// entries already dropped. edit returns whether to write. In a
-// cluster the write is a compare-and-set on the KV revision, retried
-// on conflict; edit then runs again on the fresh table.
-func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminLoginCodes) (bool, error)) error {
+// entries already dropped (editExpiringKV in a cluster).
+func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminExpiring) (bool, error)) error {
 	kv, err := g.adminSessionsKV()
 	if err != nil {
 		return err
@@ -354,27 +361,35 @@ func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminLoginC
 		g.adminSessions.mu.Lock()
 		defer g.adminSessions.mu.Unlock()
 		if g.adminSessions.codes == nil {
-			g.adminSessions.codes = adminLoginCodes{}
+			g.adminSessions.codes = adminExpiring{}
 		}
 		g.adminSessions.codes.prune(time.Now().UnixMilli())
 		_, err := edit(g.adminSessions.codes)
 		return err
 	}
+	return editExpiringKV(ctx, kv, adminLoginCodesKey, edit)
+}
+
+// editExpiringKV applies edit to the adminExpiring map at key with
+// expired entries dropped. edit returns whether to write. The write is
+// a compare-and-set on the KV revision, retried on conflict; edit then
+// runs again on the fresh map.
+func editExpiringKV(ctx context.Context, kv jetstream.KeyValue, key string, edit func(adminExpiring) (bool, error)) error {
 	kctx, cancel := kvCtx(ctx)
 	defer cancel()
 	for range 8 {
-		codes := adminLoginCodes{}
+		codes := adminExpiring{}
 		var rev uint64
-		e, err := kv.Get(kctx, adminLoginCodesKey)
+		e, err := kv.Get(kctx, key)
 		switch {
 		case err == nil:
 			rev = e.Revision()
 			if err := json.Unmarshal(e.Value(), &codes); err != nil {
-				return fmt.Errorf("admin login codes: %w", err)
+				return fmt.Errorf("admin sessions %s: %w", key, err)
 			}
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 		default:
-			return fmt.Errorf("admin login codes: %w", err)
+			return fmt.Errorf("admin sessions %s: %w", key, err)
 		}
 		codes.prune(time.Now().UnixMilli())
 		write, err := edit(codes)
@@ -383,9 +398,9 @@ func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminLoginC
 		}
 		b, _ := json.Marshal(codes)
 		if rev == 0 {
-			_, err = kv.Create(kctx, adminLoginCodesKey, b)
+			_, err = kv.Create(kctx, key, b)
 		} else {
-			_, err = kv.Update(kctx, adminLoginCodesKey, b, rev)
+			_, err = kv.Update(kctx, key, b, rev)
 		}
 		if err == nil {
 			return nil
@@ -394,10 +409,85 @@ func (g *Gateway) editAdminLoginCodes(ctx context.Context, edit func(adminLoginC
 		// last sequence); anything else is final.
 		var apiErr *jetstream.APIError
 		if !errors.As(err, &apiErr) && !errors.Is(err, jetstream.ErrKeyExists) {
-			return fmt.Errorf("admin login codes: %w", err)
+			return fmt.Errorf("admin sessions %s: %w", key, err)
 		}
 	}
 	return errAdminLoginCodeConflict
+}
+
+// DenyAdminSession ends the one session id (a logout), on every node,
+// until it expires at until; other sessions of the same subject are
+// not touched. Entries past until are dropped on the next write.
+//
+// Stability: experimental
+func (g *Gateway) DenyAdminSession(ctx context.Context, id string, until time.Time) error {
+	if id == "" {
+		return errors.New("session id is empty")
+	}
+	kv, err := g.adminSessionsKV()
+	if err != nil {
+		return err
+	}
+	now, exp := time.Now().UnixMilli(), until.UnixMilli()
+	if exp <= now {
+		return nil
+	}
+	if kv == nil {
+		g.adminSessions.mu.Lock()
+		defer g.adminSessions.mu.Unlock()
+		rev, err := g.localRevocationsLocked()
+		if err != nil {
+			return err
+		}
+		for k, x := range rev.Denied {
+			if x <= now {
+				delete(rev.Denied, k)
+			}
+		}
+		if rev.Denied == nil {
+			rev.Denied = map[string]int64{}
+		}
+		rev.Denied[id] = exp
+		return g.saveLocalRevocationsLocked(rev)
+	}
+	return editExpiringKV(ctx, kv, adminSessionDeniedKey, func(m adminExpiring) (bool, error) {
+		m[id] = adminExpiringEntry{ExpUnixMs: exp}
+		return true, nil
+	})
+}
+
+// AdminSessionDenied reports whether DenyAdminSession ended id.
+//
+// Stability: experimental
+func (g *Gateway) AdminSessionDenied(ctx context.Context, id string) (bool, error) {
+	kv, err := g.adminSessionsKV()
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UnixMilli()
+	if kv == nil {
+		g.adminSessions.mu.Lock()
+		defer g.adminSessions.mu.Unlock()
+		rev, err := g.localRevocationsLocked()
+		if err != nil {
+			return false, err
+		}
+		return rev.Denied[id] > now, nil
+	}
+	kctx, cancel := kvCtx(ctx)
+	defer cancel()
+	e, err := kv.Get(kctx, adminSessionDeniedKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("admin session denylist: %w", err)
+	}
+	m := adminExpiring{}
+	if err := json.Unmarshal(e.Value(), &m); err != nil {
+		return false, fmt.Errorf("admin session denylist: %w", err)
+	}
+	return m[id].ExpUnixMs > now, nil
 }
 
 // localRevocationsLocked loads the standalone table once. Caller

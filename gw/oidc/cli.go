@@ -198,7 +198,7 @@ func (s *SSO) CLIToken(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	exp := now.Add(s.cfg.CLITokenTTL)
 	tok := gateway.AdminSessionBearerPrefix + sign(key, "cli-bearer", sessionPayload{
-		Email: c.Email, Groups: c.Groups, Exp: exp.Unix(), Issued: now.UnixMilli(),
+		Email: c.Email, Groups: c.Groups, Exp: exp.Unix(), Issued: now.UnixMilli(), ID: randomString(),
 	})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

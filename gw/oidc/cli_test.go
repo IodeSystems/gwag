@@ -260,3 +260,22 @@ func TestCLIRevocationSkew(t *testing.T) {
 		t.Errorf("bearer from a fast clock after revoke = %d", st)
 	}
 }
+
+// POST /auth/logout with a gwo_ bearer ends that bearer only, without
+// a same-origin header.
+func TestCLIBearerLogout(t *testing.T) {
+	h := newHarness(t, nil)
+	one, two := h.cliToken(t), h.cliToken(t)
+	rec := h.admin(http.MethodPost, "/auth/logout", "", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+one.Token)
+	})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body)
+	}
+	if _, st := h.roleWithBearer(t, one.Token); st != http.StatusUnauthorized {
+		t.Errorf("logged-out bearer = %d, want 401", st)
+	}
+	if role, _ := h.roleWithBearer(t, two.Token); role != "admin" {
+		t.Errorf("other bearer after logout: role %q", role)
+	}
+}

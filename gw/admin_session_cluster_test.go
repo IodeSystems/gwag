@@ -219,4 +219,16 @@ func TestAdminSessionCLIAcrossNodes(t *testing.T) {
 	if who.Role != "admin" {
 		t.Errorf("B's bearer on A: role %q", who.Role)
 	}
+
+	// Logout on A ends the bearer on B.
+	r = httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	r.Header.Set("Authorization", "Bearer "+out.Token)
+	if rec := serve(muxA, r); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout on A: %d %s", rec.Code, rec.Body)
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/admin/whoami", nil)
+	r.Header.Set("Authorization", "Bearer "+out.Token)
+	if rec := serve(muxB, r); rec.Code != http.StatusUnauthorized {
+		t.Errorf("logged-out bearer on B: %d, want 401", rec.Code)
+	}
 }
