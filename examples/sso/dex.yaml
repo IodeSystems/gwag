@@ -1,0 +1,34 @@
+# Dex for examples/sso. Static fixture: three users, one client.
+# The passwords below are test fixtures for 127.0.0.1 only.
+#   admin@example.test    admin-pass-7f3k      -> admin (email rule)
+#   dev@example.test      dev-pass-2q9m        -> dev   (domain rule)
+#   stranger@other.test   stranger-pass-5x1v   -> no rule, denied
+# Dex static passwords carry no groups, so the rules are email and
+# domain rules; group rules need a connector (LDAP, GitHub, ...).
+issuer: http://127.0.0.1:28556/dex
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  skipApprovalScreen: true
+enablePasswordDB: true
+staticClients:
+  - id: gwag
+    name: gwag admin
+    secret: sso-example-client-secret
+    redirectURIs:
+      - http://127.0.0.1:28500/auth/callback
+staticPasswords:
+  - email: admin@example.test
+    hash: "$2a$10$.fICne/DxuEmG2IRCjqgSOXP6Uuqmvf0EZLi8aVSJE0fAOsMYlsjC"
+    username: admin
+    userID: 0a1b2c3d-0001-4000-8000-000000000001
+  - email: dev@example.test
+    hash: "$2a$10$qWDlFRyr78pzePYRDce1suyg4i9VbkwDFAxQmd4NvPr4gsAWlPkfS"
+    username: dev
+    userID: 0a1b2c3d-0002-4000-8000-000000000002
+  - email: stranger@other.test
+    hash: "$2a$10$4jnabB3AMUV30mZA37BOCeSUUPCdqDoH7N9Y7MvDewo3ADd3SRlDu"
+    username: stranger
+    userID: 0a1b2c3d-0003-4000-8000-000000000003
