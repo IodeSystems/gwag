@@ -68,6 +68,12 @@ export const ServicesQuery = graphql(`
           hashHex
           replicaCount
           manualDeprecationReason
+          instances {
+            state
+          }
+          drains {
+            state
+          }
         }
         stableVN {
           namespace

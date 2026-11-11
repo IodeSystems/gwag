@@ -34,6 +34,7 @@ import {
   StatusChip,
   useToast,
   type Column,
+  type StatusKey,
 } from '@/ui';
 import { RoleGate } from '@/components/RoleGate';
 
@@ -84,6 +85,7 @@ type ServiceRow = {
   isAutoDeprecated: boolean;
   isManualDeprecated: boolean;
   manualReason: string;
+  health: StatusKey;
   stats:
     | { count: number; throughput: number; p50Millis: number; p95Millis: number }
     | undefined;
@@ -227,6 +229,7 @@ function Services() {
       isAutoDeprecated: vN !== null && maxVN !== undefined && vN < maxVN,
       isManualDeprecated: manualReason.length > 0,
       manualReason,
+      health: healthOf(s.replicaCount, s.instances, s.drains),
       stats: statsByKey.get(`${s.namespace}@${s.version}`),
     });
   }
@@ -264,7 +267,9 @@ function Services() {
               />
             </span>
           </Tooltip>
-        ) : null,
+        ) : (
+          <StatusChip status={r.health} size="small" />
+        ),
     },
     {
       id: 'replicas',
@@ -481,6 +486,22 @@ function Services() {
       />
     </Page>
   );
+}
+
+// Row health from live instances: any draining instance wins, then
+// degraded, then waiting; ready needs every instance ready. Self-ingested
+// slots (admin, ps) list no instances; replicaCount > 0 reads as ready.
+function healthOf(
+  replicaCount: number,
+  instances: ReadonlyArray<{ state: string } | null> | null | undefined,
+  drains: ReadonlyArray<{ state: string } | null> | null | undefined,
+): StatusKey {
+  const states = (instances ?? []).filter((i) => i != null).map((i) => i.state);
+  if ((drains ?? []).some((d) => d && d.state !== 'serving')) return 'draining';
+  if (states.includes('degraded')) return 'degraded';
+  if (states.includes('waiting')) return 'waiting';
+  if (states.length === 0 && replicaCount === 0) return 'waiting';
+  return 'ready';
 }
 
 function deprecationLabel({
