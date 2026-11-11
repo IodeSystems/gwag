@@ -226,6 +226,12 @@ every node runs this version. Standalone (no cluster), the key is
 `<adminDataDir>/admin-sessions.json` (in memory without a data dir;
 CLI login codes always in memory). To end every session, revoke `"*"`.
 
+**Key rotation.** There is no command to rotate the signing key; each
+node keeps it in memory once read. By hand, which ends every session:
+in a cluster, delete the key `key` from the bucket
+(`nats kv del gwag-admin-sessions key`) and restart every node; the
+first node to need a key creates a new one. Standalone, delete
+`<adminDataDir>/session-key` and restart.
 
 **Not covered.** The Schema Registry REST routes and the control plane
 take bearers only (a `gwag login --sso` bearer works on the control
