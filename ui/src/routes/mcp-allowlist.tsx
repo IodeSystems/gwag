@@ -25,7 +25,7 @@ import {
 import { DataTable, Page, Panel, StatusChip, useToast, type Column } from '@/ui';
 import { useRoleGate } from '@/api/role';
 
-export const Route = createFileRoute('/mcp')({
+export const Route = createFileRoute('/mcp-allowlist')({
   component: McpConfig,
 });
 

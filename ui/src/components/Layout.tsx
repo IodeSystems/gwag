@@ -46,7 +46,7 @@ const nav = [
   { to: '/injectors', label: 'Injectors', icon: <InputIcon /> },
   { to: '/peers', label: 'Peers', icon: <HubIcon /> },
   { to: '/schema', label: 'Schema', icon: <SchemaIcon /> },
-  { to: '/mcp', label: 'MCP', icon: <SmartToyIcon /> },
+  { to: '/mcp-allowlist', label: 'MCP', icon: <SmartToyIcon /> },
   { to: '/token-signer', label: 'Sign Token', icon: <VpnKeyIcon /> },
 ];
 

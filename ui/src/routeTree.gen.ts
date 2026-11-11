@@ -13,7 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as KitRouteImport } from './routes/[_]kit'
 import { Route as DeprecatedRouteImport } from './routes/deprecated'
 import { Route as InjectorsRouteImport } from './routes/injectors'
-import { Route as McpRouteImport } from './routes/mcp'
+import { Route as McpAllowlistRouteImport } from './routes/mcp-allowlist'
 import { Route as PeersRouteImport } from './routes/peers'
 import { Route as SchemaRouteImport } from './routes/schema'
 import { Route as ServicesRouteImport } from './routes/services'
@@ -40,9 +40,9 @@ const InjectorsRoute = InjectorsRouteImport.update({
   path: '/injectors',
   getParentRoute: () => rootRouteImport,
 } as any)
-const McpRoute = McpRouteImport.update({
-  id: '/mcp',
-  path: '/mcp',
+const McpAllowlistRoute = McpAllowlistRouteImport.update({
+  id: '/mcp-allowlist',
+  path: '/mcp-allowlist',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PeersRoute = PeersRouteImport.update({
@@ -76,7 +76,7 @@ export interface FileRoutesByFullPath {
   '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
-  '/mcp': typeof McpRoute
+  '/mcp-allowlist': typeof McpAllowlistRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -88,7 +88,7 @@ export interface FileRoutesByTo {
   '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
-  '/mcp': typeof McpRoute
+  '/mcp-allowlist': typeof McpAllowlistRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -101,7 +101,7 @@ export interface FileRoutesById {
   '/_kit': typeof KitRoute
   '/deprecated': typeof DeprecatedRoute
   '/injectors': typeof InjectorsRoute
-  '/mcp': typeof McpRoute
+  '/mcp-allowlist': typeof McpAllowlistRoute
   '/peers': typeof PeersRoute
   '/schema': typeof SchemaRoute
   '/services': typeof ServicesRoute
@@ -115,7 +115,7 @@ export interface FileRouteTypes {
     | '/_kit'
     | '/deprecated'
     | '/injectors'
-    | '/mcp'
+    | '/mcp-allowlist'
     | '/peers'
     | '/schema'
     | '/services'
@@ -127,7 +127,7 @@ export interface FileRouteTypes {
     | '/_kit'
     | '/deprecated'
     | '/injectors'
-    | '/mcp'
+    | '/mcp-allowlist'
     | '/peers'
     | '/schema'
     | '/services'
@@ -139,7 +139,7 @@ export interface FileRouteTypes {
     | '/_kit'
     | '/deprecated'
     | '/injectors'
-    | '/mcp'
+    | '/mcp-allowlist'
     | '/peers'
     | '/schema'
     | '/services'
@@ -152,7 +152,7 @@ export interface RootRouteChildren {
   KitRoute: typeof KitRoute
   DeprecatedRoute: typeof DeprecatedRoute
   InjectorsRoute: typeof InjectorsRoute
-  McpRoute: typeof McpRoute
+  McpAllowlistRoute: typeof McpAllowlistRoute
   PeersRoute: typeof PeersRoute
   SchemaRoute: typeof SchemaRoute
   ServicesRoute: typeof ServicesRoute
@@ -190,11 +190,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InjectorsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/mcp': {
-      id: '/mcp'
-      path: '/mcp'
-      fullPath: '/mcp'
-      preLoaderRoute: typeof McpRouteImport
+    '/mcp-allowlist': {
+      id: '/mcp-allowlist'
+      path: '/mcp-allowlist'
+      fullPath: '/mcp-allowlist'
+      preLoaderRoute: typeof McpAllowlistRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/peers': {
@@ -240,7 +240,7 @@ const rootRouteChildren: RootRouteChildren = {
   KitRoute: KitRoute,
   DeprecatedRoute: DeprecatedRoute,
   InjectorsRoute: InjectorsRoute,
-  McpRoute: McpRoute,
+  McpAllowlistRoute: McpAllowlistRoute,
   PeersRoute: PeersRoute,
   SchemaRoute: SchemaRoute,
   ServicesRoute: ServicesRoute,
