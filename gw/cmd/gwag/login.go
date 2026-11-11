@@ -33,6 +33,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -229,15 +230,52 @@ func loginCmd(args []string) int {
 	token := fs.String("token", "", "Admin or dev bearer token (hex); empty = leave unset. The gateway decides the role from the token.")
 	primary := fs.Bool("primary", false, "Mark this login primary (default: true if it's the first login)")
 	global := fs.Bool("global", false, "Write to the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
+	sso := fs.Bool("sso", false, "Sign in through the gateway's SSO in a browser and save the bearer it issues (instead of --token)")
+	noBrowser := fs.Bool("no-browser", false, "With --sso: print the sign-in URL, do not open a browser")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag login --name N --gateway HOST:PORT [--endpoint URL] [--token HEX] [--primary]")
+		fmt.Fprintln(fs.Output(), "       gwag login --sso [--no-browser] [--name N] [--gateway HOST:PORT] [--endpoint URL]")
 		fmt.Fprintln(fs.Output(), "  Adds or updates a login in .gw/credentials.json. The first login")
 		fmt.Fprintln(fs.Output(), "  added is auto-primary; subsequent logins inherit primary=false")
 		fmt.Fprintln(fs.Output(), "  unless --primary is passed. Use 'gwag use NAME' to switch later.")
+		fmt.Fprintln(fs.Output(), "  --sso without --gateway updates the named login, else the current one.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	nameSet := false
+	fs.Visit(func(f *flag.Flag) { nameSet = nameSet || f.Name == "name" })
+	path, err := credentialsPath(*global)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	creds, err := loadCredentialsAt(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
+		return 1
+	}
+	if *sso && *token != "" {
+		fmt.Fprintln(os.Stderr, "--sso and --token are exclusive")
+		return 2
+	}
+	if *sso && *gw == "" {
+		// Sign the current (or named) login in again.
+		lookup := ""
+		if nameSet {
+			lookup = *name
+		}
+		cur, ok := creds.resolve(lookup)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "no login to sign in with --sso in %s; pass --gateway (and --endpoint)\n", path)
+			return 2
+		}
+		*name, *gw = cur.Name, cur.Gateway
+		if *endpoint == "" {
+			*endpoint = cur.Endpoint
+		}
+		*primary = *primary || cur.Primary
 	}
 	if *gw == "" {
 		fs.Usage()
@@ -256,15 +294,15 @@ func loginCmd(args []string) int {
 		}
 		ep = "http://" + host + ":8080"
 	}
-	path, err := credentialsPath(*global)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
-	creds, err := loadCredentialsAt(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
-		return 1
+	bearer := *token
+	var signedIn *ssoLoginResult
+	if *sso {
+		res, err := ssoLogin(context.Background(), ep, !*noBrowser, os.Stderr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sso login: %v\n", err)
+			return 1
+		}
+		bearer, signedIn = res.Token, &res
 	}
 	autoPrimary := len(creds.Logins) == 0
 	entry := loginEntry{
@@ -272,7 +310,7 @@ func loginCmd(args []string) int {
 		Primary:  *primary || autoPrimary,
 		Gateway:  *gw,
 		Endpoint: ep,
-		Bearer:   *token,
+		Bearer:   bearer,
 	}
 	if entry.Primary {
 		// Demote any other login that was marked primary.
@@ -296,7 +334,12 @@ func loginCmd(args []string) int {
 	fmt.Printf("  gateway:  %s\n", entry.Gateway)
 	fmt.Printf("  endpoint: %s\n", entry.Endpoint)
 	fmt.Printf("  primary:  %v\n", entry.Primary)
-	if entry.Bearer != "" {
+	if signedIn != nil {
+		fmt.Printf("  email:    %s\n", signedIn.Email)
+		fmt.Printf("  role:     %s\n", signedIn.Role)
+		fmt.Printf("  expires:  %s\n", signedIn.ExpiresAt)
+		fmt.Println("  bearer:   ✓ (persisted; SSO)")
+	} else if entry.Bearer != "" {
 		fmt.Println("  bearer:   ✓ (persisted)")
 	} else {
 		fmt.Println("  bearer:   (none)")
