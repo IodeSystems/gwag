@@ -352,15 +352,22 @@ func (s *SSO) login(w http.ResponseWriter, r *http.Request, cli *cliFlow) {
 
 // Callback finishes the flow: GET /auth/callback.
 func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
-	// One use only, whatever happens next.
-	clearCookie(w, stateCookie, "/auth/", s.secure(r))
-
 	key, err := s.key(r.Context())
 	if err != nil {
 		errorPage(w, http.StatusServiceUnavailable, "Single sign-on is not available", err.Error()+".")
 		return
 	}
 	q := r.URL.Query()
+	var sp statePayload
+	c, err := r.Cookie(stateCookie)
+	flowOK := err == nil && verify(key, "oidc-state", c.Value, &sp) && sp.Exp >= s.now().Unix()
+	stateOK := flowOK && strEqual(q.Get("state"), sp.State)
+	if stateOK {
+		// One use only, whatever happens next. A request without the
+		// flow's state leaves the flow alone: a link cannot cancel a
+		// sign-in in progress.
+		clearCookie(w, stateCookie, "/auth/", s.secure(r))
+	}
 	if e := q.Get("error"); e != "" {
 		// Anyone can put text in these parameters: the page shows a
 		// fixed message and the error code only when it looks like one
@@ -374,14 +381,12 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 		errorPage(w, http.StatusUnauthorized, "Sign-in was not completed", msg+" Start again, or ask the operator to check the gateway log.")
 		return
 	}
-	var sp statePayload
-	c, err := r.Cookie(stateCookie)
-	if err != nil || !verify(key, "oidc-state", c.Value, &sp) || sp.Exp < s.now().Unix() {
+	if !flowOK {
 		errorPage(w, http.StatusBadRequest, "Sign-in expired",
 			"The sign-in attempt was missing, expired or came from another browser. Start again.")
 		return
 	}
-	if !strEqual(q.Get("state"), sp.State) {
+	if !stateOK {
 		slog.Warn("sso: state mismatch")
 		errorPage(w, http.StatusBadRequest, "Sign-in rejected", "The response did not match this sign-in attempt. Start again.")
 		return

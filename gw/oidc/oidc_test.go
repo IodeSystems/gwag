@@ -687,3 +687,26 @@ func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// A callback without the flow's state does not clear the flow cookie;
+// the real callback still works after it.
+func TestSSOCallbackWrongStateKeepsFlow(t *testing.T) {
+	h := newHarness(t, nil)
+	c, state := h.login(t)
+	for _, extra := range []string{"", "&error=access_denied"} {
+		rec := h.callback("not-the-state", c, extra)
+		if rec.Code == http.StatusSeeOther {
+			t.Fatalf("wrong state accepted")
+		}
+		if findCookie(rec, stateCookie) != nil {
+			t.Errorf("wrong state%s touched the flow cookie", extra)
+		}
+	}
+	rec := h.callback(state, c, "")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("real callback after a bad one = %d: %s", rec.Code, rec.Body)
+	}
+	if fc := findCookie(rec, stateCookie); fc == nil || fc.MaxAge >= 0 {
+		t.Errorf("real callback did not clear the flow cookie: %+v", fc)
+	}
+}
