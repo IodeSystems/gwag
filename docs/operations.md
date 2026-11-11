@@ -435,7 +435,7 @@ instance or line. Default sink only.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `admin_auth_total` | counter | `method`, `outcome`, `role` | Admin auth checks: `ok_delegate`, `ok_bearer`, `denied_delegate`, `denied_bearer`, `forbidden_role` (valid token, role too low for the route), `no_token_configured`. `role`: `admin`, `dev` or `anonymous`. A read without a bearer is not counted. |
+| `admin_auth_total` | counter | `method`, `outcome`, `role` | Admin auth checks: `ok_delegate`, `ok_bearer`, `ok_session` (SSO cookie), `ok_session_bearer` (`gwag login --sso` bearer), `denied_delegate`, `denied_bearer`, `denied_session_csrf`, `denied_session_bearer`, `forbidden_role` (valid token, role too low for the route), `no_token_configured`. `role`: `admin`, `dev` or `anonymous`. A read without a bearer is not counted. |
 | `app_key_auth_total` | counter | `op`, `outcome` | App-key checks. `op`: `register`, `heartbeat`, `deregister`, `drain_instance`, `schema_registry_write`, or an operator RPC (`forget_peer`, `retract_stable`, `deprecate`, `undeprecate`). `outcome`: `ok`, `ok_admin`, `missing`, `invalid`, `expired`, `denied_delegate`, `namespace_forbidden`, `unavailable`, `admin_required`. Control-plane checks run only with `--require-app-keys`. Default sink only. |
 | `app_key_expiry_seconds` | gauge | `key_id` | Seconds until each key the gateway minted expires; negative once expired. Cluster-wide set, read at scrape. Default sink only. |
 | `app_keys_expiring` | gauge | none | Minted keys that expire within 7 days and have not expired. Default sink only. |

@@ -147,6 +147,7 @@ GWAG_SSO_CLIENT_SECRET=... gwag up \
 | `--sso-rule` | | `KIND:VALUE=ROLE`, repeatable, first match wins. Kinds: `email:alice@example.com`, `domain:example.com` (exact; not subdomains), `group:NAME` (case-sensitive). Roles: `admin`, `dev`. |
 | `--sso-allow-unverified-email` | off | Admit an email without `email_verified`. |
 | `--sso-session-ttl` | `12h` | Session lifetime. |
+| `--sso-cli-token-ttl` | `12h` | Lifetime of a `gwag login --sso` bearer; capped by `--sso-session-ttl`. |
 
 The example gateway (`examples/multi`) takes the same flags. From Go:
 `oidc.New(oidc.Config{...})` in `gw/oidc`, then
@@ -210,7 +211,53 @@ every node runs this version. Standalone (no cluster), the key is
 To end every session, revoke `"*"`.
 
 **Not covered.** The Schema Registry REST routes and the control plane
-take bearers only.
+take bearers only (a `gwag login --sso` bearer works on the control
+plane; see below).
+
+### CLI sign-in (`gwag login --sso`)
+
+```
+gwag login --sso                       # the current login
+gwag login --sso --name corp --gateway gw.example.com:50090 --endpoint https://gw.example.com
+gwag login --sso --no-browser          # print the URL only
+```
+
+The CLI signs in through the browser and saves a bearer in the login,
+as `--token` does. It prints the email, role and expiry. Without
+`--gateway` it updates the login `--name` names, else the current one.
+On a gateway without SSO (`/auth/whoami` is 404) it fails and says so.
+
+Loopback redirect (RFC 8252):
+
+1. The CLI listens on `127.0.0.1:0`, picks a random `state` and a
+   verifier, and opens
+   `/auth/cli?port=P&state=S&challenge=C`, C = base64url(SHA-256(verifier)).
+   `--no-browser` prints the URL and waits; open it on the same machine
+   (or forward the port with `ssh -L P:127.0.0.1:P`).
+2. `/auth/cli` checks the parameters (port 1024-65535, state 1-128
+   base64url characters, challenge 43) and runs the normal sign-in, with
+   them in the flow cookie.
+3. The callback sets no cookie. It stores a one-time code (60 s, single
+   use, in the `gwag-admin-sessions` bucket, so any node can take it)
+   and redirects to `http://127.0.0.1:P/callback?code=...&state=S`.
+   The host is always `127.0.0.1`; nothing in the request names it.
+4. The CLI posts `{"code","verifier"}` to `POST /auth/cli/token` and gets
+   `{"token","email","role","expires_at"}`. The first attempt spends
+   the code, right verifier or not.
+
+The bearer is `gwo_` + the signed session payload (`email`, groups,
+issued, expiry), signed for a different purpose than the cookie: a
+bearer does not pass as a cookie, nor a cookie as a bearer. Sent as
+`Authorization: Bearer gwo_...`, it is checked by the SSO only, never
+by the AdminAuthorizer delegate. The role is evaluated per request
+from the rules, and `revokeAdminSessions` ends it like a cookie. It is
+a header, so the cookie CSRF rule does not apply. It works where an
+admin bearer works: `/api/admin/*`, admin GraphQL fields, the control
+plane.
+
+A process on the same machine that listens on the port the CLI chose
+could take the code; it would still need the verifier, which stays in
+the CLI.
 
 ### Provider setup
 
