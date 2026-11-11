@@ -290,7 +290,7 @@ func upCmd(args []string) int {
 
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),
-		gateway.To("http://localhost"+*httpAddr+"/api"),
+		gateway.To(selfAdminURL(*httpAddr)),
 		gateway.ForwardHeaders(gateway.AdminForwardHeaders...)); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
@@ -385,6 +385,12 @@ func declarationsSinkOptions(hookURL, hookSecret, hookMode, filePath, fileMode s
 		opts = append(opts, gateway.WithDeclarationsFile(gateway.DeclarationsFileOptions{Path: filePath, Mode: m}))
 	}
 	return opts, nil
+}
+
+// selfAdminURL is where the gateway reaches its own /api for the
+// admin self-ingest: ":8080" and "127.0.0.1:8080" both work.
+func selfAdminURL(addr string) string {
+	return "http://" + endpointHost(addr) + "/api"
 }
 
 func endpointHost(addr string) string {

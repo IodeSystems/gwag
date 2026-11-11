@@ -367,7 +367,7 @@ func main() {
 	// the Sec-Fetch-Site the CSRF check reads) to /api/admin/*.
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),
-		gateway.To("http://localhost"+*httpAddr+"/api"),
+		gateway.To("http://"+selfHost(*httpAddr)+"/api"),
 		gateway.ForwardHeaders(gateway.AdminForwardHeaders...)); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
@@ -459,4 +459,13 @@ func emitSchemaSDL() {
 	if _, err := os.Stdout.Write(rr.Body.Bytes()); err != nil {
 		log.Fatalf("write stdout: %v", err)
 	}
+}
+
+// selfHost turns a listen address (":8080", "127.0.0.1:8080") into one
+// the gateway can dial.
+func selfHost(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "localhost" + addr
+	}
+	return addr
 }
