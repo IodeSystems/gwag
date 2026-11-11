@@ -65,6 +65,12 @@ func (g *Gateway) AdminTokenHex() string { return hex.EncodeToString(g.cfg.admin
 // A role below the route's requirement gets 401 when it is anonymous
 // and 403 otherwise. The role rides on the request context.
 //
+// With WithAdminSession, a request that presents no bearer is first
+// checked for a session cookie (admin_session.go). A valid session
+// sets the role and subject, ahead of the delegate; a valid session on
+// a request the CSRF rule refuses is 403. No valid session: the steps
+// above, as if no cookie was sent.
+//
 // A bearer in the system-key form (gws_, system_keys.go) is checked
 // against the gateway's system keys only, never the delegate: on the
 // routes a system key may call it passes with the system role; on
@@ -79,11 +85,31 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 			g.serveSystemKey(w, r, next, bearer)
 			return
 		}
-		if need == adminRoleAnonymous && bearer == "" {
+		var (
+			role           adminRole
+			subject        string
+			outcome        string
+			status         int
+			sessionFound   bool
+			sessionRefusal string
+		)
+		if bearer == "" {
+			role, subject, sessionFound, sessionRefusal = g.adminSessionOf(r)
+		}
+		if need == adminRoleAnonymous && bearer == "" && !sessionFound {
 			next.ServeHTTP(w, r.WithContext(withAdminRole(r.Context(), adminRoleAnonymous)))
 			return
 		}
-		role, subject, outcome, status := g.authenticateAdminSubject(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
+		switch {
+		case sessionRefusal != "":
+			g.recordAdminAuth(r.Method, "denied_session_csrf", adminRoleAnonymous)
+			http.Error(w, "forbidden: cross-site request with a session cookie ("+sessionRefusal+")", http.StatusForbidden)
+			return
+		case sessionFound:
+			outcome = "ok_session"
+		default:
+			role, subject, outcome, status = g.authenticateAdminSubject(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
+		}
 		if status == 0 && role < need {
 			outcome = "forbidden_role"
 			status = http.StatusForbidden

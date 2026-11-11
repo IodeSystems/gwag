@@ -236,7 +236,9 @@ func (g *Gateway) startClusterTracking(ctx context.Context) (*peerTracker, error
 	// gwag-schemas is managed whether or not this node serves the
 	// Schema Registry: another node may, and a raise or ForgetPeer
 	// must reach every bucket. A missing one is skipped.
-	buckets := append(append([]string(nil), replicaBuckets...), schemasBucketName)
+	// gwag-admin-sessions likewise: it exists from
+	// levelAdminSessions on.
+	buckets := append(append([]string(nil), replicaBuckets...), schemasBucketName, adminSessionsBucketName)
 
 	// A bucket created during an evacuation can be placed on the
 	// node being evacuated.

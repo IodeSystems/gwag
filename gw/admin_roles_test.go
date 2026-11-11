@@ -132,6 +132,7 @@ var rolesMatrix = []roleCase{
 	{"mcpSetAutoInclude", "POST", "/admin/mcp/auto-include", `{"autoInclude":false}`, adminRoleAdmin},
 	{"mcpQuery", "POST", "/admin/mcp/query", `{"query":"{ __typename }"}`, adminRoleAdmin},
 	{"rotateDevToken", "POST", "/admin/dev-token/rotate", "", adminRoleAdmin},
+	{"revokeAdminSessions", "POST", "/admin/sessions/revoke", `{"subject":"x@example.com"}`, adminRoleAdmin},
 	{"listAppKeys", "GET", "/admin/app-keys", "", adminRoleAdmin},
 	{"listReplayDiffs", "GET", "/admin/replay/diffs", "", adminRoleAdmin},
 	{"getSwitchover", "GET", "/admin/switchover", "", adminRoleDev},

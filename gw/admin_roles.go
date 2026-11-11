@@ -425,10 +425,13 @@ func (g *Gateway) adminRoleFromBearer(ctx context.Context, bearer, method, path 
 // adminRoleFromRequestContext resolves the role of a GraphQL request:
 // the Authorization header of the HTTP request (or WebSocket
 // handshake), else `authorization` in the graphql-transport-ws
-// connection_init payload (browsers cannot set WebSocket headers).
+// connection_init payload (browsers cannot set WebSocket headers),
+// else a session cookie on the request (WithAdminSession; a WebSocket
+// handshake needs an Origin naming this host).
 func (g *Gateway) adminRoleFromRequestContext(ctx context.Context, method, path string) adminRole {
 	bearer := ""
-	if r := HTTPRequestFromContext(ctx); r != nil {
+	r := HTTPRequestFromContext(ctx)
+	if r != nil {
 		bearer = bearerFromRequest(r)
 	}
 	if bearer == "" {
@@ -441,6 +444,16 @@ func (g *Gateway) adminRoleFromRequestContext(ctx context.Context, method, path 
 					}
 				}
 			}
+		}
+	}
+	if bearer == "" {
+		if role, _, found, refused := g.adminSessionOf(r); found {
+			if refused != "" {
+				g.recordAdminAuth(method, "denied_session_csrf", adminRoleAnonymous)
+				return adminRoleAnonymous
+			}
+			g.recordAdminAuth(method, "ok_session", role)
+			return role
 		}
 	}
 	return g.adminRoleFromBearer(ctx, bearer, method, path)

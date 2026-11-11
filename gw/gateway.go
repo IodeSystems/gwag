@@ -116,6 +116,10 @@ type Gateway struct {
 	// pulled holds the pulled service profiles (profile_pull.go).
 	pulled pulledProfiles
 
+	// adminSessions is the admin session key and revocation store
+	// (admin_session_store.go).
+	adminSessions adminSessionState
+
 	// trackMu serialises startClusterTracking. It is held across the
 	// JetStream calls that open the buckets; g.mu is not, so a slow or
 	// unavailable JetStream does not block registration and HTTP boot.
@@ -383,6 +387,9 @@ type config struct {
 	subAuth      SubscriptionAuthOptions
 	adminToken   []byte
 	adminDataDir string
+	// adminSession is WithAdminSession (admin_session.go); nil = no
+	// session cookies.
+	adminSession AdminSessionAuthenticator
 	// requireAppKeys is WithRequireAppKeys (app_keys.go).
 	requireAppKeys bool
 	// devToken is the WithDevToken value; nil = generate (and persist

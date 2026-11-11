@@ -58,6 +58,13 @@ const (
 	// NATS refuses once they are on ("message TTL status can not be
 	// disabled").
 	levelDeleteMarkers = 1
+
+	// levelAdminSessions: the gwag-admin-sessions bucket holds the
+	// key that signs admin session cookies and the revocation
+	// cutoffs (admin_session_store.go). Below it a cluster refuses
+	// sessions: a node of an older binary would not check the
+	// cutoffs, and would not manage the bucket's replicas.
+	levelAdminSessions = 2
 )
 
 // clusterFeature is one feature level.
@@ -74,6 +81,7 @@ type clusterFeature struct {
 // clusterFeatures is every feature level, by Level ascending.
 var clusterFeatures = []clusterFeature{
 	{Level: levelDeleteMarkers, Name: "kv-delete-markers", Apply: applyDeleteMarkers},
+	{Level: levelAdminSessions, Name: "admin-sessions", Apply: applyAdminSessions},
 }
 
 // clusterLevelMax is the highest level this binary supports.

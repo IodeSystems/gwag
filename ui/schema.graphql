@@ -69,6 +69,7 @@ type AdminMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAdminSessions(body: admin_RevokeAdminSessionsInBodyInput!): admin_RevokeAdminSessionsOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   setCost(body: admin_CostInBodyInput!): admin_LimitRecord
@@ -202,6 +203,7 @@ type AdminStableMutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAdminSessions(body: admin_RevokeAdminSessionsInBodyInput!): admin_RevokeAdminSessionsOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   setCost(body: admin_CostInBodyInput!): admin_LimitRecord
@@ -331,6 +333,7 @@ type AdminV1MutationNamespace {
     """Lower-case slug: [a-z0-9][a-z0-9_-]{0,62}."""
     id: String!
   ): admin_PutExternalDependentOutBody
+  revokeAdminSessions(body: admin_RevokeAdminSessionsInBodyInput!): admin_RevokeAdminSessionsOutBody
   revokeAppKey(id: String!): admin_RevokeAppKeyOutBody
   rotateDevToken: admin_RotateDevTokenOutBody
   setCost(body: admin_CostInBodyInput!): admin_LimitRecord
@@ -1600,6 +1603,17 @@ type admin_RetractStableOutBody {
 input admin_ReviewExternalDependentInBodyInput {
   """Next review date, RFC 3339; must be in the future. The reviewer is the authenticated caller; the body names no one."""
   reviewAt: String!
+}
+
+input admin_RevokeAdminSessionsInBodyInput {
+  """Email the sessions belong to, or * for every subject."""
+  subject: String!
+}
+
+type admin_RevokeAdminSessionsOutBody {
+  """Sessions issued at or before this time (unix ms) are refused."""
+  notBeforeUnixMs: Long!
+  subject: String!
 }
 
 type admin_RevokeAppKeyOutBody {
