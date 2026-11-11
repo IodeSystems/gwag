@@ -19,6 +19,7 @@ type Flags struct {
 	Scopes               string
 	AllowUnverifiedEmail bool
 	SessionTTL           time.Duration
+	CLITokenTTL          time.Duration
 	GroupsClaim          string
 	Rules                ruleList
 }
@@ -38,6 +39,7 @@ func RegisterFlags(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.Scopes, "sso-scopes", strings.Join(DefaultScopes, ","), "Comma-separated scopes to request")
 	fs.BoolVar(&f.AllowUnverifiedEmail, "sso-allow-unverified-email", false, "Admit an email the provider has not marked email_verified. Off: such a sign-in is refused")
 	fs.DurationVar(&f.SessionTTL, "sso-session-ttl", DefaultSessionTTL, "How long an SSO session lasts")
+	fs.DurationVar(&f.CLITokenTTL, "sso-cli-token-ttl", DefaultCLITokenTTL, "How long a gwag login --sso bearer lasts; never longer than --sso-session-ttl")
 	fs.StringVar(&f.GroupsClaim, "sso-groups-claim", "groups", "ID token or userinfo claim that lists the person's groups, for group: rules")
 	fs.Var(&f.Rules, "sso-rule", "Role rule KIND:VALUE=ROLE, repeatable, first match wins: email:alice@example.com=admin, domain:example.com=dev, group:gwag-admins=admin. No match: sign-in refused")
 	return f
@@ -55,6 +57,7 @@ func (f *Flags) Build() (*SSO, error) {
 		RedirectURL:          strings.TrimSpace(f.RedirectURL),
 		AllowUnverifiedEmail: f.AllowUnverifiedEmail,
 		SessionTTL:           f.SessionTTL,
+		CLITokenTTL:          f.CLITokenTTL,
 		GroupsClaim:          strings.TrimSpace(f.GroupsClaim),
 	}
 	if f.ClientSecretEnv != "" {

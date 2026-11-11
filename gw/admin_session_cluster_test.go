@@ -2,9 +2,12 @@ package gateway_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +124,99 @@ func TestAdminSessionAcrossNodes(t *testing.T) {
 			t.Fatal("revocation on B did not reach A")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// gwag login --sso across nodes: the callback on A stores the code, B
+// trades it, the bearer passes on A, and the code is spent on both.
+func TestAdminSessionCLIAcrossNodes(t *testing.T) {
+	p := oidctest.New(t, "gwag-test")
+	newSSO := func() *oidc.SSO {
+		s, err := oidc.New(oidc.Config{
+			Issuer: p.URL, ClientID: "gwag-test", RedirectURL: "http://gwag.test/auth/callback",
+			Rules: []oidc.Rule{{Kind: oidc.RuleDomain, Value: "example.com", Role: gateway.AdminSessionAdmin}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	ssoA, ssoB := newSSO(), newSSO()
+	a, b := gateway.SharedClusterPair(t,
+		[]gateway.Option{gateway.WithAdminSession(ssoA)},
+		[]gateway.Option{gateway.WithAdminSession(ssoB)})
+	mux := func(g *gateway.Gateway, s *oidc.SSO) *http.ServeMux {
+		m := http.NewServeMux()
+		s.Mount(m, g)
+		adminMux, _, err := g.AdminHumaRouter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Handle("/api/admin/", http.StripPrefix("/api", g.AdminMiddleware(adminMux)))
+		return m
+	}
+	muxA, muxB := mux(a, ssoA), mux(b, ssoB)
+	serve := func(m *http.ServeMux, r *http.Request) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		m.ServeHTTP(rec, r)
+		return rec
+	}
+	ctx := context.Background()
+	deadline := time.Now().Add(10 * time.Second)
+	for _, g := range []*gateway.Gateway{a, b} {
+		for {
+			if _, err := g.AdminSessionKey(ctx); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("session key not ready")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	verifier := "verifier-verifier-verifier-verifier-verifier"
+	sum := sha256.Sum256([]byte(verifier))
+	q := url.Values{"port": {"40000"}, "state": {"st"}, "challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}}
+	rec := serve(muxA, httptest.NewRequest(http.MethodGet, "/auth/cli?"+q.Encode(), nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("/auth/cli: %d %s", rec.Code, rec.Body)
+	}
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	if err := p.Expect(loc.String()); err != nil {
+		t.Fatal(err)
+	}
+	cb := httptest.NewRequest(http.MethodGet, "/auth/callback?code="+oidctest.Code+"&state="+url.QueryEscape(loc.Query().Get("state")), nil)
+	for _, c := range rec.Result().Cookies() {
+		cb.AddCookie(c)
+	}
+	rec = serve(muxA, cb)
+	back, _ := url.Parse(rec.Header().Get("Location"))
+	code := back.Query().Get("code")
+	if back.Host != "127.0.0.1:40000" || code == "" {
+		t.Fatalf("callback on A: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	exchange := func(m *http.ServeMux) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"code": code, "verifier": verifier})
+		r := httptest.NewRequest(http.MethodPost, "/auth/cli/token", strings.NewReader(string(body)))
+		r.Header.Set("Content-Type", "application/json")
+		return serve(m, r)
+	}
+	rec = exchange(muxB)
+	var out oidc.CLITokenResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if rec.Code != http.StatusOK || out.Token == "" {
+		t.Fatalf("exchange on B: %d %s", rec.Code, rec.Body)
+	}
+	if rec := exchange(muxA); rec.Code != http.StatusBadRequest {
+		t.Errorf("code reused on A: %d, want 400", rec.Code)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/admin/whoami", nil)
+	r.Header.Set("Authorization", "Bearer "+out.Token)
+	var who struct{ Role string }
+	_ = json.Unmarshal(serve(muxA, r).Body.Bytes(), &who)
+	if who.Role != "admin" {
+		t.Errorf("B's bearer on A: role %q", who.Role)
 	}
 }

@@ -14,11 +14,15 @@
 // revocation reaches all of them. The gateway also applies the CSRF
 // rule to cookie-authenticated requests (gateway.WithAdminSession).
 //
+// gwag login --sso signs the CLI in through the same flow (cli.go):
+// the browser finishes at a loopback listener of the CLI, which trades
+// a one-time code for a session bearer (gateway.AdminSessionBearerPrefix).
+//
 // Wiring:
 //
 //	sso, err := oidc.New(cfg)
 //	g := gateway.New(gateway.WithAdminSession(sso), ...)
-//	sso.Mount(mux, g)                       // /auth/login, /auth/callback, /auth/logout, /auth/whoami
+//	sso.Mount(mux, g)                       // /auth/login, /auth/callback, /auth/logout, /auth/whoami, /auth/cli, /auth/cli/token
 //	g.AddOpenAPIBytes(adminSpec, gateway.As("admin"), gateway.To(...),
 //		gateway.ForwardHeaders(gateway.AdminForwardHeaders...))
 //
@@ -74,6 +78,11 @@ type Store interface {
 	AdminSessionKey(ctx context.Context) ([]byte, error)
 	// AdminSessionNotBefore is subject's revocation cutoff, unix ms.
 	AdminSessionNotBefore(ctx context.Context, subject string) (int64, error)
+	// PutAdminLoginCode and TakeAdminLoginCode hold the one-time
+	// codes of gwag login --sso; a code put on one node is taken at
+	// most once, on any node.
+	PutAdminLoginCode(ctx context.Context, id string, value []byte, ttl time.Duration) error
+	TakeAdminLoginCode(ctx context.Context, id string) ([]byte, bool, error)
 }
 
 // Config is the provider and the role rules.
@@ -93,6 +102,9 @@ type Config struct {
 	AllowUnverifiedEmail bool
 	// SessionTTL defaults to DefaultSessionTTL.
 	SessionTTL time.Duration
+	// CLITokenTTL is how long a gwag login --sso bearer lasts;
+	// default DefaultCLITokenTTL, never longer than SessionTTL.
+	CLITokenTTL time.Duration
 	// GroupsClaim is the claim that lists the groups; default "groups".
 	GroupsClaim string
 	// Rules decide the role, first match wins. No match: no access.
@@ -141,21 +153,27 @@ func New(cfg Config) (*SSO, error) {
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = DefaultSessionTTL
 	}
+	if cfg.CLITokenTTL <= 0 {
+		cfg.CLITokenTTL = DefaultCLITokenTTL
+	}
+	cfg.CLITokenTTL = min(cfg.CLITokenTTL, cfg.SessionTTL)
 	if cfg.GroupsClaim == "" {
 		cfg.GroupsClaim = "groups"
 	}
 	return &SSO{cfg: cfg}, nil
 }
 
-// Mount registers /auth/login, /auth/callback, /auth/logout and
-// /auth/whoami on mux and sets the store the sessions are checked
-// against.
+// Mount registers /auth/login, /auth/callback, /auth/logout,
+// /auth/whoami, /auth/cli and /auth/cli/token on mux and sets the
+// store the sessions are checked against.
 func (s *SSO) Mount(mux *http.ServeMux, store Store) {
 	s.store.Store(&storeBox{store})
 	mux.HandleFunc("GET /auth/login", s.Login)
 	mux.HandleFunc("GET /auth/callback", s.Callback)
 	mux.HandleFunc("POST /auth/logout", s.Logout)
 	mux.HandleFunc("GET /auth/whoami", s.WhoAmI)
+	mux.HandleFunc("GET /auth/cli", s.CLILogin)
+	mux.HandleFunc("POST /auth/cli/token", s.CLIToken)
 }
 
 func (s *SSO) storeOf() Store {
@@ -270,6 +288,8 @@ type statePayload struct {
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
 	Exp      int64  `json:"x"`
+	// CLI is set when gwag login --sso started the flow (/auth/cli).
+	CLI *cliFlow `json:"c,omitempty"`
 }
 
 type sessionPayload struct {
@@ -285,6 +305,11 @@ type sessionPayload struct {
 
 // Login starts the flow: GET /auth/login.
 func (s *SSO) Login(w http.ResponseWriter, r *http.Request) {
+	s.login(w, r, nil)
+}
+
+// login starts the flow; cli is set for gwag login --sso.
+func (s *SSO) login(w http.ResponseWriter, r *http.Request, cli *cliFlow) {
 	key, err := s.key(r.Context())
 	if err != nil {
 		slog.Warn("sso: session store unavailable", "err", err)
@@ -303,6 +328,7 @@ func (s *SSO) Login(w http.ResponseWriter, r *http.Request) {
 		Nonce:    randomString(),
 		Verifier: oauth2.GenerateVerifier(),
 		Exp:      s.now().Add(stateTTL).Unix(),
+		CLI:      cli,
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:  stateCookie,
@@ -379,6 +405,10 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		errorPage(w, http.StatusUnauthorized, "Sign-in rejected", "The provider's identity token did not verify. Start again.")
+		return
+	}
+	if sp.CLI != nil {
+		s.finishCLI(w, r, sp.CLI, id)
 		return
 	}
 	now := s.now()
@@ -492,20 +522,27 @@ func (s *SSO) session(r *http.Request) (sessionPayload, bool) {
 	if err != nil || c.Value == "" {
 		return sessionPayload{}, false
 	}
+	return s.verifySession(r.Context(), "session", c.Value)
+}
+
+// verifySession checks a signed session payload: signature under
+// purpose ("session" for the cookie, "cli-bearer" for the bearer, so
+// neither passes as the other), expiry, and the revocation cutoff.
+func (s *SSO) verifySession(ctx context.Context, purpose, value string) (sessionPayload, bool) {
 	st := s.storeOf()
 	if st == nil {
 		return sessionPayload{}, false
 	}
-	key, err := st.AdminSessionKey(r.Context())
+	key, err := st.AdminSessionKey(ctx)
 	if err != nil {
 		slog.Warn("sso: session key unavailable; refusing the session", "err", err)
 		return sessionPayload{}, false
 	}
 	var sp sessionPayload
-	if !verify(key, "session", c.Value, &sp) || sp.Exp < s.now().Unix() || sp.Email == "" {
+	if !verify(key, purpose, value, &sp) || sp.Exp < s.now().Unix() || sp.Email == "" {
 		return sessionPayload{}, false
 	}
-	nb, err := st.AdminSessionNotBefore(r.Context(), sp.Email)
+	nb, err := st.AdminSessionNotBefore(ctx, sp.Email)
 	if err != nil {
 		slog.Warn("sso: revocation lookup failed; refusing the session", "email", sp.Email, "err", err)
 		return sessionPayload{}, false

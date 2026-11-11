@@ -545,6 +545,12 @@ func (f failingStore) AdminSessionKey(context.Context) ([]byte, error) { return 
 func (f failingStore) AdminSessionNotBefore(context.Context, string) (int64, error) {
 	return 0, f.err
 }
+func (f failingStore) PutAdminLoginCode(context.Context, string, []byte, time.Duration) error {
+	return f.err
+}
+func (f failingStore) TakeAdminLoginCode(context.Context, string) ([]byte, bool, error) {
+	return nil, false, f.err
+}
 
 // The store fails (a cluster below the sessions feature level): login
 // says why, whoami reports it, no session is accepted.
