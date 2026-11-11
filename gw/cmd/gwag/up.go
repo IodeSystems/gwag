@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 
 	gateway "github.com/iodesystems/gwag/v2/gw"
+	"github.com/iodesystems/gwag/v2/gw/oidc"
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 	gwui "github.com/iodesystems/gwag/v2/ui"
 )
@@ -88,6 +89,7 @@ func upCmd(args []string) int {
 	mirrorTLSCA := fs.String("mirror-tls-ca", "", "CA that signs both sides' --mirror-tls-cert")
 	adminTokenFile := fs.String("admin-token-file", "", "Read the admin bearer token (hex) from this file instead of generating one in the data dir. Env GWAG_ADMIN_TOKEN works the same when the flag is empty. Use it to hand every node of a deployment one platform-managed secret")
 	srFlags := addSchemaRegistryFlags(fs)
+	ssoFlags := oidc.RegisterFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
 		fmt.Fprintln(fs.Output(), "  Boots a standalone gateway: embedded NATS, admin endpoints, UI,")
@@ -219,6 +221,14 @@ func upCmd(args []string) int {
 	if srOpt != nil {
 		gwOpts = append(gwOpts, srOpt)
 	}
+	sso, err := ssoFlags.Build()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if sso != nil {
+		gwOpts = append(gwOpts, gateway.WithAdminSession(sso))
+	}
 	sinkOpts, err := declarationsSinkOptions(*declHook, *declHookSecret, *declHookMode, *declFile, *declFileMode)
 	if err != nil {
 		log.Fatal(err)
@@ -257,6 +267,10 @@ func upCmd(args []string) int {
 	mux.Handle("/api/admin/", http.StripPrefix("/api", gw.AdminMiddleware(adminMux)))
 	gw.MountMCP(mux)
 	srFlags.mount(mux, gw)
+	if sso != nil {
+		sso.Mount(mux, gw)
+		log.Printf("sso: sign-in at /auth/login with %s", ssoFlags.Issuer)
+	}
 	if pmux := gw.PprofMux(); pmux != nil {
 		mux.Handle("/debug/pprof/", gw.AdminMiddleware(pmux))
 		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")
@@ -276,7 +290,8 @@ func upCmd(args []string) int {
 
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),
-		gateway.To("http://localhost"+*httpAddr+"/api")); err != nil {
+		gateway.To("http://localhost"+*httpAddr+"/api"),
+		gateway.ForwardHeaders(gateway.AdminForwardHeaders...)); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
 

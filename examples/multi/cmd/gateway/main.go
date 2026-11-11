@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	gateway "github.com/iodesystems/gwag/v2/gw"
+	"github.com/iodesystems/gwag/v2/gw/oidc"
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 	gwui "github.com/iodesystems/gwag/v2/ui"
 )
@@ -106,6 +107,7 @@ func main() {
 	declFileMode := flag.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
 	autoFinalize := flag.Bool("cluster-auto-finalize", false, "Raise the cluster feature level as soon as every live peer supports a higher one, instead of waiting for gwag cluster finalize. Ends the rollback window without an operator step")
 	clusterReplicas := flag.String("cluster-replicas", "odd", "JetStream KV replica policy: odd (largest odd <= min(peers,3); 2 peers stay at R1), auto (min(peers,3)), or a fixed integer 1..5 capped at live peers")
+	ssoFlags := oidc.RegisterFlags(flag.CommandLine)
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")
 	flag.Parse()
 
@@ -239,6 +241,14 @@ func main() {
 		"library.**",
 		"admin.**",
 	))
+	// Browser SSO for the admin UI (--sso-*, docs/admin-auth.md#sso).
+	sso, err := ssoFlags.Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if sso != nil {
+		gwOpts = append(gwOpts, gateway.WithAdminSession(sso))
+	}
 	gw := gateway.New(gwOpts...)
 
 	// ----------------------------------------------------------------
@@ -331,6 +341,10 @@ func main() {
 	// WithMCPInclude and tunable at runtime via /api/admin/mcp/*.
 	// See examples/multi/cmd/mcp-demo for a worked client.
 	gw.MountMCP(mux)
+	// /auth/login, /auth/callback, /auth/logout, /auth/whoami.
+	if sso != nil {
+		sso.Mount(mux, gw)
+	}
 	if pmux := gw.PprofMux(); pmux != nil {
 		// Bearer-gated. pprof leaks goroutine + heap state; never serve it
 		// without auth.
@@ -349,9 +363,12 @@ func main() {
 	// Self-ingest the huma admin OpenAPI so its operations become
 	// GraphQL fields under namespace "admin". Note the base URL points
 	// at /api so the OpenAPI dispatch path resolves to the gated mount.
+	// AdminForwardHeaders carries the bearer and the SSO cookie (with
+	// the Sec-Fetch-Site the CSRF check reads) to /api/admin/*.
 	if err := gw.AddOpenAPIBytes(adminSpec,
 		gateway.As("admin"),
-		gateway.To("http://localhost"+*httpAddr+"/api")); err != nil {
+		gateway.To("http://localhost"+*httpAddr+"/api"),
+		gateway.ForwardHeaders(gateway.AdminForwardHeaders...)); err != nil {
 		log.Fatalf("self-ingest admin openapi: %v", err)
 	}
 
