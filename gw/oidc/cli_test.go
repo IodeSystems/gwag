@@ -241,3 +241,22 @@ func TestCLIBearerRevokedAndRoleChange(t *testing.T) {
 		t.Errorf("revoked bearer = %d, want 401", code)
 	}
 }
+
+// A code taken during the revoke allowance gets no bearer; a bearer
+// from a fast clock is ended by the revoke.
+func TestCLIRevocationSkew(t *testing.T) {
+	h := newHarness(t, nil)
+	code := h.cliSignIn(t, "40000", "st").Query().Get("code")
+	h.sso.cfg.Now = func() time.Time { return time.Now().Add(20 * time.Second) }
+	fast := h.cliToken(t)
+	h.sso.cfg.Now = nil
+	if _, err := h.gw.RevokeAdminSessions(context.Background(), "ops@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := h.exchange(code, testVerifier); rec.Code != http.StatusForbidden {
+		t.Errorf("exchange right after revoke = %d: %s", rec.Code, rec.Body)
+	}
+	if _, st := h.roleWithBearer(t, fast.Token); st != http.StatusUnauthorized {
+		t.Errorf("bearer from a fast clock after revoke = %d", st)
+	}
+}

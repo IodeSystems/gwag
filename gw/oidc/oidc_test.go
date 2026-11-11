@@ -510,7 +510,17 @@ func TestSSORevocation(t *testing.T) {
 	if got := h.roleWith(t, sess); got != "anonymous" {
 		t.Errorf("revoked session: role %q, want anonymous", got)
 	}
-	time.Sleep(5 * time.Millisecond)
+	// Sign-in is refused until the skew allowance has passed.
+	if rec := h.signIn(t); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Sessions ended") {
+		t.Errorf("sign-in right after revoke = %d: %s", rec.Code, rec.Body)
+	}
+	// later is the clock once the allowance has passed.
+	later := func() {
+		at := time.Now().Add(gateway.AdminSessionRevokeSkew + 5*time.Millisecond)
+		h.sso.cfg.Now = func() time.Time { return at }
+		time.Sleep(10 * time.Millisecond)
+	}
+	later()
 	sess2 := sessionFrom(t, h.signIn(t))
 	if got := h.roleWith(t, sess2); got != "admin" {
 		t.Errorf("new session after revoke: role %q", got)
@@ -520,7 +530,7 @@ func TestSSORevocation(t *testing.T) {
 		t.Errorf("after revoke *: role %q", got)
 	}
 	// A session cookie cannot call revoke cross-site.
-	time.Sleep(5 * time.Millisecond)
+	later()
 	sess3 := sessionFrom(t, h.signIn(t))
 	if rec := h.admin(http.MethodPost, "/api/admin/sessions/revoke", `{"subject":"*"}`, func(r *http.Request) {
 		r.AddCookie(sess3)
@@ -726,5 +736,20 @@ func TestSSOEmailVerifiedNotMixed(t *testing.T) {
 	h.idp.SetClaims(withClaims(func(c map[string]any) { delete(c, "email"); delete(c, "email_verified") }))
 	if got := h.roleWith(t, sessionFrom(t, h.signIn(t))); got != "admin" {
 		t.Errorf("email from userinfo: role %q", got)
+	}
+}
+
+// A session minted on a node whose clock runs ahead (less than the
+// allowance) is still ended by a revoke.
+func TestSSORevocationClockSkew(t *testing.T) {
+	h := newHarness(t, nil)
+	h.sso.cfg.Now = func() time.Time { return time.Now().Add(20 * time.Second) }
+	sess := sessionFrom(t, h.signIn(t))
+	h.sso.cfg.Now = nil
+	if _, err := h.gw.RevokeAdminSessions(context.Background(), "ops@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.roleWith(t, sess); got != "anonymous" {
+		t.Errorf("session from a fast clock survived the revoke: role %q", got)
 	}
 }

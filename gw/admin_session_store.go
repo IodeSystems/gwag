@@ -40,6 +40,15 @@ const (
 	adminSessionKeyFile         = "session-key"
 	adminSessionRevocationsFile = "admin-sessions.json"
 
+	// AdminSessionRevokeSkew is added to the revocation time to make
+	// the cutoff. A session's issued time comes from the clock of the
+	// node that minted it, the cutoff from the revoking node's; the
+	// allowance covers that much skew between them. Sign-in for the
+	// subject is refused until the cutoff passes.
+	//
+	// Stability: experimental
+	AdminSessionRevokeSkew = 30 * time.Second
+
 	// AdminSessionsAll names every subject in RevokeAdminSessions.
 	//
 	// Stability: experimental
@@ -242,8 +251,8 @@ func (g *Gateway) AdminSessionNotBefore(ctx context.Context, subject string) (in
 }
 
 // RevokeAdminSessions ends every session of subject issued until now
-// (AdminSessionsAll: every subject's), on every node. Returns the
-// cutoff in unix ms.
+// plus AdminSessionRevokeSkew (AdminSessionsAll: every subject's), on
+// every node. Returns the cutoff in unix ms.
 //
 // Stability: experimental
 func (g *Gateway) RevokeAdminSessions(ctx context.Context, subject string) (int64, error) {
@@ -255,7 +264,7 @@ func (g *Gateway) RevokeAdminSessions(ctx context.Context, subject string) (int6
 	if err != nil {
 		return 0, err
 	}
-	now := time.Now().UnixMilli()
+	now := time.Now().Add(AdminSessionRevokeSkew).UnixMilli()
 	if kv == nil {
 		g.adminSessions.mu.Lock()
 		defer g.adminSessions.mu.Unlock()
@@ -451,7 +460,7 @@ func registerAdminSessionRoutes(api huma.API, g *Gateway) {
 		OperationID: "revokeAdminSessions",
 		Method:      http.MethodPost,
 		Path:        "/admin/sessions/revoke",
-		Summary:     "End every SSO session of a subject (an email; * for everyone) issued until now, on every node. Their next request is anonymous; signing in again works. Admin only.",
+		Summary:     "End every SSO session of a subject (an email; * for everyone) issued until 30 s from now (allowance for clock skew between nodes), on every node. Their next request is anonymous; signing in works again after the 30 s. Admin only.",
 	}, func(ctx context.Context, in *revokeAdminSessionsIn) (*revokeAdminSessionsOut, error) {
 		nb, err := g.RevokeAdminSessions(ctx, in.Body.Subject)
 		if err != nil {

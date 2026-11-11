@@ -421,6 +421,11 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 		errorPage(w, http.StatusUnauthorized, "Sign-in rejected", "The provider's identity token did not verify. Start again.")
 		return
 	}
+	if until, revoked := s.revokedUntil(r.Context(), id.Email); revoked {
+		errorPage(w, http.StatusForbidden, "Sessions ended",
+			fmt.Sprintf("The sessions of %s were ended moments ago. Sign in again after %s UTC.", id.Email, until.UTC().Format(time.TimeOnly)))
+		return
+	}
 	if sp.CLI != nil {
 		s.finishCLI(w, r, sp.CLI, id)
 		return
@@ -524,6 +529,22 @@ func (s *SSO) verifyIDToken(ctx context.Context, p *oidc.Provider, tok *oauth2.T
 	}
 	id.Role = role
 	return id, "", false
+}
+
+// revokedUntil reports whether a session minted now for email would be
+// refused: the cutoff (which runs gateway.AdminSessionRevokeSkew ahead
+// of the revoke) is not past yet. A failed lookup is not a refusal
+// here; the session check refuses it later.
+func (s *SSO) revokedUntil(ctx context.Context, email string) (time.Time, bool) {
+	st := s.storeOf()
+	if st == nil {
+		return time.Time{}, false
+	}
+	nb, err := st.AdminSessionNotBefore(ctx, email)
+	if err != nil || nb < s.now().UnixMilli() {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(nb), true
 }
 
 // AdminSession implements gateway.AdminSessionAuthenticator: the

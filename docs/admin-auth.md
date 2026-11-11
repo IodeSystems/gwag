@@ -196,8 +196,12 @@ cross-site GET is refused there too.
 
 **Revoke.** `POST /admin/sessions/revoke` `{"subject":"alice@example.com"}`
 (admin, GraphQL `admin.revokeAdminSessions`) refuses every session of
-that email issued until now, on every node. `"*"` revokes everyone's.
-Signing in again works.
+that email issued until 30 s from now, on every node. `"*"` revokes
+everyone's. The 30 s (`gateway.AdminSessionRevokeSkew`) cover clock
+skew: the issued time comes from the clock of the node that minted the
+session, the cutoff from the revoking node's. Signing in for that email
+is refused until the 30 s have passed, then works again. The same holds
+for `gwag login --sso` bearers.
 
 **Shared state.** The signing key and the revocation cutoffs live in
 the KV bucket `gwag-admin-sessions` (no TTL), so a cookie minted on one

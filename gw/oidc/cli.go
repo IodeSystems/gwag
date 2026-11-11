@@ -191,6 +191,10 @@ func (s *SSO) CLIToken(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusForbidden, c.Email+" has no role on this gateway")
 		return
 	}
+	if until, revoked := s.revokedUntil(r.Context(), c.Email); revoked {
+		fail(http.StatusForbidden, fmt.Sprintf("the sessions of %s were ended moments ago; sign in again after %s UTC", c.Email, until.UTC().Format(time.TimeOnly)))
+		return
+	}
 	now := s.now()
 	exp := now.Add(s.cfg.CLITokenTTL)
 	tok := gateway.AdminSessionBearerPrefix + sign(key, "cli-bearer", sessionPayload{
