@@ -9,16 +9,21 @@
 #   TRAFFIC_SECS=120 bin/shots
 #   SSO=1 bin/shots           # also capture the signed-out SSO page
 #                             #   (examples/sso: docker + Dex, ports 285xx)
+#   CLUSTER=1 bin/shots       # also boot a 3-node examples/multi cluster plus one
+#                             #   standalone node; capture Peers (3 nodes and
+#                             #   "Standalone, not clustered") and Injectors
 #
 # Boots `gwag up` with the examples/multi greeter and library on their own
 # ports, so a gateway on :8080 / :50090 is left alone:
 #   HTTP 18480, control plane 18490, NATS 18422/18448,
 #   greeter 18451, library 18452, Chrome DevTools 18433.
+# CLUSTER=1 adds, on 18481-18484 / 18491-18494 / 18423-18425 / 18462-18464 /
+# 18453, three examples/multi gateways (n1-n3) and a standalone one (s1).
 # Needs: go, curl, node 22+, google-chrome, openssl, ImageMagick (convert).
 # Every process it starts is killed by recorded PID on exit.
 #
 # Default look: preset "walnut" (the UI default), dark. Also writes one
-# light shot and a preset gallery. The CDP driver is docs/shots/shoot.mjs.
+# light shot and a preset gallery (paper in light, the rest in dark). The CDP driver is docs/shots/shoot.mjs.
 set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
@@ -29,14 +34,16 @@ KEEP_RAW=0
 [[ "${1:-}" == "--keep-raw" ]] && KEEP_RAW=1
 
 HTTP_PORT=18480 CP_PORT=18490 NATS_PORT=18422 NATS_CLUSTER=18448
-GREETER_PORT=18451 LIBRARY_PORT=18452 CDP_PORT=18433
+GREETER_PORT=18451 LIBRARY_PORT=18452 CDP_PORT=18433 GREETER2_PORT=18454
 GW="http://127.0.0.1:$HTTP_PORT"
 IMG="$REPO_DIR/docs/img"
 
 for tool in go curl node google-chrome openssl convert ss; do
   command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
 done
-for p in $HTTP_PORT $CP_PORT $NATS_PORT $NATS_CLUSTER $GREETER_PORT $LIBRARY_PORT $CDP_PORT; do
+CL_PORTS=""
+[[ "${CLUSTER:-0}" == 1 ]] && CL_PORTS="18481 18482 18483 18484 18491 18492 18493 18494 18423 18424 18425 18462 18463 18464 18453"
+for p in $HTTP_PORT $CP_PORT $NATS_PORT $NATS_CLUSTER $GREETER_PORT $LIBRARY_PORT $GREETER2_PORT $CDP_PORT $CL_PORTS; do
   if ss -ltn "sport = :$p" | grep -q LISTEN; then
     echo "port $p is in use; stop whatever holds it" >&2; exit 1
   fi
@@ -149,6 +156,9 @@ done
 sleep "$((TRAFFIC_SECS - 12))"
 
 echo "==> capture pages"
+# Intended mode per preset: paper is a light, ink-on-paper preset (its dark mode is
+# "sepia-night", ui/src/ui/theme/presets.ts); the others lead with dark.
+theme_mode() { [[ "$1" == paper ]] && echo light || echo dark; }
 page() { printf '{"file":"%s.png","path":"%s","preset":"%s","mode":"%s"}\n' "$1" "$2" "${3:-walnut}" "${4:-dark}"; }
 {
   page graph /
@@ -161,11 +171,79 @@ page() { printf '{"file":"%s.png","path":"%s","preset":"%s","mode":"%s"}\n' "$1"
   page token-signer /token-signer
   page status-light /status walnut light
   for p in glow walnut graphite paper harbor terminal; do
-    page "theme-$p" / "$p" dark
+    page "theme-$p" / "$p" "$(theme_mode "$p")"
   done
   printf '{"file":"signed-out.png","path":"/status","preset":"walnut","mode":"dark","token":false}\n'
 } | spec "$RUN/pages.json"
 shoot "$RUN/pages.json"
+
+echo "==> lifecycle: greeter v2 registers, then the deprecate and retract dialogs"
+# Throwaway stack only: the deprecate below is real and stays until the stack exits.
+cd examples/multi
+spawn "$RUN/greeter" --addr ":$GREETER2_PORT" --advertise "localhost:$GREETER2_PORT" \
+  --gateway "localhost:$CP_PORT" --nats "nats://localhost:$NATS_PORT" --version v2
+cd "$REPO_DIR"
+for _ in $(seq 60); do
+  curl -fs "${AUTH[@]}" "$GW/api/admin/services" | grep -q '"v2"' && break; sleep 0.5
+done
+DEP_REASON='Moved to greeter v2; v1 is removed once billing and reports migrate'
+{
+  printf '{"file":"lc-services.png","path":"/services","preset":"walnut","mode":"dark"}\n'
+  printf '{"file":"lc-deprecate-dialog.png","path":"/services","preset":"walnut","mode":"dark","steps":[{"click":"Deprecate","row":"greeter v1 "},{"fill":"[role=dialog] textarea:not([aria-hidden=true])","value":"%s"}]}\n' "$DEP_REASON"
+  printf '{"file":"lc-deprecated-row.png","path":"/services","preset":"walnut","mode":"dark","steps":[{"click":"Deprecate","row":"greeter v1 "},{"fill":"[role=dialog] textarea:not([aria-hidden=true])","value":"%s"},{"click":"Deprecate","scope":"[role=dialog]"},{"wait":1500}]}\n' "$DEP_REASON"
+  printf '{"file":"lc-retract-dialog.png","path":"/services","preset":"walnut","mode":"dark","steps":[{"click":"Retract Stable","row":"greeter v2 "}]}\n'
+} | spec "$RUN/lc.json"
+shoot "$RUN/lc.json"
+
+if [[ "${CLUSTER:-0}" == 1 ]]; then
+  echo "==> cluster: 3 examples/multi gateways + 1 standalone"
+  go build -o "$RUN/mgw" ./examples/multi/cmd/gateway
+  for i in 1 2 3; do
+    peers=()
+    for j in 1 2 3; do if [[ $j != $i ]]; then peers+=(--nats-peer "127.0.0.1:$((18461 + j))"); fi; done
+    spawn "$RUN/mgw" --node-name "n$i" --http "127.0.0.1:$((18480 + i))" \
+      --control-plane "127.0.0.1:$((18490 + i))" --nats-listen "127.0.0.1:$((18422 + i))" \
+      --nats-cluster "127.0.0.1:$((18461 + i))" --nats-data "$RUN/n$i" "${peers[@]}" \
+      --environment demo --public-services all --insecure-subscribe >"$RUN/n$i.log" 2>&1
+  done
+  mkdir -p "$RUN/s1"
+  spawn "$RUN/mgw" --http 127.0.0.1:18484 --control-plane 127.0.0.1:18494 \
+    --admin-data-dir "$RUN/s1" --environment demo --public-services all >"$RUN/s1.log" 2>&1
+  N1="http://127.0.0.1:18481"
+  for _ in $(seq 120); do
+    [[ -s "$RUN/n1/admin-token" ]] && break; sleep 0.5
+  done
+  N1TOK="$(cat "$RUN/n1/admin-token")"
+  ok=0
+  for _ in $(seq 120); do
+    n="$(curl -fs -H "Authorization: Bearer $N1TOK" "$N1/api/admin/peers" 2>/dev/null | grep -o '"nodeId"' | wc -l || true)"
+    [[ "$n" == 3 ]] && { ok=1; break; }
+    sleep 0.5
+  done
+  [[ "$ok" == 1 ]] || { echo "cluster did not reach 3 peers" >&2; tail -20 "$RUN/n1.log" >&2; exit 1; }
+  cd examples/multi
+  spawn "$RUN/greeter" --addr ":18453" --advertise "localhost:18453" \
+    --gateway "localhost:18491" --nats "nats://localhost:18423"
+  cd "$REPO_DIR"
+  for _ in $(seq 60); do
+    curl -fs -H "Authorization: Bearer $N1TOK" "$N1/api/admin/services" | grep -q '"greeter"' && break; sleep 0.5
+  done
+  sleep 3  # injector inventory turns active on the schema rebuild after registration
+  S1TOK=""
+  for _ in $(seq 60); do
+    [[ -s "$RUN/s1/admin-token" ]] && { S1TOK="$(cat "$RUN/s1/admin-token")"; break; }; sleep 0.5
+  done
+  [[ -n "$S1TOK" ]] || { echo "standalone token missing" >&2; exit 1; }
+  printf '{"base":"%s","token":"%s","out":"%s","chromePort":%s,"scale":%s,"shots":[%s,%s]}\n' \
+    "$N1" "$N1TOK" "$RAW" "$CDP_PORT" "$SCALE" \
+    '{"file":"peers-cluster.png","path":"/peers","preset":"walnut","mode":"dark"}' \
+    '{"file":"injectors.png","path":"/injectors","preset":"walnut","mode":"dark"}' > "$RUN/cl.json"
+  shoot "$RUN/cl.json"
+  printf '{"base":"http://127.0.0.1:18484","token":"%s","out":"%s","chromePort":%s,"scale":%s,"shots":[%s]}\n' \
+    "$S1TOK" "$RAW" "$CDP_PORT" "$SCALE" \
+    '{"file":"peers-standalone.png","path":"/peers","preset":"walnut","mode":"dark"}' > "$RUN/sa.json"
+  shoot "$RUN/sa.json"
+fi
 
 if [[ "${SSO:-0}" == 1 ]]; then
   echo "==> SSO sign-in page (examples/sso, Dex in docker)"
@@ -182,13 +260,23 @@ opt() { convert "$1" -strip -colors 256 -define png:compression-level=9 "$2"; }
 for f in graph services status deprecated peers schema mcp-allowlist token-signer status-light signed-out; do
   opt "$RAW/$f.png" "$IMG/admin-$f.png"
 done
+for f in lc-services lc-deprecate-dialog lc-retract-dialog; do
+  opt "$RAW/$f.png" "$IMG/admin-$f.png"
+done
+# Crop the toasts (bottom corners) off the after-deprecation shot.
+opt "$RAW/lc-deprecated-row.png[2880x1300+0+0]" "$IMG/admin-lc-deprecated-row.png"
+if [[ "${CLUSTER:-0}" == 1 ]]; then
+  opt "$RAW/peers-cluster.png" "$IMG/admin-peers-cluster.png"
+  opt "$RAW/peers-standalone.png" "$IMG/admin-peers-standalone.png"
+  opt "$RAW/injectors.png" "$IMG/admin-injectors.png"
+fi
 # The SSO page has no services (the sso stack registers none): keep the app bar and banner.
 [[ -f "$RAW/sso-signin.png" ]] && opt "$RAW/sso-signin.png[2880x330+0+0]" "$IMG/admin-sso-signin.png"
 
 # Theme gallery: 3x2 contact sheet of the graph page, one preset each.
 for p in glow walnut graphite paper harbor terminal; do
   convert "$RAW/theme-$p.png" -resize 640x -gravity SouthWest -fill white -undercolor '#00000099' \
-    -pointsize 22 -annotate +8+8 " $p " "$RUN/t-$p.png"
+    -pointsize 22 -annotate +8+8 " $p · $(theme_mode "$p") " "$RUN/t-$p.png"
 done
 montage_args=()
 for p in glow walnut graphite paper harbor terminal; do montage_args+=("$RUN/t-$p.png"); done

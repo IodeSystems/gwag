@@ -4,9 +4,16 @@
 //   node docs/shots/shoot.mjs SPEC.json
 //
 // SPEC: { base, token, out, chromePort, scale, shots: [{ file, path,
-//   preset, mode, token? , fill? }] }
+//   preset, mode, token?, steps?, fill?, after? }] }
 //   token:  admin token placed in sessionStorage; false for a signed-out page
+//   steps:  run in order after the page settles, before the capture:
+//             { click: "Label", row?, scope? }  click the button/tab with that
+//                 exact text; row limits it to the table row whose text (spaces
+//                 collapsed) contains row; scope is a CSS selector to search in
+//             { fill: "selector", value }      type into an input / textarea
+//             { wait: ms }
 //   fill:   [{ selector, value }] typed into inputs before the capture
+//   after:  extra ms to wait before the capture
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -94,15 +101,40 @@ for (const s of spec.shots) {
   await send('Page.navigate', { url: base + s.path });
   await sleep(1000);
   const ok = await settle();
-  for (const f of s.fill ?? []) {
-    await evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(f.selector)});
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      set.call(el, ${JSON.stringify(f.value)});
+  const fillEl = (selector, value) => evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return false;
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+      Object.getOwnPropertyDescriptor(proto.prototype, 'value').set.call(el, ${JSON.stringify(value)});
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
     })()`);
-  }
+  const stepFail = (what) => { console.log('FAILED', s.file, 'step:', what); };
+  let stepsOk = true;
+  for (const f of s.fill ?? []) await fillEl(f.selector, f.value);
   if (s.fill) await sleep(500);
+  for (const st of s.steps ?? []) {
+    let r = true;
+    if (st.click !== undefined) {
+      r = await evaluate(`(() => {
+        const scope = ${st.row ? `[...document.querySelectorAll('tr')].find((t) => t.innerText.replace(/\\s+/g, ' ').includes(${JSON.stringify(st.row)}))` : st.scope ? `document.querySelector(${JSON.stringify(st.scope)})` : 'document'};
+        if (!scope) return false;
+        const b = [...scope.querySelectorAll('button, [role=button], [role=tab]')]
+          .find((x) => x.innerText.trim() === ${JSON.stringify(st.click)} && !x.disabled);
+        if (!b) return false;
+        b.click();
+        return true;
+      })()`);
+      await sleep(900);
+    } else if (st.fill !== undefined) {
+      r = await fillEl(st.fill, st.value);
+      await sleep(300);
+    } else if (st.wait !== undefined) {
+      await sleep(st.wait);
+    }
+    if (!r) { stepFail(JSON.stringify(st)); stepsOk = false; break; }
+  }
+  if (!stepsOk) continue;
   if (s.after) { await sleep(s.after); }
   const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   if (shot.timeout || !shot.result) { console.log('FAILED', s.file); continue; }
