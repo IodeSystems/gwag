@@ -481,7 +481,7 @@ Per-cluster drift is prevented by the canonical hash gate in the
 pool: a replica with a mismatched proto can't join an existing
 `(ns, version)` pool.
 
-## What this *doesn't* (yet) tell you
+## Who still calls a deprecated version
 
 The `dispatch_duration_seconds` Prometheus histogram already carries
 a `caller` label (extracted via the caller-identity seams documented
@@ -489,9 +489,11 @@ in [`caller-identity.md`](./caller-identity.md) — forgeable-by-design
 "public" mode, HMAC for production, delegated when you want richer
 attrs alongside), so "who's calling this method?" is queryable today.
 
-What's still missing is the *deprecated-operation* UI panel — a
-per-(namespace, method) view of which callers are still hitting an
-`@deprecated` op so you know who to nudge before retiring it. Until
-that lands, deprecation is "announce, wait, retire," with the
-schema-side warnings emitted automatically and Prometheus answering
-"who's still on it?" via the caller label.
+The admin UI answers it on the **Deprecated** page: each deprecated
+`(namespace, version)` with traffic in the last 24 hours expands to its
+per-method, per-caller counts and p50 / p95 latency, and a second table
+lists deprecated versions with no traffic ("Safe to retire"). Caller
+names come from the caller-identity seam, so without `--caller-id-public`
+(or a real identity mode) every caller reads `unknown`.
+
+![Deprecated page: library v1 with the callers still hitting it](./img/admin-deprecated.png)

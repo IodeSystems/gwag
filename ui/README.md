@@ -49,15 +49,20 @@ src/
   providers/
     EventsProvider.tsx      graphql-ws subscriptions + ring buffer; useSubscribe() / useEvents()
   components/
-    Layout.tsx              AppBar (settings + notifications) + Drawer shell
-    SettingsDrawer.tsx      Admin token entry; useAdminToken() hook
+    Layout.tsx              AppBar (theme, events, settings, SSO) + side nav shell
+    SettingsDrawer.tsx      Theme picker + bearer token entry; useAdminToken() hook
     EventsTray.tsx          Slide-out drawer rendering recent events
   routes/
     __root.tsx              Wraps every page in <Layout>
-    index.tsx               Dashboard (env, peers, services counters)
-    services.tsx            Services table (ListServices)
-    peers.tsx               Peers table + Forget mutation
-    schema.tsx              SDL viewer (raw text from /schema/graphql)
+    index.tsx               Graph: dependency graph (/)
+    status.tsx              Per-service calls, errors, latency (/status)
+    services.tsx            Services table, deprecate / retract (/services)
+    deprecated.tsx          Deprecated versions and their callers (/deprecated)
+    injectors.tsx           InjectType / InjectPath / InjectHeader list (/injectors)
+    peers.tsx               Peers table + Forget mutation (/peers)
+    schema.tsx              GraphQL SDL / OpenAPI / Protobuf viewer (/schema)
+    mcp-allowlist.tsx       MCP include / exclude patterns (/mcp-allowlist)
+    token-signer.tsx        Sign subscribe token (/token-signer)
   queries.graphql           Operations consumed by codegen
 ```
 
@@ -80,27 +85,106 @@ go run ./examples/multi/cmd/gateway --nats-data /tmp/gw1
 # UI at http://localhost:8080/, GraphQL at /api/graphql
 ```
 
+## Pages
+
+Screenshots are generated, not hand-made: `bin/shots` (repo root) boots
+a private gateway with the `examples/multi` services, sends traffic and
+writes `docs/img/admin-*.png`. Run it after a UI change.
+
+**Graph** (`/`). Declared dependencies (solid) and observed calls
+(dashed) between external callers and services. Toggles: Desired /
+Active / Both, "Gateway services", a time window, "External dependent"
+to declare one.
+
+![Graph](../docs/img/admin-graph.png)
+
+**Status** (`/status`). One row per service: health, calls, errors,
+p50 / p95 / p99, and a per-minute sparkline for the last hour. Needs no
+token for public services.
+
+![Status](../docs/img/admin-status.png)
+
+**Services** (`/services`). Namespace, version, tier, STATUS (Ready,
+deprecated), replicas, calls / 24h, p50 / p95, calls / s. Row actions:
+Deprecate (asks for a reason) / Undeprecate, Retract Stable.
+
+![Services](../docs/img/admin-services.png)
+
+**Deprecated** (`/deprecated`). Deprecated versions with traffic,
+expanded per method and caller, then "Safe to retire".
+
+![Deprecated](../docs/img/admin-deprecated.png)
+
+**Peers** (`/peers`). Gateways in the cluster with a Forget action. A
+single node with no cluster shows "Standalone, not clustered" when the
+list is empty.
+
+![Peers](../docs/img/admin-peers.png)
+
+**Schema** (`/schema`). The gateway schema as GraphQL SDL (syntax
+highlighted), OpenAPI or Protobuf SDL, with Filter by service and
+Download.
+
+![Schema](../docs/img/admin-schema.png)
+
+**MCP** (`/mcp-allowlist`). Include and exclude patterns for what `/mcp`
+exposes, an Auto-include switch, and a live "Allowed operations" preview.
+Details: [`docs/mcp.md`](../docs/mcp.md).
+
+![MCP allowlist](../docs/img/admin-mcp-allowlist.png)
+
+**Sign Token** (`/token-signer`). Channel, TTL and kid in; hmac and
+timestamp out. Admin only. The CLI equivalent is `gwag sign`.
+
+![Sign Token](../docs/img/admin-token-signer.png)
+
+**Injectors** (`/injectors`). Lists `InjectType`, `InjectPath` and
+`InjectHeader` registrations; empty on the example stack.
+
+## Themes
+
+Six presets, each with a dark and a light mode: glow, walnut (default),
+graphite, paper, harbor, terminal. Pick one from the palette icon in the
+app bar or the Settings drawer; the sun / moon icon switches mode. Both
+choices are kept in `localStorage` (`gwag.ui.themePreset`,
+`gwag.ui.themeMode`).
+
+![The six presets on the Graph page](../docs/img/admin-themes.png)
+
+![Status page in light mode](../docs/img/admin-status-light.png)
+
 ## Auth
 
-The gateway gates write operations on a bearer token (logged at boot
-as `admin token = …`). To unlock the UI's Forget button and any
-future `admin_*` mutation:
+The gateway logs `admin token = …` and `dev token = …` at boot. The UI
+works in three states:
 
-1. Click the gear icon in the AppBar.
-2. Paste the token into the Settings drawer.
-3. Save — graphql-request reads it from `sessionStorage` per request
-   and sends `Authorization: Bearer <token>` to `/graphql`.
+- **No token.** Public view: the Graph and Status pages show services
+  marked public. The app bar has "Sign in" (and "Sign in with SSO" when
+  the gateway has `--sso-*` set; the token button then reads "Use a
+  token").
 
-The badge dot on the gear is the "no token set" indicator. Storage
-is sessionStorage only — closing the tab discards it; refresh keeps
-it. There's intentionally no "remember me" option; the gateway boot
-log is the source of truth, and persistent UI storage of a long-
-lived bearer is the kind of thing that ends up in a screenshot.
+  ![Signed-out Status page](../docs/img/admin-signed-out.png)
 
-If the deployment fronts the gateway with another auth layer
-(session cookie, OAuth proxy), that's same-origin transparent to the
-UI; the bearer is a separate concern for the gateway's own admin
-surface.
+- **Dev token.** Every service, external dependents editable.
+- **Admin token.** Also every write: drain, deprecate, forget peer,
+  sign tokens.
+
+To sign in with a token:
+
+1. Click the gear icon in the app bar (Settings drawer).
+2. Paste the token under "Bearer token".
+3. Click Save. The app bar chip shows the role (Admin / Dev).
+
+graphql-request reads it from `sessionStorage` per request and sends
+`Authorization: Bearer <token>`. Storage is sessionStorage only: closing
+the tab discards it, refresh keeps it. There is no "remember me"; the
+gateway boot log is the source of truth, and persistent UI storage of a
+long-lived bearer is the kind of thing that ends up in a screenshot.
+
+If the deployment fronts the gateway with another auth layer (session
+cookie, OAuth proxy), that is same-origin transparent to the UI; the
+bearer is a separate concern for the gateway's own admin surface. SSO
+setup: [`docs/admin-auth.md`](../docs/admin-auth.md#sso).
 
 ## Events provider
 

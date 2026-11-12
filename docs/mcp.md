@@ -207,8 +207,14 @@ Six admin endpoints, all under `/api/admin/mcp/` and gated by
 
 The same operations are surfaced as GraphQL fields under the `admin`
 namespace (`Mutation.admin.mcpInclude(body: {…})`, etc.) via the
-huma → OpenAPI → self-ingest path. A GraphQL UI can curate the
-surface without a parallel REST client.
+huma → OpenAPI → self-ingest path. The admin UI's **MCP** page
+(`/mcp-allowlist`) is such a client: an Auto-include switch, Include and
+Exclude pattern lists (type a glob, click Add; the trash icon removes
+one), and an "Allowed operations" table that previews what an agent
+sees from `schema_list`. Include patterns apply while Auto-include is
+off; Exclude patterns apply while it is on.
+
+![MCP allowlist page with greeter.** and library.** included](./img/admin-mcp-allowlist.png)
 
 ## Cluster semantics
 

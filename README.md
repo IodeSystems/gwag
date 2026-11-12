@@ -9,7 +9,7 @@ own codegen tools. Because the gateway reads the schemas, it also
 knows each service's versions, who calls which version, and which
 changes break a caller.
 
-![Live registration: each new service binary appears in the gateway's Services panel without a restart](docs/img/live-reload.gif)
+![Live registration: the admin UI's Services page gains greeter and library as each binary registers, without a gateway restart](docs/img/live-reload.gif)
 
 ## Why
 

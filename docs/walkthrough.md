@@ -46,9 +46,18 @@ curl -s -X POST localhost:8080/api/graphql \
 # → {"data":{"greeter":{"hello":{"greeting":"Hello, world!"}}}}
 ```
 
-Open `http://localhost:8080/` in a browser for the admin UI's
-schema explorer. (The boot token is logged at gateway startup and
-written to `/tmp/gwag-multi/admin-token`; paste it when prompted.)
+Open `http://localhost:8080/` in a browser for the admin UI. Without a
+token it shows the public Graph and Status pages. To see everything,
+click the gear icon, paste the boot token under "Bearer token" and
+click Save (the token is logged at gateway startup and written to
+`/tmp/gwag-multi/admin-token`). The side nav then lists Graph, Status,
+Services, Deprecated, Injectors, Peers, Schema, MCP and Sign Token.
+Services shows `greeter` and `library`, and Schema shows the
+consolidated SDL.
+
+![Services page with greeter and library registered](./img/admin-services.png)
+
+![Schema page, GraphQL SDL view](./img/admin-schema.png)
 
 ## Step 2: Codegen three typed clients
 

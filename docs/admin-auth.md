@@ -123,7 +123,11 @@ gw.AddOpenAPIBytes(adminSpec,
 ## SSO
 
 People can sign in to the admin UI with an OpenID Connect provider
-instead of pasting a token. The session is a cookie; the role comes
+instead of pasting a token. With SSO configured, the signed-out app bar
+shows "Sign in with SSO" (the token button reads "Use a token"); after
+sign-in the bar shows the email, the role chip and a sign-out button.
+
+![Signed-out app bar with Sign in with SSO and Use a token](./img/admin-sso-signin.png) The session is a cookie; the role comes
 from rules on the email and groups the provider sends. Tokens keep
 working, and a request that presents a bearer is checked by the bearer
 alone.
