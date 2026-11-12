@@ -123,6 +123,64 @@ Two paths:
 1. **Auto-deprecation on version fold.** Older `vN` get `@deprecated` automatically when newer cuts register; `unstable` carries a fixed deprecation reason any time it's queried. Free.
 2. **Manual deprecate / undeprecate.** Operators flip a `deprecated` bit on any `(namespace, version)` from the admin UI or RPC, with a reason string. Useful for sunsetting a still-current `vN` ahead of cutting `vN+1`, or for un-deprecating in a rollback.
 
+### Deprecate and retract in the admin UI
+
+The **Services** page lists every `(namespace, version)` with its tier,
+health, and traffic. Each row has the actions that apply to it, for the
+admin role. Here `greeter` v2 was registered next to v1, so v1 reads
+`deprecated · auto` and v2 is the `stable` target; `library` v1 was
+deprecated by hand.
+
+![Services page with greeter v1 and v2](./img/admin-lc-services.png)
+
+**Deprecate** opens a dialog that takes a reason. The reason is
+required; the call is refused with an empty one.
+
+![Deprecate dialog with a reason typed in](./img/admin-lc-deprecate-dialog.png)
+
+Submitting sets a manual deprecation on that one `(namespace, version)`:
+
+- The schema rebuilds and the version carries
+  `@deprecated(reason: "...")` in SDL, so codegen and IDEs flag callers.
+  A manual reason takes precedence over the auto-deprecation text.
+- Calls are not blocked. The version still serves traffic, and the
+  Deprecated page counts who still calls it.
+- In a cluster the reason is written to the `gwag-deprecated` KV bucket,
+  so every node renders it and it survives restarts.
+- The version must be registered on the gateway that gets the call.
+
+![Services row after the deprecation, status deprecated auto+manual](./img/admin-lc-deprecated-row.png)
+
+The status chip shows `auto`, `manual`, or `auto+manual`; the tooltip
+shows the reason. **Undeprecate** replaces Deprecate on a manually
+deprecated row. It clears only the manual reason; auto-deprecation of
+older `vN` stays.
+
+**Retract Stable** appears on the row `stable` currently aliases.
+
+![Retract stable dialog offering v1](./img/admin-lc-retract-dialog.png)
+
+The dialog lists the lower `vN` registered for the namespace. Choosing
+one moves the `stable` alias there and rebuilds the schema:
+
+- Clients on `stable` get the lower version's schema from then on.
+  Clients pinned to `vN` see no change, and the retracted version stays
+  registered and callable at its own `vN`.
+- The target must be below the current stable and registered. The
+  gateway refuses to skip past an unregistered `vN`, so with no lower
+  version the dialog lists nothing.
+- Only an operator moves `stable` down. Registering a newer `vN` moves
+  it up again on its own.
+- In a cluster the new value is written to the stable KV bucket and every
+  node follows.
+
+Both actions fail while the cluster is frozen. There is no CLI
+subcommand; the REST calls are
+`POST /api/admin/services/{namespace}/{version}/deprecate` (body
+`{"reason": "..."}`), `.../undeprecate`, and
+`POST /api/admin/services/{namespace}/stable/retract` (body
+`{"targetVN": 1}`), with an admin bearer token.
+
 CI gate with `schema diff --strict`:
 
 ```bash
