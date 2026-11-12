@@ -57,6 +57,33 @@ that fills only `Runtime`.
 > README has the current mental model); the per-request middleware
 > chain is for unary calls.
 
+## Injectors page
+
+**Injectors** in the admin UI lists every `InjectType`, `InjectPath` and
+`InjectHeader` registration on the gateway you are connected to. It
+refreshes every 10 s. The shot is the `examples/multi` gateway with a
+greeter registered.
+
+![Injectors page: an InjectPath on greeter.Hello.name and an InjectHeader](./img/admin-injectors.png)
+
+| Column | Meaning |
+|---|---|
+| Kind | `type`, `path` or `header`: the constructor used. |
+| Key | What it addresses: the Go type name, the `ns.method.arg` path, or the header name. |
+| Mode | `hide` (the schema drops the arg and the resolver sees `current=nil`) or `inspect` (`Hide(false)`: the arg stays and the resolver sees the caller's value). `nullable` is added when `Nullable(true)` made the arg optional. |
+| State | `active`: the key resolved against the current schema. `dormant`: a path with no match yet, for example a service that has not registered. It activates on the schema rebuild that brings the path in. |
+| Landings | Where it applies now: `ns:version.op.arg` for an arg, `ns:version · Type.field` for a field, the header name for a header. Empty (`—`) while dormant. |
+| Registered | `file:line` of the `gw.Use` call, last three path segments. Hover for the function name. |
+
+Here `greeter.Hello.name` is `inspect + nullable` and landed on
+`greeter:v1.Hello.name` once the greeter registered. `X-Source-IP` is a
+header injector, so it has no schema landing beyond the header name.
+With no registrations the page reads "No injectors". The page is
+read-only and needs the dev role or above
+([`admin-auth.md`](./admin-auth.md)). A gateway built from `gwag up`
+registers none: injectors are Go code, added with `gw.Use` in your own
+gateway binary.
+
 ## The auth case end-to-end
 
 The shape that drove the API: globally hide auth fields, fill them from

@@ -276,6 +276,40 @@ three control-plane addresses. n1 was killed with `kill -9`.
   Losing two leaves the survivor routing from its registry, with
   writes refused; measured in [`running.md`](./running.md#measured-failures).
 
+## Peers page
+
+The admin UI lists the cluster on **Peers**. The page polls every 5 s.
+
+![Peers page with three nodes](./img/admin-peers-cluster.png)
+
+The subtitle gives the active feature level and, when JetStream is
+running, the meta group: leader, size, and which members are offline.
+`gwag peer list` ends with the same meta line.
+
+| Column | Meaning |
+|---|---|
+| Node ID | The NATS-assigned ID. A restarted node gets a new one, and the old one expires within 30 s. |
+| Name | `--node-name` (the example gateway defaults to `gw` plus its control-plane address). |
+| Joined | When this node's entry in `gwag-peers` was written, in the browser's time zone. |
+| Version | The node's build version. `no level support` marks a node older than feature levels. |
+| Levels | The range of [feature levels](#feature-levels) the node runs, `min-max`. |
+| Action | **Forget**: same call as `gwag peer forget NODE_ID`, see below. Admin role only; greyed out otherwise. |
+
+Forget on a live peer is refused and the error shows as a toast; the
+row stays until the peer's entry expires. The page has no evacuate
+button: use `gwag peer evacuate NODE_ID` (or `POST
+/api/admin/peers/{nodeId}/evacuate`) before stopping a node, see
+[Replica swap](#replica-swap).
+
+A gateway with no cluster has no peers:
+
+![Peers page on a standalone gateway](./img/admin-peers-standalone.png)
+
+"Standalone, not clustered" appears when the gateway runs without
+`--nats-data`. A node started with `gwag up` runs embedded NATS and lists
+itself as the only peer instead. `gwag peer list --gateway HOST:PORT` shows the
+same data on the command line.
+
 ## Forget a dead peer
 
 A peer that expired and will not return can be forgotten. The call is
