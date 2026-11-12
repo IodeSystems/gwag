@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+#
+# bin/shots — regenerate the admin UI screenshots under docs/img/.
+#
+#   bin/shots                 # boot a private stack, drive traffic, capture
+#   bin/shots --keep-raw      # also leave the unoptimised PNGs in $RAW_DIR
+#   SCALE=1 bin/shots         # device scale factor (default 2; PNGs are
+#                             #   then palette-reduced to keep sizes sane)
+#   TRAFFIC_SECS=120 bin/shots
+#   SSO=1 bin/shots           # also capture the signed-out SSO page
+#                             #   (examples/sso: docker + Dex, ports 285xx)
+#
+# Boots `gwag up` with the examples/multi greeter and library on their own
+# ports, so a gateway on :8080 / :50090 is left alone:
+#   HTTP 18480, control plane 18490, NATS 18422/18448,
+#   greeter 18451, library 18452, Chrome DevTools 18433.
+# Needs: go, curl, node 22+, google-chrome, openssl, ImageMagick (convert).
+# Every process it starts is killed by recorded PID on exit.
+#
+# Default look: preset "walnut" (the UI default), dark. Also writes one
+# light shot and a preset gallery. The CDP driver is docs/shots/shoot.mjs.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR"
+
+SCALE="${SCALE:-2}"
+TRAFFIC_SECS="${TRAFFIC_SECS:-120}"
+KEEP_RAW=0
+[[ "${1:-}" == "--keep-raw" ]] && KEEP_RAW=1
+
+HTTP_PORT=18480 CP_PORT=18490 NATS_PORT=18422 NATS_CLUSTER=18448
+GREETER_PORT=18451 LIBRARY_PORT=18452 CDP_PORT=18433
+GW="http://127.0.0.1:$HTTP_PORT"
+IMG="$REPO_DIR/docs/img"
+
+for tool in go curl node google-chrome openssl convert ss; do
+  command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
+done
+for p in $HTTP_PORT $CP_PORT $NATS_PORT $NATS_CLUSTER $GREETER_PORT $LIBRARY_PORT $CDP_PORT; do
+  if ss -ltn "sport = :$p" | grep -q LISTEN; then
+    echo "port $p is in use; stop whatever holds it" >&2; exit 1
+  fi
+done
+
+RUN="$(mktemp -d "${TMPDIR:-/tmp}/gwag-shots.XXXXXX")"
+RAW="${RAW_DIR:-$RUN/raw}"
+mkdir -p "$RAW" "$IMG"
+PIDS=()
+cleanup() {
+  local pid
+  for pid in "${PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done
+  for pid in "${PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+  done
+  [[ "$KEEP_RAW" == 1 ]] || rm -rf "$RUN"
+}
+trap cleanup EXIT INT TERM
+spawn() { "$@" & PIDS+=($!); }
+
+echo "==> build services"
+go build -o "$RUN/greeter" ./examples/multi/cmd/greeter
+go build -o "$RUN/library" ./examples/multi/cmd/library
+[[ -f ui/dist/index.html ]] || { echo "ui/dist missing; run bin/build first" >&2; exit 1; }
+go build -o "$RUN/gwag" ./gw/cmd/gwag
+
+openssl rand -hex 32 > "$RUN/token"
+TOKEN="$(cat "$RUN/token")"
+AUTH=(-H "Authorization: Bearer $TOKEN")
+
+echo "==> gateway on $GW"
+spawn "$RUN/gwag" up --addr "127.0.0.1:$HTTP_PORT" --control-plane "127.0.0.1:$CP_PORT" \
+  --nats-listen "127.0.0.1:$NATS_PORT" --nats-cluster "127.0.0.1:$NATS_CLUSTER" \
+  --data-dir "$RUN/data" --no-context-write --admin-token-file "$RUN/token" \
+  --environment demo --caller-id-public --insecure-subscribe --public-services all \
+  >"$RUN/gw.log" 2>&1
+GWPID=${PIDS[-1]}
+for _ in $(seq 120); do
+  curl -fs "$GW/api/health" >/dev/null && break
+  kill -0 "$GWPID" 2>/dev/null || { tail -20 "$RUN/gw.log" >&2; exit 1; }
+  sleep 0.5
+done
+curl -fs "$GW/api/health" >/dev/null || { tail -20 "$RUN/gw.log" >&2; exit 1; }
+
+# Shots are written to $RAW then optimised into $IMG.
+shoot() { # shoot SPEC_JSON_FILE
+  node "$REPO_DIR/docs/shots/shoot.mjs" "$1"
+}
+spec() { # spec OUTFILE then shot objects on stdin lines (JSON, comma-joined)
+  local out="$1" shots
+  shots="$(paste -sd, -)"
+  printf '{"base":"%s","token":"%s","out":"%s","chromePort":%s,"scale":%s,"shots":[%s]}\n' \
+    "$GW" "$TOKEN" "$RAW" "$CDP_PORT" "$SCALE" "$shots" > "$out"
+}
+
+wait_service() { # wait_service NS: fail if it does not register within 30 s
+  for _ in $(seq 60); do
+    curl -fs "${AUTH[@]}" "$GW/api/admin/services" 2>/dev/null | grep -q "\"$1\"" && return 0
+    sleep 0.5
+  done
+  echo "service $1 did not register" >&2; exit 1
+}
+
+echo "==> registration frames (services page as each binary appears)"
+echo '{"file":"reg-0.png","path":"/services","preset":"walnut","mode":"dark"}' | spec "$RUN/s0.json"
+shoot "$RUN/s0.json"
+# The example services read protos/ relative to examples/multi/.
+cd examples/multi
+spawn "$RUN/greeter" --addr ":$GREETER_PORT" --advertise "localhost:$GREETER_PORT" \
+  --gateway "localhost:$CP_PORT" --nats "nats://localhost:$NATS_PORT" --delay 12ms
+wait_service greeter
+echo '{"file":"reg-1.png","path":"/services","preset":"walnut","mode":"dark"}' | spec "$RUN/s1.json"
+shoot "$RUN/s1.json"
+spawn "$RUN/library" --addr ":$LIBRARY_PORT" --advertise "localhost:$LIBRARY_PORT" \
+  --gateway "localhost:$CP_PORT"
+wait_service library
+cd "$REPO_DIR"
+echo '{"file":"reg-2.png","path":"/services","preset":"walnut","mode":"dark"}' | spec "$RUN/s2.json"
+shoot "$RUN/s2.json"
+
+echo "==> traffic for ${TRAFFIC_SECS}s"
+gql() { # gql CALLER QUERY
+  curl -s -o /dev/null -X POST "$GW/api/graphql" -H 'Content-Type: application/json' \
+    -H "X-Caller-Id: $1" -d "{\"query\":\"$2\"}"
+}
+load() { # load CALLER QUERY DELAY SECS
+  local end=$((SECONDS + $4))
+  while (( SECONDS < end )); do gql "$1" "$2"; sleep "$3"; done
+}
+HELLO='{ greeter { hello(name: \"world\") { greeting } } }'
+BOOKS='{ library { listBooks { books { id title } } } }'
+BAD='{ library { getBook(id: \"nope\") { title } } }'
+spawn load web-app "$HELLO" 0.04 "$TRAFFIC_SECS"
+spawn load mobile "$HELLO" 0.08 "$TRAFFIC_SECS"
+spawn load billing "$BOOKS" 0.06 "$TRAFFIC_SECS"
+spawn load reports "$BOOKS" 0.2 "$TRAFFIC_SECS"
+spawn load importer "$BAD" 0.5 "$TRAFFIC_SECS"
+sleep 5
+# Library v1 deprecated with traffic still arriving: fills the Deprecated page.
+curl -fs -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d '{"reason":"Replaced by library/v2; billing and reports still call v1"}' \
+  "$GW/api/admin/services/library/v1/deprecate" >/dev/null || echo "deprecate failed" >&2
+# MCP allowlist: expose the two example services so the preview table has rows.
+for pat in 'greeter.**' 'library.**'; do
+  curl -fs -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+    -d "{\"path\":\"$pat\"}" "$GW/api/admin/mcp/include" >/dev/null || echo "mcp include failed" >&2
+done
+sleep "$((TRAFFIC_SECS - 12))"
+
+echo "==> capture pages"
+page() { printf '{"file":"%s.png","path":"%s","preset":"%s","mode":"%s"}\n' "$1" "$2" "${3:-walnut}" "${4:-dark}"; }
+{
+  page graph /
+  page services /services
+  page status /status
+  page deprecated /deprecated
+  page peers /peers
+  page schema /schema
+  page mcp-allowlist /mcp-allowlist
+  page token-signer /token-signer
+  page status-light /status walnut light
+  for p in glow walnut graphite paper harbor terminal; do
+    page "theme-$p" / "$p" dark
+  done
+  printf '{"file":"signed-out.png","path":"/status","preset":"walnut","mode":"dark","token":false}\n'
+} | spec "$RUN/pages.json"
+shoot "$RUN/pages.json"
+
+if [[ "${SSO:-0}" == 1 ]]; then
+  echo "==> SSO sign-in page (examples/sso, Dex in docker)"
+  ( cd examples/sso && source ./stack.sh && trap stack_stop EXIT && stack_start
+    printf '{"file":"sso-signin.png","path":"/status","preset":"walnut","mode":"dark","token":false}\n' |
+      { shots="$(cat)"; printf '{"base":"%s","out":"%s","chromePort":%s,"scale":%s,"shots":[%s]}\n' \
+        "$GW" "$RAW" "$CDP_PORT" "$SCALE" "$shots"; } > "$RUN/sso.json"
+    node "$REPO_DIR/docs/shots/shoot.mjs" "$RUN/sso.json" )
+fi
+
+echo "==> optimise into docs/img"
+# Palette-reduce (flat UI colours survive 256 entries) and strip metadata.
+opt() { convert "$1" -strip -colors 256 -define png:compression-level=9 "$2"; }
+for f in graph services status deprecated peers schema mcp-allowlist token-signer status-light signed-out; do
+  opt "$RAW/$f.png" "$IMG/admin-$f.png"
+done
+# The SSO page has no services (the sso stack registers none): keep the app bar and banner.
+[[ -f "$RAW/sso-signin.png" ]] && opt "$RAW/sso-signin.png[2880x330+0+0]" "$IMG/admin-sso-signin.png"
+
+# Theme gallery: 3x2 contact sheet of the graph page, one preset each.
+for p in glow walnut graphite paper harbor terminal; do
+  convert "$RAW/theme-$p.png" -resize 640x -gravity SouthWest -fill white -undercolor '#00000099' \
+    -pointsize 22 -annotate +8+8 " $p " "$RUN/t-$p.png"
+done
+montage_args=()
+for p in glow walnut graphite paper harbor terminal; do montage_args+=("$RUN/t-$p.png"); done
+convert "${montage_args[@]}" -background none +append "$RUN/row.png" 2>/dev/null || true
+convert \( "$RUN/t-glow.png" "$RUN/t-walnut.png" "$RUN/t-graphite.png" +append \) \
+        \( "$RUN/t-paper.png" "$RUN/t-harbor.png" "$RUN/t-terminal.png" +append \) \
+        -append -strip -colors 256 "$IMG/admin-themes.png"
+
+# README hero: the services page as each binary registers.
+for i in 0 1 2; do convert "$RAW/reg-$i.png" -resize 960x -colors 128 "$RUN/reg-$i.gif"; done
+convert -delay 120 "$RUN/reg-0.gif" -delay 120 "$RUN/reg-1.gif" -delay 300 "$RUN/reg-2.gif" \
+  -loop 0 -layers optimize "$IMG/live-reload.gif"
+
+echo "==> done"
+du -b "$IMG"/admin-*.png "$IMG/live-reload.gif"
