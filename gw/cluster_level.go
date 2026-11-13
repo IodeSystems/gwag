@@ -102,8 +102,17 @@ type clusterLevelRecord struct {
 	SetBy     string `json:"set_by,omitempty"`
 }
 
+// buildVersion is stamped by release builds (goreleaser):
+// -ldflags "-X github.com/iodesystems/gwag/v2/gw.buildVersion=v2.12.0".
+// A plain `go build` in a checkout has no module version, so the
+// release binary carries it here. `go install ...@vX` needs no stamp.
+var buildVersion string
+
 // binaryVersion is the gateway module version, or "devel".
 func binaryVersion() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		return bi.Main.Version
 	}

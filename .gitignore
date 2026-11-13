@@ -31,3 +31,6 @@ __pycache__/
 # examples/cutover runtime state (admin tokens, system keys, state copy).
 /examples/cutover/.run/
 /examples/sso/.run/
+
+# goreleaser output.
+/dist/

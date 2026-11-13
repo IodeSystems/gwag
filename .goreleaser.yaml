@@ -1,0 +1,66 @@
+# GoReleaser v2. Run by .github/workflows/release.yml on a v* tag.
+# Local dry run: goreleaser release --snapshot --clean --skip=publish
+version: 2
+
+project_name: gwag
+
+before:
+  hooks:
+    # Release binaries embed the real admin UI (ui/embed.go).
+    - bin/build --no-go
+
+builds:
+  - id: gwag
+    main: ./gw/cmd/gwag
+    binary: gwag
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      # gw.binaryVersion reads this; go install builds use buildinfo.
+      - -s -w -X github.com/iodesystems/gwag/v2/gw.buildVersion={{.Tag}}
+
+archives:
+  - id: gwag
+    formats: [tar.gz]
+    # install.sh depends on this name: gwag_<version>_<os>_<arch>.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+dockers_v2:
+  - id: gwag
+    ids: [gwag]
+    dockerfile: Dockerfile.release
+    images:
+      - ghcr.io/iodesystems/gwag
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+release:
+  github:
+    owner: iodesystems
+    name: gwag
+  prerelease: auto

@@ -1,10 +1,12 @@
 node_modules/
 .vite/
 
-# dist/ is build output only — never tracked. `pnpm run build`
-# populates it; embed.go falls back to ui/fallback/ when dist/ is
-# empty so `go build` succeeds on a fresh clone.
-dist/
+# dist/ is build output. Only the empty dist/.gitkeep is tracked, so
+# //go:embed all:dist compiles without a UI build (go install from the
+# module proxy). embed.go serves ui/fallback/ when dist/ has no
+# index.html; vite.config.ts restores .gitkeep after a build.
+dist/*
+!dist/.gitkeep
 *.log
 .DS_Store
 
