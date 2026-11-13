@@ -24,6 +24,7 @@ bin/build              # full build: UI codegen + Vite + Go (idempotent)
 bin/build --no-ui      # Go only (UI unchanged)
 bin/build --no-go      # UI only
 bin/build --no-codegen # skip GraphQL schema/codegen step
+make install           # bin/build (UI) + install gwag to ~/.local/bin (PREFIX, DESTDIR); install-bin skips the UI
 ```
 
 `bin/build` is the single entry point. Do NOT run `go build ./...` directly
