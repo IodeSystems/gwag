@@ -68,17 +68,25 @@ become 2.0 work with a deprecation cycle.
    Tags are annotated, not lightweight — `git describe` and Go
    module proxies expect the metadata.
 
-6. **Create the GitHub release.**
+6. **Let the release workflow publish.**
+
+   Pushing the tag starts `.github/workflows/release.yml`. It runs
+   GoReleaser (`.goreleaser.yaml`): builds the UI, then `gwag` for
+   linux and darwin on amd64 and arm64, writes `checksums.txt`,
+   creates the GitHub release with a changelog from git, and pushes
+   the multi-arch image `ghcr.io/iodesystems/gwag` (tags `1.0.0` and
+   `latest`). Watch the run in the Actions tab.
+
+   Dry run without publishing:
 
    ```
-   gh release create v1.0.0 \
-     --title "v1.0.0" \
-     --notes-file <(awk '/^## v1\.0\.0/,/^## /' CHANGELOG.md | sed '$d')
+   goreleaser release --snapshot --clean --skip=publish
    ```
 
-   The awk slice extracts everything from the v1.0.0 header up to
-   the next `## ` line (the next-older release), then `sed '$d'`
-   drops the trailing separator. Eyeball before publishing.
+   Edit the release notes on GitHub afterwards if the generated list
+   needs the `CHANGELOG.md` section instead. If the workflow fails
+   after the release exists, fix the cause and re-run the failed
+   job; do not move the tag.
 
 7. **Verify the Go proxy picked it up.**
 
@@ -87,7 +95,9 @@ become 2.0 work with a deprecation cycle.
    ```
 
    `v1.0.0` should appear within a minute. If not, the proxy is
-   lagging; `GOPROXY=direct` to bypass.
+   lagging; `GOPROXY=direct` to bypass. Check the install channels
+   in [`docs/install.md`](./docs/install.md): `install.sh`,
+   `docker pull ghcr.io/iodesystems/gwag:1.0.0`.
 
 ## Patch and minor releases
 
@@ -113,11 +123,9 @@ tag `v1.x.(y+1)`, push the branch.
 
 ## Future flow (not yet wired)
 
-- **Container image publish.** When the project ships a public
-  container, this section names the registry, the build / push
-  script, and the tag conventions (`v1.0.0`, `1.0`, `1`, `latest`).
 - **`bin/release`.** A wrapper around the manual flow above when
   the steps stabilise enough that scripting them adds value.
-- **CI release verification.** A GitHub Actions workflow that
-  re-runs the full test matrix on every tag and refuses to publish
-  the release if anything regresses.
+- **CI release verification.** The release workflow does not run the
+  test suite; `.github/workflows/ci.yml` does on every push and PR.
+  Gating the release on a green CI run for the tagged commit is not
+  wired.
