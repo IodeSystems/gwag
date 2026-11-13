@@ -377,7 +377,7 @@ func TestReplicas_EvacuationWaitsForWholeStreams(t *testing.T) {
 		t.Fatalf("record after a refused evacuation %+v err %v", rec, err)
 	}
 
-	// Polled as `gwag peer evacuate --wait` does: refused until the
+	// Polled as `gwag ctl peer evacuate --wait` does: refused until the
 	// raise is applied, then evacuated.
 	waitUntilErr(t, 90*time.Second, "wh-d evacuated", func() error {
 		resp, err := cp.EvacuatePeer(ctx, &cpv1.EvacuatePeerRequest{NodeId: goneID})

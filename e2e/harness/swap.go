@@ -76,7 +76,7 @@ type EvacuateResult struct {
 // Evacuate asks g to move every stream replica off the live peer
 // nodeID, and asks again until no stream is on it and every replica
 // is current (a replica raise in between can place one back, the way
-// `gwag peer evacuate --wait` does). With leave, the peer is then
+// `gwag ctl peer evacuate --wait` does). With leave, the peer is then
 // removed from the JetStream meta group.
 //
 // The gateway refuses to start an evacuation (409) while a bucket or

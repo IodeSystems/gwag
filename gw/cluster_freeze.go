@@ -94,7 +94,7 @@ func errFrozen(what string, f freezeRecord) *cutoverError {
 	return &cutoverError{
 		status: http.StatusConflict,
 		code:   codes.FailedPrecondition,
-		msg:    fmt.Sprintf("cluster frozen for cutover until %s (set%s): %s is refused; `gwag cluster unfreeze` ends the freeze", f.until().UTC().Format(time.RFC3339), by, what),
+		msg:    fmt.Sprintf("cluster frozen for cutover until %s (set%s): %s is refused; `gwag ctl cluster unfreeze` ends the freeze", f.until().UTC().Format(time.RFC3339), by, what),
 	}
 }
 

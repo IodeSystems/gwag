@@ -214,7 +214,7 @@ describe("loadProfile", () => {
       /want proto, openapi or graphql/,
     );
     assert.throws(() => loadProfile(write("bad4.json", '{"service":"x","provides":{"v1":{"kind":"proto"}}}'), "x:1"), /file: required/);
-    assert.throws(() => loadProfile(write("bad5.yaml", "service: x\n"), "x:1"), /gwag service init -o gwag.json/);
+    assert.throws(() => loadProfile(write("bad5.yaml", "service: x\n"), "x:1"), /gwag ctl services init -o gwag.json/);
   });
 });
 

@@ -58,7 +58,7 @@ message EchoResponse {
 // a locked vN line refuses a different schema and keeps serving the
 // old one, the mutable unstable line swaps, a line can be deprecated
 // with a reason and un-deprecated, and the schema export plus
-// `gwag schema diff` show the change.
+// `gwag ctl schema diff` show the change.
 func TestS6SchemaGovernance(t *testing.T) {
 	env := harness.New(t)
 	gw := env.Gateway(harness.GatewayOpts{Environment: "e2e"})
@@ -230,9 +230,9 @@ func TestS6SchemaGovernance(t *testing.T) {
 		}
 
 		t.Run("schema diff shows it", func(t *testing.T) {
-			// The CI gate (`gwag schema diff --strict`) sees the removal as breaking.
+			// The CI gate (`gwag ctl schema diff --strict`) sees the removal as breaking.
 			out, code := schemaDiff(t, oldFile, gw.SchemaURL("billing"))
-			t.Logf("gwag schema diff --strict (unstable, before -> after):\n%s", out)
+			t.Logf("gwag ctl schema diff --strict (unstable, before -> after):\n%s", out)
 			if code == 0 || !strings.Contains(out, "[BREAKING]") || !strings.Contains(out, "instance") {
 				t.Errorf("exit %d; want a failure naming the removed instance field", code)
 			}
@@ -324,11 +324,11 @@ func TestS6SchemaGovernance(t *testing.T) {
 
 }
 
-// schemaDiff runs `gwag schema diff --strict` and returns its output
+// schemaDiff runs `gwag ctl schema diff --strict` and returns its output
 // and exit code.
 func schemaDiff(t *testing.T, from, to string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(harness.Binary(t, "gwag"), "schema", "diff", "--from", from, "--to", to, "--strict")
+	cmd := exec.Command(harness.Binary(t, "gwag"), "ctl", "schema", "diff", "--from", from, "--to", to, "--strict")
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	switch {
@@ -337,7 +337,7 @@ func schemaDiff(t *testing.T, from, to string) (string, int) {
 	case errors.As(err, &ee):
 		return string(out), ee.ExitCode()
 	default:
-		t.Fatalf("gwag schema diff: %v", err)
+		t.Fatalf("gwag ctl schema diff: %v", err)
 		return "", -1
 	}
 }

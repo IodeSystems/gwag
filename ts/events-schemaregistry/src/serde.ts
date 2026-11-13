@@ -70,7 +70,7 @@ export interface SerdeOptions {
    * records decode only against its registry, or against the gwag
    * context it was imported into
    * (http://gwag:8080/schema-registry/contexts/.corp after
-   * `gwag schema import --into .corp`).
+   * `gwag ctl schema import --into .corp`).
    */
   channelClients?: Record<string, RegistryClient>;
 }

@@ -11,7 +11,7 @@ import (
 	sr "github.com/iodesystems/gwag/v2/events/schemaregistry"
 )
 
-// Bundle is what `gwag schema import` copies out of another registry.
+// Bundle is what `gwag ctl schema import` copies out of another registry.
 type Bundle struct {
 	Schemas  []ImportSchema  `json:"schemas"`
 	Versions []ImportVersion `json:"versions"`
@@ -83,7 +83,7 @@ func (s *Store) Import(ctx context.Context, b Bundle) (ImportResult, error) {
 func (s *Store) ImportWith(ctx context.Context, b Bundle, o ImportOptions) (ImportResult, error) {
 	var res ImportResult
 	if s.Default() && !o.Default {
-		return res, errf(codeOperationNotPermitted, "import into a named context (POST /contexts/.corp/gwag/import; gwag schema import --into .corp): the default context holds the ids gwag allocates")
+		return res, errf(codeOperationNotPermitted, "import into a named context (POST /contexts/.corp/gwag/import; gwag ctl schema import --into .corp): the default context holds the ids gwag allocates")
 	}
 	byID := map[int]*ImportSchema{}
 	for i := range b.Schemas {

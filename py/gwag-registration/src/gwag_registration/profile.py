@@ -36,7 +36,7 @@ def _parse(path: Path) -> Any:
         except ImportError:
             raise ValueError(
                 f"registration: profile {path}: reading YAML needs PyYAML; "
-                "install it, or write gwag.json (gwag service init -o gwag.json)"
+                "install it, or write gwag.json (gwag ctl services init -o gwag.json)"
             ) from None
         return yaml.safe_load(text)
     try:
@@ -47,7 +47,7 @@ def _parse(path: Path) -> Any:
         except ImportError:
             raise ValueError(
                 f"registration: profile {path}: not JSON ({err}); reading YAML needs PyYAML: "
-                "install it, or write gwag.json (gwag service init -o gwag.json)"
+                "install it, or write gwag.json (gwag ctl services init -o gwag.json)"
             ) from None
         return yaml.safe_load(text)
 

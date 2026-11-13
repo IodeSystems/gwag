@@ -44,7 +44,7 @@ func splitArgs(fs *flag.FlagSet, args []string) ([]string, bool) {
 	}
 }
 
-// schemaCheckCmd implements `gwag schema check`: compare every message
+// schemaCheckCmd implements `gwag ctl schema check`: compare every message
 // with (gwag.ps.v1.shadow) against its registry subject.
 func schemaCheckCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("schema check", flag.ContinueOnError)
@@ -54,7 +54,7 @@ func schemaCheckCmd(args []string, stdout, stderr io.Writer) int {
 	imports := &stringListValue{}
 	fs.Var(imports, "I", "Import path (repeatable; default .)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema check --registry NAME=URL... [-I DIR]... FILE.proto...")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl schema check --registry NAME=URL... [-I DIR]... FILE.proto...")
 		fmt.Fprintln(fs.Output(), "  Checks each message with option (gwag.ps.v1.shadow) against its registry subject.")
 		fmt.Fprintln(fs.Output(), "  side CONSUMER: kept fields must match number, type, cardinality, enum values; extra fields fail.")
 		fmt.Fprintln(fs.Output(), "  side PRODUCER: the registry's compatibility API must accept the copy.")
@@ -155,7 +155,7 @@ func checkShadow(ctx context.Context, md protoreflect.MessageDescriptor, s sr.Sh
 	return sr.CheckShadow(ctx, c, s, md)
 }
 
-// schemaPushCmd implements `gwag schema push`: register the protos of
+// schemaPushCmd implements `gwag ctl schema push`: register the protos of
 // every named channel (own), with their imports as references.
 func schemaPushCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("schema push", flag.ContinueOnError)
@@ -169,7 +169,7 @@ func schemaPushCmd(args []string, stdout, stderr io.Writer) int {
 	imports := &stringListValue{}
 	fs.Var(imports, "I", "Import path (repeatable; default .)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema push --registry URL [--strategy S] [--topic KEY=TOPIC]... [-I DIR]... FILE.proto...")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl schema push --registry URL [--strategy S] [--topic KEY=TOPIC]... [-I DIR]... FILE.proto...")
 		fmt.Fprintln(fs.Output(), "  Registers the file of each named channel's messages, imports as references (subject = import path).")
 		fmt.Fprintln(fs.Output(), "  "+registryEnvHelp)
 		fs.PrintDefaults()

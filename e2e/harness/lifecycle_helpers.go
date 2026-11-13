@@ -116,7 +116,7 @@ func (g *Gateway) SchemaSDL(ctx context.Context, service string) (string, error)
 	return string(b), nil
 }
 
-// SchemaURL is the URL of the SDL export, for `gwag schema diff`.
+// SchemaURL is the URL of the SDL export, for `gwag ctl schema diff`.
 func (g *Gateway) SchemaURL(service string) string {
 	u := g.BaseURL() + "/api/schema/graphql"
 	if service != "" {

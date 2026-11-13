@@ -62,7 +62,7 @@ function resolveEndpoint(addr: string, ep: string): string {
 }
 
 /**
- * Read a service profile (gwag.json; `gwag service init -o gwag.json`
+ * Read a service profile (gwag.json; `gwag ctl services init -o gwag.json`
  * writes one) and return one Service per provided version, sorted (v1,
  * v2, ..., unstable last): the spec read from the file the profile names
  * (proto imports from its import directories), depends, owner, public,
@@ -80,7 +80,7 @@ export function loadProfile(path: string, serviceAddr: string): Service[] {
   } catch (err) {
     if (err instanceof SyntaxError) {
       throw new Error(
-        `registration: profile ${path}: not JSON (${err.message}); @gwag/registration reads JSON only: write gwag.json (gwag service init -o gwag.json)`,
+        `registration: profile ${path}: not JSON (${err.message}); @gwag/registration reads JSON only: write gwag.json (gwag ctl services init -o gwag.json)`,
       );
     }
     throw err;

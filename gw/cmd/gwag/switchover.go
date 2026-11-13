@@ -12,9 +12,9 @@ import (
 )
 
 const switchoverUsage = `Usage:
-  gwag cluster switchover [--gateway URL]                       show the setting
-  gwag cluster switchover --percent N [--rule SPEC]... [--target URL] [--gateway URL]
-  gwag cluster switchover --clear [--gateway URL]
+  gwag ctl cluster switchover [--gateway URL]                       show the setting
+  gwag ctl cluster switchover --percent N [--rule SPEC]... [--target URL] [--gateway URL]
+  gwag ctl cluster switchover --clear [--gateway URL]
 
 Sets the share of GraphQL requests blue (the gateway at --gateway, a
 node started with WithSwitchover) forwards to green. In a cluster the

@@ -168,7 +168,7 @@ func SchemaOf(fd protoreflect.FileDescriptor, refs []Reference) (Schema, error) 
 }
 
 // canonical drops what differs between compilers of the same source,
-// so a file pushed from .proto source (gwag schema push) and the same
+// so a file pushed from .proto source (gwag ctl schema push) and the same
 // file in generated code (the Serde at publish) register as one
 // schema: source info, and proto3_optional on extensions (protoc sets
 // it, protocompile does not; an extension always has presence).

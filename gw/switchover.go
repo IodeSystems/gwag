@@ -152,7 +152,7 @@ type SwitchoverRule struct {
 
 // WithSwitchover turns on forwarding of a share of GraphQL client
 // requests from this gateway (blue) to green. The runtime setting
-// (setSwitchover admin op, gwag cluster switchover) replaces Target,
+// (setSwitchover admin op, gwag ctl cluster switchover) replaces Target,
 // Percent and Rules until it is cleared.
 //
 // Stability: experimental

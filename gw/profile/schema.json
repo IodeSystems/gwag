@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/iodesystems/gwag/gw/profile/schema.json",
   "title": "gwag service profile",
-  "description": "What a service provides to gwag, what it depends on and which event channels it listens on. Written by `gwag service init`, checked by `gwag service check`, loaded by the registration clients, served as JSON at /.well-known/gwag.json for the gateway to pull.",
+  "description": "What a service provides to gwag, what it depends on and which event channels it listens on. Written by `gwag ctl services init`, checked by `gwag ctl services check`, loaded by the registration clients, served as JSON at /.well-known/gwag.json for the gateway to pull.",
   "type": "object",
   "additionalProperties": false,
   "required": ["service", "provides"],
@@ -72,7 +72,7 @@
         "url": {"$ref": "#/$defs/ref", "description": "Where the running service serves this version's spec."},
         "endpoint": {"$ref": "#/$defs/ref", "description": "GraphQL endpoint (kind graphql)."},
         "health": {"$ref": "#/$defs/ref", "description": "Health URL of this version; overrides the top-level health."},
-        "snapshot": {"type": "string", "description": "Committed spec snapshot relative to the profile; `gwag service check` fails on a breaking change against it."}
+        "snapshot": {"type": "string", "description": "Committed spec snapshot relative to the profile; `gwag ctl services check` fails on a breaking change against it."}
       }
     }
   }

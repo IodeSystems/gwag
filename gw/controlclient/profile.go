@@ -8,7 +8,7 @@ import (
 )
 
 // LoadProfile reads a service profile (gwag.yaml or gwag.json, see
-// package profile and `gwag service init`) and returns one Service
+// package profile and `gwag ctl services init`) and returns one Service
 // per provided version: the spec read from the file the profile
 // names (proto imports from its import directories), Depends, Owner,
 // Public, Subscribes, and HealthURL / SpecURL so the gateway

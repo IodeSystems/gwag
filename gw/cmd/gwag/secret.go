@@ -7,12 +7,12 @@ import (
 	gateway "github.com/iodesystems/gwag/v2/gw"
 )
 
-// secretCmd implements `gwag secret gen`: print one random secret
+// secretCmd implements `gwag ctl secret gen`: print one random secret
 // (48 random bytes, base64) that passes the declarations hook secret
 // check.
 func secretCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 || args[0] != "gen" {
-		fmt.Fprintln(stderr, "usage: gwag secret gen")
+		fmt.Fprintln(stderr, "usage: gwag ctl secret gen")
 		return 2
 	}
 	s, err := gateway.GenerateSecret()

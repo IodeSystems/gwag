@@ -19,7 +19,7 @@ import (
 // schemaRegistryPrefix is where gwag up mounts the registry.
 const schemaRegistryPrefix = "/schema-registry"
 
-// schemaImportCmd implements `gwag schema import`: copy subjects,
+// schemaImportCmd implements `gwag ctl schema import`: copy subjects,
 // versions, ids and compatibility levels from a registry into a named
 // context of the registry a gwag gateway serves, keeping the ids. The
 // context is required: the default context is gwag's own id space.
@@ -36,7 +36,7 @@ func schemaImportCmd(args []string, stdout, stderr io.Writer) int {
 	deleted := fs.Bool("include-deleted", false, "Also import soft-deleted subjects and versions (served as deleted)")
 	dry := fs.Bool("dry-run", false, "Read the source and print what would be sent; send nothing")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema import --from URL --into CONTEXT [--to URL] [--subject S]... [--include-deleted] [--dry-run]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl schema import --from URL --into CONTEXT [--to URL] [--subject S]... [--include-deleted] [--dry-run]")
 		fmt.Fprintln(fs.Output(), "  Copies a registry into a context of gwag's (its own id space), keeping schema ids")
 		fmt.Fprintln(fs.Output(), "  and versions, so records framed with the source's ids decode against gwag at")
 		fmt.Fprintln(fs.Output(), "  <registry URL>/contexts/CONTEXT. Safe to run again: it adds what is new.")

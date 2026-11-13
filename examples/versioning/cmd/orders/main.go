@@ -6,7 +6,7 @@
 //	go run ./examples/versioning/cmd/orders ... -no-v1                            # the build after v1 is deleted
 //
 // Each version is its own registration (instance orders-v1@ADDR and
-// orders-v2@ADDR), so `gwag drain orders-v1@ADDR` can take one line out
+// orders-v2@ADDR), so `gwag ctl drain orders-v1@ADDR` can take one line out
 // of rotation while the other keeps serving. One registration with two
 // Services also works (docs/services.md, "Two versions in one binary");
 // it drains both lines together.

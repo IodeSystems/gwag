@@ -215,8 +215,8 @@ async function cliSuite(email, loginFn) {
   const credPath = [join(cli, '.gw/credentials.json')].find(existsSync);
   const creds = credPath ? readFileSync(credPath, 'utf8') : '';
   check('credentials hold a gwo_ token', /"gwo_[^"]+/.test(creds), credPath ?? 'no credentials file');
-  let r = await run(['peer', 'list']);
-  check('gwag peer list (dev or admin) works with the bearer', r.code === 0, r.out.slice(0, 200));
+  let r = await run(['ctl', 'peer', 'list']);
+  check('gwag ctl peer list (dev or admin) works with the bearer', r.code === 0, r.out.slice(0, 200));
   const tok = creds.match(/gwo_[^"]+/)?.[0];
   r = await run(['logout']);
   check('gwag logout exits 0', r.code === 0, r.out);

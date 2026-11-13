@@ -24,7 +24,7 @@ import (
 
 // Pulled services: an external or legacy service that runs no
 // registration client serves its profile (profile.WellKnownPath) and
-// an operator adds it by URL (`gwag services add --profile-url`,
+// an operator adds it by URL (`gwag ctl services add --profile-url`,
 // AddServiceProfile, POST /admin/services/profiles).
 //
 // The gateway fetches the profile, fetches each provided spec from

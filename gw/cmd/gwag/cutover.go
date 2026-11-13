@@ -14,10 +14,10 @@ import (
 )
 
 const clusterStateUsage = `Usage:
-  gwag cluster freeze   [--ttl 10m] [--note TEXT]
-  gwag cluster unfreeze
-  gwag cluster export   [--allow-unfrozen] > state.json
-  gwag cluster import   [--overwrite] [--dry-run] state.json   (- reads stdin)
+  gwag ctl cluster freeze   [--ttl 10m] [--note TEXT]
+  gwag ctl cluster unfreeze
+  gwag ctl cluster export   [--allow-unfrozen] > state.json
+  gwag ctl cluster import   [--overwrite] [--dry-run] state.json   (- reads stdin)
 
 State copy of a cutover (docs/cutover.md). freeze makes every node of
 the cluster refuse the admin writes that change copied state (stable,
@@ -30,13 +30,13 @@ unless --overwrite. Registrations are not copied: services register
 with both clusters.
 
 freeze and unfreeze need the admin token; export and import the admin
-token or a system key (gwag key create --system).
+token or a system key (gwag ctl key create --system).
 
 Flags: --gateway URL (the gateway's HTTP endpoint; default: .gw
 primary endpoint, else http://localhost:8080; --endpoint is the same),
 --bearer TOKEN (default: from .gw), --context NAME.`
 
-// clusterStateCmd runs `gwag cluster freeze|unfreeze|export|import`.
+// clusterStateCmd runs `gwag ctl cluster freeze|unfreeze|export|import`.
 func clusterStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, clusterStateUsage)

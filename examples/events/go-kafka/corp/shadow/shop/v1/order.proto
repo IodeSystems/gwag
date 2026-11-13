@@ -1,6 +1,6 @@
 // gwag's own copy of corp.orders.v1.Order (a shadow). It keeps the
 // fields this service reads and carries a channel binding, so gwag gen
-// writes typed calls for it. `gwag schema check --registry corp=URL`
+// writes typed calls for it. `gwag ctl schema check --registry corp=URL`
 // fails if a kept field no longer matches the registry.
 syntax = "proto3";
 

@@ -160,7 +160,7 @@ func TypeNames(m map[string]string) SerdeOption {
 // publish and on delivery. For a channel another system produces: its
 // schema ids are that system's, so its records decode only against its
 // registry, or against the gwag context it was imported into
-// (http://gwag:8080/schema-registry/contexts/.corp after `gwag schema
+// (http://gwag:8080/schema-registry/contexts/.corp after `gwag ctl schema
 // import --into .corp`). Repeatable, one per channel. An empty key or
 // a nil client fails NewSerde.
 //

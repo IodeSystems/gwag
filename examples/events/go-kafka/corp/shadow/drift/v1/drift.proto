@@ -1,5 +1,5 @@
 // Copies that no longer match corp-orders-value. ../../test.sh expects
-// `gwag schema check` to fail on each, with these reasons.
+// `gwag ctl schema check` to fail on each, with these reasons.
 syntax = "proto3";
 
 package drift.v1;

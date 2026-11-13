@@ -6,7 +6,7 @@ events/schemaregistry in Go; the framing is byte for byte the same.
 Who produces the topic decides how it is used (docs/events-kafka.md, "Who
 produces the topic?"): own (gwag registers its protos), import (gwag reads a
 pinned copy of another team's schema), shadow (gwag keeps its own copy
-and `gwag schema check` compares it).
+and `gwag ctl schema check` compares it).
 
 betterproto2 messages carry no descriptors, so `gwag gen --lang python`
 embeds the serialized FileDescriptorProto of each file it generates

@@ -27,7 +27,7 @@ import (
 // plane (enforced only with WithRequireAppKeys), and add or delete
 // Schema Registry subjects of the channels those namespaces declare.
 //
-// The gateway mints a key (createAppKey, `gwag key create`), shows
+// The gateway mints a key (createAppKey, `gwag ctl key create`), shows
 // the secret once and stores only its SHA-256, with the namespaces
 // and an expiry. A key is
 //

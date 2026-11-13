@@ -36,7 +36,7 @@ type UsageOptions struct {
 
 // WithUsage records per (caller, namespace, version, operation, day)
 // usage of every upstream call and serves it at GET
-// /admin/usage (`gwag usage`). Off by default. See docs/quota.md.
+// /admin/usage (`gwag ctl usage`). Off by default. See docs/quota.md.
 //
 // Stability: experimental
 func WithUsage(opts UsageOptions) Option {

@@ -44,7 +44,7 @@ const ControlPlaneSubject = "gateway.controlplane.v1.ControlPlane"
 // exactly what the Go serde's AutoRegister would send, so a serde in
 // lookup mode finds it. These, and the control plane subject, are in
 // the default context: gwag's id space. Another registry's ids come in
-// with `gwag schema import` into a named context (POST
+// with `gwag ctl schema import` into a named context (POST
 // /contexts/{context}/gwag/import, admin token), its own id space, so
 // they never clash with gwag's.
 //

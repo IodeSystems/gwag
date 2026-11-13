@@ -23,38 +23,38 @@
 //	gwag --control-plane :50090 --addr :8080
 //
 //	# Print a strong random secret (for --declarations-hook-secret):
-//	gwag secret gen
+//	gwag ctl secret gen
 //
 //	# Generate typed event code for the channels a .proto declares
 //	# (docs/events.md):
 //	gwag gen --lang go --opt paths=source_relative -I proto orders/v1/orders.proto
 //
 //	# Talk to a running gateway:
-//	gwag peer list   --gateway localhost:50090
-//	gwag peer evacuate --gateway localhost:50090 --wait NODE_ID
-//	gwag peer forget --gateway localhost:50090 NODE_ID
-//	gwag cluster finalize --gateway localhost:50090
-//	gwag cluster switchover --gateway http://blue:8080 --percent 5
-//	gwag cluster freeze --gateway http://blue:8080 --ttl 10m
-//	gwag cluster mirror --gateway http://green:8080 --from blue:14223
-//	gwag cluster export --gateway http://blue:8080 > state.json
-//	gwag cluster import --gateway http://green:8080 state.json
-//	gwag drain --list --gateway localhost:50090
-//	gwag drain --wait --gateway localhost:50090 INSTANCE
+//	gwag ctl peer list   --gateway localhost:50090
+//	gwag ctl peer evacuate --gateway localhost:50090 --wait NODE_ID
+//	gwag ctl peer forget --gateway localhost:50090 NODE_ID
+//	gwag ctl cluster finalize --gateway localhost:50090
+//	gwag ctl cluster switchover --gateway http://blue:8080 --percent 5
+//	gwag ctl cluster freeze --gateway http://blue:8080 --ttl 10m
+//	gwag ctl cluster mirror --gateway http://green:8080 --from blue:14223
+//	gwag ctl cluster export --gateway http://blue:8080 > state.json
+//	gwag ctl cluster import --gateway http://green:8080 state.json
+//	gwag ctl drain --list --gateway localhost:50090
+//	gwag ctl drain --wait --gateway localhost:50090 INSTANCE
 //
 //	# The integration pattern (docs/integrate.md): profile, lint, gated deploy:
-//	gwag service init --spec api/openapi.json --url /openapi.json --health /healthz
-//	gwag service check --url http://billing:8080 --gateway localhost:50090
-//	gwag service wait --gateway localhost:50090 --service billing:v1 --green --timeout 2m
-//	gwag services add --profile-url http://legacy:8080/.well-known/gwag.json
+//	gwag ctl services init --spec api/openapi.json --url /openapi.json --health /healthz
+//	gwag ctl services check --url http://billing:8080 --gateway localhost:50090
+//	gwag ctl services wait --gateway localhost:50090 --service billing:v1 --green --timeout 2m
+//	gwag ctl services add --profile-url http://legacy:8080/.well-known/gwag.json
 //
 //	# Persist named gateway logins so subcommands don't need --gateway:
 //	gwag login --name local --gateway localhost:50090 --token DEADBEEF...
 //	gwag login --name staging --gateway staging.gw:50090 --token ...
 //	gwag context                # list logins; primary is marked
 //	gwag use staging            # switch primary
-//	gwag peer list              # uses primary login
-//	gwag peer list --context local
+//	gwag ctl peer list              # uses primary login
+//	gwag ctl peer list --context local
 //	gwag logout staging         # remove one login; --all wipes .gw/
 //
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
@@ -218,11 +218,11 @@ func runGateway() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	cpAddr := flag.String("control-plane", "", "Control-plane gRPC listen address (e.g. :50090); empty = no runtime registration")
 	allowTier := flag.String("allow-tier", "unstable,stable,vN", "Comma-separated tiers accepted by this gateway (subset of unstable,stable,vN); production deployments restrict to \"stable,vN\" or \"vN\"")
-	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists (and reloads) its boot admin token; empty = in-memory only. Set a writable path so 'gwag sign --gateway --bearer $(cat <dir>/admin-token)' works against this gateway instead of local --secret signing.")
+	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists (and reloads) its boot admin token; empty = in-memory only. Set a writable path so 'gwag ctl sign --gateway --bearer $(cat <dir>/admin-token)' works against this gateway instead of local --secret signing.")
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	shutdownDelay := flag.Duration("shutdown-delay", 5*time.Second, "Keep serving this long after /health flips to 503 on SIGTERM/SIGINT, so load balancers pull the node before the listener closes. Default 5s. Use 0 for an interactive run or with no load balancer in front. Otherwise use at least the LB probe interval x unhealthy threshold")
 	shutdownTimeout := flag.Duration("shutdown-timeout", gateway.DefaultShutdownTimeout, "Bound for the stream drain and, separately, for in-flight HTTP requests on SIGTERM/SIGINT")
-	requireAppKeys := flag.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY), operator RPCs the admin token. Mint keys with 'gwag key create' (needs the admin API, which this mode does not mount; use gwag up or an embedding gateway)")
+	requireAppKeys := flag.Bool("require-app-keys", false, "Control plane: remote Register/Heartbeat/Deregister/DrainInstance need an app key covering the namespaces (gRPC metadata authorization: Bearer KEY), operator RPCs the admin token. Mint keys with 'gwag ctl key create' (needs the admin API, which this mode does not mount; use gwag up or an embedding gateway)")
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
@@ -363,10 +363,10 @@ func servicesCmd(args []string) int {
 		}
 	}
 	if len(args) == 0 || args[0] != "list" {
-		fmt.Fprintln(os.Stderr, "Usage: gwag services list [--gateway HOST:PORT] [--context NAME]")
-		fmt.Fprintln(os.Stderr, "       gwag services add --profile-url URL [--gateway HOST:PORT] [--context NAME]")
-		fmt.Fprintln(os.Stderr, "       gwag services remove --profile-url URL [--gateway HOST:PORT] [--context NAME]")
-		fmt.Fprintln(os.Stderr, "       gwag services profiles [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag ctl services list [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag ctl services add --profile-url URL [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag ctl services remove --profile-url URL [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag ctl services profiles [--gateway HOST:PORT] [--context NAME]")
 		return 2
 	}
 	flags, _ := splitFlagsAndPositionals(args[1:])
@@ -412,7 +412,7 @@ func servicesCmd(args []string) int {
 
 func schemaCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push|import|snapshot) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag ctl schema (fetch|diff|check|push|import|snapshot) ...")
 		return 2
 	}
 	switch args[0] {
@@ -429,7 +429,7 @@ func schemaCmd(args []string) int {
 	case "snapshot":
 		return schemaSnapshotCmd(args[1:], os.Stdout, os.Stderr)
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: gwag schema (fetch|diff|check|push|import|snapshot) ...")
+		fmt.Fprintln(os.Stderr, "Usage: gwag ctl schema (fetch|diff|check|push|import|snapshot) ...")
 		return 2
 	}
 }
@@ -477,7 +477,7 @@ func schemaDiffCmd(args []string) int {
 	to := fs.String("to", "", "New schema source (URL or file path; required)")
 	strict := fs.Bool("strict", false, "Exit non-zero if any breaking changes are reported")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag schema diff --from OLD --to NEW [--strict]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl schema diff --from OLD --to NEW [--strict]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
@@ -560,7 +560,7 @@ func signCmd(args []string) int {
 	kid := fs.String("kid", "", "Optional rotation key id; empty = legacy default secret")
 	bearerHex := fs.String("bearer", "", "Hex-encoded bearer for the gRPC sign endpoint (signer-secret or admin token); required with --gateway. Defaults from .gw primary if set there.")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag sign --channel SUBJECT [--ttl 60] [--kid KID]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl sign --channel SUBJECT [--ttl 60] [--kid KID]")
 		fmt.Fprintln(fs.Output(), "  Remote: --gateway HOST:PORT --bearer HEX")
 		fmt.Fprintln(fs.Output(), "  Local:  --secret HEX")
 		fs.PrintDefaults()
@@ -659,7 +659,7 @@ func splitFlagsAndPositionals(args []string) (flags, positionals []string) {
 
 func peerCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gwag peer (list|evacuate NODE_ID|forget NODE_ID) [--gateway HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: gwag ctl peer (list|evacuate NODE_ID|forget NODE_ID) [--gateway HOST:PORT]")
 		return 2
 	}
 	verb := args[0]
@@ -675,7 +675,7 @@ func peerCmd(args []string) int {
 	leave := fs.Bool("leave", false, "evacuate: once no stream is on the peer, remove it from the JetStream meta group (its JetStream turns off; stop it next)")
 	wait := fs.Duration("wait", 0, "evacuate: poll until done, up to this long (e.g. 2m); first wait for every stream to be at the cluster replica count")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: gwag peer "+verb+" [--gateway HOST:PORT] [--context NAME] [args...]")
+		fmt.Fprintln(fs.Output(), "Usage: gwag ctl peer "+verb+" [--gateway HOST:PORT] [--context NAME] [args...]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(flags); err != nil {
@@ -712,14 +712,14 @@ func peerCmd(args []string) int {
 
 	case "evacuate":
 		if len(rest) < 1 {
-			fmt.Fprintln(os.Stderr, "usage: gwag peer evacuate NODE_ID [--check] [--leave] [--wait 2m] [--gateway HOST:PORT]")
+			fmt.Fprintln(os.Stderr, "usage: gwag ctl peer evacuate NODE_ID [--check] [--leave] [--wait 2m] [--gateway HOST:PORT]")
 			return 2
 		}
 		return evacuatePeer(client, login.Bearer, rest[0], *checkOnly, *leave, *wait)
 
 	case "forget":
 		if len(rest) < 1 {
-			fmt.Fprintln(os.Stderr, "usage: gwag peer forget NODE_ID [--gateway HOST:PORT]")
+			fmt.Fprintln(os.Stderr, "usage: gwag ctl peer forget NODE_ID [--gateway HOST:PORT]")
 			return 2
 		}
 		resp, err := client.ForgetPeer(ctx, &cpv1.ForgetPeerRequest{NodeId: rest[0]})

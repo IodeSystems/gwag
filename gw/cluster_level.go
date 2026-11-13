@@ -27,7 +27,7 @@ import (
 //     reads the old and the new format and writes the old one.
 //     Rolling back to the old binary is safe.
 //  2. Contract. An operator raises the level (FinalizeCluster,
-//     `gwag cluster finalize`, or WithClusterAutoFinalize). From then
+//     `gwag ctl cluster finalize`, or WithClusterAutoFinalize). From then
 //     on the nodes write the new format, and the old binary is
 //     refused.
 //
@@ -130,7 +130,7 @@ func checkClusterLevel(active int) error {
 		return fmt.Errorf("cluster feature level %d is above the highest level this binary supports (%d, version %s): the cluster was finalized by a newer binary; run that version or newer", active, clusterLevelMax(), binaryVersion())
 	}
 	if active < clusterLevelMin {
-		return fmt.Errorf("cluster feature level %d is below the lowest level this binary supports (%d, version %s): finalize the cluster to level %d with the current binary first (gwag cluster finalize)", active, clusterLevelMin, binaryVersion(), clusterLevelMin)
+		return fmt.Errorf("cluster feature level %d is below the lowest level this binary supports (%d, version %s): finalize the cluster to level %d with the current binary first (gwag ctl cluster finalize)", active, clusterLevelMin, binaryVersion(), clusterLevelMin)
 	}
 	return nil
 }

@@ -105,7 +105,7 @@ func main() {
 	declHookMode := flag.String("declarations-hook-mode", "full", "--declarations-hook body: full (the whole set) or delta (one change)")
 	declFile := flag.String("declarations-file", "", "Keep this file in step with the external dependents. Every node writes its own")
 	declFileMode := flag.String("declarations-file-mode", "full", "--declarations-file content: full (the whole set as JSON, replaced atomically) or delta (one JSON line appended per change)")
-	autoFinalize := flag.Bool("cluster-auto-finalize", false, "Raise the cluster feature level as soon as every live peer supports a higher one, instead of waiting for gwag cluster finalize. Ends the rollback window without an operator step")
+	autoFinalize := flag.Bool("cluster-auto-finalize", false, "Raise the cluster feature level as soon as every live peer supports a higher one, instead of waiting for gwag ctl cluster finalize. Ends the rollback window without an operator step")
 	clusterReplicas := flag.String("cluster-replicas", "odd", "JetStream KV replica policy: odd (largest odd <= min(peers,3); 2 peers stay at R1), auto (min(peers,3)), or a fixed integer 1..5 capped at live peers")
 	ssoFlags := oidc.RegisterFlags(flag.CommandLine)
 	genMode := flag.Bool("gen", false, "Build the static admin GraphQL schema and print SDL to stdout, then exit. No cluster, no listeners — the gateway is constructed in-process, the admin OpenAPI is self-ingested, and SchemaHandler renders the SDL the UI codegen consumes.")

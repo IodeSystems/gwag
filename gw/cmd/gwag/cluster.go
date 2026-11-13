@@ -40,7 +40,7 @@ func printPeers(w io.Writer, resp *cpv1.ListPeersResponse) {
 	}
 }
 
-// evacuatePeer runs `gwag peer evacuate`.
+// evacuatePeer runs `gwag ctl peer evacuate`.
 func evacuatePeer(client cpv1.ControlPlaneClient, bearer, nodeID string, checkOnly, leave bool, wait time.Duration) int {
 	deadline := time.Now().Add(wait)
 	call := func(check bool) (*cpv1.EvacuatePeerResponse, error) {
@@ -103,7 +103,7 @@ func notReadyStreams(err error) []string {
 	return out
 }
 
-// clusterCmd runs `gwag cluster ...`.
+// clusterCmd runs `gwag ctl cluster ...`.
 func clusterCmd(args []string) int {
 	if len(args) > 0 {
 		switch args[0] {
@@ -116,10 +116,10 @@ func clusterCmd(args []string) int {
 		}
 	}
 	if len(args) == 0 || args[0] != "finalize" {
-		fmt.Fprintln(os.Stderr, "Usage: gwag cluster finalize [--level N] [--dry-run] [--gateway HOST:PORT] [--context NAME]")
-		fmt.Fprintln(os.Stderr, "       gwag cluster switchover [--percent N] [--rule SPEC]... [--target URL] [--clear] [--gateway URL]")
-		fmt.Fprintln(os.Stderr, "       gwag cluster (freeze|unfreeze|export|import) ... (cutover state copy; gwag cluster export --help)")
-		fmt.Fprintln(os.Stderr, "       gwag cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop] [--gateway GREEN] (event stream mirror)")
+		fmt.Fprintln(os.Stderr, "Usage: gwag ctl cluster finalize [--level N] [--dry-run] [--gateway HOST:PORT] [--context NAME]")
+		fmt.Fprintln(os.Stderr, "       gwag ctl cluster switchover [--percent N] [--rule SPEC]... [--target URL] [--clear] [--gateway URL]")
+		fmt.Fprintln(os.Stderr, "       gwag ctl cluster (freeze|unfreeze|export|import) ... (cutover state copy; gwag ctl cluster export --help)")
+		fmt.Fprintln(os.Stderr, "       gwag ctl cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop] [--gateway GREEN] (event stream mirror)")
 		return 2
 	}
 	fs := flag.NewFlagSet("cluster finalize", flag.ContinueOnError)

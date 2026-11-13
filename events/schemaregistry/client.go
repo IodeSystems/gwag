@@ -6,7 +6,7 @@
 // Who produces the topic decides how it is used (docs/events-kafka.md,
 // "Who produces the topic?"): own (gwag registers its protos), import (gwag
 // reads a pinned copy of another team's schema), shadow (gwag keeps its
-// own copy and `gwag schema check` compares it).
+// own copy and `gwag ctl schema check` compares it).
 //
 // Stability: experimental
 package schemaregistry

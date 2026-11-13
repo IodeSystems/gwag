@@ -16,8 +16,8 @@ import (
 )
 
 const drainUsage = `Usage:
-  gwag drain INSTANCE [--wait] [--timeout 5m] [--cancel] [--gateway HOST:PORT] [--context NAME]
-  gwag drain --list [--gateway HOST:PORT] [--context NAME]
+  gwag ctl drain INSTANCE [--wait] [--timeout 5m] [--cancel] [--gateway HOST:PORT] [--context NAME]
+  gwag ctl drain --list [--gateway HOST:PORT] [--context NAME]
 
 INSTANCE is a registration_id or an instance_id (see --list).
 Without --wait, prints the current drain state and exits 0.

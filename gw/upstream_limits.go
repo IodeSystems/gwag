@@ -25,7 +25,7 @@ import (
 //
 //   - rate limit: a token bucket per (namespace, version, operation)
 //     scope, set in code (RateLimit, OperationRateLimit) or by an
-//     operator (admin API, `gwag limit set`). In a cluster each node
+//     operator (admin API, `gwag ctl limit set`). In a cluster each node
 //     gets rps / live peers and burst / live peers, recomputed when
 //     the live peer count changes. A call waits for a token up to the
 //     backpressure MaxWaitTime, then fails ResourceExhausted (HTTP
@@ -172,7 +172,7 @@ const maxQuotaWindow = 24 * time.Hour
 // cluster-wide: each node gets rps and burst divided by the live peer
 // count. Callers over the limit wait for a token up to the
 // backpressure MaxWaitTime, then fail ResourceExhausted (HTTP 429 with
-// Retry-After). An operator limit for the same scope (`gwag limit
+// Retry-After). An operator limit for the same scope (`gwag ctl limit
 // set`) replaces this one. Applies to AddProto*, AddOpenAPI*,
 // AddGraphQL and AddMCP. See docs/quota.md.
 //
@@ -196,8 +196,8 @@ func OperationRateLimit(op string, rps float64, burst int) ServiceOption {
 }
 
 // OperationCost sets the units one call to op counts against quotas
-// that count units (`gwag quota set --units`) and in the usage
-// report. Default 1. An operator cost for the same operation (`gwag
+// that count units (`gwag ctl quota set --units`) and in the usage
+// report. Default 1. An operator cost for the same operation (`gwag ctl
 // cost set`) replaces this one.
 //
 // Stability: experimental

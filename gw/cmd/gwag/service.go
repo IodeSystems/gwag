@@ -24,18 +24,18 @@ import (
 	cpv1 "github.com/iodesystems/gwag/v2/gw/proto/controlplane/v1"
 )
 
-// gwag service: the integration pattern for one service.
+// gwag ctl services (profile verbs): the integration pattern for one service.
 //
-//	gwag service init   write the profile (gwag.yaml) from local specs
-//	gwag service check  lint the profile; check a running service
+//	gwag ctl services init   write the profile (gwag.yaml) from local specs
+//	gwag ctl services check  lint the profile; check a running service
 //	                    against it; check depends on a gateway
-//	gwag service wait   block until the gateway reports it green
+//	gwag ctl services wait   block until the gateway reports it green
 
 const serviceUsage = `Usage:
-  gwag service init  --spec [VERSION=]FILE ... [--service NS] [--url PATH] [--health PATH] [flags]
-  gwag service check [--profile gwag.yaml] [--url http://svc:port] [--grpc-addr host:port] [--gateway HOST:PORT] [--json]
-  gwag service wait  --service NS[:VERSION] [--instance ID] [--green] [--timeout 2m] [--gateway HOST:PORT] [--json]
-  gwag service schema   print the JSON Schema of the profile file`
+  gwag ctl services init  --spec [VERSION=]FILE ... [--service NS] [--url PATH] [--health PATH] [flags]
+  gwag ctl services check [--profile gwag.yaml] [--url http://svc:port] [--grpc-addr host:port] [--gateway HOST:PORT] [--json]
+  gwag ctl services wait  --service NS[:VERSION] [--instance ID] [--green] [--timeout 2m] [--gateway HOST:PORT] [--json]
+  gwag ctl services schema   print the JSON Schema of the profile file`
 
 func serviceCmd(args []string) int {
 	return runService(args, os.Stdout, os.Stderr)
@@ -90,7 +90,7 @@ func serviceInit(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("o", profile.DefaultFile, "Output file; .json writes JSON (for /.well-known/gwag.json), anything else YAML; - for stdout")
 	force := fs.Bool("force", false, "Overwrite the output file")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gwag service init --spec [VERSION=]FILE ... [flags]")
+		fmt.Fprintln(stderr, "Usage: gwag ctl services init --spec [VERSION=]FILE ... [flags]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -196,7 +196,7 @@ func serviceInit(args []string, stdout, stderr io.Writer) int {
 		body = append(body, '\n')
 	} else {
 		body, err = p.YAML()
-		body = append([]byte("# gwag service profile. Schema: `gwag service schema`. Check: `gwag service check`.\n"), body...)
+		body = append([]byte("# gwag service profile. Schema: `gwag ctl services schema`. Check: `gwag ctl services check`.\n"), body...)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -296,7 +296,7 @@ func serviceCheck(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "Print the results as JSON")
 	timeout := fs.Duration("timeout", 10*time.Second, "Timeout of each network check")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gwag service check [--profile gwag.yaml] [--url http://svc:port] [--grpc-addr host:port] [--gateway HOST:PORT] [--json]")
+		fmt.Fprintln(stderr, "Usage: gwag ctl services check [--profile gwag.yaml] [--url http://svc:port] [--grpc-addr host:port] [--gateway HOST:PORT] [--json]")
 		fmt.Fprintln(stderr, "Exit codes: 0 ok; 3 profile; 4 service unreachable; 5 spec or profile differs; 6 dependency missing on the gateway; 1 error; 2 usage. Several failures: the lowest code.")
 		fs.PrintDefaults()
 	}
@@ -393,7 +393,7 @@ func serviceCheck(args []string, stdout, stderr io.Writer) int {
 			case "equal":
 				add(fmt.Sprintf("provides.%s snapshot %s", v, pv.Snapshot), "profile", nil)
 			case "additive":
-				warn(fmt.Sprintf("provides.%s snapshot %s", v, pv.Snapshot), "profile", "additive change; run `gwag schema snapshot update`: "+detail)
+				warn(fmt.Sprintf("provides.%s snapshot %s", v, pv.Snapshot), "profile", "additive change; run `gwag ctl schema snapshot update`: "+detail)
 			default:
 				add(fmt.Sprintf("provides.%s snapshot %s", v, pv.Snapshot), "profile", errors.New(detail))
 			}
@@ -720,7 +720,7 @@ func serviceWait(args []string, stdout, stderr io.Writer) int {
 	interval := fs.Duration("interval", time.Second, "Poll interval")
 	jsonOut := fs.Bool("json", false, "Print the final state as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gwag service wait --service NS[:VERSION] [--instance ID] [--green] [--any] [--timeout 2m] [--gateway HOST:PORT] [--json]")
+		fmt.Fprintln(stderr, "Usage: gwag ctl services wait --service NS[:VERSION] [--instance ID] [--green] [--any] [--timeout 2m] [--gateway HOST:PORT] [--json]")
 		fmt.Fprintln(stderr, "Green: the instance is READY (start gate passed, dependencies present) and its verification is green or not declared.")
 		fmt.Fprintln(stderr, "Exit codes: 0 green; 3 not green at the timeout (reasons printed); 4 no matching instance at the timeout; 1 error; 2 usage.")
 		fs.PrintDefaults()
@@ -890,7 +890,7 @@ func servicesProfileCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if verb != "profiles" && *profileURL == "" {
-		fmt.Fprintf(stderr, "Usage: gwag services %s --profile-url URL [--gateway HOST:PORT] [--context NAME]\n", verb)
+		fmt.Fprintf(stderr, "Usage: gwag ctl services %s --profile-url URL [--gateway HOST:PORT] [--context NAME]\n", verb)
 		return 2
 	}
 	login := resolveLogin(*ctxName)
@@ -920,7 +920,7 @@ func servicesProfileCmd(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		if len(resp.GetBindings()) == 0 {
-			fmt.Fprintln(stdout, "  registered by another cluster node; see `gwag service wait`")
+			fmt.Fprintln(stdout, "  registered by another cluster node; see `gwag ctl services wait`")
 		}
 	case "remove":
 		resp, err := client.RemoveServiceProfile(ctx, &cpv1.RemoveServiceProfileRequest{Url: *profileURL})

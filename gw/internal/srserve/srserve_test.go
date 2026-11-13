@@ -169,7 +169,7 @@ func TestReadOnly(t *testing.T) {
 	}
 }
 
-// bundleFrom copies src the way `gwag schema import` does.
+// bundleFrom copies src the way `gwag ctl schema import` does.
 func bundleFrom(t *testing.T, src *sr.Client) srserve.Bundle {
 	t.Helper()
 	ctx := context.Background()

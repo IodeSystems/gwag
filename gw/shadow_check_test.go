@@ -57,7 +57,7 @@ func shadowGateway(t *testing.T, withRegistry bool, opts ...Option) *Gateway {
 	return g
 }
 
-// importCorp puts corpOrderProto at subject in context, as `gwag
+// importCorp puts corpOrderProto at subject in context, as `gwag ctl
 // schema import --into` would.
 func importCorp(t *testing.T, g *Gateway, context_, subject string) {
 	t.Helper()

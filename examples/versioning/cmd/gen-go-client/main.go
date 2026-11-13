@@ -27,7 +27,7 @@ import (
 const module = "github.com/iodesystems/gwag/v2/examples/versioning/clients/go"
 
 func main() {
-	snap := flag.String("snapshot", "", "proto snapshot (gwag schema snapshot canonical JSON)")
+	snap := flag.String("snapshot", "", "proto snapshot (gwag ctl schema snapshot canonical JSON)")
 	pkg := flag.String("pkg", "", "Go package name, also the directory under -out")
 	out := flag.String("out", "", "output directory (module root of the clients)")
 	flag.Parse()

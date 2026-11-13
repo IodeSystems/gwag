@@ -7,7 +7,7 @@ import (
 )
 
 // Built-in quotas: per caller-id limits over a fixed window, set by
-// operators (`gwag quota set`). The caller id is whatever caller-id
+// operators (`gwag ctl quota set`). The caller id is whatever caller-id
 // mode the gateway runs (docs/caller-identity.md); "unknown" when none
 // resolves.
 //

@@ -15,9 +15,9 @@ import (
 )
 
 const mirrorUsage = `Usage:
-  gwag cluster mirror [--from BLUE] [--channel NAME]...   start
-  gwag cluster mirror --status
-  gwag cluster mirror --stop [--channel NAME]...
+  gwag ctl cluster mirror [--from BLUE] [--channel NAME]...   start
+  gwag ctl cluster mirror --status
+  gwag ctl cluster mirror --stop [--channel NAME]...
 
 Event stream mirror of a cutover (docs/cutover.md), run against green
 (--gateway). Green's nodes run with --mirror-from (blue's

@@ -24,7 +24,7 @@ import (
 // subject it names in its own Schema Registry. The result is a
 // warning: the registration always succeeds, and the gateway never
 // calls an external registry (the corp schemas are in a context
-// filled by `gwag schema import`).
+// filled by `gwag ctl schema import`).
 //
 // Lookup rule: the option's registry name is the context
 // (srserve.NormContext: "corp" is ".corp"). If that context holds the

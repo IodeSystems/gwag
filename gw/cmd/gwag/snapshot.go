@@ -35,7 +35,7 @@ const (
 
 func schemaSnapshotCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || (args[0] != "check" && args[0] != "update") {
-		fmt.Fprintln(stderr, "Usage: gwag schema snapshot (check|update) --spec FILE|URL --snapshot FILE [--format openapi|graphql|proto] [-I DIR]")
+		fmt.Fprintln(stderr, "Usage: gwag ctl schema snapshot (check|update) --spec FILE|URL --snapshot FILE [--format openapi|graphql|proto] [-I DIR]")
 		return 2
 	}
 	verb := args[0]

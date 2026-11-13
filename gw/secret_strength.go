@@ -97,7 +97,7 @@ func dropRuns(b []byte) []byte {
 //
 // Stability: experimental
 func CheckSecretStrength(secret []byte) error {
-	const hint = "make one with `openssl rand -base64 48` or `gwag secret gen`"
+	const hint = "make one with `openssl rand -base64 48` or `gwag ctl secret gen`"
 	if len(secret) < MinSecretBytes {
 		return fmt.Errorf("secret is %d bytes, need at least %d: %s", len(secret), MinSecretBytes, hint)
 	}

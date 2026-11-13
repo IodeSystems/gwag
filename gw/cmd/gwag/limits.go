@@ -15,9 +15,9 @@ import (
 )
 
 const limitUsage = `Usage:
-  gwag limit set --service NS[:vN] [--op OP] --rps N --burst B
-  gwag limit delete --service NS[:vN] [--op OP]
-  gwag limit list
+  gwag ctl limit set --service NS[:vN] [--op OP] --rps N --burst B
+  gwag ctl limit delete --service NS[:vN] [--op OP]
+  gwag ctl limit list
 
 A cluster-wide rate limit on calls from the gateway to a service:
 every node applies rps and burst divided by the live peer count.
@@ -33,30 +33,30 @@ http://localhost:8080), --bearer TOKEN (default: from .gw),
 --context NAME.`
 
 const quotaUsage = `Usage:
-  gwag quota set (--caller ID | --default) [--service NS[:vN]] [--op OP] --limit N --per 1s|1m|1h|1d [--units]
-  gwag quota delete (--caller ID | --default) [--service NS[:vN]] [--op OP]
-  gwag quota list
+  gwag ctl quota set (--caller ID | --default) [--service NS[:vN]] [--op OP] --limit N --per 1s|1m|1h|1d [--units]
+  gwag ctl quota delete (--caller ID | --default) [--service NS[:vN]] [--op OP]
+  gwag ctl quota list
 
 A quota for one caller id (the caller-id mode the gateway runs), or
 the default for every caller without its own quota at that scope;
 each caller counts separately. Windows are fixed (1m starts on the
 minute, 1d at 00:00 UTC), at most 24h. --units counts operation cost
-units (gwag cost set) instead of calls. Without --service the quota
+units (gwag ctl cost set) instead of calls. Without --service the quota
 covers every service. Windows under 1m are split across the live
 nodes; longer windows use a cluster counter flushed every few
 seconds (docs/quota.md). Writes need the admin token.`
 
 const costUsage = `Usage:
-  gwag cost set --service NS[:vN] --op OP --units N
-  gwag cost delete --service NS[:vN] --op OP
-  gwag cost list
+  gwag ctl cost set --service NS[:vN] --op OP --units N
+  gwag ctl cost delete --service NS[:vN] --op OP
+  gwag ctl cost list
 
 The units one call to an operation counts against --units quotas and
 in the usage report (default 1). Replaces a cost set in code
 (gateway.OperationCost).`
 
 const usageUsage = `Usage:
-  gwag usage [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--caller ID] [--service NS[:vN]] [--csv]
+  gwag ctl usage [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--caller ID] [--service NS[:vN]] [--csv]
 
 Usage per UTC day, caller, service and operation: calls, units,
 rate-limit and quota refusals, upstream 429s, errors. Default: the

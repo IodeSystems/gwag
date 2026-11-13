@@ -16,7 +16,7 @@ import (
 
 // TestS15GatedDeploy is the integration pattern's deploy gate
 // (docs/integrate.md): two replicas register with a health URL and a
-// spec URL; the gateway verifies each and `gwag service wait --green`
+// spec URL; the gateway verifies each and `gwag ctl services wait --green`
 // passes. One replica's health check fails: the gateway reports it
 // red with the reason, stops routing to it while the other keeps
 // serving, and `service wait` for it exits 3. It recovers to green.
@@ -43,7 +43,7 @@ func TestS15GatedDeploy(t *testing.T) {
 	}
 	wait := func(args ...string) (string, int) {
 		t.Helper()
-		cmd := exec.Command(harness.Binary(t, "gwag"), append([]string{"service", "wait", "--gateway", gw.CPAddr(), "--interval", "100ms"}, args...)...)
+		cmd := exec.Command(harness.Binary(t, "gwag"), append([]string{"ctl", "services", "wait", "--gateway", gw.CPAddr(), "--interval", "100ms"}, args...)...)
 		out, err := cmd.CombinedOutput()
 		var ee *exec.ExitError
 		switch {
@@ -52,7 +52,7 @@ func TestS15GatedDeploy(t *testing.T) {
 		case errors.As(err, &ee):
 			return string(out), ee.ExitCode()
 		}
-		t.Fatalf("gwag service wait: %v", err)
+		t.Fatalf("gwag ctl services wait: %v", err)
 		return "", -1
 	}
 

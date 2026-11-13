@@ -13,10 +13,10 @@ import (
 )
 
 const keyUsage = `Usage:
-  gwag key create --ns NAMESPACE [--ns ...] --ttl 30d [--note TEXT]
-  gwag key create --system --ttl 30d [--note TEXT]
-  gwag key list
-  gwag key revoke ID
+  gwag ctl key create --ns NAMESPACE [--ns ...] --ttl 30d [--note TEXT]
+  gwag ctl key create --system --ttl 30d [--note TEXT]
+  gwag ctl key list
+  gwag ctl key revoke ID
 
 App keys let a service register, heartbeat, deregister and drain
 bindings in the listed namespaces (on a gateway with

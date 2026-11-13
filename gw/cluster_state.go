@@ -244,7 +244,7 @@ func (g *Gateway) exportClusterState(ctx context.Context, allowUnfrozen bool) (*
 	}
 	if !frozen {
 		if !allowUnfrozen {
-			return nil, &cutoverError{status: http.StatusConflict, code: codes.FailedPrecondition, msg: "cluster state export: the cluster is not frozen; freeze it first (gwag cluster freeze), or export with allowUnfrozen and copy again after the last change"}
+			return nil, &cutoverError{status: http.StatusConflict, code: codes.FailedPrecondition, msg: "cluster state export: the cluster is not frozen; freeze it first (gwag ctl cluster freeze), or export with allowUnfrozen and copy again after the last change"}
 		}
 		doc.Warnings = append(doc.Warnings, "exported without a freeze: admin writes during the export may be missing or half there; freeze and export again before the switch")
 		g.srWarnf("cluster state export without a freeze (allowUnfrozen), by %s", doc.ExportedBy)

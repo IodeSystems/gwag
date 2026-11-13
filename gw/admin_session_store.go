@@ -107,7 +107,7 @@ type adminSessionCutoff struct {
 }
 
 // errAdminSessionsLevel: the cluster runs below levelAdminSessions.
-var errAdminSessionsLevel = fmt.Errorf("admin sessions need cluster feature level %d; raise it with gwag cluster finalize once every node runs this version", levelAdminSessions)
+var errAdminSessionsLevel = fmt.Errorf("admin sessions need cluster feature level %d; raise it with gwag ctl cluster finalize once every node runs this version", levelAdminSessions)
 
 // errAdminSessionsStarting: cluster tracking has not opened the bucket.
 var errAdminSessionsStarting = errors.New("admin sessions: cluster tracking has not started yet; retry")

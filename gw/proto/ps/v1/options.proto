@@ -47,7 +47,7 @@ extend google.protobuf.MessageOptions {
 }
 
 // Shadow declares that a message is gwag's copy of a message another
-// team owns in a Confluent Schema Registry. `gwag schema check` reads
+// team owns in a Confluent Schema Registry. `gwag ctl schema check` reads
 // it and compares the two. The gateway and generated code ignore it.
 //
 //   option (gwag.ps.v1.shadow) = {
@@ -59,7 +59,7 @@ extend google.protobuf.MessageOptions {
 // The registry URL is not in the proto, so one proto serves every
 // environment.
 message Shadow {
-  // Registry name. `gwag schema check --registry NAME=URL` maps it to
+  // Registry name. `gwag ctl schema check --registry NAME=URL` maps it to
   // a URL. Required.
   string registry = 1;
   // Schema Registry subject, e.g. "orders-value". Required.

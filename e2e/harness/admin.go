@@ -340,7 +340,7 @@ func (a *Admin) ExternalDependents(ctx context.Context) ([]ExternalDependent, er
 
 // DrainInstance asks the gateway to drain an instance (registration id
 // or instance id) and returns the drain state; cancel withdraws the
-// drain. Same call as `gwag drain`; repeating it is how `gwag drain
+// drain. Same call as `gwag ctl drain`; repeating it is how `gwag ctl drain
 // --wait` polls.
 func (a *Admin) DrainInstance(ctx context.Context, instance string, cancel bool) (*cpv1.DrainInstanceResponse, error) {
 	return a.g.ControlPlane().DrainInstance(ctx, &cpv1.DrainInstanceRequest{Instance: instance, Cancel: cancel})
@@ -376,7 +376,7 @@ func (a *Admin) WaitDrainState(instance, want string, timeout time.Duration) {
 }
 
 // DrainStateName is the lower-case short name of a drain state, as
-// `gwag drain` prints it.
+// `gwag ctl drain` prints it.
 func DrainStateName(s cpv1.DrainState) string {
 	return strings.ToLower(strings.TrimPrefix(s.String(), "DRAIN_STATE_"))
 }

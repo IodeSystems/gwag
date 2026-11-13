@@ -216,7 +216,7 @@ type evacuateNotReadyError struct {
 }
 
 func (e *evacuateNotReadyError) Error() string {
-	return fmt.Sprintf("cluster: evacuation of %s not started: %d stream(s) not at R%d with every replica current, and an evacuation holds raises back until the node is forgotten; try again once they are (gwag peer evacuate --wait does): %s",
+	return fmt.Sprintf("cluster: evacuation of %s not started: %d stream(s) not at R%d with every replica current, and an evacuation holds raises back until the node is forgotten; try again once they are (gwag ctl peer evacuate --wait does): %s",
 		e.Peer, len(e.Streams), e.Target, strings.Join(e.Streams, "; "))
 }
 

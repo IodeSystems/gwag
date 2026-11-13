@@ -153,7 +153,7 @@ func (x *ChannelBinding) GetName() string {
 }
 
 // Shadow declares that a message is gwag's copy of a message another
-// team owns in a Confluent Schema Registry. `gwag schema check` reads
+// team owns in a Confluent Schema Registry. `gwag ctl schema check` reads
 // it and compares the two. The gateway and generated code ignore it.
 //
 //	option (gwag.ps.v1.shadow) = {
@@ -166,7 +166,7 @@ func (x *ChannelBinding) GetName() string {
 // environment.
 type Shadow struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Registry name. `gwag schema check --registry NAME=URL` maps it to
+	// Registry name. `gwag ctl schema check --registry NAME=URL` maps it to
 	// a URL. Required.
 	Registry string `protobuf:"bytes,1,opt,name=registry,proto3" json:"registry,omitempty"`
 	// Schema Registry subject, e.g. "orders-value". Required.

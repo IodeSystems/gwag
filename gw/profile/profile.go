@@ -9,8 +9,8 @@
 // @gwag/registration loadProfile, gwag_registration.load_profile)
 // and pushes it with Register. An external or legacy service serves
 // it as JSON at WellKnownPath, and the gateway pulls it
-// (`gwag services add --profile-url`). `gwag service init` writes it,
-// `gwag service check` lints it and checks a running service against
+// (`gwag ctl services add --profile-url`). `gwag ctl services init` writes it,
+// `gwag ctl services check` lints it and checks a running service against
 // it.
 //
 //	service: billing
@@ -48,7 +48,7 @@ import (
 // the gateway to pull.
 const WellKnownPath = "/.well-known/gwag.json"
 
-// DefaultFile is the profile file name `gwag service init` writes and
+// DefaultFile is the profile file name `gwag ctl services init` writes and
 // the other commands read when --profile is not given.
 const DefaultFile = "gwag.yaml"
 
@@ -122,8 +122,8 @@ type Provide struct {
 	// Health overrides Profile.Health for this version.
 	Health string `json:"health,omitempty" yaml:"health,omitempty"`
 	// Snapshot is the committed snapshot of this version's spec
-	// (`gwag schema snapshot update`), relative to the profile file.
-	// `gwag service check` compares File against it: a breaking
+	// (`gwag ctl schema snapshot update`), relative to the profile file.
+	// `gwag ctl services check` compares File against it: a breaking
 	// change fails the check. Optional.
 	Snapshot string `json:"snapshot,omitempty" yaml:"snapshot,omitempty"`
 }
