@@ -8,11 +8,13 @@
 //	cd ui && pnpm install && pnpm run build   # populates dist/
 //	go build ./...                              # embeds dist/* into the binary
 //
-// dist/ is gitignored entirely — only generated content lives there.
-// The tracked placeholder is `ui/fallback/index.html`; bin/build seeds
-// (or recovers) dist/index.html from that fallback when pnpm run build
-// fails or hasn't run yet, so //go:embed all:dist always finds at
-// least one file. Run bin/build before `go build` on a fresh clone.
+// dist/ is gitignored except the empty placeholder dist/.gitkeep, which
+// keeps //go:embed all:dist compiling in a module-proxy build
+// (`go install .../gw/cmd/gwag@version`), where dist/ is never built.
+// vite.config.ts restores .gitkeep after each build, so a build leaves
+// the tree clean. FS() serves dist/ when it holds index.html and the
+// tracked ui/fallback/index.html otherwise. bin/build seeds
+// dist/index.html from the fallback when the Vite build fails.
 package ui
 
 import (
@@ -23,15 +25,22 @@ import (
 //go:embed all:dist
 var raw embed.FS
 
-// FS returns an fs.FS rooted at the dist directory (the build
-// output), suitable to pass to gateway.UIHandler. Returns a non-nil
-// FS even when only the placeholder is present.
+//go:embed fallback
+var fallback embed.FS
+
+// FS returns an fs.FS rooted at the UI bundle, suitable to pass to
+// gateway.UIHandler. It is the built bundle when dist/index.html was
+// embedded, the placeholder page otherwise. Never nil.
 func FS() fs.FS {
-	sub, err := fs.Sub(raw, "dist")
+	if sub, err := fs.Sub(raw, "dist"); err == nil {
+		if _, err := fs.Stat(sub, "index.html"); err == nil {
+			return sub
+		}
+	}
+	sub, err := fs.Sub(fallback, "fallback")
 	if err != nil {
-		// Embed contract: dist/ exists at build time, so Sub cannot
-		// fail. Panic to surface broken builds early.
-		panic("ui: fs.Sub(dist): " + err.Error())
+		// Embed contract: fallback/ exists at build time.
+		panic("ui: fs.Sub(fallback): " + err.Error())
 	}
 	return sub
 }

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import { tanstackRouter } from '@tanstack/router-plugin/vite';
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:18080';
 
@@ -17,8 +18,19 @@ const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:18080';
 // per query at module init — microseconds for our four-or-so
 // queries — so the precompile isn't worth the toolchain juggling.
 // Revisit if the plugin becomes ABI-current with a newer SWC.
+// Vite empties dist/ before a build. dist/.gitkeep is tracked so that
+// //go:embed all:dist compiles in a module-proxy build (ui/embed.go);
+// put it back so a build leaves the git tree clean.
+const keepDist = () => ({
+  name: 'keep-dist-gitkeep',
+  closeBundle() {
+    writeFileSync(path.resolve(import.meta.dirname, 'dist/.gitkeep'), '');
+  },
+});
+
 export default defineConfig({
   plugins: [
+    keepDist(),
     tanstackRouter({ routesDirectory: 'src/routes', generatedRouteTree: 'src/routeTree.gen.ts' }),
     react(),
   ],
