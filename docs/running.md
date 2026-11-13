@@ -62,6 +62,49 @@ Ports (defaults, `gwag up`):
 | 14222 | NATS client | event producers and listeners, `ps` bridge clients |
 | 14248 | NATS cluster routes | other gateway nodes only |
 
+## Run as a service
+
+`gwag service` runs `gwag up` as a per-user service: a systemd user unit
+on Linux, a LaunchAgent on macOS. User scope only; no root.
+
+```
+gwag service install --enable --start -- --addr :8080
+```
+
+Everything after `--` goes to `gwag up`. The service is named `gwag`;
+`--name` installs another one beside it (give it its own ports).
+
+| Command | Does |
+| --- | --- |
+| `install [--exec PATH] [--data-dir DIR] [--env K=V]... [--enable] [--start] [-- UP-FLAGS]` | Write the unit (overwrites on reinstall), reload systemd. `--enable` starts it at login, `--start` (re)starts it now. |
+| `uninstall` | Stop, disable, remove the unit. The data dir stays; the command prints where. |
+| `start`, `stop`, `restart`, `status` | `systemctl --user` / `launchctl`. |
+| `logs [-f]` | Last 200 lines from `journalctl --user -u NAME`, or the log file on macOS. `-f` follows. |
+| `login` | Save a credentials context named after the service in `~/.config/gwag/credentials.json`: the daemon's admin address and the token from `<data-dir>/admin-token`. Then `gwag ctl ... --context NAME`. |
+
+State and files:
+
+| What | Linux | macOS |
+| --- | --- | --- |
+| Definition | `~/.config/systemd/user/NAME.service` | `~/Library/LaunchAgents/com.iodesystems.NAME.plist` |
+| Data dir | `$XDG_DATA_HOME/gwag/NAME`, else `~/.local/share/gwag/NAME` (mode 0700) | same |
+| Logs | journal | `~/Library/Logs/gwag/NAME.log` |
+
+The unit is `Type=notify`: `gwag up` sends `READY=1` once the listener is
+up and `/health` reports `serving` (in a cluster, after the registry
+replay), so `systemctl --user start` returns when the gateway can take
+traffic. It sends `STOPPING=1` when the drain starts. `TimeoutStopSec` is
+derived from `--shutdown-timeout` and `--shutdown-delay` (twice the
+timeout, plus the delay, plus 30 s). `Restart=on-failure`, `KillMode=mixed`.
+
+The unit passes `--no-context-write`, so the daemon does not write
+`.gw/credentials.json` into its working directory; use `gwag service login`.
+`gwag up` logs the dev token to the journal on every start.
+
+To keep a user service running after logout on Linux: `loginctl enable-linger $USER`.
+
+Upgrade from a checkout: `make install && gwag service restart`.
+
 ## Supported deployment setups
 
 | Setup | How | Tested |

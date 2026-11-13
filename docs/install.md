@@ -62,6 +62,12 @@ bin/build            # UI codegen + Vite + Go
 bin/gwag up
 ```
 
+`make install` builds the UI and installs `gwag` to `$PREFIX/bin`
+(default `~/.local/bin`; `DESTDIR` stages for packagers). The binary is
+written under a temporary name and renamed, so a running copy is never
+half-written. `make install-bin` skips the UI rebuild. To run the result
+as a service, see [running.md](./running.md#run-as-a-service).
+
 Needs Go (version in `go.mod`), Node and pnpm (version in
 `ui/package.json`). `bin/build --no-ui` builds Go only; the UI then is
 the fallback page unless `ui/dist/` already holds a build.
