@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -87,14 +88,29 @@ func ServeHTTP(srv *http.Server, g *Gateway, opts ShutdownOptions) error {
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)
 
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
+	go func() { errc <- srv.Serve(ln) }()
+
+	// READY=1 once the listener is up and /health reports serving.
+	stopReady := make(chan struct{})
+	go notifyWhenReady(g, stopReady)
 
 	select {
 	case err := <-errc:
+		close(stopReady)
 		return err
 	case <-sigs:
+		close(stopReady)
 	}
+	sdNotify("STOPPING=1")
 	go func() {
 		<-sigs
 		log.Printf("second signal: exiting without waiting")
@@ -116,7 +132,7 @@ func ServeHTTP(srv *http.Server, g *Gateway, opts ShutdownOptions) error {
 		time.Sleep(opts.Delay)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-	err := srv.Shutdown(ctx)
+	err = srv.Shutdown(ctx)
 	cancel()
 	if err != nil {
 		log.Printf("http shutdown: %v (closing remaining connections)", err)

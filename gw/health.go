@@ -48,19 +48,7 @@ import (
 // Stability: stable
 func (g *Gateway) HealthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		status := "serving"
-		code := http.StatusOK
-		switch {
-		case g.draining.Load():
-			status = "draining"
-			code = http.StatusServiceUnavailable
-		case g.clusterLevelErr.Load() != nil:
-			status = "incompatible"
-			code = http.StatusServiceUnavailable
-		case g.registrySync.Load() == registrySyncPending:
-			status = "starting"
-			code = http.StatusServiceUnavailable
-		}
+		status, code := g.healthState()
 		body := map[string]any{
 			"status":         status,
 			"active_streams": g.streamGlobal.Load(),
@@ -166,4 +154,18 @@ func (g *Gateway) Drain(ctx context.Context) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// healthState is the /health status word and HTTP code. sd_notify
+// READY=1 waits for "serving" (ServeHTTP).
+func (g *Gateway) healthState() (string, int) {
+	switch {
+	case g.draining.Load():
+		return "draining", http.StatusServiceUnavailable
+	case g.clusterLevelErr.Load() != nil:
+		return "incompatible", http.StatusServiceUnavailable
+	case g.registrySync.Load() == registrySyncPending:
+		return "starting", http.StatusServiceUnavailable
+	}
+	return "serving", http.StatusOK
 }
