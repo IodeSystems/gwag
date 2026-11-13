@@ -1,0 +1,16 @@
+# Release image, built by GoReleaser (.goreleaser.yaml, dockers_v2).
+# The build context holds the prebuilt binary at $TARGETPLATFORM/gwag.
+# For a from-source image use ./Dockerfile.
+FROM --platform=$BUILDPLATFORM busybox:1.37 AS data
+RUN mkdir /data && chown 65532:65532 /data
+
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/gwag /gwag
+# Named volumes copy this directory's ownership on first use.
+COPY --from=data --chown=65532:65532 /data /data
+VOLUME /data
+EXPOSE 8080 50090 14222 14248
+USER 65532:65532
+ENTRYPOINT ["/gwag"]
+CMD ["up", "--data-dir", "/data", "--no-context-write"]
