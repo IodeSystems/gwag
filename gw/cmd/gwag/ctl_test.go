@@ -141,7 +141,12 @@ func TestHelpHidesAliasesAndListsNouns(t *testing.T) {
 			t.Errorf("top usage lists old name %q", old)
 		}
 	}
-	if strings.Contains(topUsage, "gwag service ") || strings.Contains(topUsage, "gwag peer") {
+	for _, v := range legacyServiceVerbs {
+		if strings.Contains(topUsage, "gwag service "+v) {
+			t.Errorf("top usage lists legacy gwag service %s", v)
+		}
+	}
+	if strings.Contains(topUsage, "gwag peer") {
 		t.Error("top usage lists a moved command")
 	}
 	if !strings.Contains(topUsage, "gwag ctl") {

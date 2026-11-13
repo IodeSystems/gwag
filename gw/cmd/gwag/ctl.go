@@ -19,6 +19,8 @@ const topUsage = `Usage: gwag [gateway flags]         run a gateway (gwag --help
        gwag up [flags]              zero-config local gateway: NATS + admin + UI + auto-login
        gwag serve [flags]           single-upstream embedded translator
        gwag ctl <noun> ...          talk to a running gateway (gwag ctl help)
+       gwag service install|uninstall|start|stop|restart|status|logs|login
+                                    run the gateway as a user service (systemd / launchd)
        gwag login | logout | use | context
                                     manage saved gateway logins
        gwag deploy up|down|status|login|export
@@ -162,6 +164,8 @@ func dispatchSubcommand(argv []string) (code int, ok bool) {
 		return probeCmd(rest), true
 	case "ctl":
 		return ctlMain(rest, os.Stdout, os.Stderr), true
+	case "service":
+		return serviceMain(rest, os.Stdout, os.Stderr), true
 	case "help":
 		fmt.Fprintln(os.Stdout, topUsage)
 		return 0, true
