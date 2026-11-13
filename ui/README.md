@@ -134,7 +134,7 @@ Details: [`docs/mcp.md`](../docs/mcp.md).
 ![MCP allowlist](../docs/img/admin-mcp-allowlist.png)
 
 **Sign Token** (`/token-signer`). Channel, TTL and kid in; hmac and
-timestamp out. Admin only. The CLI equivalent is `gwag sign`.
+timestamp out. Admin only. The CLI equivalent is `gwag ctl sign`.
 
 ![Sign Token](../docs/img/admin-token-signer.png)
 

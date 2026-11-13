@@ -112,7 +112,7 @@ start() {
 }
 
 gwag() { "$RUN/gwag" "$@"; }
-drain() { gwag drain "$@" --gateway "localhost:$CP"; }
+drain() { gwag ctl drain "$@" --gateway "localhost:$CP"; }
 
 # ---- build --------------------------------------------------------
 
@@ -187,13 +187,13 @@ look "library/v2 appears. library/v1 has two replicas (library-a, library-b)."
 until_graph 30 "library/v1 has 2 ready instances, library/v2 has 1" \
   '([.nodes[] | select(.id=="library/v1") | .readyCount][0]==2) and ([.nodes[] | select(.id=="library/v2") | .readyCount][0]==1)'
 echo
-echo "   \$ gwag drain library-a --wait"
+echo "   \$ gwag ctl drain library-a --wait"
 if out="$(drain library-a --wait --timeout 60s 2>&1)"; then
   echo "$out" | sed 's/^/     /'
   if grep -q safe_to_stop <<<"$out"; then ok "library-a reaches safe_to_stop (library-b covers v1)"; else bad "library-a: no safe_to_stop in output"; fi
 else
   echo "$out" | sed 's/^/     /'
-  bad "gwag drain library-a --wait failed"
+  bad "gwag ctl drain library-a --wait failed"
 fi
 look "library-a shows draining -> safe_to_stop in the graph; orders stays READY."
 echo "   \$ kill -TERM library-a   (DrainOnSIGTERM: already safe_to_stop, deregisters, exits)"
@@ -254,14 +254,14 @@ until_graph 5 "library/v2 is not sunset-able (orders depends on it)" \
   '.nodes[] | select(.id=="library/v2") | .sunsetable==false'
 echo
 echo "   Now a drain that would strand a dependent: library-b is the only v2 instance."
-echo "   \$ gwag drain library-b"
+echo "   \$ gwag ctl drain library-b"
 out="$(drain library-b 2>&1)"; echo "$out" | sed 's/^/     /'
 if grep -q blocked <<<"$out" && grep -q "blocked:" <<<"$out"; then ok "drain library-b is blocked, with reasons"; else bad "drain library-b: expected blocked + reasons"; fi
 look "library-b shows 'blocked' with the reason (orders would have no ready library line)."
 until_graph 5 "graph shows library-b blocked" \
   '[.nodes[].instances[] | select(.instanceId=="library-b") | .drainState][0]=="blocked"'
 pause
-echo "   \$ gwag drain library-b --cancel"
+echo "   \$ gwag ctl drain library-b --cancel"
 out="$(drain library-b --cancel 2>&1)"; echo "$out" | sed 's/^/     /'
 until_graph 10 "library-b serves again after --cancel" \
   '[.nodes[].instances[] | select(.instanceId=="library-b") | .drainState][0]=="serving"'

@@ -107,11 +107,16 @@ REBUILD=1 bin/gwag up                  # force a fresh build first
 For the real admin UI, run `bin/build` first — `bin/gwag` only seeds
 the `ui/fallback/` placeholder when `ui/dist/` is empty.
 
-Subcommands: `peer list/forget`, `services list`, `schema fetch/diff/check/push/snapshot`,
-`sign`, `login/logout/context/use`, `gen` (typed event code for
-go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
-(Compose, minikube, k8s and ECS files from `gw/deploy`; see `docs/deploy.md`),
-`probe` (HTTP health check for shell-less images).
+Top-level subcommands: `up`, `serve`, `login/logout/context/use`, `gen` (typed
+event code for go / ts / python, see `docs/events.md`), `deploy
+up/down/status/login/export` (Compose, minikube, k8s and ECS files from
+`gw/deploy`; see `docs/deploy.md`), `probe` (HTTP health check for
+shell-less images), `help`. Admin commands live under `gwag ctl`: `services
+list/add/remove/profiles/init/check/wait/schema`, `peer list/evacuate/forget`,
+`cluster`, `drain`, `schema fetch/diff/check/push/import/snapshot`, `key`,
+`sign`, `secret`, `limit`, `quota`, `cost`, `usage`. The old top-level names
+and `gwag service init|check|wait|schema` are hidden aliases for one release
+(`gw/cmd/gwag/ctl.go`); `gwag service` is reserved for the OS service.
 
 ## Architecture Essentials
 
@@ -131,7 +136,7 @@ go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
 - **Cluster feature levels** (`gw/cluster_level.go`): a change to shared
   state (KV value format, bucket or stream config) that older nodes cannot
   handle is a new `clusterFeature` level, gated on `g.clusterFeatureOn(L)`;
-  read old + new, write old until `gwag cluster finalize`. See
+  read old + new, write old until `gwag ctl cluster finalize`. See
   `docs/cluster.md#feature-levels`.
 - **Per-pool isolation is sacred** — no gateway-wide caps on unary dispatch
   beyond per-pool `MaxInflight`.
@@ -172,8 +177,8 @@ go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
   `schemaregistry.SchemaOf` bytes, so Go and Python register one
   schema. Registry CLI: `gwag gen --registry URL
   --subject S[@V]` (import, lock file), `gwag gen --check-lock`,
-  `gwag schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
-  `gwag schema push --registry URL` (own). The bus is open: authorship
+  `gwag ctl schema check --registry NAME=URL` (`(gwag.ps.v1.shadow)`),
+  `gwag ctl schema push --registry URL` (own). The bus is open: authorship
   is the application's job. See `docs/events.md` and `docs/events-kafka.md`.
 - **Registration clients** — `ts/registration` (`@gwag/registration`,
   connect-node gRPC) and `py/gwag-registration` (`gwag_registration`,
@@ -186,12 +191,12 @@ go / ts / python, see `docs/events.md`), `deploy up/down/status/login/export`
   drift-checked by `examples/events/check.sh`; never edit
   `*/gen/`). The Schema Registry serves that file as the default subject
   `gateway.controlplane.v1.ControlPlane`, an ordinary schema of the
-  default context. `gwag schema import --into .corp` puts another
+  default context. `gwag ctl schema import --into .corp` puts another
   registry in its own context (own id space), so imports cannot collide
   with it. `examples/events/registration.sh` runs both
   clients against a real `gwag up`. See `docs/registration-clients.md`.
 - **Integration pattern** (`docs/integrate.md`): profile file
-  `gwag.yaml` (`gw/profile`, `gwag service init|check|wait`), loaded by
+  `gwag.yaml` (`gw/profile`, `gwag ctl services init|check|wait`), loaded by
   `controlclient.LoadProfile` and the TS / Python clients, or pulled
   from `/.well-known/gwag.json` (`AddServiceProfile`,
   `gw/profile_pull.go`, KV `gwag-pulled-services`). A binding with

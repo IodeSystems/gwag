@@ -65,11 +65,11 @@ Bypassing the shim and hitting `SignSubscriptionToken` directly is
 gated by the gateway:
 
 ```
-$ gwag sign --gateway 127.0.0.1:50090 \
+$ gwag ctl sign --gateway 127.0.0.1:50090 \
            --channel events.user.alice
 --bearer is required with --gateway (the sign endpoint is bearer-gated)
 
-$ gwag sign --gateway 127.0.0.1:50090 \
+$ gwag ctl sign --gateway 127.0.0.1:50090 \
            --bearer 11111111111111111111111111111111 \
            --channel events.user.alice
 hmac=…

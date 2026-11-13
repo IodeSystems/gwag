@@ -25,9 +25,9 @@ One question decides how gwag uses a registry schema.
 | Who produces the topic | a gwag service | another team | another team |
 | Use when | default | default | advanced: you need your own annotations on their message |
 | The proto gwag compiles | yours, with `(gwag.ps.v1.binding)`; the serde registers it | read-only files fetched from their subject, pinned in `gwag.lock.json` | yours, with `(gwag.ps.v1.binding)` and `(gwag.ps.v1.shadow)` naming their subject |
-| You run | `gwag schema push` (CI) | `gwag gen --registry ...` | `gwag schema check` (CI) |
+| You run | `gwag ctl schema push` (CI) | `gwag gen --registry ...` | `gwag ctl schema check` (CI) |
 | Fails at gen time | nothing (`gwag gen` does not contact the registry) | `gwag gen --registry`: subject or a reference missing, or not PROTOBUF | nothing |
-| Fails in CI | `gwag schema push --dry-run`: schema not registered; `push`: registry rejects an incompatible change | `gwag gen --check-lock`: a file was edited, or the registry's version has another id or text, or is gone | `gwag schema check`: your message no longer matches the subject |
+| Fails in CI | `gwag ctl schema push --dry-run`: schema not registered; `push`: registry rejects an incompatible change | `gwag gen --check-lock`: a file was edited, or the registry's version has another id or text, or is gone | `gwag ctl schema check`: your message no longer matches the subject |
 | Fails at service registration | nothing | nothing | nothing |
 | Fails at runtime | publish: the subject does not hold the schema (lookup-only), or the registry rejects it | a record cannot be decoded | a record cannot be decoded; a registry change since the last check is not seen |
 | Example | `srinterop produce` | `corp import` | `corp shadow` |
@@ -102,8 +102,8 @@ await bus.publish_order_events(OrderEventsSubject(order_id="o-1001"), OrderCreat
   found by the others. Register from CI instead:
 
   ```bash
-  gwag schema push --registry "$SR_URL" -I proto orders/v1/orders.proto
-  gwag schema push --registry "$SR_URL" --dry-run -I proto orders/v1/orders.proto   # fails if not registered
+  gwag ctl schema push --registry "$SR_URL" -I proto orders/v1/orders.proto
+  gwag ctl schema push --registry "$SR_URL" --dry-run -I proto orders/v1/orders.proto   # fails if not registered
   ```
 
   `push` registers the file of every named channel. Flags:
@@ -205,7 +205,7 @@ diff.
 Advanced. Another team produces the topic, and you need gwag
 annotations on their message: fewer fields, your own package, your own
 channel binding. If you only need to read their topic, use
-[import](#import). `gwag schema check` compares the shadow with the
+[import](#import). `gwag ctl schema check` compares the shadow with the
 registry in CI. A gateway whose own registry holds the imported
 subject also checks it when the service registers, as a warning
 ([below](#check-at-register)). A registry change after either run is
@@ -226,7 +226,7 @@ message CorpOrder {
 ```
 
 ```bash
-gwag schema check --registry corp="$SR_URL" -I proto shop/v1/order.proto
+gwag ctl schema check --registry corp="$SR_URL" -I proto shop/v1/order.proto
 ```
 
 - `side: CONSUMER` (default) — gwag reads the topic. The shadow
@@ -265,29 +265,29 @@ serde = Serde(registry, type_names={"corp.orders.v1.Order": "shop.v1.CorpOrder"}
 
 The shadow proto is in `go-kafka/corp/shadow/shop/v1/order.proto`;
 `go-kafka/corp/shadow/drift/v1/drift.proto` is one that fails the
-check. TypeScript uses the Go example's shadow proto; `gwag schema
+check. TypeScript uses the Go example's shadow proto; `gwag ctl schema
 check` is the same command for every language.
 
 #### Check at register
 
 With the gateway's Schema Registry on (`--schema-registry`) and the
-corp registry imported into a context (`gwag schema import --into
+corp registry imported into a context (`gwag ctl schema import --into
 .corp`), the gateway checks each shadow message of a service when the
 service registers through the control plane. The comparison is the
-one `gwag schema check` runs (`side` decides consumer or producer).
+one `gwag ctl schema check` runs (`side` decides consumer or producer).
 
 - **Warn, never reject.** The registration succeeds. A difference
   goes to the gateway log, to the metric
   `shadow_check_total{outcome="mismatch"}`, to
   `RegisterResponse.warnings` (log them in the client), and to
   `ServiceInfo.warnings` (`GET /admin/services` `warnings`,
-  `gwag services list`).
+  `gwag ctl services list`).
 - **Lookup.** `registry` in the option is the context name: `corp` is
   `.corp`. If that context holds `subject`, the gateway checks there.
   If not, it tries the other non-default contexts in name order and
   uses the first that holds the subject. The default context holds
   gwag's own channels and is never searched. `version` and `message`
-  work as in `gwag schema check`.
+  work as in `gwag ctl schema check`.
 - **No check, no warning** when the registry is off, or no context
   holds the subject (metric `outcome="not_found"`). The gateway reads
   only its own registry; it never calls the corp registry.
@@ -311,7 +311,7 @@ each topic belongs to one id space: the producer's.
 While the other team runs its own registry, there is nothing to do:
 each serde points at the registry of its topics. When gwag replaces
 their registry ([schema-registry.md](./schema-registry.md)),
-`gwag schema import --into .corp` copies it into the context `.corp`,
+`gwag ctl schema import --into .corp` copies it into the context `.corp`,
 ids unchanged, and the clients of their topics move to
 `http://HOST:8080/schema-registry/contexts/.corp`. gwag's own channels
 stay in the default context. The two id spaces never clash: id 5 of
@@ -554,11 +554,11 @@ Schemas are registered as Confluent's own clients do: base64 of the
 and get no reference; on decode only `google/protobuf/*` is known.
 Fetched schemas and ids are cached per client.
 
-The CLI (`gwag gen --registry`, `--check-lock`, `gwag schema check`,
-`gwag schema push`) takes credentials from the URL user info or the
+The CLI (`gwag gen --registry`, `--check-lock`, `gwag ctl schema check`,
+`gwag ctl schema push`) takes credentials from the URL user info or the
 environment: `GWAG_REGISTRY_USERNAME` / `GWAG_REGISTRY_PASSWORD`
 (basic), `GWAG_REGISTRY_TOKEN` (bearer), `GWAG_REGISTRY_CA` (a CA file
-for HTTPS). `gwag schema check` takes `--registry NAME=URL` (repeatable);
+for HTTPS). `gwag ctl schema check` takes `--registry NAME=URL` (repeatable);
 the others take `--registry URL`.
 
 ## Wire format

@@ -85,7 +85,7 @@ await reg.close()  # deregisters; `async with await register(...)` does the same
 
 ## Profile and verification
 
-A service profile (`gwag.json`, written by `gwag service init -o
+A service profile (`gwag.json`, written by `gwag ctl services init -o
 gwag.json`) says what the service provides, depends on and listens on.
 `loadProfile` / `load_profile` reads it and returns one service per
 provided version, sorted `v1`, `v2`, ..., `unstable`. Spec files are read

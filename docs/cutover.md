@@ -307,10 +307,10 @@ does the same for the binary.
 ### Set the share at runtime
 
 ```
-gwag cluster switchover --gateway http://blue:8080 --percent 5
-gwag cluster switchover --gateway http://blue:8080 --percent 50 --rule op=CreateOrder,exclude --rule percent=50
-gwag cluster switchover --gateway http://blue:8080              # show
-gwag cluster switchover --gateway http://blue:8080 --clear      # back to the static options
+gwag ctl cluster switchover --gateway http://blue:8080 --percent 5
+gwag ctl cluster switchover --gateway http://blue:8080 --percent 50 --rule op=CreateOrder,exclude --rule percent=50
+gwag ctl cluster switchover --gateway http://blue:8080              # show
+gwag ctl cluster switchover --gateway http://blue:8080 --clear      # back to the static options
 ```
 
 `--gateway` is blue's HTTP endpoint here, not the control-plane
@@ -406,7 +406,7 @@ proxied connections too.
    unexpected diffs.
 2. Blue nodes run with `WithSwitchover` (or `gwag up --switchover`)
    and green's `Target`, share 0.
-3. `gwag cluster switchover --percent 5`. Watch
+3. `gwag ctl cluster switchover --percent 5`. Watch
    `switchover_green_errors_total` on blue and green's own metrics.
 4. `--percent 50`, then `--percent 100`. Clients already on green stay
    there at each step.
@@ -439,7 +439,7 @@ gateways at 0, 50 and 100 percent by caller id, sticky header and
 source address, client headers reaching green, green down (blue
 answers; metric, admin view); the admin ops and their roles; a
 WebSocket to green and its fallback; the setting moving between two
-cluster nodes through the KV bucket. `gwag cluster switchover` in
+cluster nodes through the KV bucket. `gwag ctl cluster switchover` in
 `gw/cmd/gwag`. `examples/cutover/`: two 3-node clusters in Docker
 behind Envoy, 5, 50 and 100 percent at about 155 requests per second,
 0 failed requests, 0 fallbacks. Not tested: real load and the added
@@ -451,7 +451,7 @@ A system key is the credential of one cluster calling another. Mint
 it on the cluster that will be called, with the admin token:
 
 ```
-$ gwag key create --system --ttl 30d --note "blue -> green" --endpoint http://green:8080
+$ gwag ctl key create --system --ttl 30d --note "blue -> green" --endpoint http://green:8080
 gws_8d2f61c04a7be913_51c0...
 system key id 8d2f61c04a7be913, expires 2026-12-08T10:00:00Z. The key is shown once; store it now.
 ```
@@ -459,8 +459,8 @@ system key id 8d2f61c04a7be913, expires 2026-12-08T10:00:00Z. The key is shown o
 The admin route is `POST /admin/system-keys` (`{ttl, note}`). A
 system key is stored like an app key (its SHA-256, an expiry, in the
 `gwag-app-keys` bucket with `"kind": "system"`), so it is valid on
-every node of the cluster at once, and `gwag key list` shows it
-(`KIND system`), `gwag key revoke ID` revokes it, and the expiry log
+every node of the cluster at once, and `gwag ctl key list` shows it
+(`KIND system`), `gwag ctl key revoke ID` revokes it, and the expiry log
 lines and `app_key_expiry_seconds{key_id}` cover it. Rotate it like an
 app key: mint a new one, deploy it, revoke the old one.
 
@@ -495,7 +495,7 @@ What green needs from blue before it serves, and how it gets there:
 
 | State | Copied by | Note |
 |---|---|---|
-| stable marks (`gwag-stable`) | `gwag cluster export` / `import` | |
+| stable marks (`gwag-stable`) | `gwag ctl cluster export` / `import` | |
 | deprecated marks (`gwag-deprecated`) | export / import | a mark for a line green has not registered yet applies when it registers |
 | app keys and system keys (`gwag-app-keys`) | export / import | with the stored hashes: the same keys work on green |
 | external dependents (`gwag-external-dependents`) | export / import | |
@@ -507,15 +507,15 @@ What green needs from blue before it serves, and how it gets there:
 ### Steps
 
 ```
-gwag cluster freeze   --gateway http://blue:8080  --bearer $BLUE_ADMIN --ttl 10m
-gwag cluster export   --gateway http://blue:8080  --bearer $SYSTEM_KEY > state.json
-gwag cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN --dry-run state.json
-gwag cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN state.json
-gwag cluster unfreeze --gateway http://blue:8080  --bearer $BLUE_ADMIN
+gwag ctl cluster freeze   --gateway http://blue:8080  --bearer $BLUE_ADMIN --ttl 10m
+gwag ctl cluster export   --gateway http://blue:8080  --bearer $SYSTEM_KEY > state.json
+gwag ctl cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN --dry-run state.json
+gwag ctl cluster import   --gateway http://green:8080 --bearer $GREEN_ADMIN state.json
+gwag ctl cluster unfreeze --gateway http://blue:8080  --bearer $BLUE_ADMIN
 ```
 
 `--gateway` here is the gateway's HTTP endpoint (the admin API at
-`/api/admin`), not the control-plane address `gwag cluster finalize`
+`/api/admin`), not the control-plane address `gwag ctl cluster finalize`
 takes. `--bearer` is the admin token or, for export and import, a
 system key. The first import into a fresh green needs green's admin
 token (green holds no keys yet); after it, blue's system keys are
@@ -554,10 +554,10 @@ replica that is behind does not drop a value.
 
 ### Freeze
 
-`gwag cluster freeze [--ttl 10m] [--note TEXT]` (`POST
+`gwag ctl cluster freeze [--ttl 10m] [--note TEXT]` (`POST
 /admin/cluster/freeze`, admin) writes one record, `freeze` in the
 `gwag-cluster` bucket, with an end time. Until it ends, or until
-`gwag cluster unfreeze` (`POST /admin/cluster/unfreeze`), every node
+`gwag ctl cluster unfreeze` (`POST /admin/cluster/unfreeze`), every node
 refuses the writes that change copied state:
 
 | Write | Refused with |
@@ -568,7 +568,7 @@ refuses the writes that change copied state:
 | Schema Registry REST writes: register, delete, config, mode, `gwag/import` | 409, `error_code` 40903 |
 
 The message names the end time and who froze:
-`cluster frozen for cutover until 2026-11-08T10:10:00Z (set by admin): deprecate is refused; gwag cluster unfreeze ends the freeze`.
+`cluster frozen for cutover until 2026-11-08T10:10:00Z (set by admin): deprecate is refused; gwag ctl cluster unfreeze ends the freeze`.
 
 Not frozen: registrations, heartbeats, drains and client traffic. A
 Schema Registry register of a schema the subject already holds is
@@ -615,7 +615,7 @@ before services register channels with green: a fresh green's
 registry holds only its own control plane subject (id 1 of the
 default context, which blue's copy leaves out). When services register
 their channels with green after the import, green finds blue's
-schemas and allocates nothing. `gwag schema import --into .` stays
+schemas and allocates nothing. `gwag ctl schema import --into .` stays
 refused: a foreign registry's ids never go into the default context;
 only this copy from another gwag does.
 
@@ -667,7 +667,7 @@ adds or removes the source per stream at runtime.
   server connects to blue as a leafnode. With several blue addresses
   (comma-separated) NATS picks one at random and tries the next when
   it fails.
-- `gwag cluster mirror` (on green) adds a source to green's stream of
+- `gwag ctl cluster mirror` (on green) adds a source to green's stream of
   each event stream blue has. Green creates a stream it does not have,
   with blue's subject and gwag's event stream config. The source is
   the only mirror state: there is no other record, and the stream
@@ -720,7 +720,7 @@ On blue, every node:
 
 ```
 gwag up ... --mirror-listen :14223
-gwag key create --system --ttl 30d --note "green mirror" --endpoint http://blue:8080 > mirror.key
+gwag ctl key create --system --ttl 30d --note "green mirror" --endpoint http://blue:8080 > mirror.key
 ```
 
 On green, every node (a restart if green is running):
@@ -732,7 +732,7 @@ gwag up ... --mirror-from blue-0:14223,blue-1:14223,blue-2:14223 --mirror-key-fi
 ### Start, status, stop
 
 ```
-$ gwag cluster mirror --gateway http://green:8080 --from blue-0:14223
+$ gwag ctl cluster mirror --gateway http://green:8080 --from blue-0:14223
 source=nats-leaf://blue-0:14223,... leafnodes=1
 STREAM                                   MIRRORED   BLUE_SEQ  GREEN_SEQ      LAG   ACTIVE ERROR
 EV_orders_v1_Audit                       true            120        120        0     215ms
@@ -788,7 +788,7 @@ No gap and no duplicate, per stream:
    through green (switchover traffic) are producers too.
 3. Wait for `LAG` 0 and every consumer on blue at 0 pending
    (`nats consumer info`).
-4. `gwag cluster mirror --stop --channel STREAM`.
+4. `gwag ctl cluster mirror --stop --channel STREAM`.
 5. Move the consumers to green. Each starts after green's last
    message: everything up to there was consumed on blue.
 6. Move the producers to green.
@@ -805,14 +805,14 @@ has the time green stored it), and drop repeats in the handler by
 1. [State copy](#state-copy): freeze, export, import, unfreeze.
 2. Blue nodes with `--mirror-listen`; green nodes with `--mirror-from`
    and a system key of blue.
-3. `gwag cluster mirror` start; wait for `LAG` 0.
+3. `gwag ctl cluster mirror` start; wait for `LAG` 0.
 4. [Replay verification](#replay-verification) and
    [switchover](#switchover) steps. The mirror keeps running. Events
    published through green during the switchover stay on green: the
    consumers on blue do not see them. To keep such mutations on blue
    until the consumers move, exclude them (`--rule op=NAME,exclude`).
 5. Load balancer to green.
-6. The consumer steps above, per stream, then `gwag cluster mirror
+6. The consumer steps above, per stream, then `gwag ctl cluster mirror
    --stop`. Blue's NATS must run until the consumers have moved.
 7. Drain and stop blue.
 
@@ -1000,7 +1000,7 @@ find and move them before the next step.
 
 1. Events: the [consumer steps](#consumers) per stream (stop the
    producers on blue, wait for `LAG` 0 and the blue consumers at 0
-   pending, `gwag cluster mirror --stop`, move the consumers to green,
+   pending, `gwag ctl cluster mirror --stop`, move the consumers to green,
    then the producers). Blue's NATS serves until this is done.
 2. Services: close each service's registration with blue (its second
    `controlclient.SelfRegister`, `Registration.Close`). Without it the
@@ -1015,7 +1015,7 @@ find and move them before the next step.
 4. Remove blue's volumes when you no longer want them for a rollback.
 
 Rollback before step 3: set the load balancer back to blue and
-`gwag cluster switchover --percent 0`. After step 1 the event
+`gwag ctl cluster switchover --percent 0`. After step 1 the event
 consumers are on green; moving them back is the consumer procedure in
 the other direction, without a mirror (none runs green to blue).
 
@@ -1089,7 +1089,7 @@ POST JSON only), and anything on Kubernetes or ECS.
    left ([Read the results](#read-the-results)).
 5. State copy: freeze blue, export, import into green, unfreeze
    ([Steps](#steps)).
-6. Event stream mirror: `gwag cluster mirror` on green, wait for `LAG`
+6. Event stream mirror: `gwag ctl cluster mirror` on green, wait for `LAG`
    0 ([Start, status, stop](#start-status-stop)).
 7. Switchover 5, 50, 100 percent, watching green's errors
    ([Set the share at runtime](#set-the-share-at-runtime)).

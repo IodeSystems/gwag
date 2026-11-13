@@ -8,14 +8,14 @@ inside the binary, so it works from a downloaded `gwag`.
 ```bash
 gwag deploy up --platform docker-compose          # 1 node
 gwag deploy login --platform docker-compose       # saves the admin token to .gw/credentials.json
-gwag services list
+gwag ctl services list
 gwag deploy down --platform docker-compose
 ```
 
 `up` builds the image, writes the files into `--dir` (default
 `./gwag-deploy`) and starts the nodes. `login` reads the admin token
 and the addresses from there (Compose) or from the cluster (minikube),
-so `gwag peer list` and `gwag services list` work straight away.
+so `gwag ctl peer list` and `gwag ctl services list` work straight away.
 
 ## Image
 
@@ -191,7 +191,7 @@ The stack has one ECS service per node (desired count 1):
   parallel, and a `DependsOn` chain would deadlock a first create
   (service 1 needs service 2 to be healthy). So each node has its own
   image parameter, `Image1` to `ImageN`. Update one per stack update and
-  wait for `gwag peer list` to show every node before the next.
+  wait for `gwag ctl peer list` to show every node before the next.
 - Token: a Secrets Manager secret with a generated 64-character hex
   value, injected as `GWAG_ADMIN_TOKEN`. The execution role may read it.
 - `HealthCheckGracePeriodSeconds` 180, container health check `/gwag
@@ -211,9 +211,9 @@ and the update sequence above.
 
 Pull the new image and follow [`cluster.md`](./cluster.md#upgrades):
 rolling restart (Compose: `docker compose up -d --no-deps gwag-N`, one
-node at a time, wait for `gwag peer list`; Kubernetes: change the image,
+node at a time, wait for `gwag ctl peer list`; Kubernetes: change the image,
 the StatefulSet does one pod at a time) or the replica swap runbook.
-`gwag cluster finalize` afterwards. A replica swap starts new nodes
+`gwag ctl cluster finalize` afterwards. A replica swap starts new nodes
 into an existing cluster one at a time; the generated files do not do
 that for you.
 

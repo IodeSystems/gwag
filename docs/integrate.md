@@ -3,17 +3,17 @@
 The common way a service joins gwag:
 
 1. **Cluster up.** A gateway (or cluster) runs in the environment.
-2. **Profile.** `gwag service init` writes `gwag.yaml`: what the
+2. **Profile.** `gwag ctl services init` writes `gwag.yaml`: what the
    service provides (versions, spec files, the URLs where the running
    service serves each spec and its health check), what it depends on,
    which event channels it listens on.
-3. **Lint in CI.** `gwag service check` validates the profile, checks
+3. **Lint in CI.** `gwag ctl services check` validates the profile, checks
    a running build against it, and checks that its dependencies exist
    on the target environment.
 4. **Deploy.** The service registers (registration client) or the
    gateway pulls it (external or legacy service). gwag verifies each
    instance and routes to it only when it is green.
-5. **Gate promotion.** `gwag service wait --green` exits 0 when the
+5. **Gate promotion.** `gwag ctl services wait --green` exits 0 when the
    new instance is green, non-zero with the reasons when it is red.
 
 Two kinds of service take this path:
@@ -65,12 +65,12 @@ An instance that declares no health or spec URL is not verified:
 `verification` is empty (`none` in the admin API) and it is routed as
 soon as the start gate passes, as before.
 
-## 1. Profile: `gwag service init`
+## 1. Profile: `gwag ctl services init`
 
 From the spec files you already have:
 
 ```bash
-gwag service init \
+gwag ctl services init \
   --spec v1=api/billing-v1.json --spec v2=api/billing-v2.json \
   --url '/api/schema/openapi?version={version}' \
   --health /healthz \
@@ -80,7 +80,7 @@ gwag service init \
 ```
 
 ```yaml
-# gwag service profile. Schema: `gwag service schema`. Check: `gwag service check`.
+# gwag service profile. Schema: `gwag ctl services schema`. Check: `gwag ctl services check`.
 service: billing
 owner:
   team: payments
@@ -123,10 +123,10 @@ subscribes:
   clients load.
 - `snapshot: frozen/billing-v1.json` under a version (add it by hand)
   makes `service check` compare the spec file with a committed
-  snapshot, as `gwag schema snapshot check` does
+  snapshot, as `gwag ctl schema snapshot check` does
   ([lifecycle.md](./lifecycle.md#frozen-spec-snapshots)).
 
-`gwag service schema` prints the JSON Schema of the file, for editors
+`gwag ctl services schema` prints the JSON Schema of the file, for editors
 (`$schema:` key) and CI linters. Unknown keys are an error.
 
 ## 2. Register from the profile
@@ -162,13 +162,13 @@ TypeScript and Python: [`registration-clients.md`](./registration-clients.md#pro
 Without the profile, set the two fields by hand:
 `controlclient.Service{..., HealthURL: "/healthz", SpecURL: "/openapi.json"}`.
 
-## 3. Lint in CI: `gwag service check`
+## 3. Lint in CI: `gwag ctl services check`
 
 ```bash
-gwag service check                                   # the profile and its spec files
-gwag service check --url http://localhost:8080       # + a running build
-gwag service check --url http://localhost:8080 --gateway staging-gw:50090
-gwag service check ... --json                        # machine-readable
+gwag ctl services check                                   # the profile and its spec files
+gwag ctl services check --url http://localhost:8080       # + a running build
+gwag ctl services check --url http://localhost:8080 --gateway staging-gw:50090
+gwag ctl services check ... --json                        # machine-readable
 ```
 
 Checks, and the exit code when one fails:
@@ -189,9 +189,9 @@ gateway then checks less.
 A CI job for a service you own:
 
 ```bash
-gwag service check                              # on every push
+gwag ctl services check                              # on every push
 ./billing --listen :8080 &                      # the build under test
-gwag service check --url http://localhost:8080 --gateway "$STAGING_GW"
+gwag ctl services check --url http://localhost:8080 --gateway "$STAGING_GW"
 ```
 
 ## 4. Deploy
@@ -223,9 +223,9 @@ If you cannot change the service, serve the file from anything on the
 same host. Then:
 
 ```bash
-gwag services add --profile-url http://ledger.internal:8080/.well-known/gwag.json
-gwag services profiles                          # list pulled services
-gwag services remove --profile-url http://ledger.internal:8080/.well-known/gwag.json
+gwag ctl services add --profile-url http://ledger.internal:8080/.well-known/gwag.json
+gwag ctl services profiles                          # list pulled services
+gwag ctl services remove --profile-url http://ledger.internal:8080/.well-known/gwag.json
 ```
 
 or `POST /admin/services/profiles {"url": ...}` (admin token).
@@ -241,11 +241,11 @@ a different spec, the instance turns red; add the profile again to
 register the new spec (a `vN` with a different spec is refused, as for
 any registration: cut `vN+1`).
 
-## 5. Gate promotion: `gwag service wait`
+## 5. Gate promotion: `gwag ctl services wait`
 
 ```bash
-gwag service wait --gateway "$GW" --service billing:v2 --green --timeout 2m
-gwag service wait --gateway "$GW" --service billing --instance "billing-$GIT_SHA" --green
+gwag ctl services wait --gateway "$GW" --service billing:v2 --green --timeout 2m
+gwag ctl services wait --gateway "$GW" --service billing --instance "billing-$GIT_SHA" --green
 ```
 
 Green: the instance is `READY` (start gate passed) and its
@@ -259,7 +259,7 @@ A deploy step:
 
 ```bash
 kubectl rollout status deploy/billing
-if ! gwag service wait --service billing:v2 --instance "billing-$GIT_SHA" --green --timeout 2m; then
+if ! gwag ctl services wait --service billing:v2 --instance "billing-$GIT_SHA" --green --timeout 2m; then
   kubectl rollout undo deploy/billing
   exit 1
 fi

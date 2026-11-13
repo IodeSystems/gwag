@@ -142,11 +142,11 @@ Not tested.
 |---|---|---|
 | Load balancer (c) | No client reaches any node; the nodes, services and events between them go on | A redundant pair (VRRP, a cloud LB), or DNS with one record per node and clients that retry the next address. Not run in S14: the in-test balancer is the client. |
 | A single gateway node | Everything stops until it is back ([f](#measured-failures)) | 3 nodes. |
-| JetStream quorum | Writes stop: registrations, heartbeat refresh, admin writes, KV, events ([b](#measured-failures)) | 3 or 5 nodes on separate hosts and disks; replace a dead node rather than waiting, and `gwag peer forget` one that will not return ([`cluster.md`](./cluster.md#forget-a-dead-peer)). |
+| JetStream quorum | Writes stop: registrations, heartbeat refresh, admin writes, KV, events ([b](#measured-failures)) | 3 or 5 nodes on separate hosts and disks; replace a dead node rather than waiting, and `gwag ctl peer forget` one that will not return ([`cluster.md`](./cluster.md#forget-a-dead-peer)). |
 | A service with one instance | Its calls fail until it is back ([d](#measured-failures)) | Two or more instances ([e](#measured-failures)). |
 | A service's one control-plane address | When that node dies, the service cannot refresh its registration and is dropped 30 s later ([`cluster.md`](./cluster.md#when-a-node-dies)) | `GatewayAddrs` with every node, or a load-balanced control-plane address. |
 | One NATS URL in an event client | The client stops when that node dies | Every node's NATS URL. |
-| One node's disk (1 node) | Registrations come back by heartbeat; stable and deprecated marks, app keys, external dependents and event streams are lost (not tested) | 3 nodes (R3 copies), or `gwag cluster export` for a copy of the state ([`cutover.md`](./cutover.md#state-copy)). |
+| One node's disk (1 node) | Registrations come back by heartbeat; stable and deprecated marks, app keys, external dependents and event streams are lost (not tested) | 3 nodes (R3 copies), or `gwag ctl cluster export` for a copy of the state ([`cutover.md`](./cutover.md#state-copy)). |
 | The admin token | Lost token: no admin writes | `--admin-token-file` / `GWAG_ADMIN_TOKEN` from a secret store, the same on every node ([`deploy.md`](./deploy.md#what-every-platform-gets)). |
 
 ## Capacity

@@ -21,7 +21,7 @@ decides the role:
 | admin | admin token, or an `AdminAuthorizer` OK | every admin route |
 | dev | dev token, or an `AdminAuthorizer` OK with `ADMIN_ROLE_DEV` | every admin read (services with owner contacts, graph, usage, instances, peers, injectors, MCP config and schema, external dependents), and `PUT` / `DELETE /admin/external-dependents/{id}` |
 | anonymous | no bearer | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph`: public services only |
-| system | a system key (`gws_...`, `gwag key create --system`) | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState`, `getClusterMirror`, `startClusterMirror`, `stopClusterMirror` only (cluster to cluster, see [cutover.md](./cutover.md#system-keys)) |
+| system | a system key (`gws_...`, `gwag ctl key create --system`) | `POST /admin/replay/verify`, `exportClusterState`, `importClusterState`, `getClusterMirror`, `startClusterMirror`, `stopClusterMirror` only (cluster to cluster, see [cutover.md](./cutover.md#system-keys)) |
 
 Role by operation:
 
@@ -224,7 +224,7 @@ node passes on every other. The bucket exists from
 [cluster feature level](./cluster.md#feature-levels) 2. Below it,
 SSO is off: `/auth/login` answers 503 with the reason and
 `/auth/whoami` answers `"error":"sso unavailable"` (the reason is in
-the gateway log). Run `gwag cluster finalize` once
+the gateway log). Run `gwag ctl cluster finalize` once
 every node runs this version. Standalone (no cluster), the key is
 `<adminDataDir>/session-key` and the cutoffs and denylist
 `<adminDataDir>/admin-sessions.json` (in memory without a data dir;

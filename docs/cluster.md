@@ -68,7 +68,7 @@ $ curl -s -w ' %{http_code}\n' localhost:18080/api/health
 {"active_streams":0,"node_id":"NAIW5CIN...","pubsub":"nats","status":"serving"}
  200
 
-$ gwag peer list --gateway localhost:51091     # a later run, ports 2808x/5109x
+$ gwag ctl peer list --gateway localhost:51091     # a later run, ports 2808x/5109x
 NODE_ID                                                    NAME       JOINED                     LEVELS  VERSION
 NABY6XWLRI3IKXKG2LHVZWJPKKARA22NQFY4ITZYDFNEH7QO7VXXSZBS   n3         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
 NBLJNPKR57EMPKU2PPDRPQ6SRGRUGH4AACJFFLQSVLWY2AEBWXVCWJ2K   n1         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
@@ -124,29 +124,29 @@ with messages.
 |------|--------|
 | 1. Stop the standalone node, restart it on the same data dir with `--nats-peer` for n2 and n3, start n2 at the same time | A meta leader is elected and the node serves again 6.2 to 6.4 s after the stop. The application KV bucket and streams are **not** usable: they are on disk but unknown to the new meta group, and the log says `Detected orphaned stream '$G > EV_s0', will cleanup` about 30 s after start. Re-creating them by name adopts the disk copy only when the new R1 stream is placed on the restarted node: 1 run kept the data (2 streams), 1 run placed all 10 streams on n2 and the data stayed orphaned on n1, 1 run (waited 75 s before re-creating) had them deleted and re-created empty. Gateway buckets are re-created by the gateway; whether their old content survives was not shown (`gwag-registry` held 0 messages), and in one run they were placed on n2 while the old copy stayed orphaned on n1. When n3 joined, the gateway buckets went R1 to R3. Application streams and KV stayed R1. |
 | 2. Start n2 and n3 fresh, then restart n1 on its standalone data dir with peers | n2 and n3 formed a cluster on their own and served (`/api/health` 200) with n1 down. When n1 joined, its gateway buckets were reset to the cluster copy (`Catchup for stream '$G > KV_gwag-peers' resetting first sequence`), and its application streams were removed as orphans (`Detected orphaned stream`) about 30 to 65 s later. n1's data is discarded. |
-| 3. Start n1 with peers that are not up and leave it alone | No meta leader. `/api/health` returns 503 `starting`, `gwag peer list` shows `(no peers)`, JetStream calls return 503 (err_code 10008). The GraphQL endpoint answers (`{ __typename }` returned `Query`, 200) and `/api/schema` is served. Not tested: registering a service in this state. When n2 started, n1 reported 200 after 2.7 s. After n3 joined, `gwag peer list` showed `jetstream meta: leader=n1 size=3`, `cluster_peers` was 3, and the gateway buckets went R1 to R3. An application KV bucket and streams created after n2 joined kept their data and stayed R1 after n3 joined; raise their replicas with a stream update. |
+| 3. Start n1 with peers that are not up and leave it alone | No meta leader. `/api/health` returns 503 `starting`, `gwag ctl peer list` shows `(no peers)`, JetStream calls return 503 (err_code 10008). The GraphQL endpoint answers (`{ __typename }` returned `Query`, 200) and `/api/schema` is served. Not tested: registering a service in this state. When n2 started, n1 reported 200 after 2.7 s. After n3 joined, `gwag ctl peer list` showed `jetstream meta: leader=n1 size=3`, `cluster_peers` was 3, and the gateway buckets went R1 to R3. An application KV bucket and streams created after n2 joined kept their data and stayed R1 after n3 joined; raise their replicas with a stream update. |
 | 4. Manual leader or bootstrap option in NATS | `$JS.API.META.RESCUE` (system account) lowers the quorum on a surviving server, but refused on a node that never had a leader: `JetStream system rescue not applied: raft: log is empty` (err_code 10224). JetStream stayed unavailable. The gateway does not expose it. No option converts a standalone store to a clustered one. |
-| 5. Copy data by stream sourcing or mirroring | For event streams (`EV_*`) only: the cutover's [event stream mirror](./cutover.md#event-stream-mirror) adds a leafnode listener (`ClusterOptions.MirrorListen`, `--mirror-listen`) and a leafnode connection to it (`MirrorFrom`, `MirrorKey`, `--mirror-from`); `gwag cluster mirror` on the new cluster sources the old node's event streams. Tested in-process from a standalone node into a 2-node cluster (`TestEventMirror_TwoNodeGreen`), and with `gwag up` binaries from a 3-node cluster into another 3-node cluster ([`examples/cutover/`](../examples/cutover/)); the standalone-to-three path was not run with binaries. Gateway buckets, application KV buckets and other streams are not copied: the mirror handles `EV_*` streams only. There are still no JetStream domain or account settings. Copying with a NATS client (read from the old node, write to the new cluster) was not tried. |
+| 5. Copy data by stream sourcing or mirroring | For event streams (`EV_*`) only: the cutover's [event stream mirror](./cutover.md#event-stream-mirror) adds a leafnode listener (`ClusterOptions.MirrorListen`, `--mirror-listen`) and a leafnode connection to it (`MirrorFrom`, `MirrorKey`, `--mirror-from`); `gwag ctl cluster mirror` on the new cluster sources the old node's event streams. Tested in-process from a standalone node into a 2-node cluster (`TestEventMirror_TwoNodeGreen`), and with `gwag up` binaries from a 3-node cluster into another 3-node cluster ([`examples/cutover/`](../examples/cutover/)); the standalone-to-three path was not run with binaries. Gateway buckets, application KV buckets and other streams are not copied: the mirror handles `EV_*` streams only. There are still no JetStream domain or account settings. Copying with a NATS client (read from the old node, write to the new cluster) was not tried. |
 
 Workaround, as tested in paths 2 and 3 (no application data is
 carried over):
 
 1. Start n2 and n3 on empty data dirs, each with the other two nodes in
    `--nats-peer`. Check `/api/health` returns 200 on both, and
-   `gwag peer list --gateway <n2 control plane>` shows both nodes.
+   `gwag ctl peer list --gateway <n2 control plane>` shows both nodes.
    Two nodes serve; buckets are R1 until the third node is up.
 2. Re-register the services on the new cluster (control plane or
    `gwag` flags). Registrations live in the cluster buckets, and the
    old node's are not imported. Nor are stable and deprecated marks,
-   app keys, or Schema Registry contents: set them again (`gwag key
-   create`, `gwag schema import --into`) before moving traffic.
+   app keys, or Schema Registry contents: set them again (`gwag ctl key
+   create`, `gwag ctl schema import --into`) before moving traffic.
 3. Copy application KV and stream data you need to keep with a NATS
    client. Not tested.
 4. Move traffic to the new nodes, then stop the old node. Do not
    restart it into the cluster: its data is discarded or orphaned.
 5. Start the third node (or add the old node again on an empty data
    dir; not tested). Check
-   `gwag peer list` ends with `jetstream meta: leader=<name> size=3
+   `gwag ctl peer list` ends with `jetstream meta: leader=<name> size=3
    offline=none`, `go_api_gateway_cluster_peers` is 3, and
    `/api/health` is 200 on every node.
 
@@ -284,7 +284,7 @@ The admin UI lists the cluster on **Peers**. The page polls every 5 s.
 
 The subtitle gives the active feature level and, when JetStream is
 running, the meta group: leader, size, and which members are offline.
-`gwag peer list` ends with the same meta line.
+`gwag ctl peer list` ends with the same meta line.
 
 | Column | Meaning |
 |---|---|
@@ -293,11 +293,11 @@ running, the meta group: leader, size, and which members are offline.
 | Joined | When this node's entry in `gwag-peers` was written, in the browser's time zone. |
 | Version | The node's build version. `no level support` marks a node older than feature levels. |
 | Levels | The range of [feature levels](#feature-levels) the node runs, `min-max`. |
-| Action | **Forget**: same call as `gwag peer forget NODE_ID`, see below. Admin role only; greyed out otherwise. |
+| Action | **Forget**: same call as `gwag ctl peer forget NODE_ID`, see below. Admin role only; greyed out otherwise. |
 
 Forget on a live peer is refused and the error shows as a toast; the
 row stays until the peer's entry expires. The page has no evacuate
-button: use `gwag peer evacuate NODE_ID` (or `POST
+button: use `gwag ctl peer evacuate NODE_ID` (or `POST
 /api/admin/peers/{nodeId}/evacuate`) before stopping a node, see
 [Replica swap](#replica-swap).
 
@@ -307,7 +307,7 @@ A gateway with no cluster has no peers:
 
 "Standalone, not clustered" appears when the gateway runs without
 `--nats-data`. A node started with `gwag up` runs embedded NATS and lists
-itself as the only peer instead. `gwag peer list --gateway HOST:PORT` shows the
+itself as the only peer instead. `gwag ctl peer list --gateway HOST:PORT` shows the
 same data on the command line.
 
 ## Forget a dead peer
@@ -316,14 +316,14 @@ A peer that expired and will not return can be forgotten. The call is
 refused for a live peer:
 
 ```
-$ gwag peer forget NBCMQ6KJ...SITNM --gateway localhost:50091
+$ gwag ctl peer forget NBCMQ6KJ...SITNM --gateway localhost:50091
 ForgetPeer: rpc error: code = Unknown desc = controlplane: peer NBCMQ6KJ...SITNM is still alive — wait for TTL (30s) to expire
 ```
 
 and for an expired one:
 
 ```
-$ gwag peer forget NBLJNPKR...WCWJ2K --gateway localhost:51094
+$ gwag ctl peer forget NBLJNPKR...WCWJ2K --gateway localhost:51094
 removed=false new_replicas=3 meta_removed=true
 ```
 
@@ -382,7 +382,7 @@ session cookies and the revocation cutoffs
 refused with a message that names the level.
 
 ```
-$ gwag peer list --gateway localhost:51094
+$ gwag ctl peer list --gateway localhost:51094
 NODE_ID                                                    NAME       JOINED                     LEVELS  VERSION
 NABY6XWLRI3IKXKG2LHVZWJPKKARA22NQFY4ITZYDFNEH7QO7VXXSZBS   n3         2026-11-08T05:56:20-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
 NBZNX6HUN4CEB3OUTDNINIFH6X5PD5XA2YMLKHW7WKX3YFZFLOMED5J2   n4         2026-11-08T05:56:33-08:00  0-1     v2.11.1-0.20261108072306-afca24f66349+dirty
@@ -405,7 +405,7 @@ UI peers page, and in the metric
 ### Raising the level
 
 ```
-gwag cluster finalize --gateway <node> [--level N] [--dry-run]
+gwag ctl cluster finalize --gateway <node> [--level N] [--dry-run]
 ```
 
 Without `--level` it raises to the highest level the answering node's
@@ -438,7 +438,7 @@ must finalize first.
 
 Two ways: restart the nodes in place, one at a time, or swap in new
 nodes and remove the old ones (replica swap). Both run two versions
-side by side for a while and end with `gwag cluster finalize`.
+side by side for a while and end with `gwag ctl cluster finalize`.
 
 A third way is a cutover to a separate cluster:
 [`cutover.md`](./cutover.md). The old cluster records requests for
@@ -451,7 +451,7 @@ and then the load balancer moves and the old cluster drains.
 
 One node at a time. With `odd` and 3 nodes (R3), never take down two.
 
-1. Check all nodes are up: `gwag peer list --gateway <any>` shows 3,
+1. Check all nodes are up: `gwag ctl peer list --gateway <any>` shows 3,
    `jetstream meta: ... offline=none`, every `/api/health` is 200.
 2. Send SIGTERM to the node. It reports `draining`, waits
    `--shutdown-delay`, finishes in-flight requests, closes. Services
@@ -462,9 +462,9 @@ One node at a time. With `odd` and 3 nodes (R3), never take down two.
 4. Wait for `/api/health` to return 200. The node reports `starting`
    until it replays the registry, and `incompatible` if its binary
    cannot run at the cluster's level: put the old binary back.
-5. Confirm `gwag peer list` shows 3 and `cluster_peers` is 3 on every
+5. Confirm `gwag ctl peer list` shows 3 and `cluster_peers` is 3 on every
    node, then move to the next.
-6. When every node runs the new binary, `gwag cluster finalize`.
+6. When every node runs the new binary, `gwag ctl cluster finalize`.
 
 Tested: n2 was stopped with SIGTERM and restarted (health 200 again
 after about a second, three peers listed), then n1 after a `kill -9`
@@ -483,7 +483,7 @@ at six nodes.
 1. Check blue as in the rolling restart, step 1.
 2. Start green nodes one at a time. Give each a new `--node-name` and
    data directory, and list every running node in `--nats-peer`. Before
-   starting the next, wait until `gwag peer list --gateway <new node>`
+   starting the next, wait until `gwag ctl peer list --gateway <new node>`
    lists every node and shows `jetstream meta: leader=<a blue node or
    an earlier green one> size=<running nodes>`.
 
@@ -505,7 +505,7 @@ at six nodes.
    2. Move its replicas to the other nodes:
 
       ```
-      gwag peer evacuate --gateway <green node> --wait 2m <blue NODE_ID>
+      gwag ctl peer evacuate --gateway <green node> --wait 2m <blue NODE_ID>
       ```
 
       Precondition, enforced by the gateway: every gateway bucket and
@@ -542,7 +542,7 @@ at six nodes.
    4. When its peers entry has expired (30 s), forget it:
 
       ```
-      $ gwag peer forget --gateway <green node> <blue NODE_ID>
+      $ gwag ctl peer forget --gateway <green node> <blue NODE_ID>
       removed=false new_replicas=3 meta_removed=true
       ```
 
@@ -550,16 +550,16 @@ at six nodes.
       (`$JS.API.SERVER.REMOVE`). Until then a stopped node still counts
       in the meta quorum: with six members, three stopped blue nodes
       leave no quorum, and stream creates and replica changes fail.
-   5. Check `gwag peer list` on a green node: one node fewer, `jetstream
+   5. Check `gwag ctl peer list` on a green node: one node fewer, `jetstream
       meta: ... offline=none`.
 
    One at a time also matters for placement: an evacuated node is kept
    out of a stream only until that stream is back at full size, so a
    later evacuation can pick a blue node that has not been removed yet.
-6. `gwag cluster finalize --gateway <green node>`. It is refused while
+6. `gwag ctl cluster finalize --gateway <green node>`. It is refused while
    any blue node is live.
 
-`gwag peer evacuate` and the meta removal need a node of this version:
+`gwag ctl peer evacuate` and the meta removal need a node of this version:
 the JetStream server APIs answer only in the NATS system account, and
 only this version's nodes have a system account user (a random
 password, used in-process). Blue nodes running v2.11.0 cannot do either.
@@ -585,7 +585,7 @@ both have feature levels (that is the next release), and a swap with
 
 ### Rollback window
 
-Before `gwag cluster finalize`, the old binary can come back:
+Before `gwag ctl cluster finalize`, the old binary can come back:
 
 - Rolling restart: restart nodes with the old binary, same way.
 - Replica swap: remove the green nodes the way step 5 removes blue
@@ -593,7 +593,7 @@ Before `gwag cluster finalize`, the old binary can come back:
   because the old nodes cannot remove it:
 
   ```
-  gwag peer evacuate --gateway <last green> --leave --wait 2m <its NODE_ID>
+  gwag ctl peer evacuate --gateway <last green> --leave --wait 2m <its NODE_ID>
   ```
 
   `--leave` removes it from the meta group once no stream is on it

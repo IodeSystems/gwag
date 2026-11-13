@@ -51,7 +51,7 @@ go run ./cmd/legacy -spec .run/legacy/openapi.json
 echo "== frozen snapshots"
 ./snapshot.sh check || fail=1
 rc=0
-.run/gwag schema snapshot check --format openapi --spec .run/legacy/openapi.json \
+.run/gwag ctl schema snapshot check --format openapi --spec .run/legacy/openapi.json \
   --snapshot api/orders/v1/openapi.json >.run/legacy/snap.out || rc=$?
 if [[ $rc -eq 0 ]]; then
   echo "ok   legacy v1 spec = api/orders/v1/openapi.json"

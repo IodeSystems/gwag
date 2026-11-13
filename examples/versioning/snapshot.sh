@@ -7,7 +7,7 @@
 #   ./snapshot.sh update --allow-breaking    # rewrite anyway (retiring a version)
 #
 # The specs come from cmd/specs, which builds the service in process;
-# no server runs. Comparison is `gwag schema snapshot` (docs/lifecycle.md,
+# no server runs. Comparison is `gwag ctl schema snapshot` (docs/lifecycle.md,
 # "Frozen spec snapshots"), built from this checkout.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,7 +30,7 @@ go run ./cmd/specs -out .run/gen
 fail=0
 snapshot() {
   local rc=0
-  .run/gwag schema snapshot "$verb" --format "$1" --spec "$2" --snapshot "$3" "${@:4}" >.run/snap.out 2>&1 || rc=$?
+  .run/gwag ctl schema snapshot "$verb" --format "$1" --spec "$2" --snapshot "$3" "${@:4}" >.run/snap.out 2>&1 || rc=$?
   if [[ "$verb" == update ]]; then
     cat .run/snap.out
     [[ $rc -eq 0 ]] || fail=1
@@ -40,7 +40,7 @@ snapshot() {
     0) echo "ok   $3" ;;
     3) cat .run/snap.out; echo "FAIL $3: additive change not in the snapshot; review, then ./snapshot.sh update" >&2; fail=1 ;;
     4) cat .run/snap.out; echo "FAIL $3: breaking change to a frozen version" >&2; fail=1 ;;
-    *) cat .run/snap.out; echo "FAIL $3: gwag schema snapshot exit $rc" >&2; fail=1 ;;
+    *) cat .run/snap.out; echo "FAIL $3: gwag ctl schema snapshot exit $rc" >&2; fail=1 ;;
   esac
 }
 

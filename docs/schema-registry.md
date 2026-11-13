@@ -4,11 +4,11 @@ gwag can serve the Confluent Schema Registry REST API, so Kafka
 serdes, Kafka Connect and registry UIs that talk to a Confluent
 registry can talk to gwag instead. Use it in two steps:
 
-1. **Connect.** Keep the corp registry. gwag's serdes, `gwag schema
-   push`, `gwag schema check` and `gwag gen --registry` work against it
+1. **Connect.** Keep the corp registry. gwag's serdes, `gwag ctl schema
+   push`, `gwag ctl schema check` and `gwag gen --registry` work against it
    (own, import, shadow: see [events-kafka.md](./events-kafka.md)).
 2. **Replace.** Turn on the registry in gwag, copy the corp registry
-   into a context of its own with `gwag schema import --into .corp`,
+   into a context of its own with `gwag ctl schema import --into .corp`,
    and point the corp topics' clients at
    `http://HOST:8080/schema-registry/contexts/.corp`. Every record on
    the topics carries a schema id; the import keeps the ids, so records
@@ -92,7 +92,7 @@ system keeps its own id space: a Confluent schema context. See
 - The default context, `.`, holds what gwag registers: its channels
   and the control plane subject. Clients use
   `http://HOST:8080/schema-registry`.
-- `gwag schema import --into .corp` puts another registry in context
+- `gwag ctl schema import --into .corp` puts another registry in context
   `.corp`, with its ids. Clients of its topics use
   `http://HOST:8080/schema-registry/contexts/.corp`.
 - Each context has its own id counter, subjects, versions and
@@ -143,7 +143,7 @@ The default context is not searched. Details, outputs and the metric:
 ## Import
 
 ```
-gwag schema import --from https://sr.corp.example:8081 --into .corp
+gwag ctl schema import --from https://sr.corp.example:8081 --into .corp
 ```
 
 - Reads every subject, version, schema id (both formats) and
@@ -260,7 +260,7 @@ not allowed; `50003` store not ready).
 | `POST /compatibility/subjects/{s}/versions` | against the versions the level names |
 | `GET /contexts` | `["."]` and the contexts that hold data |
 | `/contexts/{context}/...` | every route above, in that context |
-| `POST /contexts/{context}/gwag/import` | admin token; body from `gwag schema import` |
+| `POST /contexts/{context}/gwag/import` | admin token; body from `gwag ctl schema import` |
 
 Not implemented: `DELETE /config`, `PUT /mode`, exporters, and
 compatibility checks of AVRO and JSON schemas (identical text only).
@@ -289,13 +289,13 @@ one):
 
 Adding or removing fields is compatible (protobuf skips unknown
 fields). The field check is `schemaregistry.CompareShared`, the code
-behind `gwag schema check`.
+behind `gwag ctl schema check`.
 
 ## Verified with
 
 `examples/events/sr-replace.sh` (docker): records written through a
 Confluent registry by the Go, Python and TypeScript serdes and by
-Confluent's Python and Java serializers; `gwag schema import --into
+Confluent's Python and Java serializers; `gwag ctl schema import --into
 .corp`; the Confluent registry stopped; then the gwag serdes and
 Confluent's Python `ProtobufDeserializer` and Java
 `kafka-protobuf-console-consumer` read them through

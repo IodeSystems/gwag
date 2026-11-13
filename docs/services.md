@@ -165,7 +165,7 @@ The service registered once, with n1; all three nodes answer.
 | `GatewayAddrs` | More control-plane addresses of the same cluster, tried after `GatewayAddr` (which may be empty). Pass all of them. |
 | `ServiceAddr` | Where the gateway dials this service: `host:port` for gRPC, the base URL for OpenAPI. Passed verbatim, so it must be reachable from the gateway, not only from the service. |
 | `Services` | One or more bindings (below). All share `ServiceAddr`. |
-| `InstanceID` | Free-form name shown in listings and used by `gwag drain`. |
+| `InstanceID` | Free-form name shown in listings and used by `gwag ctl drain`. |
 | `TTL` | How long the gateway keeps the registration without a heartbeat. 0 uses the server default, 30 s. |
 | `HeartbeatInterval` | Default `TTL/3`, or 10 s when `TTL` is 0. |
 | `ReadyPollInterval` | Poll rate while a binding waits on dependencies. Default 1 s. |
@@ -317,8 +317,8 @@ instances of the line keep serving, and comes back on the next
 passing probe. `reg.Bindings()` carries `Verification` and
 `VerifyReasons`. `controlclient.LoadProfile("gwag.yaml", addr)` fills
 the `Service` list, these two fields included, from a profile file
-written by `gwag service init`. The whole pattern (profile, CI check,
-`gwag service wait --green`, services added by URL):
+written by `gwag ctl services init`. The whole pattern (profile, CI check,
+`gwag ctl services wait --green`, services added by URL):
 [`integrate.md`](./integrate.md).
 
 ### Draining
@@ -338,23 +338,23 @@ leaves `DrainOnSIGTERM` off and calls `reg.Drain(ctx)` then
 2026/11/07 15:22:16 controlclient: drain: DRAIN_STATE_DRAINING inflight=0
 ```
 
-and the instance was gone from `gwag drain --list` afterwards.
+and the instance was gone from `gwag ctl drain --list` afterwards.
 
-From an operator, `gwag drain`:
+From an operator, `gwag ctl drain`:
 
 ```
-$ gwag drain --list --gateway localhost:50090
+$ gwag ctl drain --list --gateway localhost:50090
 REGISTRATION_ID            INSTANCE_ID              ADDR                     LINES
 6381ed3362829d9457e9f867   hello@localhost:15101    localhost:15101          hello/v1
 
-$ gwag drain 'hello@localhost:15101' --wait --gateway localhost:50090
+$ gwag ctl drain 'hello@localhost:15101' --wait --gateway localhost:50090
 6381ed3362829d9457e9f867 hello@localhost:15101 draining inflight=0 lines=hello/v1
 6381ed3362829d9457e9f867 hello@localhost:15101 safe_to_stop inflight=0 lines=hello/v1
 
 $ curl -s localhost:18300/api/graphql ... '{ hello { hello(name:"x") { greeting } } }'
 {"data":{"hello":{"hello":null}},"errors":[{"message":"gateway: no live replicas for hello/v1",...}]}
 
-$ gwag drain 'hello@localhost:15101' --cancel --gateway localhost:50090
+$ gwag ctl drain 'hello@localhost:15101' --cancel --gateway localhost:50090
 6381ed3362829d9457e9f867 hello@localhost:15101 serving inflight=0 lines=hello/v1
 ```
 
@@ -394,17 +394,17 @@ An app key lets a service act on the namespaces it lists. Mint one
 with the admin token:
 
 ```
-$ gwag key create --ns orders --ttl 30d --note "orders prod"
+$ gwag ctl key create --ns orders --ttl 30d --note "orders prod"
 gwk_3f9c0a1b2c3d4e5f_6a1e...
 id 3f9c0a1b2c3d4e5f, namespaces orders, expires 2026-12-07T10:00:00Z. The key is shown once; store it now.
-$ gwag key list
+$ gwag ctl key list
 ID               KIND   NAMESPACES                 EXPIRES               STATE         NOTE
 3f9c0a1b2c3d4e5f app    orders                     2026-12-07T10:00:00Z  valid         orders prod
-$ gwag key revoke 3f9c0a1b2c3d4e5f
+$ gwag ctl key revoke 3f9c0a1b2c3d4e5f
 revoked 3f9c0a1b2c3d4e5f
 ```
 
-The key goes to stdout alone, so `KEY=$(gwag key create ...)` works.
+The key goes to stdout alone, so `KEY=$(gwag ctl key create ...)` works.
 The gateway stores the key's SHA-256, the namespaces and the expiry;
 the key cannot be shown again. The admin API is `POST /admin/app-keys`
 (`{namespaces, ttl, note}`), `GET /admin/app-keys` and
@@ -475,7 +475,7 @@ covering `_app_key_auth`, or the admin token.
 App keys also authorize Schema Registry writes; see
 [`schema-registry.md`](./schema-registry.md#auth-and-writes).
 
-**System keys.** `gwag key create --system --ttl 30d` mints a key of
+**System keys.** `gwag ctl key create --system --ttl 30d` mints a key of
 another kind, `gws_<id>_<secret>`, for one cluster to call another
 during a cutover. It is stored, listed (`KIND system`), expired and
 revoked like an app key, but authorizes only replay verify and the
@@ -572,7 +572,7 @@ gw.AddMCP(gateway.MCPHTTP, "https://mcp.example.com", gateway.As("tools"))
 
 Rate limits and costs are operator-side: a control-plane
 registration (`ServiceBinding`) cannot declare them. Set them with
-`gwag limit set` / `gwag cost set` for services that register
+`gwag ctl limit set` / `gwag ctl cost set` for services that register
 remotely.
 
 In-process registration has no heartbeat, no start gate and no drain:
@@ -580,7 +580,7 @@ the registration exists while the process runs.
 
 ## Related
 
-- [`integrate.md`](./integrate.md) — profile, `gwag service check`, verification, `gwag service wait --green`, services added by URL
+- [`integrate.md`](./integrate.md) — profile, `gwag ctl services check`, verification, `gwag ctl services wait --green`, services added by URL
 
 - [`cluster.md`](./cluster.md) — multi-node gateways.
 - [`lifecycle.md`](./lifecycle.md) — versions, deprecation, retirement, external dependents.

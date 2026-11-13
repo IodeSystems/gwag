@@ -13,7 +13,7 @@
 #   3. a TypeScript service that declares the channels (orders)
 #      registers, and the waiting Python service becomes ready;
 #   4. a TypeScript service subscribing to the same channel registers;
-#   5. `gwag services list` shows all three, and the admin API shows
+#   5. `gwag ctl services list` shows all three, and the admin API shows
 #      each listener's Subscribes;
 #   6. SIGTERM deregisters both listeners at once (not after the TTL).
 #
@@ -64,7 +64,7 @@ SR="http://127.0.0.1:$HTTP/schema-registry"
 wait_for 60 curl -sf "$SR/subjects" -o /dev/null || { cat "$WORK/gateway.log" >&2; echo "gateway did not start" >&2; exit 1; }
 echo "== gateway: http 127.0.0.1:$HTTP, control plane 127.0.0.1:$CP"
 
-services() { (cd "$WORK/gw" && "$GWAG" services list --gateway "127.0.0.1:$CP"); }
+services() { (cd "$WORK/gw" && "$GWAG" ctl services list --gateway "127.0.0.1:$CP"); }
 has_service() { services | grep -q "^$1 "; }
 no_service() { ! has_service "$1"; }
 
@@ -133,7 +133,7 @@ echo "== 5. gateway view"
 # The list is built from the registry KV watch, which applies a
 # registration shortly after the client's Register returns.
 for ns in orders pynotify tsnotify; do
-  check "gwag services list shows $ns" wait_for 10 has_service "$ns"
+  check "gwag ctl services list shows $ns" wait_for 10 has_service "$ns"
 done
 ADMIN="$(sed -n 's/.*admin token = \([0-9a-f]*\).*/\1/p' "$WORK/gateway.log" | head -n1)"
 curl -sf -H "Authorization: Bearer $ADMIN" "http://127.0.0.1:$HTTP/api/admin/services" >"$WORK/admin-services.json"

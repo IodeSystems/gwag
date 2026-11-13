@@ -35,7 +35,7 @@ gwag sits between them and works from the schemas:
 - **Callers are counted.** Usage per caller and version, a dependency
   graph, declared external consumers. A version that something still
   depends on cannot be retired.
-- **CI knows what breaks.** `gwag schema diff --strict` and frozen
+- **CI knows what breaks.** `gwag ctl schema diff --strict` and frozen
   snapshots fail the build on a breaking change.
 
 Two ways to run it:
@@ -58,7 +58,7 @@ curl -s -X POST -H 'content-type: application/json' localhost:8080/api/graphql \
   -d '{"query":"{ __schema { queryType { name } } }"}'
 ```
 
-`bin/gwag services list` and `bin/gwag peer list` now work. Without Docker,
+`bin/gwag ctl services list` and `bin/gwag ctl peer list` now work. Without Docker,
 `bin/gwag up` runs one node as a process. Kubernetes, minikube and ECS
 files, replica rules and what is untested: [`docs/deploy.md`](./docs/deploy.md).
 
@@ -97,11 +97,11 @@ path below ends in the same place.
 The same four steps for a new service and for one that runs today:
 
 ```bash
-gwag service init --spec api/billing.json --url /openapi.json --health /healthz   # writes gwag.yaml
-gwag service check --url http://localhost:8080 --gateway staging-gw:50090         # in CI
+gwag ctl services init --spec api/billing.json --url /openapi.json --health /healthz   # writes gwag.yaml
+gwag ctl services check --url http://localhost:8080 --gateway staging-gw:50090         # in CI
 # deploy: the service registers from gwag.yaml, or the gateway pulls it:
-gwag services add --profile-url http://legacy:8080/.well-known/gwag.json
-gwag service wait --service billing:v1 --green --timeout 2m                       # gate promotion
+gwag ctl services add --profile-url http://legacy:8080/.well-known/gwag.json
+gwag ctl services wait --service billing:v1 --green --timeout 2m                       # gate promotion
 ```
 
 The profile says what the service provides, depends on and listens
@@ -215,8 +215,8 @@ each environment is protected from changes that would break it.
 - **Tiers per environment.** `--allow-tier stable,vN` on production
   gateways refuses `unstable`; a release build (`BuildTag`) cannot
   depend on another service's `unstable`.
-- **CI gates.** `gwag schema diff --strict` against the live schema;
-  `gwag schema snapshot check` keeps a frozen version additive-only.
+- **CI gates.** `gwag ctl schema diff --strict` against the live schema;
+  `gwag ctl schema snapshot check` keeps a frozen version additive-only.
 - **Start order.** A service that declares `Depends` (or event
   `Subscribes`) waits until its dependencies are registered; a
   version stays until nothing depends on it.

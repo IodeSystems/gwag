@@ -19,7 +19,7 @@ carry no groups, so there are no `group:` rules here.
 admin mutation (REST and GraphQL) same-origin, the same refused from
 another origin, logout, the dev role (admin op refused, dev op allowed),
 the denied page, then `gwag login --sso --no-browser` driven through the
-browser, `gwag peer list`, and `gwag logout` ending the bearer.
+browser, `gwag ctl peer list`, and `gwag logout` ending the bearer.
 
 **Keycloak** (`keycloak-realm.json`, imported at start; the passwords in
 it are fixtures): realm `gwag`, confidential client `gwag`, a Group
@@ -31,7 +31,7 @@ Membership mapper `groups` (full path off, ID token and userinfo), groups
 `IDP=keycloak ./e2e.sh` checks each role, then removes `grp-demote` from
 `gwag-admins` through Keycloak's admin REST API: the open session keeps
 `admin` (groups are in the cookie); after sign-out and sign-in again the
-role is `dev`. `gwag login --sso` as `grp-admin` and `gwag peer list`
+role is `dev`. `gwag login --sso` as `grp-admin` and `gwag ctl peer list`
 follow. A second phase restarts the gateway with
 `--sso-groups-claim roles_groups` (a second mapper, full path on) and
 rules on `/gwag-admins` paths, dev rule first.

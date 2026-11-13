@@ -43,12 +43,12 @@ instead of `ProtoSource`; same shape, both formats ship raw source.
 The control-plane API is in
 [`gw/proto/controlplane/v1/control.proto`](../gw/proto/controlplane/v1/control.proto).
 
-The usual path for a new service is a profile file (`gwag service
-init`), a CI check (`gwag service check`), and a deploy gated on the
-gateway's verification of the new instance (`gwag service wait
+The usual path for a new service is a profile file (`gwag ctl services
+init`), a CI check (`gwag ctl services check`), and a deploy gated on the
+gateway's verification of the new instance (`gwag ctl services wait
 --green`). A service with no registration client can serve its
 profile at `/.well-known/gwag.json` and be added by URL
-(`gwag services add --profile-url`). See
+(`gwag ctl services add --profile-url`). See
 [`integrate.md`](./integrate.md).
 
 ## Version
@@ -184,7 +184,7 @@ subcommand; the REST calls are
 CI gate with `schema diff --strict`:
 
 ```bash
-$ gwag schema diff \
+$ gwag ctl schema diff \
     --from https://gw.internal/schema \
     --to   ./candidate.graphql --strict
 ```
@@ -214,9 +214,9 @@ When specs are generated from code (huma, gat), freeze each version's
 spec as a committed file and let CI compare the generated spec with it:
 
 ```bash
-$ gwag schema snapshot check  --spec http://localhost:8080/openapi.json \
+$ gwag ctl schema snapshot check  --spec http://localhost:8080/openapi.json \
     --snapshot api/v1.openapi.json
-$ gwag schema snapshot update --spec ./gen/v1.graphql --snapshot api/v1.graphql
+$ gwag ctl schema snapshot update --spec ./gen/v1.graphql --snapshot api/v1.graphql
 ```
 
 `--format openapi|graphql|proto` is inferred from the file extension
@@ -410,7 +410,7 @@ that continue a constant-step run (`aaaa`, `abcdef`, `97531`), then
 multiplies the Shannon entropy of the remaining bytes by their count.
 It is a floor against lazy secrets, not a proof of randomness: it
 cannot see a dictionary phrase. `openssl rand -base64 48` and
-`gwag secret gen` print a 64-character secret that scores about 250
+`gwag ctl secret gen` print a 64-character secret that scores about 250
 bits; a random 32-character hex string scores about 118 and is
 refused. The hex secrets (`--subscribe-secret`, `--signer-secret`)
 are not refused; the gateway logs a warning at start when one decodes

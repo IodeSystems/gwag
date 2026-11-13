@@ -95,7 +95,7 @@ api/orders/schema.graphql    one GraphQL schema for all versions
 
 [`snapshot.sh`](../examples/versioning/snapshot.sh) builds the
 service in process (no server), writes the generated specs, and runs
-`gwag schema snapshot check` on each
+`gwag ctl schema snapshot check` on each
 ([lifecycle.md](./lifecycle.md#frozen-spec-snapshots)). A rename on
 v1 fails it (excerpt):
 
@@ -131,7 +131,7 @@ What a frozen version may still take:
 
 GraphQL is one schema across versions, so its snapshot changes when
 v2 changes. Treat it like any client-facing schema:
-`gwag schema diff --strict` against the live gateway.
+`gwag ctl schema diff --strict` against the live gateway.
 
 ## Contract tests
 
@@ -288,7 +288,7 @@ and it had no traffic in the window. While billing and Acme pin v1:
 GET /api/admin/graph?window=1m
 orders/v1 sunsetable=false: 5 calls in the last 1m on this node; billing/v1 accepts orders [v1]: no other ready line; external acme (Acme mobile app) accepts orders [v1]: no other ready line
 
-$ gwag drain orders-v1@http://localhost:18621
+$ gwag ctl drain orders-v1@http://localhost:18621
 283d3196deeae5b6f145d231 orders-v1@http://localhost:18621 blocked inflight=0 lines=orders/v1
   blocked: billing/v1 accepts orders [v1]: no other ready instance
   blocked: external acme (Acme mobile app) accepts orders [v1]: no other ready instance
@@ -396,7 +396,7 @@ controlclient.SelfRegister(ctx, controlclient.Options{
 ```
 
 Freeze `orders/v1/orders.proto` with
-`gwag schema snapshot check --spec orders/v1/orders.proto --snapshot api/orders/v1/proto.json --format proto`.
+`gwag ctl schema snapshot check --spec orders/v1/orders.proto --snapshot api/orders/v1/proto.json --format proto`.
 Contract tests are HTTP only today; for gRPC, table tests over the
 adapter's methods do the same job.
 

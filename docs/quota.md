@@ -51,9 +51,9 @@ With `gwag up`, register the service through the control plane or
 
 ```
 gwag up --usage
-gwag limit set --service vendor --rps 10 --burst 10
-gwag limit set --service vendor --op search --rps 2 --burst 2
-gwag cost set --service vendor:v1 --op search --units 5
+gwag ctl limit set --service vendor --rps 10 --burst 10
+gwag ctl limit set --service vendor --op search --rps 2 --burst 2
+gwag ctl cost set --service vendor:v1 --op search --units 5
 ```
 
 ## Rate limit
@@ -89,9 +89,9 @@ can wait.
 Set in code (`RateLimit`, `OperationRateLimit`) or by an operator:
 
 ```
-gwag limit set --service vendor:v1 [--op X] --rps N --burst B
-gwag limit delete --service vendor:v1 [--op X]
-gwag limit list
+gwag ctl limit set --service vendor:v1 [--op X] --rps N --burst B
+gwag ctl limit delete --service vendor:v1 [--op X]
+gwag ctl limit list
 ```
 
 An operator limit replaces a code limit for the same scope; deleting
@@ -152,7 +152,7 @@ limit is usually per account.
 The node that got the 429 publishes the pause on the NATS subject
 `gwag.upstream.pause` with the remaining time, so clock differences
 between nodes do not matter. A node that misses the message (it was
-restarting) pauses when it gets its own 429. `gwag limit list` shows
+restarting) pauses when it gets its own 429. `gwag ctl limit list` shows
 the pauses in force on the answering node.
 
 Services with no rate limit are not paused: their 429 goes to the
@@ -167,11 +167,11 @@ whatever caller-id mode the gateway runs
 is `unknown`. There is no other credential for quotas.
 
 ```
-gwag quota set --caller billing --service vendor --limit 10000 --per 1d
-gwag quota set --default --service vendor --limit 1000 --per 1d
-gwag quota set --default --service vendor --op search --limit 50 --per 1m --units
-gwag quota list
-gwag quota delete --caller billing --service vendor
+gwag ctl quota set --caller billing --service vendor --limit 10000 --per 1d
+gwag ctl quota set --default --service vendor --limit 1000 --per 1d
+gwag ctl quota set --default --service vendor --op search --limit 50 --per 1m --units
+gwag ctl quota list
+gwag ctl quota delete --caller billing --service vendor
 ```
 
 - `--caller ID` sets one caller's quota; `--default` the quota of
@@ -222,7 +222,7 @@ work with either.
 
 ## Costs
 
-`OperationCost("search", 5)` or `gwag cost set --service vendor:v1
+`OperationCost("search", 5)` or `gwag ctl cost set --service vendor:v1
 --op search --units 5` makes one call count 5 units against
 `--units` quotas and in the usage report. Default 1. An operator cost
 replaces the code cost.
@@ -249,9 +249,9 @@ bucket's max age, set by the node that creates the bucket. A
 standalone gateway loses its rows on restart.
 
 ```
-gwag usage                                   # last 7 days
-gwag usage --from 2026-11-01 --to 2026-11-30 --service vendor --csv > november.csv
-gwag usage --caller billing
+gwag ctl usage                                   # last 7 days
+gwag ctl usage --from 2026-11-01 --to 2026-11-30 --service vendor --csv > november.csv
+gwag ctl usage --caller billing
 ```
 
 Admin API (dev role): `GET /admin/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&caller=&service=ns[:vN]`
@@ -283,7 +283,7 @@ Details in [`operations.md`](./operations.md#upstream-sla).
 ## Cutover and freeze
 
 Operator limits, quotas and costs are in the cluster state document
-(`gwag cluster export` / `import`, [`cutover.md`](./cutover.md#state-copy)).
+(`gwag ctl cluster export` / `import`, [`cutover.md`](./cutover.md#state-copy)).
 Quota counters and usage rows are not. A cutover freeze refuses
 limit, quota and cost writes like the other admin writes.
 
@@ -292,7 +292,7 @@ limit, quota and cost writes like the other admin writes.
 - Leased blocks (see above).
 - Limits declared by a service at registration (`ServiceBinding`).
   The vendor's limit is an operator fact, so it is set in code by the
-  embedding gateway or with `gwag limit set`.
+  embedding gateway or with `gwag ctl limit set`.
 - Subscriptions are not rate limited, counted or paused.
 - MCP upstreams have no SLA metrics (their calls go through the MCP
   client library).

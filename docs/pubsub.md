@@ -394,14 +394,14 @@ CLI surface:
 
 ```bash
 # Remote (over the gateway's control plane; bearer required).
-gwag sign --gateway localhost:50090 --bearer "$ADMIN_OR_SIGNER_TOKEN" \
+gwag ctl sign --gateway localhost:50090 --bearer "$ADMIN_OR_SIGNER_TOKEN" \
           --channel "events.orders.42.update" --ttl 60
 # hmac=md6l2SVJ...
 # ts=1778092482
 # kid=
 
 # Local (pure crypto; no gateway round-trip).
-gwag sign --secret "$HEX_SECRET" \
+gwag ctl sign --secret "$HEX_SECRET" \
           --channel "events.orders.42.update" --ttl 60
 ```
 

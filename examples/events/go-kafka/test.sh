@@ -11,8 +11,8 @@
 # image and the confluent-kafka Python client (confluent/, run with uv)
 # read what gwag writes, and gwag reads what the Python serializer
 # writes. Then the three ways to use a topic (docs/events-kafka.md, "Who
-# produces the topic?"): own (srinterop, gwag schema push), import
-# (corp import, gwag gen --check-lock), shadow (corp shadow, gwag
+# produces the topic?"): own (srinterop, gwag ctl schema push), import
+# (corp import, gwag gen --check-lock), shadow (corp shadow, gwag ctl
 # schema check).
 #
 # Needs docker and go; uv for the registry part. KAFKA_PORT (default
@@ -151,8 +151,8 @@ expect "gwag reads Confluent" "$out" \
   "OrderShipped o-2001 via dhl (key o-2001, schema id" "gwag headers false)" \
   "OrderCreated o-2001 by cy (type from schema id"
 
-echo "== own: gwag schema push finds what the serde registered"
-out="$(gwag schema push --registry "$SR_URL" --topic orders.v1.OrderShipped=gwag-shipped \
+echo "== own: gwag ctl schema push finds what the serde registered"
+out="$(gwag ctl schema push --registry "$SR_URL" --topic orders.v1.OrderShipped=gwag-shipped \
   --topic orders.v1.OrderEvents=gwag-events -I examples/events/proto orders/v1/orders.proto)"
 echo "$out"
 expect "schema push" "$out" "ok   orders.v1.OrderShipped subject gwag-shipped-value version 1" \
@@ -173,11 +173,11 @@ echo "== shadow: gwag's own copy, checked against the subject"
 out="$(cd corp && go run . shadow corp-orders)"
 echo "$out"
 expect "shadow" "$out" "shadow shop.v1.CorpOrder o-3001 total 4200 (key o-3001)" "shadow shop.v1.CorpOrder o-3002 total 999 (key o-3002)"
-out="$(gwag schema check --registry "corp=$SR_URL" -I "$HERE/corp/shadow" shop/v1/order.proto)"
+out="$(gwag ctl schema check --registry "corp=$SR_URL" -I "$HERE/corp/shadow" shop/v1/order.proto)"
 echo "$out"
 expect "schema check" "$out" "ok   shop.v1.CorpOrder (consumer) vs corp corp-orders-value@latest" \
   "ok   shop.v1.CorpOrderOut (producer) vs corp corp-orders-value@latest"
-if out="$(gwag schema check --registry "corp=$SR_URL" -I "$HERE/corp/shadow" drift/v1/drift.proto)"; then
+if out="$(gwag ctl schema check --registry "corp=$SR_URL" -I "$HERE/corp/shadow" drift/v1/drift.proto)"; then
   echo "FAIL schema check passed on drift/v1/drift.proto" >&2
   fail=1
 fi

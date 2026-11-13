@@ -8,7 +8,7 @@
 #    Python and TypeScript serdes (AutoRegister) and by Confluent's own
 #    Python and Java serializers.
 # 2. A gateway (gwag up --schema-registry) imports the registry into
-#    context .corp with `gwag schema import --into .corp`. The
+#    context .corp with `gwag ctl schema import --into .corp`. The
 #    Confluent registry is stopped.
 # 3. Pointed at gwag's .corp context (/schema-registry/contexts/.corp):
 #    the Go, Python and TypeScript serdes and Confluent's Python and
@@ -103,7 +103,7 @@ for s in go-shipped go-events py-shipped ts-shipped ts-events cf-shipped corp-or
 done
 echo "Confluent ids: $(for s in "${!want_id[@]}"; do printf '%s=%s ' "$s" "${want_id[$s]}"; done)"
 
-echo "== gwag up --schema-registry; gwag schema import"
+echo "== gwag up --schema-registry; gwag ctl schema import"
 "$ROOT/bin/gwag" up --addr "127.0.0.1:$GW_PORT" --control-plane "127.0.0.1:$((GW_PORT + 1))" \
   --nats-listen "127.0.0.1:$((GW_PORT + 2))" --nats-cluster "127.0.0.1:$((GW_PORT + 3))" \
   --data-dir "$GWDIR" --no-context-write --shutdown-delay 0 --schema-registry --schema-registry-writes >"$GWDIR/gwag.log" 2>&1 &
@@ -117,14 +117,14 @@ done
 curl -fsS "$GW/subjects" >/dev/null || { cat "$GWDIR/gwag.log" >&2; exit 1; }
 TOKEN="$(cat "$GWDIR/admin-token")"
 GW_AUTH="http://x:$TOKEN@127.0.0.1:$GW_PORT/schema-registry"
-out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --bearer "$TOKEN" 2>&1 || true)"
+out="$("$ROOT/bin/gwag" ctl schema import --from "$CONFLUENT" --to "$GW" --bearer "$TOKEN" 2>&1 || true)"
 expect "import needs a context" "$out" "--into CONTEXT"
 out="$(curl -sS -u "x:$TOKEN" -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' "$GW/gwag/import" -d '{"schemas":[],"versions":[]}')"
 expect "import into the default context refused" "$out" '"error_code":42205'
-out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
+out="$("$ROOT/bin/gwag" ctl schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
 echo "$out"
 expect "import" "$out" "versions added" "/contexts/.corp"
-out="$("$ROOT/bin/gwag" schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
+out="$("$ROOT/bin/gwag" ctl schema import --from "$CONFLUENT" --to "$GW" --into .corp --bearer "$TOKEN")"
 echo "$out"
 expect "import again" "$out" "0 schemas added, 0 versions added"
 for s in "${!want_id[@]}"; do

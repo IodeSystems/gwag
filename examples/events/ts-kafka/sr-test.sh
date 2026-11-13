@@ -15,7 +15,7 @@
 #     what Confluent's serializers write (Java console producer, Python
 #     ProtobufSerializer), none with Gwag-* headers;
 #   - import (gwag gen --lang ts --registry, --check-lock) and shadow
-#     (typeNames, gwag schema check) against a topic another team writes.
+#     (typeNames, gwag ctl schema check) against a topic another team writes.
 #
 # Needs docker, go, node >= 24, pnpm and uv (the Python checks in
 # ../go-kafka/confluent). KAFKA_PORT (default 19092) and SR_PORT
@@ -138,7 +138,7 @@ echo "== shadow: gwag's own copy, checked against the subject"
 out="$(node corp/main.ts shadow corp-orders 2> >(grep -v -e TimeoutNegativeWarning -e 'Timeout duration was set' -e 'trace-warnings' >&2))"
 echo "$out"
 expect "shadow" "$out" "shadow shop.v1.CorpOrder o-3001 total 4200 (key o-3001)" "shadow shop.v1.CorpOrder o-3002 total 999 (key o-3002)"
-out="$(gwag schema check --registry "corp=$SR_URL" -I "$ROOT/examples/events/go-kafka/corp/shadow" shop/v1/order.proto)"
+out="$(gwag ctl schema check --registry "corp=$SR_URL" -I "$ROOT/examples/events/go-kafka/corp/shadow" shop/v1/order.proto)"
 echo "$out"
 expect "schema check" "$out" "ok   shop.v1.CorpOrder (consumer) vs corp corp-orders-value@latest" \
   "ok   shop.v1.CorpOrderOut (producer) vs corp corp-orders-value@latest"

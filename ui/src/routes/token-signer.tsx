@@ -27,7 +27,7 @@ function TokenSigner() {
   return (
     <Page
       title="Sign subscribe token"
-      subtitle="Mint an HMAC token a client presents on a subscription (the GUI for `gwag sign`). Requires the admin bearer (Settings)."
+      subtitle="Mint an HMAC token a client presents on a subscription (the GUI for `gwag ctl sign`). Requires the admin bearer (Settings)."
       maxWidth={640}
     >
       <Panel>

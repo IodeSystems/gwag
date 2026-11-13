@@ -182,7 +182,7 @@ Consequences:
   different policies do not move the count back and forth: each only
   raises, so the highest policy wins until a `ForgetPeer`. To lower
   without a forget, edit the streams with the `nats` CLI.
-- No node raises while a node is being evacuated (`gwag peer
+- No node raises while a node is being evacuated (`gwag ctl peer
   evacuate`). NATS places new replicas on any online server, the
   evacuated one included, and has no option to keep one server out of
   a new placement. `EvacuatePeer` records the node in the `gwag-cluster`
@@ -197,7 +197,7 @@ Consequences:
   policy count for the live peers, or has no leader, a replica missing
   or not current, or a move in progress: it answers
   `FailedPrecondition` (admin API 409) listing those streams and
-  starts the raise. `gwag peer evacuate --wait` asks again until they
+  starts the raise. `gwag ctl peer evacuate --wait` asks again until they
   are whole. A call that renews a started evacuation is not checked.
 - A booting node reads the count of `gwag-peers` for the buckets it
   creates, and retries that read for up to 20 s: a node that has just
@@ -212,7 +212,7 @@ Consequences:
 
 `gwag up --schema-registry` serves the Confluent Schema Registry API at
 `/schema-registry` (read-only by default; state in the `gwag-schemas`
-bucket). `gwag schema import --into .corp` copies an existing registry
+bucket). `gwag ctl schema import --into .corp` copies an existing registry
 into a context of its own, keeping the schema ids. See
 [schema-registry.md](./schema-registry.md).
 
@@ -243,7 +243,7 @@ fails with `Reject(ResourceExhausted, "could not acquire slot in N")`
 gateway-wide unary cap by design (it would couple unrelated requests);
 visibility comes from the per-pool metrics below.
 
-A rate limit on a service (`gateway.RateLimit`, `gwag limit set`)
+A rate limit on a service (`gateway.RateLimit`, `gwag ctl limit set`)
 waits for a token within the same `MaxWaitTime`, on that service's
 own bucket. See [`quota.md`](./quota.md).
 

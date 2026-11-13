@@ -13,7 +13,7 @@
 #     read (the confluent-kafka project in ../go-kafka/confluent);
 #   - Confluent's ProtobufSerializer produces (no Gwag-* headers),
 #     Python reads with typed handlers.
-# Then the three ways to use a topic: own (srinterop.py, gwag schema
+# Then the three ways to use a topic: own (srinterop.py, gwag ctl schema
 # push), import (corp.py import, gwag gen --check-lock), shadow
 # (corp.py shadow).
 #
@@ -175,8 +175,8 @@ expect "Python reads Confluent" "$out" \
   "OrderShipped o-2001 via dhl (key o-2001, schema id" "gwag headers False)" \
   "OrderCreated o-2001 by cy (type from schema id"
 
-echo "== own: gwag schema push finds what the Python serde registered"
-out="$(gwag schema push --registry "$SR_URL" --topic "orders.v1.OrderShipped=py-shipped-$suffix" \
+echo "== own: gwag ctl schema push finds what the Python serde registered"
+out="$(gwag ctl schema push --registry "$SR_URL" --topic "orders.v1.OrderShipped=py-shipped-$suffix" \
   --topic "orders.v1.OrderEvents=py-events-$suffix" -I examples/events/proto orders/v1/orders.proto)"
 echo "$out"
 expect "schema push" "$out" "ok   orders.v1.OrderShipped subject py-shipped-$suffix-value version 1" \

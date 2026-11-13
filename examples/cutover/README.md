@@ -36,10 +36,10 @@ What the script does, in order:
 2. Replay: mints a system key on green and writes it to the file blue
    reads (`--replay-verify-token-file`). Checks that `ListItems` and
    `AddNote` match and `GetItem` differs only in the upstream path.
-3. State copy: `gwag cluster freeze`, `export`, `import --dry-run`,
+3. State copy: `gwag ctl cluster freeze`, `export`, `import --dry-run`,
    `import`, `unfreeze`; checks green's export equals blue's.
-4. `gwag cluster mirror` on green; waits for lag 0.
-5. `gwag cluster switchover` 5, 50, 100 percent; prints
+4. `gwag ctl cluster mirror` on green; waits for lag 0.
+5. `gwag ctl cluster switchover` 5, 50, 100 percent; prints
    `switchover_total` and `switchover_green_errors_total` summed over
    blue.
 6. Envoy to green (`runtime_modify`); waits until Envoy has no request

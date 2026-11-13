@@ -179,7 +179,7 @@ HMAC channel-auth seam on subscribe instead.
 ## Built-in quotas
 
 Without a delegate, quotas per caller id can be set in the gateway
-itself: `gwag quota set --caller ID|--default --service ns[:vN]
+itself: `gwag ctl quota set --caller ID|--default --service ns[:vN]
 [--op X] --limit N --per 1m [--units]`. Short windows are split
 across the live nodes; windows of 1 minute and more use a cluster
 counter. `WithQuota` replaces them: with the delegate configured,

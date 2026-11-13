@@ -126,7 +126,7 @@ examples/clients/go-proto/gen.sh`, then `pnpm gen` in `ts-openapi/`.
 ## Regenerating on schema change
 
 Commit the generated code. When a service changes, rerun `gen.sh` and
-review the diff. In CI, run `gwag schema diff --from <committed snapshot> --to <live
+review the diff. In CI, run `gwag ctl schema diff --from <committed snapshot> --to <live
 gateway> --strict` to fail the build when the schema changed in a way
 that breaks existing callers, and regenerate only after that gate
 passes. See

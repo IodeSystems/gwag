@@ -190,11 +190,11 @@ Open `http://<host>:8080/` (the UI home is the live graph). Ports:
    sends traffic with `X-Caller-Id: orders/v1`.
 4. `library-b` registers v1 and v2 in one Register (proto packages
    `library.v1` and `library.v2`; gRPC ingress needs distinct packages
-   per line). `gwag drain library-a --wait` reaches `safe_to_stop`
+   per line). `gwag ctl drain library-a --wait` reaches `safe_to_stop`
    because `library-b` covers v1; SIGTERM then exits `library-a`.
 5. `orders` restarts with `[v1, v2]` (calls v2 once present), then `[v2]`.
 6. `library/v1` becomes sunset-able once no call hit v1 within the 1m
-   window: about 60 s of waiting in this step. `gwag drain library-b`
+   window: about 60 s of waiting in this step. `gwag ctl drain library-b`
    is `blocked` (it holds the only v2 instance; `orders` needs v2);
    `--cancel` withdraws it.
 7. Ctrl-C or any exit stops every process.
