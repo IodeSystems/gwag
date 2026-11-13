@@ -202,53 +202,8 @@ func splitNSURL(s string) (ns, url string) {
 }
 
 func main() {
-	if len(os.Args) >= 2 {
-		switch os.Args[1] {
-		case "up":
-			os.Exit(upCmd(os.Args[2:]))
-		case "serve":
-			os.Exit(serveCmd(os.Args[2:]))
-		case "login":
-			os.Exit(loginCmd(os.Args[2:]))
-		case "logout":
-			os.Exit(logoutCmd(os.Args[2:]))
-		case "use":
-			os.Exit(useCmd(os.Args[2:]))
-		case "context":
-			os.Exit(contextCmd(os.Args[2:]))
-		case "peer":
-			os.Exit(peerCmd(os.Args[2:]))
-		case "cluster":
-			os.Exit(clusterCmd(os.Args[2:]))
-		case "services":
-			os.Exit(servicesCmd(os.Args[2:]))
-		case "service":
-			os.Exit(serviceCmd(os.Args[2:]))
-		case "schema":
-			os.Exit(schemaCmd(os.Args[2:]))
-		case "sign":
-			os.Exit(signCmd(os.Args[2:]))
-		case "drain":
-			os.Exit(drainCmd(os.Args[2:]))
-		case "key":
-			os.Exit(keyCmd(os.Args[2:]))
-		case "limit":
-			os.Exit(limitCmd(os.Args[2:]))
-		case "quota":
-			os.Exit(quotaCmd(os.Args[2:]))
-		case "cost":
-			os.Exit(costCmd(os.Args[2:]))
-		case "usage":
-			os.Exit(usageCmd(os.Args[2:]))
-		case "secret":
-			os.Exit(secretCmd(os.Args[2:], os.Stdout, os.Stderr))
-		case "gen":
-			os.Exit(genCmd(os.Args[2:], os.Stdout, os.Stderr))
-		case "deploy":
-			os.Exit(deployCmd(os.Args[2:], os.Stdout, os.Stderr))
-		case "probe":
-			os.Exit(probeCmd(os.Args[2:]))
-		}
+	if code, ok := dispatchSubcommand(os.Args[1:]); ok {
+		os.Exit(code)
 	}
 	runGateway()
 }
@@ -275,17 +230,8 @@ func runGateway() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--admin-data-dir DIR] [--mcp] [--mcp-upstream NS:TRANSPORT:TARGET ...]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag peer (list|evacuate|forget) ...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster finalize [--level N] [--dry-run]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster switchover [--percent N] [--rule SPEC]... [--clear]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster (freeze|unfreeze|export|import) ...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag cluster mirror [--from BLUE] [--channel NAME]... [--status] [--stop]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag key (create|list|revoke) ...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag (limit|quota|cost) (set|delete|list) ...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag usage [--from DAY] [--to DAY] [--caller ID] [--service NS[:vN]] [--csv]")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --lang go [--out DIR] [-I DIR]... FILE.proto...")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag gen --registry URL --subject SUBJECT[@VERSION]... | --check-lock")
-		fmt.Fprintln(flag.CommandLine.Output(), "       gwag schema (check|push) --registry ... FILE.proto...")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag ctl <noun> ...   talk to a running gateway (gwag ctl help)")
+		fmt.Fprintln(flag.CommandLine.Output(), "       gwag help             all commands")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
