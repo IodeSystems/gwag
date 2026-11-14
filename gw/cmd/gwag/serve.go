@@ -173,7 +173,7 @@ func serveFullGateway(src fullGatewaySource, addr, namespace, version string, en
 
 	log.Printf("gwag serve: %s → POST %s/api/graphql", label, strings.TrimRight(addr, "/"))
 	if enableMCP {
-		log.Printf("gwag serve: MCP at /mcp  (admin token = %s)", gw.AdminTokenHex())
+		log.Print("gwag serve: MCP at /mcp  (" + tokenLine("admin token", gw.AdminTokenHex(), gw.AdminTokenPath(), stderrIsTTY(), underService()) + ")")
 	}
 	if err := gateway.ServeHTTP(gateway.NewHTTPServer(addr, mux), gw, shut); err != nil {
 		fmt.Fprintf(os.Stderr, "gwag serve: %v\n", err)

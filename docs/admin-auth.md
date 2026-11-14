@@ -6,12 +6,21 @@ The gateway protects its own admin surface (`/admin/*` and the
 self-ingested `admin` GraphQL fields) with two bearer tokens. On boot,
 the gateway reads each from `<adminDataDir>/admin-token` and
 `<adminDataDir>/dev-token`, or generates a fresh 32-byte one and
-persists it. Both are logged to stderr at startup:
+persists it. When stderr is a terminal, both values are logged at startup:
 
 ```
 admin token = ab9089b1...  (persisted to /var/lib/gateway/admin-token)
 dev token   = 5c01de77...  (persisted to /var/lib/gateway/dev-token)
 ```
+
+When stderr is not a terminal (systemd, launchd, docker, CI, redirect), the
+log shows the file path, not the value:
+
+```
+admin token = (not logged; stored in /var/lib/gateway/admin-token; read the file)
+```
+
+Under `gwag service` the hint is `run 'gwag service login'`.
 
 Wire either as standard `Authorization: Bearer <hex>`. The token
 decides the role:

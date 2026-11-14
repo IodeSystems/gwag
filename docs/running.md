@@ -99,7 +99,7 @@ timeout, plus the delay, plus 30 s). `Restart=on-failure`, `KillMode=mixed`.
 
 The unit passes `--no-context-write`, so the daemon does not write
 `.gw/credentials.json` into its working directory; use `gwag service login`.
-`gwag up` logs the dev token to the journal on every start.
+`gwag up` prints token values only when stderr is a terminal. Under the service (journal, log file) it prints the token file path instead; `gwag service login` saves the admin token to a credentials context.
 
 To keep a user service running after logout on Linux: `loginctl enable-linger $USER`.
 

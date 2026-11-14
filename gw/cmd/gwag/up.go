@@ -300,16 +300,14 @@ func upCmd(args []string) int {
 	}
 
 	token := gw.AdminTokenHex()
+	tty, svc := stderrIsTTY(), underService()
 	if tokOpt != nil {
 		// Supplied from a platform secret: keep it out of the logs.
 		log.Printf("admin token = (supplied; not logged)")
-		log.Printf("dev token   = (not logged; persisted to %s)", gw.DevTokenPath())
-	} else if path := gw.AdminTokenPath(); path != "" {
-		log.Printf("admin token = %s  (persisted to %s)", token, path)
-		log.Printf("dev token   = %s  (persisted to %s)", gw.DevTokenHex(), gw.DevTokenPath())
+		log.Print(tokenLine("dev token  ", gw.DevTokenHex(), gw.DevTokenPath(), false, svc))
 	} else {
-		log.Printf("admin token = %s  (in-memory)", token)
-		log.Printf("dev token   = %s  (in-memory)", gw.DevTokenHex())
+		log.Print(tokenLine("admin token", token, gw.AdminTokenPath(), tty, svc))
+		log.Print(tokenLine("dev token  ", gw.DevTokenHex(), gw.DevTokenPath(), tty, svc))
 	}
 
 	// Auto-login: write the credential entry and promote it to

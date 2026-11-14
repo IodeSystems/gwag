@@ -158,6 +158,7 @@ changes on MINOR, drops on MAJOR.
 - `go install github.com/iodesystems/gwag/v2/gw/cmd/gwag@latest` failed with `pattern all:dist: no matching files found` (v2.11.0). `ui/dist/.gitkeep` is tracked; a module-proxy build serves the fallback UI page, `bin/build` still embeds the real UI. Release builds report their tag as the binary version.
 
 ### Security
+- `gwag up` and `gwag serve --mcp` log token values only when stderr is a terminal; otherwise (systemd journal, launchd, docker, CI) they log the token file path.
 - `DeclarationsHookOptions.Secret` / `--declarations-hook-secret` is refused unless it is at least 32 bytes with an estimated 128 bits of entropy (repetition such as `aaaa...` or `abcabc...` and constant-step runs do not count): `New` panics, `gwag up` exits with an error naming `openssl rand -base64 48` / `gwag secret gen`. `--subscribe-secret` and `--signer-secret` (hex) are still accepted; the gateway logs a startup warning when one decodes to under 16 bytes.
 - `/debug/pprof` (`WithPprof`, `--pprof`) under `AdminMiddleware` answered GETs with no token: GETs passed as public reads. `WithPprof` now registers `/debug/pprof/*` as a destructive read, so it needs the admin token (dev gets 403).
 - Anonymous admin reads no longer expose every service, owner contacts, instance addresses, external-dependent declarations, peers, injectors or the MCP config. Before, any client that could reach `/api/admin/*` or the `admin` GraphQL fields read all of it.
