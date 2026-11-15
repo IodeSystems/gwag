@@ -69,15 +69,17 @@ function LayoutInner({ children }: { children: ReactNode }) {
   const sso = useSSO();
   const { role, invalid } = useAdminRole();
   const { unread, markRead } = useEvents();
-  // Signed in: a pasted token, or an SSO session cookie. A token wins
-  // when both are present (the gateway checks the bearer first).
+  // Signed in: a pasted token, or a session cookie (SSO, or gwag
+  // login --web). A token wins when both are present (the gateway
+  // checks the bearer first).
   const viaSSO = !token && sso.authenticated;
+  const sessionKind = sso.via === 'token' ? 'from the CLI' : 'with SSO';
   const settingsTooltip = invalid
     ? 'Settings — the gateway rejected this token'
     : token
       ? `Settings — signed in as ${role}`
       : viaSSO
-        ? `Settings — signed in with SSO as ${role}`
+        ? `Settings — signed in ${sessionKind} as ${role}`
         : 'Settings — no token set';
   const eventsTooltip = unread > 0 ? `Events (${unread} new)` : 'Events';
 
@@ -140,8 +142,11 @@ function LayoutInner({ children }: { children: ReactNode }) {
             owner contacts or external dependents. Sign in with the dev
             token to see every service and edit external dependents, or
             with the admin token for every operation (drain, deprecate).
-            The gateway prints both at startup and keeps them under its
-            data dir.{sso.enabled && ' Or sign in with SSO.'}
+            Run <code>gwag login --web</code> (or{' '}
+            <code>gwag service login --web</code>) to open this page signed
+            in, or paste a token from the gateway's data dir
+            (<code>admin-token</code>, <code>dev-token</code>).
+            {sso.enabled && ' Or sign in with SSO.'}
           </Alert>
           {sso.error && (
             <Alert severity="warning" sx={{ mb: 2 }}>
@@ -171,10 +176,10 @@ function LayoutInner({ children }: { children: ReactNode }) {
           />
           {viaSSO && (
             <>
-              <Typography variant="body2" noWrap sx={{ mx: 1 }} title="Signed in with SSO">
+              <Typography variant="body2" noWrap sx={{ mx: 1 }} title={`Signed in ${sessionKind}`}>
                 {sso.email}
               </Typography>
-              <Tooltip title="Sign out (ends the SSO session in this browser)">
+              <Tooltip title="Sign out (ends this browser's session on the gateway)">
                 <IconButton color="inherit" onClick={() => void ssoSignOut()} aria-label="sign out">
                   <LogoutIcon />
                 </IconButton>

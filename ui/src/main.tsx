@@ -6,6 +6,12 @@ import { routeTree } from './routeTree.gen';
 import { AppThemeProvider, ToastProvider } from '@/ui';
 import { client } from '@/api/client';
 import { EnvironmentQuery } from '@/api/operations';
+import { captureSignInCode } from '@/api/sso';
+import CodeSignIn from '@/components/CodeSignIn';
+
+// Before the router reads the location: a gwag login --web code leaves
+// the address bar first.
+captureSignInCode();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,6 +48,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <Themed>
         <ToastProvider>
+          <CodeSignIn />
           <RouterProvider router={router} />
         </ToastProvider>
       </Themed>

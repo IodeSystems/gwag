@@ -36,9 +36,10 @@ interface SettingsDrawerProps {
 
 /**
  * SettingsDrawer is the operator's entry point for pasting a bearer
- * token: the admin token or the dev token. The gateway logs both at
- * boot (`admin token = <hex>`, `dev token = <hex>`) and decides the
- * role. Stored in sessionStorage only.
+ * token: the admin token or the dev token. The gateway keeps both in
+ * its data dir (`admin-token`, `dev-token`; printed at boot only when
+ * stderr is a terminal) and decides the role. Stored in sessionStorage
+ * only. `gwag login --web` signs the browser in without a paste.
  */
 export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const current = useAdminToken();
@@ -87,9 +88,13 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           The dev token shows every service and lets you edit external
           dependents. The admin token also allows every write (drain,
-          deprecate, forget peer, sign tokens). The gateway logs{' '}
-          <code>admin token = …</code> and <code>dev token = …</code> at
-          boot. Paste either one here.
+          deprecate, forget peer, sign tokens). Without pasting: run{' '}
+          <code>gwag login --web</code>, or <code>gwag service login --web</code>{' '}
+          for a gateway run as a service; it prints a one-time link that
+          opens this page signed in. To paste: the tokens are the files{' '}
+          <code>admin-token</code> and <code>dev-token</code> in the
+          gateway's data dir (printed at boot only when the gateway runs in
+          a terminal).
         </Typography>
 
         <TextField
@@ -99,7 +104,7 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           maxRows={4}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="paste hex token from boot log"
+          placeholder="paste hex token (data dir: admin-token or dev-token)"
           autoComplete="off"
           spellCheck={false}
           sx={{ fontFamily: 'monospace', '& textarea': { fontFamily: 'monospace', fontSize: '0.85rem' } }}
@@ -132,7 +137,7 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
             : current
               ? `Signed in as ${role === 'admin' ? 'Admin' : role === 'dev' ? 'Dev' : role}.`
               : sso.authenticated
-                ? `No token set. Signed in with SSO as ${sso.email ?? '?'} (${role}).`
+                ? `No token set. Signed in ${sso.via === 'token' ? 'from the CLI' : 'with SSO'} as ${sso.email ?? '?'} (${role}).`
                 : 'No token set: public services only, no writes.'}
         </Typography>
       </Box>
