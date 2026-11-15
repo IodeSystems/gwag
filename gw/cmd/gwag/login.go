@@ -231,14 +231,20 @@ func loginCmd(args []string) int {
 	primary := fs.Bool("primary", false, "Mark this login primary (default: true if it's the first login)")
 	global := fs.Bool("global", false, "Write to the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	sso := fs.Bool("sso", false, "Sign in through the gateway's SSO in a browser and save the bearer it issues (instead of --token)")
-	noBrowser := fs.Bool("no-browser", false, "With --sso: print the sign-in URL, do not open a browser")
+	noBrowser := fs.Bool("no-browser", false, "With --sso or --web: print the sign-in URL, do not open a browser")
+	web := fs.Bool("web", false, "Sign the admin UI in a browser in with the current (or --context) login's bearer: prints a one-time URL (60 s). Changes no credentials")
+	webURL := fs.String("web-url", "", "With --web: base of the printed URL (e.g. http://192.168.1.76:8080) when the browser reaches the gateway at another address than the login's endpoint")
+	ctxName := fs.String("context", "", "With --web: the login to use (default: --name, else the current one)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag login --name N --gateway HOST:PORT [--endpoint URL] [--token HEX] [--primary]")
 		fmt.Fprintln(fs.Output(), "       gwag login --sso [--no-browser] [--name N] [--gateway HOST:PORT] [--endpoint URL]")
+		fmt.Fprintln(fs.Output(), "       gwag login --web [--context N] [--web-url URL] [--no-browser] [--global]")
 		fmt.Fprintln(fs.Output(), "  Adds or updates a login in .gw/credentials.json. The first login")
 		fmt.Fprintln(fs.Output(), "  added is auto-primary; subsequent logins inherit primary=false")
 		fmt.Fprintln(fs.Output(), "  unless --primary is passed. Use 'gwag use NAME' to switch later.")
 		fmt.Fprintln(fs.Output(), "  --sso without --gateway updates the named login, else the current one.")
+		fmt.Fprintln(fs.Output(), "  --web opens the admin UI signed in with the login's role; the URL is")
+		fmt.Fprintln(fs.Output(), "  always printed, for a browser on another host.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -246,6 +252,21 @@ func loginCmd(args []string) int {
 	}
 	nameSet := false
 	fs.Visit(func(f *flag.Flag) { nameSet = nameSet || f.Name == "name" })
+	if *web {
+		if *sso || *token != "" || *gw != "" || *endpoint != "" || *primary {
+			fmt.Fprintln(os.Stderr, "--web signs a browser in with an existing login; it takes no --sso, --token, --gateway, --endpoint or --primary")
+			return 2
+		}
+		lookup := *ctxName
+		if lookup == "" && nameSet {
+			lookup = *name
+		}
+		return loginWebCmd(lookup, *global, *webURL, !*noBrowser)
+	}
+	if *webURL != "" || *ctxName != "" {
+		fmt.Fprintln(os.Stderr, "--web-url and --context need --web")
+		return 2
+	}
 	path, err := credentialsPath(*global)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -343,6 +364,46 @@ func loginCmd(args []string) int {
 		fmt.Println("  bearer:   ✓ (persisted)")
 	} else {
 		fmt.Println("  bearer:   (none)")
+	}
+	return 0
+}
+
+// loginWebCmd is gwag login --web: the named (or current) login of the
+// active credentials file (--global: the global one) signs a browser
+// in.
+func loginWebCmd(name string, global bool, webURL string, browser bool) int {
+	path := activeCredentialsPath()
+	if global {
+		p, err := credentialsPath(true)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		path = p
+	}
+	creds, err := loadCredentialsAt(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
+		return 1
+	}
+	e, ok := creds.resolve(name)
+	switch {
+	case !ok && name != "":
+		fmt.Fprintf(os.Stderr, "no login named %q in %s\n", name, path)
+		return 2
+	case !ok:
+		fmt.Fprintf(os.Stderr, "no login in %s; run gwag login or gwag up first\n", path)
+		return 2
+	case e.Bearer == "":
+		fmt.Fprintf(os.Stderr, "login %q has no bearer; add one with gwag login --name %s --token HEX\n", e.Name, e.Name)
+		return 2
+	case e.Endpoint == "":
+		fmt.Fprintf(os.Stderr, "login %q has no endpoint; set it with gwag login --name %s --endpoint URL\n", e.Name, e.Name)
+		return 2
+	}
+	if err := webLogin(context.Background(), e.Endpoint, e.Bearer, webURL, browser, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "web login: %v\n", err)
+		return 1
 	}
 	return 0
 }

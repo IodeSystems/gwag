@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,9 @@ const svcUsage = `Usage: gwag service <verb> [--name NAME]
   logs [-f] last 200 lines (journalctl --user / the log file); -f follows
   login [--data-dir DIR] [--primary]
             save a credentials context named NAME for this service's admin address
+  login --web [--data-dir DIR] [--web-url URL] [--no-browser]
+            sign the admin UI in a browser in with this service's admin token
+            (prints a one-time URL, 60 s; saves no context)
 
 NAME defaults to "gwag".`
 
@@ -50,6 +54,8 @@ type svcEnv struct {
 	exe      func() (string, error)
 	run      svcRunner
 	sleep    func(time.Duration)
+	// webLogin is gwag service login --web's sign-in (login_web.go).
+	webLogin func(ctx context.Context, endpoint, bearer, base string, browser bool, out io.Writer) error
 }
 
 func defaultSvcEnv(out, errw io.Writer) *svcEnv {
@@ -519,8 +525,19 @@ func (e *svcEnv) login(args []string) error {
 	fs, name := e.flags("login")
 	dataDir := fs.String("data-dir", "", "data dir (default: the installed service's)")
 	primary := fs.Bool("primary", false, "make this the primary login")
+	web := fs.Bool("web", false, "sign the admin UI in a browser in with the admin token instead of saving a context")
+	webURL := fs.String("web-url", "", "with --web: base of the printed URL (e.g. http://192.168.1.76:8080); default the service's address")
+	noBrowser := fs.Bool("no-browser", false, "with --web: print the URL, do not open a browser")
 	if err := e.parse(fs, name, args); err != nil {
 		return err
+	}
+	if !*web && (*webURL != "" || *noBrowser) {
+		fmt.Fprintln(e.err, "--web-url and --no-browser need --web")
+		return errUsage
+	}
+	if *web && *primary {
+		fmt.Fprintln(e.err, "--web saves no context; --primary does not apply")
+		return errUsage
 	}
 	var upArgs []string
 	if a, err := e.installedArgs(*name); err == nil {
@@ -550,6 +567,13 @@ func (e *svcEnv) login(args []string) error {
 	}
 	if v := flagValue(upArgs, "--control-plane"); v != "" {
 		cpAddr = v
+	}
+	if *web {
+		wl := e.webLogin
+		if wl == nil {
+			wl = webLogin
+		}
+		return wl(context.Background(), "http://"+listenHost(httpAddr), tok, *webURL, !*noBrowser, e.out)
 	}
 	path, err := credentialsPath(true)
 	if err != nil {

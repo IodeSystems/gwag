@@ -56,6 +56,7 @@
 //	gwag ctl peer list              # uses primary login
 //	gwag ctl peer list --context local
 //	gwag logout staging         # remove one login; --all wipes .gw/
+//	gwag login --web            # open the admin UI signed in with the primary login
 //
 // Each --proto flag takes PATH=[NAMESPACE@]ADDR. Without a namespace,
 // the proto's filename stem is used. Without TLS configuration, dialing
