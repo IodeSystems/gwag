@@ -32,11 +32,7 @@ package oidc
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,18 +49,19 @@ import (
 	"golang.org/x/oauth2"
 
 	gateway "github.com/iodesystems/gwag/v2/gw"
+	"github.com/iodesystems/gwag/v2/gw/internal/adminsession"
 )
 
 const (
 	// SessionCookie carries the signed session.
-	SessionCookie = "gwag_session"
+	SessionCookie = adminsession.CookieName
 	// stateCookie carries state, nonce and the PKCE verifier between
 	// /auth/login and /auth/callback.
 	stateCookie = "gwag_oidc"
 
 	// DefaultSessionTTL is how long a session lasts when
 	// Config.SessionTTL is 0.
-	DefaultSessionTTL = 12 * time.Hour
+	DefaultSessionTTL = adminsession.DefaultTTL
 	stateTTL          = 10 * time.Minute
 	// clockSkew is how far a provider's clock may run ahead of ours.
 	clockSkew = time.Minute
@@ -301,19 +298,11 @@ type statePayload struct {
 	CLI *cliFlow `json:"c,omitempty"`
 }
 
-type sessionPayload struct {
-	Email string `json:"e"`
-	// Groups are the groups the rules name that the person was in at
-	// sign-in. Other groups are dropped: a provider can send hundreds,
-	// and a cookie holds 4 KB.
-	Groups []string `json:"g,omitempty"`
-	Exp    int64    `json:"x"`
-	// Issued is unix ms, checked against the NotBefore cutoff.
-	Issued int64 `json:"i"`
-	// ID names this one session; logout puts it on the denylist
-	// (Store.DenyAdminSession). A payload without one is refused.
-	ID string `json:"j"`
-}
+// sessionPayload is the signed session (cookie and CLI bearer). Groups
+// are the groups the rules name that the person was in at sign-in;
+// other groups are dropped: a provider can send hundreds, and a cookie
+// holds 4 KB.
+type sessionPayload = adminsession.Payload
 
 // Login starts the flow: GET /auth/login.
 func (s *SSO) Login(w http.ResponseWriter, r *http.Request) {
@@ -438,18 +427,10 @@ func (s *SSO) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.now()
-	http.SetCookie(w, &http.Cookie{
-		Name: SessionCookie,
-		Value: sign(key, "session", sessionPayload{
-			Email: id.Email, Groups: id.Groups,
-			Exp: now.Add(s.cfg.SessionTTL).Unix(), Issued: now.UnixMilli(), ID: randomString(),
-		}),
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-		HttpOnly: true,
-		Secure:   s.secure(r),
-		MaxAge:   int(s.cfg.SessionTTL.Seconds()),
-	})
+	adminsession.SetCookie(w, sign(key, adminsession.PurposeSSO, sessionPayload{
+		Email: id.Email, Groups: id.Groups,
+		Exp: now.Add(s.cfg.SessionTTL).Unix(), Issued: now.UnixMilli(), ID: randomString(),
+	}), s.cfg.SessionTTL, s.secure(r))
 	slog.Info("sso: signed in", "email", id.Email, "role", id.Role)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -574,43 +555,19 @@ func (s *SSO) session(r *http.Request) (sessionPayload, bool) {
 	if err != nil || c.Value == "" {
 		return sessionPayload{}, false
 	}
-	return s.verifySession(r.Context(), "session", c.Value)
+	return s.verifySession(r.Context(), adminsession.PurposeSSO, c.Value)
 }
 
 // verifySession checks a signed session payload: signature under
 // purpose ("session" for the cookie, "cli-bearer" for the bearer, so
-// neither passes as the other), expiry, and the revocation cutoff.
+// neither passes as the other), expiry, the revocation cutoff and the
+// logout denylist (adminsession.Check).
 func (s *SSO) verifySession(ctx context.Context, purpose, value string) (sessionPayload, bool) {
 	st := s.storeOf()
 	if st == nil {
 		return sessionPayload{}, false
 	}
-	key, err := st.AdminSessionKey(ctx)
-	if err != nil {
-		slog.Warn("sso: session key unavailable; refusing the session", "err", err)
-		return sessionPayload{}, false
-	}
-	var sp sessionPayload
-	if !verify(key, purpose, value, &sp) || sp.Exp < s.now().Unix() || sp.Email == "" || sp.ID == "" {
-		return sessionPayload{}, false
-	}
-	nb, err := st.AdminSessionNotBefore(ctx, sp.Email)
-	if err != nil {
-		slog.Warn("sso: revocation lookup failed; refusing the session", "email", sp.Email, "err", err)
-		return sessionPayload{}, false
-	}
-	if nb > 0 && sp.Issued <= nb {
-		return sessionPayload{}, false
-	}
-	denied, err := st.AdminSessionDenied(ctx, sp.ID)
-	if err != nil {
-		slog.Warn("sso: denylist lookup failed; refusing the session", "email", sp.Email, "err", err)
-		return sessionPayload{}, false
-	}
-	if denied {
-		return sessionPayload{}, false
-	}
-	return sp, true
+	return adminsession.Check(ctx, st, purpose, value, s.now())
 }
 
 // Logout clears the session cookie: POST /auth/logout. Same-origin
@@ -622,7 +579,7 @@ func (s *SSO) verifySession(ctx context.Context, purpose, value string) (session
 // logout), that bearer ends; a header needs no same-origin check.
 func (s *SSO) Logout(w http.ResponseWriter, r *http.Request) {
 	if bearer := bearerOf(r); strings.HasPrefix(bearer, gateway.AdminSessionBearerPrefix) {
-		s.endSession(w, r, "cli-bearer", strings.TrimPrefix(bearer, gateway.AdminSessionBearerPrefix))
+		s.endSession(w, r, adminsession.PurposeCLIBearer, strings.TrimPrefix(bearer, gateway.AdminSessionBearerPrefix))
 		return
 	}
 	if r.Header.Get("Sec-Fetch-Site") != "same-origin" {
@@ -635,7 +592,7 @@ func (s *SSO) Logout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.endSession(w, r, "session", c.Value)
+	s.endSession(w, r, adminsession.PurposeSSO, c.Value)
 }
 
 // endSession puts a valid session on the denylist. An invalid one is
@@ -724,41 +681,13 @@ func truthy(v any) bool {
 	return false
 }
 
-// sign encodes v as base64url(JSON).base64url(HMAC-SHA256). purpose is
-// mixed into the MAC so a state cookie never passes as a session.
-func sign(key []byte, purpose string, v any) string {
-	b, _ := json.Marshal(v)
-	body := base64.RawURLEncoding.EncodeToString(b)
-	return body + "." + base64.RawURLEncoding.EncodeToString(mac(key, purpose, body))
-}
+func sign(key []byte, purpose string, v any) string { return adminsession.Sign(key, purpose, v) }
 
 func verify(key []byte, purpose, value string, out any) bool {
-	body, sig, ok := strings.Cut(value, ".")
-	if !ok || len(key) == 0 {
-		return false
-	}
-	got, err := base64.RawURLEncoding.DecodeString(sig)
-	if err != nil || !hmac.Equal(got, mac(key, purpose, body)) {
-		return false
-	}
-	b, err := base64.RawURLEncoding.DecodeString(body)
-	if err != nil {
-		return false
-	}
-	return json.Unmarshal(b, out) == nil
+	return adminsession.Verify(key, purpose, value, out)
 }
 
-func mac(key []byte, purpose, body string) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write([]byte("gwag-" + purpose + "\x00" + body))
-	return m.Sum(nil)
-}
-
-func randomString() string {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
-}
+func randomString() string { return adminsession.RandomString() }
 
 func strEqual(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
@@ -767,15 +696,11 @@ func strEqual(got, want string) bool {
 // secure: the cookie gets Secure on TLS, behind a proxy that says
 // https, or with an https redirect URL.
 func (s *SSO) secure(r *http.Request) bool {
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		return true
-	}
-	return strings.HasPrefix(s.cfg.RedirectURL, "https://")
+	return adminsession.RequestSecure(r) || strings.HasPrefix(s.cfg.RedirectURL, "https://")
 }
 
 func clearCookie(w http.ResponseWriter, name, path string, secure bool) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure})
+	adminsession.ClearCookie(w, name, path, secure)
 }
 
 // exchangeErr keeps the provider's error code and drops the rest: a

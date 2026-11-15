@@ -32,6 +32,7 @@ import (
 	"time"
 
 	gateway "github.com/iodesystems/gwag/v2/gw"
+	"github.com/iodesystems/gwag/v2/gw/internal/adminsession"
 )
 
 const (
@@ -197,7 +198,7 @@ func (s *SSO) CLIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now()
 	exp := now.Add(s.cfg.CLITokenTTL)
-	tok := gateway.AdminSessionBearerPrefix + sign(key, "cli-bearer", sessionPayload{
+	tok := gateway.AdminSessionBearerPrefix + sign(key, adminsession.PurposeCLIBearer, sessionPayload{
 		Email: c.Email, Groups: c.Groups, Exp: exp.Unix(), Issued: now.UnixMilli(), ID: randomString(),
 	})
 	w.Header().Set("Content-Type", "application/json")
@@ -215,7 +216,7 @@ func (s *SSO) AdminSessionBearer(ctx context.Context, bearer string) (gateway.Ad
 	if !ok || v == "" {
 		return gateway.AdminSession{}, false
 	}
-	sp, ok := s.verifySession(ctx, "cli-bearer", v)
+	sp, ok := s.verifySession(ctx, adminsession.PurposeCLIBearer, v)
 	if !ok {
 		return gateway.AdminSession{}, false
 	}
