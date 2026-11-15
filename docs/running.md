@@ -81,6 +81,7 @@ Everything after `--` goes to `gwag up`. The service is named `gwag`;
 | `start`, `stop`, `restart`, `status` | `systemctl --user` / `launchctl`. |
 | `logs [-f]` | Last 200 lines from `journalctl --user -u NAME`, or the log file on macOS. `-f` follows. |
 | `login` | Save a credentials context named after the service in `~/.config/gwag/credentials.json`: the daemon's admin address and the token from `<data-dir>/admin-token`. Then `gwag ctl ... --context NAME`. |
+| `login --web [--web-url URL] [--no-browser]` | Sign the admin UI in a browser in with the token from `<data-dir>/admin-token`: prints a one-time URL (60 s) and opens it. Saves no context. `--web-url` sets the URL base when the browser runs on another host. See [admin-auth.md](./admin-auth.md#browser-sign-in-from-the-cli-gwag-login---web). |
 
 State and files:
 
@@ -99,7 +100,7 @@ timeout, plus the delay, plus 30 s). `Restart=on-failure`, `KillMode=mixed`.
 
 The unit passes `--no-context-write`, so the daemon does not write
 `.gw/credentials.json` into its working directory; use `gwag service login`.
-`gwag up` prints token values only when stderr is a terminal. Under the service (journal, log file) it prints the token file path instead; `gwag service login` saves the admin token to a credentials context.
+`gwag up` prints token values only when stderr is a terminal. Under the service (journal, log file) it prints the token file path instead; `gwag service login` saves the admin token to a credentials context, and `gwag service login --web` opens the admin UI signed in.
 
 To keep a user service running after logout on Linux: `loginctl enable-linger $USER`.
 

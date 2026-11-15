@@ -39,6 +39,7 @@ Role by operation:
 | `whoami`, `listServices`, `servicesStats`, `servicesHistory`, `serviceStats`, `deprecatedStats`, `usageEdges`, `dependencyGraph` | public only | yes | yes | 403 |
 | `listPeers`, `listChannels`, `listBindings`, `listInjectors`, `listInstances`, `listExternalDependents`, `mcpList`, `mcpSchemaList`, `mcpSchemaSearch`, `mcpSchemaExpand`, `getClusterFreeze` | 401 | yes | yes | 403 |
 | `putExternalDependent`, `deleteExternalDependent`, `reviewExternalDependent`, `listNotifications`, `dismissNotification` | 401 | yes | yes | 403 |
+| `createAdminSessionCode` (bearer only, see [Browser sign-in from the CLI](#browser-sign-in-from-the-cli-gwag-login---web)) | 401 | yes | yes | 403 |
 | `forgetPeer`, `evacuatePeer`, `finalizeCluster`, `signSubscriptionToken`, `retractStable`, `deprecate`, `undeprecate`, `mcpInclude`, `mcpExclude`, `mcpIncludeRemove`, `mcpExcludeRemove`, `mcpSetAutoInclude`, `mcpQuery`, `drain`, `drainInstance`, `rotateDevToken`, `revokeAdminSessions` | 401 | 403 | yes | 403 |
 | `createAppKey`, `createSystemKey`, `listAppKeys`, `revokeAppKey` (app and system keys, see [services.md](./services.md#app-keys)) | 401 | 403 | yes | 403 |
 | `freezeCluster`, `unfreezeCluster` (cutover freeze) | 401 | 403 | yes | 403 |
@@ -105,6 +106,9 @@ API, delete `<adminDataDir>/dev-token` and restart.
 `gwag login --token HEX` stores either token; the gateway decides the
 role.
 
+To use a token in the admin UI without pasting it, run `gwag login --web`
+(next section).
+
 **Destructive reads.** A GET that has side effects or exposes
 sensitive data isn't really a safe read. Opt those paths into the
 auth gate with `WithDestructiveReads("/admin/export", "/admin/dump/*")`
@@ -128,6 +132,77 @@ gw.AddOpenAPIBytes(adminSpec,
     gateway.As("admin"),
     gateway.To("http://localhost:8080/api"))
 ```
+
+## Browser sign-in from the CLI (`gwag login --web`)
+
+```
+gwag login --web                         # the current login
+gwag login --web --context staging       # another login
+gwag login --web --no-browser --web-url http://192.168.1.76:8080
+gwag service login --web                 # a gateway run by gwag service
+```
+
+The CLI signs a browser in to the admin UI with its own bearer. It
+changes no credentials. SSO is not needed.
+
+1. The CLI calls `POST /api/admin/sessions/code` (`createAdminSessionCode`)
+   with the login's bearer and gets `{code, role, subject, expiresInSeconds}`.
+   `gwag service login --web` uses `<data-dir>/admin-token` and the
+   service's `--addr`.
+2. It prints `http://HOST/#code=CODE` and opens it in a browser, unless
+   `--no-browser`. The URL is always printed, for a browser on another
+   host. HOST is the login's endpoint; `--web-url` replaces it (the
+   endpoint is often `127.0.0.1`, which another host cannot reach).
+3. The UI removes the fragment from the address bar, then posts
+   `{"code"}` to `POST /auth/session`. The gateway spends the code and
+   sets the session cookie. A used, unknown or expired code is 401; the
+   UI shows the error.
+
+The code:
+
+- 256 random bits, valid 60 s, one redeem. It is in the URL fragment,
+  so it is not sent in the request line and does not reach server or
+  proxy logs. The gateway stores its SHA-256 hash, not the code, in the
+  table of one-time codes it shares with `gwag login --sso`: memory
+  standalone, the `gwag-admin-sessions` bucket in a cluster (spent by
+  compare-and-set, so a code minted on one node redeems once, on any
+  node). At most 64 codes wait at a time; more is 429.
+- carries the caller's role. The admin token gives an admin session,
+  the dev token a dev session, an `AdminAuthorizer` OK or a `gwo_`
+  bearer the role it resolved to. A dev bearer cannot mint an admin
+  session.
+- needs a bearer. A request authenticated by a session cookie alone is
+  refused (403), so a browser session cannot be copied to another
+  browser through a code. Anonymous callers get 401.
+
+The session:
+
+- the same cookie as SSO: `gwag_session`, HttpOnly, SameSite=Lax,
+  Secure on TLS or behind `X-Forwarded-Proto: https`, path `/`. Signed
+  with the same key (`AdminSessionKey`) for its own purpose, so it does
+  not pass as an SSO session or a `gwo_` bearer, and an older node
+  refuses it. The role is in the cookie, fixed when the code was minted.
+- subject `token:admin` or `token:dev`, or the subject the
+  `AdminAuthorizer` or SSO bearer named. The UI shows it; writes record
+  `admin:token:admin`.
+- lasts `--sso-session-ttl` when SSO is on, else 12 h
+  (`gateway.DefaultAdminSessionTTL`).
+- passes the checks an SSO session passes: the CSRF rule on writes,
+  `POST /auth/logout` (ends it on every node), and
+  `revokeAdminSessions` with subject `token:admin`, `token:dev` or `*`.
+  Rotating the dev token does not end dev sessions; revoke `token:dev`.
+- `POST /auth/session` needs `Sec-Fetch-Site: same-origin`, like every
+  cookie write, so a page elsewhere cannot plant a session in your
+  browser. A refused request does not spend the code.
+
+Without SSO, the gateway serves `GET /auth/whoami` (`"sso": false`,
+`"via": "token"`) and `POST /auth/logout` for these sessions. With SSO,
+the SSO routes answer for both kinds.
+
+Go wiring: `gw.MountAdminSessions(mux)` registers `POST /auth/session`,
+and the two routes above when no `WithAdminSession` is set. Call it
+beside `sso.Mount`. Forward `gateway.AdminForwardHeaders` on the admin
+self-ingest so the admin GraphQL fields see the cookie.
 
 ## SSO
 
