@@ -95,13 +95,21 @@ Admin visibility only: calls to services through GraphQL, REST, gRPC
 or Connect are not affected, and `/api/schema/*` plus GraphQL
 introspection still describe every service.
 
-**Dev token rotation.** `POST /admin/dev-token/rotate` (admin only,
+**Token rotation.** `POST /admin/dev-token/rotate` (admin only,
 GraphQL `admin.rotateDevToken`) replaces the dev token on that node,
 persists it, and returns it; the old one stops working at once.
 `gateway.RotateDevToken()` does the same from Go. A token pinned with
 `gateway.WithDevToken(...)` cannot be rotated (409). Each node has its
 own tokens, like the admin token. To retire a dev token without the
-API, delete `<adminDataDir>/dev-token` and restart.
+API, delete `<adminDataDir>/dev-token` and restart. To replace the
+admin token, change `<adminDataDir>/admin-token` (or the
+`--admin-token-file` / `GWAG_ADMIN_TOKEN` secret) and restart.
+
+Rotating a token does not end the browser sessions minted with it
+(`gwag login --web`): they are cookies with the role inside, valid
+until they expire. After a rotation, also run `revokeAdminSessions`
+(`POST /admin/sessions/revoke`) with subject `token:dev` for the dev
+token, `token:admin` for the admin token.
 
 `gwag login --token HEX` stores either token; the gateway decides the
 role.
@@ -208,7 +216,8 @@ The session:
 - passes the checks an SSO session passes: the CSRF rule on writes,
   `POST /auth/logout` (ends it on every node), and
   `revokeAdminSessions` with subject `token:admin`, `token:dev` or `*`.
-  Rotating the dev token does not end dev sessions; revoke `token:dev`.
+  Rotating the admin or dev token does not end these sessions; revoke
+  `token:admin` or `token:dev` too (see token rotation above).
 - `POST /auth/session` needs `Sec-Fetch-Site: same-origin`, like every
   cookie write, so a page elsewhere cannot post a code. That does not
   stop a link: anyone who can mint a code (a dev token is enough) can
