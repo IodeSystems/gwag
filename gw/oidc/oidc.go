@@ -715,6 +715,11 @@ func (s *SSO) secure(r *http.Request) bool {
 	return adminsession.RequestSecure(r) || strings.HasPrefix(s.cfg.RedirectURL, "https://")
 }
 
+// AdminSessionSecure implements gateway.AdminSessionSecurer: a session
+// redeemed from a sign-in code gets the Secure flag by the same rule
+// as an SSO session.
+func (s *SSO) AdminSessionSecure(r *http.Request) bool { return s.secure(r) }
+
 func clearCookie(w http.ResponseWriter, name, path string, secure bool) {
 	adminsession.ClearCookie(w, name, path, secure)
 }

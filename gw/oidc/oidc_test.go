@@ -872,3 +872,21 @@ func TestGWOCodeRedeemsAsSSOSession(t *testing.T) {
 		t.Errorf("role after the rule changed %q, want anonymous", got)
 	}
 }
+
+// With an https redirect URL, a session redeemed from a sign-in code
+// gets Secure even on a plain-http request, as an SSO session does.
+func TestTokenSessionSecureFromRedirectURL(t *testing.T) {
+	h := newHarness(t, func(c *Config) { c.RedirectURL = "https://gwag.test/auth/callback" })
+	rec := h.admin(http.MethodPost, "/api/admin/sessions/code", "", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+h.gw.AdminTokenHex())
+	})
+	var minted struct{ Code string }
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &minted) != nil {
+		t.Fatalf("mint: %d %s", rec.Code, rec.Body)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/auth/session", strings.NewReader(`{"code":"`+minted.Code+`"}`))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	if c := sessionFrom(t, h.serve(r)); !c.Secure {
+		t.Errorf("cookie not Secure with an https redirect URL: %+v", c)
+	}
+}

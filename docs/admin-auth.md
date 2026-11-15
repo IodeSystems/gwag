@@ -187,7 +187,9 @@ The code:
 The session:
 
 - the same cookie as SSO: `gwag_session`, HttpOnly, SameSite=Lax,
-  Secure on TLS or behind `X-Forwarded-Proto: https`, path `/`. Signed
+  path `/`. Secure by the rule of SSO cookies when SSO is on (TLS,
+  `X-Forwarded-Proto: https`, or an https `--sso-redirect-url`), else
+  on TLS or behind `X-Forwarded-Proto: https`. Signed
   with the same key (`AdminSessionKey`) for its own purpose, so it does
   not pass as an SSO session or a `gwo_` bearer, and an older node
   refuses it. The role is in the cookie, fixed when the code was minted.

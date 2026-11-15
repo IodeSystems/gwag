@@ -154,6 +154,26 @@ func (g *Gateway) adminSessionTTL() time.Duration {
 	return DefaultAdminSessionTTL
 }
 
+// AdminSessionSecurer is an AdminSessionAuthenticator that decides
+// whether the session cookie gets the Secure flag (gw/oidc: TLS,
+// X-Forwarded-Proto: https, or an https redirect URL). Sessions
+// redeemed from a sign-in code then get the same flag as its own
+// sessions; otherwise Secure on TLS or X-Forwarded-Proto: https.
+//
+// Stability: experimental
+type AdminSessionSecurer interface {
+	AdminSessionSecure(r *http.Request) bool
+}
+
+// adminSessionSecure is the Secure flag of a session cookie set or
+// cleared on r.
+func (g *Gateway) adminSessionSecure(r *http.Request) bool {
+	if s, ok := g.cfg.adminSession.(AdminSessionSecurer); ok {
+		return s.AdminSessionSecure(r)
+	}
+	return adminsession.RequestSecure(r)
+}
+
 // tokenSessionOf is the session redeemed from a sign-in code that r
 // carries, if any.
 func (g *Gateway) tokenSessionOf(r *http.Request) (AdminSession, bool) {
@@ -238,7 +258,7 @@ func (g *Gateway) serveAdminSessionRedeem(w http.ResponseWriter, r *http.Request
 		// The SSO rules give the role per request; it is not signed in.
 		purpose, p.Role, p.Groups = adminsession.PurposeSSO, "", c.Groups
 	}
-	adminsession.SetCookie(w, adminsession.Sign(key, purpose, p), ttl, adminsession.RequestSecure(r))
+	adminsession.SetCookie(w, adminsession.Sign(key, purpose, p), ttl, g.adminSessionSecure(r))
 	g.recordAdminAuth(r.Method, "ok_session_code", role)
 	slog.Info("admin session: signed in with a code", "subject", c.Subject, "role", c.Role, "sso", c.SSO)
 	sessionJSON(w, http.StatusOK, map[string]string{
@@ -278,7 +298,7 @@ func (g *Gateway) serveAdminSessionLogout(w http.ResponseWriter, r *http.Request
 		http.Error(w, "forbidden: logout must come from the gateway's own pages (Sec-Fetch-Site: same-origin)", http.StatusForbidden)
 		return
 	}
-	secure := adminsession.RequestSecure(r)
+	secure := g.adminSessionSecure(r)
 	adminsession.ClearCookie(w, adminsession.CookieName, "/", secure)
 	c, err := r.Cookie(adminsession.CookieName)
 	if err != nil || c.Value == "" {
