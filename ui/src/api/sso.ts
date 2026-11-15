@@ -67,7 +67,9 @@ export async function ssoSignOut(): Promise<void> {
 
 // gwag login --web prints http://HOST/#code=CODE. The code is in the
 // fragment so it never reaches a server or proxy log; take it off the
-// address at once (history, a shared screen), then redeem it.
+// address at once (history, a shared screen). It is redeemed only after
+// the person confirms (CodeSignIn): anyone who can mint a code can send
+// such a link, and redeeming it signs this browser in as them.
 let pendingCode: string | null = null;
 
 /**
@@ -102,13 +104,30 @@ export interface CodeSignInResult {
   role: string;
 }
 
-/** redeemSignInCode trades the code for a session cookie. */
-export async function redeemSignInCode(code: string): Promise<CodeSignInResult> {
+/** SignInError is a refused redeem; status 409 means "already signed in". */
+export class SignInError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    /** On 409: who this browser is signed in as. */
+    readonly subject?: string
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * redeemSignInCode trades the code for a session cookie. replace must
+ * be true only after the person confirmed replacing the session this
+ * browser holds; without it the gateway refuses (409) when one is live
+ * and keeps the code.
+ */
+export async function redeemSignInCode(code: string, replace: boolean): Promise<CodeSignInResult> {
   const res = await fetch('/auth/session', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify(replace ? { code, replace: true } : { code }),
   });
   let d: Record<string, unknown> = {};
   try {
@@ -118,7 +137,7 @@ export async function redeemSignInCode(code: string): Promise<CodeSignInResult> 
   }
   if (!res.ok) {
     const msg = typeof d.error === 'string' ? d.error : `HTTP ${res.status}`;
-    throw new Error(msg);
+    throw new SignInError(msg, res.status, typeof d.subject === 'string' ? d.subject : undefined);
   }
   return {
     subject: typeof d.subject === 'string' ? d.subject : '',

@@ -153,10 +153,16 @@ changes no credentials. SSO is not needed.
    `--no-browser`. The URL is always printed, for a browser on another
    host. HOST is the login's endpoint; `--web-url` replaces it (the
    endpoint is often `127.0.0.1`, which another host cannot reach).
-3. The UI removes the fragment from the address bar, then posts
-   `{"code"}` to `POST /auth/session`. The gateway spends the code and
-   sets the session cookie. A used, unknown or expired code is 401; the
-   UI shows the error.
+3. The UI removes the fragment from the address bar and asks first:
+   the link signs this browser in as whoever ran `gwag login --web`,
+   so continue only if you ran it just now. If the browser is signed in
+   already (a session cookie or a pasted token), the dialog names who
+   and says that signing in replaces it. Cancel drops the code. Sign in
+   posts `{"code"}` (with `"replace": true` when the dialog named a
+   session) to `POST /auth/session`; the gateway spends the code and
+   sets the session cookie, and the UI drops a pasted token, which
+   would otherwise win over the cookie. A used, unknown or expired
+   code is 401; the UI shows the error.
 
 The code:
 
