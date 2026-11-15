@@ -151,6 +151,22 @@ func TokenSession(r *http.Request, st Store, now time.Time) (Payload, bool) {
 	return p, true
 }
 
+// Current is the session the cookie on r carries under either cookie
+// purpose (PurposeSSO, PurposeToken), whether or not a rule gives it
+// a role now.
+func Current(r *http.Request, st Store, now time.Time) (Payload, bool) {
+	c, err := r.Cookie(CookieName)
+	if err != nil || c.Value == "" {
+		return Payload{}, false
+	}
+	for _, purpose := range []string{PurposeSSO, PurposeToken} {
+		if p, ok := Check(r.Context(), st, purpose, c.Value, now); ok {
+			return p, true
+		}
+	}
+	return Payload{}, false
+}
+
 // End puts the session value on the denylist until it expires, trying
 // each purpose in turn. found is false when the value is not a valid
 // session under any of them (already refused: nothing to end).

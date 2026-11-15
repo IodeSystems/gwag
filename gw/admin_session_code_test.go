@@ -362,3 +362,63 @@ func TestAdminSessionCodeForeignSessionBearer(t *testing.T) {
 		t.Errorf("foreign gwo_ mint: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func redeemReplaceReq(code string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/auth/session", strings.NewReader(`{"code":"`+code+`","replace":true}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	return r
+}
+
+// A browser that holds a valid session (token or SSO purpose) is not
+// signed in as someone else by a link: 409 unless replace, and the
+// refused request leaves the code. With replace, the new session wins
+// and the old one ends on the server.
+func TestAdminSessionCodeReplace(t *testing.T) {
+	h := newCodeHarness(t)
+	ctx := context.Background()
+	key, _ := h.g.AdminSessionKey(ctx)
+	now := time.Now()
+	sso := &http.Cookie{Name: adminsession.CookieName, Value: adminsession.Sign(key, adminsession.PurposeSSO, adminsession.Payload{
+		Email: "ops@example.com", Exp: now.Add(time.Hour).Unix(), Issued: now.UnixMilli(), ID: "sso-1",
+	})}
+	adminCode, _, _ := h.mintCode(h.g.AdminTokenHex())
+	admin := h.redeem(adminCode)
+
+	for name, cur := range map[string]*http.Cookie{"token session": admin, "sso session": sso} {
+		code, _, _ := h.mintCode(h.g.DevTokenHex())
+		r := redeemReq(code, "same-origin")
+		r.AddCookie(cur)
+		rec := h.do(r)
+		if rec.Code != http.StatusConflict || sessionCookie(rec) != nil || !strings.Contains(rec.Body.String(), "already signed in") {
+			t.Fatalf("%s, no replace: %d %s", name, rec.Code, rec.Body)
+		}
+		// Not spent: the confirmed retry signs in.
+		r = redeemReplaceReq(code)
+		r.AddCookie(cur)
+		rec = h.do(r)
+		c := sessionCookie(rec)
+		if rec.Code != http.StatusOK || c == nil {
+			t.Fatalf("%s, replace: %d %s", name, rec.Code, rec.Body)
+		}
+		if got := h.role(c); got != "dev" {
+			t.Errorf("%s: new session role %q", name, got)
+		}
+		if _, ok := adminsession.Current(withCookieReq(cur), h.g, time.Now()); ok {
+			t.Errorf("%s: replaced session still valid", name)
+		}
+	}
+	// No session (or an invalid one): no replace needed.
+	code, _, _ := h.mintCode(h.g.DevTokenHex())
+	r := redeemReq(code, "same-origin")
+	r.AddCookie(admin) // ended above
+	if rec := h.do(r); rec.Code != http.StatusOK {
+		t.Errorf("ended cookie, no replace: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func withCookieReq(c *http.Cookie) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(c)
+	return r
+}

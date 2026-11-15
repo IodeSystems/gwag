@@ -207,9 +207,14 @@ func sessionJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// serveAdminSessionRedeem is POST /auth/session {"code"}. Same-origin
-// only: a page elsewhere must not plant a session in this browser. The
-// code is never logged.
+// serveAdminSessionRedeem is POST /auth/session {"code", "replace"}.
+// Same-origin only: a page elsewhere must not post it. That does not
+// stop a link: anyone who can mint a code can send
+// https://gw/#code=X, and the UI on this origin posts it. So the UI
+// asks first, and a browser that already holds a valid session (SSO
+// or token) is refused (409) unless "replace" is true, which the UI
+// sends only after the person confirmed replacing it. A refused
+// request does not spend the code. The code is never logged.
 func (g *Gateway) serveAdminSessionRedeem(w http.ResponseWriter, r *http.Request) {
 	fail := func(status int, msg string) { sessionJSON(w, status, map[string]string{"error": msg}) }
 	if why := adminSessionAllowed(r); why != "" {
@@ -218,16 +223,26 @@ func (g *Gateway) serveAdminSessionRedeem(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Replace bool   `json:"replace"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil || in.Code == "" || len(in.Code) > 128 {
-		fail(http.StatusBadRequest, "body must be JSON {code}")
+		fail(http.StatusBadRequest, "body must be JSON {code, replace}")
 		return
 	}
 	ctx := r.Context()
 	key, err := g.AdminSessionKey(ctx)
 	if err != nil {
 		g.sessionStoreFail(w, err)
+		return
+	}
+	current, signedIn := adminsession.Current(r, g, time.Now())
+	if signedIn && !in.Replace {
+		g.recordAdminAuth(r.Method, "denied_session_replace", adminRoleAnonymous)
+		sessionJSON(w, http.StatusConflict, map[string]string{
+			"error":   fmt.Sprintf("this browser is already signed in as %s; signing in with this link replaces that session, which needs \"replace\": true (the admin UI asks first)", sanitizeSubject(current.Email)),
+			"subject": sanitizeSubject(current.Email),
+		})
 		return
 	}
 	c, ok, err := g.takeAdminSessionCode(ctx, in.Code)
@@ -259,6 +274,13 @@ func (g *Gateway) serveAdminSessionRedeem(w http.ResponseWriter, r *http.Request
 		purpose, p.Role, p.Groups = adminsession.PurposeSSO, "", c.Groups
 	}
 	adminsession.SetCookie(w, adminsession.Sign(key, purpose, p), ttl, g.adminSessionSecure(r))
+	if signedIn {
+		// The old session ends on the server too, not only in this
+		// browser.
+		if err := g.DenyAdminSession(ctx, current.ID, time.Unix(current.Exp, 0)); err != nil {
+			slog.Warn("admin session: could not end the replaced session", "subject", current.Email, "err", err)
+		}
+	}
 	g.recordAdminAuth(r.Method, "ok_session_code", role)
 	slog.Info("admin session: signed in with a code", "subject", c.Subject, "role", c.Role, "sso", c.SSO)
 	sessionJSON(w, http.StatusOK, map[string]string{

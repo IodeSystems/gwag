@@ -204,8 +204,15 @@ The session:
   `revokeAdminSessions` with subject `token:admin`, `token:dev` or `*`.
   Rotating the dev token does not end dev sessions; revoke `token:dev`.
 - `POST /auth/session` needs `Sec-Fetch-Site: same-origin`, like every
-  cookie write, so a page elsewhere cannot plant a session in your
-  browser. A refused request does not spend the code.
+  cookie write, so a page elsewhere cannot post a code. That does not
+  stop a link: anyone who can mint a code (a dev token is enough) can
+  send `https://HOST/#code=CODE`, and the UI on the gateway's origin
+  redeems it, signing your browser in as them. So the UI asks before
+  it redeems, and the gateway refuses (409) a request that already
+  carries a valid `gwag_session` cookie (SSO or token) unless the body
+  is `{"code", "replace": true}`; the UI sends `replace` only after you
+  confirmed replacing the session it names. A replaced session ends on
+  the server too. A refused request does not spend the code.
 
 Without SSO, the gateway serves `GET /auth/whoami` (`"sso": false`,
 `"via": "token"`) and `POST /auth/logout` for these sessions. With SSO,
