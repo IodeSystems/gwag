@@ -127,9 +127,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 		switch status {
 		case 0:
 			ctx := withAdminSubject(withAdminRole(r.Context(), role), subject)
-			if viaSession {
-				ctx = context.WithValue(ctx, adminViaSessionCtxKey{}, true)
-			}
+			ctx = context.WithValue(ctx, adminCallerCtxKey{}, g.adminCallerOf(outcome, viaSession, bearer))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case http.StatusUnauthorized:
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)

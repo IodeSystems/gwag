@@ -839,3 +839,36 @@ func withCookie(c *http.Cookie) *http.Request {
 	r.AddCookie(c)
 	return r
 }
+
+// A code minted with a gwo_ bearer redeems as an SSO session (email
+// and groups, no role inside), so the SSO rules decide the role per
+// request, as for a browser sign-in.
+func TestGWOCodeRedeemsAsSSOSession(t *testing.T) {
+	h := newHarness(t, nil)
+	tok := h.cliToken(t).Token
+	rec := h.admin(http.MethodPost, "/api/admin/sessions/code", "", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	})
+	var minted struct{ Code, Role, Subject string }
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &minted) != nil || minted.Code == "" {
+		t.Fatalf("mint: %d %s", rec.Code, rec.Body)
+	}
+	if minted.Subject != "ops@example.com" || minted.Role != "admin" {
+		t.Errorf("minted %+v", minted)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/auth/session", strings.NewReader(`{"code":"`+minted.Code+`"}`))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	c := sessionFrom(t, h.serve(r))
+	sp := payloadOf(t, h, c) // verifies under the SSO purpose
+	if sp.Email != "ops@example.com" || sp.Role != "" {
+		t.Errorf("payload %+v", sp)
+	}
+	if got := h.roleWith(t, c); got != "admin" {
+		t.Errorf("role %q, want admin", got)
+	}
+	// The rule is read per request: drop it and the session has no role.
+	h.sso.cfg.Rules = []Rule{{Kind: RuleEmail, Value: "someone@example.com", Role: gateway.AdminSessionAdmin}}
+	if got := h.roleWith(t, c); got != "anonymous" {
+		t.Errorf("role after the rule changed %q, want anonymous", got)
+	}
+}

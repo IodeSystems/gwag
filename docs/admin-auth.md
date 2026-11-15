@@ -167,13 +167,20 @@ The code:
   standalone, the `gwag-admin-sessions` bucket in a cluster (spent by
   compare-and-set, so a code minted on one node redeems once, on any
   node). At most 64 codes wait at a time; more is 429.
-- carries the caller's role. The admin token gives an admin session,
-  the dev token a dev session, an `AdminAuthorizer` OK or a `gwo_`
-  bearer the role it resolved to. A dev bearer cannot mint an admin
-  session.
-- needs a bearer. A request authenticated by a session cookie alone is
-  refused (403), so a browser session cannot be copied to another
-  browser through a code. Anonymous callers get 401.
+- needs the admin token, the dev token or a `gwo_` SSO bearer
+  (`gwag login --sso`). The admin token gives an admin session, the
+  dev token a dev session; a dev bearer cannot mint an admin session.
+  A `gwo_` code redeems as an SSO session (email and groups, no role
+  inside), so the SSO rules give its role per request, as for a
+  browser SSO sign-in.
+- is refused (403) to a credential the `AdminAuthorizer` delegate
+  checks: the delegate decides per request, and a cookie would freeze
+  its answer. Use the admin or dev token, or SSO (`/auth/login`). A
+  delegate that accepts the admin or dev token itself does not count:
+  that bearer mints as the token.
+- is refused (403) to a request authenticated by a session cookie
+  alone, so a browser session cannot be copied to another browser
+  through a code. Anonymous callers get 401.
 
 The session:
 
@@ -182,9 +189,10 @@ The session:
   with the same key (`AdminSessionKey`) for its own purpose, so it does
   not pass as an SSO session or a `gwo_` bearer, and an older node
   refuses it. The role is in the cookie, fixed when the code was minted.
-- subject `token:admin` or `token:dev`, or the subject the
-  `AdminAuthorizer` or SSO bearer named. The UI shows it; writes record
-  `admin:token:admin`.
+  A code minted with a `gwo_` bearer sets an ordinary SSO session
+  cookie instead.
+- subject `token:admin` or `token:dev`, or the email of the `gwo_`
+  bearer. The UI shows it; writes record `admin:token:admin`.
 - lasts `--sso-session-ttl` when SSO is on, else 12 h
   (`gateway.DefaultAdminSessionTTL`).
 - passes the checks an SSO session passes: the CSRF rule on writes,

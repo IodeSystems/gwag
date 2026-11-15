@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/gwag/v2/gw/internal/adminsession"
+	aav1 "github.com/iodesystems/gwag/v2/gw/proto/adminauth/v1"
 )
 
 type codeHarness struct {
@@ -301,5 +302,41 @@ func TestAdminSessionCodeTTLFromAuthenticator(t *testing.T) {
 	}
 	if rec := h.do(httptest.NewRequest(http.MethodGet, "/auth/whoami", nil)); rec.Code != http.StatusNotFound {
 		t.Errorf("/auth/whoami mounted with an authenticator: %d", rec.Code)
+	}
+}
+
+// A caller the AdminAuthorizer delegate authenticates cannot mint: a
+// cookie would freeze the delegate's per-request answer. The boot
+// token still mints when the delegate accepts it, with its own role.
+func TestAdminSessionCodeDelegateRefused(t *testing.T) {
+	h := newCodeHarness(t)
+	withDelegate(t, h.g, &fakeAdminAuthConn{handler: func(*aav1.AuthorizeRequest) (*aav1.AuthorizeResponse, error) {
+		return &aav1.AuthorizeResponse{Code: aav1.AdminAuthCode_ADMIN_AUTH_CODE_OK, Role: aav1.AdminRole_ADMIN_ROLE_ADMIN, Subject: "alice"}, nil
+	}})
+	rec := h.mint("delegate-credential", nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "checked per request by the delegate") {
+		t.Errorf("delegate mint: %d %s", rec.Code, rec.Body)
+	}
+	_, role, subject := h.mintCode(h.g.DevTokenHex())
+	if role != "dev" || subject != "token:dev" {
+		t.Errorf("dev token through an accepting delegate: role %q subject %q", role, subject)
+	}
+}
+
+// bearerSession reads any gwo_ bearer as an admin: an authenticator
+// whose bearers are not gw/oidc's signed sessions.
+type bearerSession struct{ fixedSession }
+
+func (bearerSession) AdminSessionBearer(context.Context, string) (AdminSession, bool) {
+	return AdminSession{Subject: "ops@example.com", Role: AdminSessionAdmin}, true
+}
+
+// A gwo_ bearer the gateway cannot read as an SSO session (email and
+// groups) is refused, pointing to /auth/login.
+func TestAdminSessionCodeForeignSessionBearer(t *testing.T) {
+	h := newCodeHarness(t, WithAdminSession(bearerSession{}))
+	rec := h.mint(AdminSessionBearerPrefix+"opaque", nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "/auth/login") {
+		t.Errorf("foreign gwo_ mint: %d %s", rec.Code, rec.Body)
 	}
 }

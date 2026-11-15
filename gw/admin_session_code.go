@@ -20,11 +20,15 @@ import (
 // Sign-in codes: gwag login --web and gwag service login --web sign
 // the admin UI in without pasting a token.
 //
-//  1. The CLI calls POST /admin/sessions/code with a bearer (admin or
-//     dev token, delegate, or gwo_ SSO bearer). A session cookie alone
-//     cannot mint a code: a browser session must not turn itself into
-//     a code another browser redeems. The code carries the caller's
-//     role and subject, lives adminSessionCodeTTL, and is stored as a
+//  1. The CLI calls POST /admin/sessions/code with a bearer: the admin
+//     or dev token, or a gwo_ SSO bearer. A session cookie cannot mint
+//     a code (a browser session must not turn itself into a code
+//     another browser redeems), nor can a credential the AdminAuthorizer
+//     delegate checks: the delegate decides per request, and a cookie
+//     would freeze its answer. A token code carries the token's role
+//     and subject; a gwo_ code carries the email and groups and
+//     redeems as an SSO session, whose role the SSO rules give per
+//     request. The code lives adminSessionCodeTTL, and is stored as a
 //     hash in the one-time code table (PutAdminLoginCode: memory
 //     standalone, gwag-admin-sessions in a cluster), so a code minted
 //     on one node redeems on another.
@@ -34,7 +38,8 @@ import (
 //     The gateway takes the code (compare-and-set: one redeem, cluster
 //     wide) and sets the session cookie: the same cookie, key and
 //     checks as SSO (gw/internal/adminsession), signed for
-//     PurposeToken with the role inside. Logout, the denylist and
+//     PurposeToken with the role inside (token code) or PurposeSSO
+//     (gwo_ code). Logout, the denylist and
 //     POST /admin/sessions/revoke (subject "token:admin", "token:dev",
 //     or the caller's subject) apply to it.
 
@@ -50,7 +55,14 @@ const (
 // adminSessionCode is the value stored under a code.
 type adminSessionCode struct {
 	Subject string `json:"s"`
-	Role    string `json:"r"`
+	// Role is the role of a token session; for an SSO session, the
+	// caller's role at mint time (reported, not signed into the
+	// cookie).
+	Role string `json:"r"`
+	// SSO: redeem as an SSO session (Subject is the email, Groups the
+	// rule groups) instead of a token session.
+	SSO    bool     `json:"o,omitempty"`
+	Groups []string `json:"g,omitempty"`
 }
 
 // errAdminSessionCodesFull: maxAdminSessionCodes are waiting.
@@ -61,14 +73,13 @@ func adminSessionCodeID(code string) string {
 	return adminSessionCodePrefix + hex.EncodeToString(sum[:])
 }
 
-// mintAdminSessionCode stores a one-time code for role and subject and
-// returns it.
-func (g *Gateway) mintAdminSessionCode(ctx context.Context, role adminRole, subject string) (string, error) {
-	if role != adminRoleAdmin && role != adminRoleDev {
+// mintAdminSessionCode stores a one-time code for c and returns it.
+func (g *Gateway) mintAdminSessionCode(ctx context.Context, c adminSessionCode) (string, error) {
+	if _, ok := adminSessionRole(AdminSessionRole(c.Role)); !ok || c.Subject == "" {
 		return "", errors.New("sign-in code: role must be admin or dev")
 	}
 	code := adminsession.RandomString()
-	v, _ := json.Marshal(adminSessionCode{Subject: subject, Role: role.String()})
+	v, _ := json.Marshal(c)
 	id, exp := adminSessionCodeID(code), time.Now().Add(adminSessionCodeTTL).UnixMilli()
 	err := g.editAdminLoginCodes(ctx, func(c adminExpiring) (bool, error) {
 		n := 0
@@ -205,13 +216,18 @@ func (g *Gateway) serveAdminSessionRedeem(w http.ResponseWriter, r *http.Request
 	}
 	ttl := g.adminSessionTTL()
 	exp := now.Add(ttl)
-	adminsession.SetCookie(w, adminsession.Sign(key, adminsession.PurposeToken, adminsession.Payload{
+	purpose, p := adminsession.PurposeToken, adminsession.Payload{
 		Email: c.Subject, Role: c.Role, Exp: exp.Unix(), Issued: now.UnixMilli(), ID: adminsession.RandomString(),
-	}), ttl, adminsession.RequestSecure(r))
+	}
+	if c.SSO {
+		// The SSO rules give the role per request; it is not signed in.
+		purpose, p.Role, p.Groups = adminsession.PurposeSSO, "", c.Groups
+	}
+	adminsession.SetCookie(w, adminsession.Sign(key, purpose, p), ttl, adminsession.RequestSecure(r))
 	g.recordAdminAuth(r.Method, "ok_session_code", role)
-	slog.Info("admin session: signed in with a code", "subject", c.Subject, "role", c.Role)
+	slog.Info("admin session: signed in with a code", "subject", c.Subject, "role", c.Role, "sso", c.SSO)
 	sessionJSON(w, http.StatusOK, map[string]string{
-		"subject": c.Subject, "role": c.Role, "expires_at": exp.UTC().Format(time.RFC3339),
+		"subject": sanitizeSubject(c.Subject), "role": c.Role, "expires_at": exp.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -266,13 +282,52 @@ func (g *Gateway) serveAdminSessionLogout(w http.ResponseWriter, r *http.Request
 
 // ---- admin operation ----------------------------------------------
 
-type adminViaSessionCtxKey struct{}
+// adminCallerVia is how AdminMiddleware authenticated a request.
+type adminCallerVia int
 
-// adminViaSession reports whether AdminMiddleware authenticated ctx's
-// request by a session cookie (not a bearer).
-func adminViaSession(ctx context.Context) bool {
-	v, _ := ctx.Value(adminViaSessionCtxKey{}).(bool)
-	return v
+const (
+	adminViaOther         adminCallerVia = iota
+	adminViaCookie                       // a session cookie
+	adminViaToken                        // the boot admin or dev token
+	adminViaDelegate                     // the AdminAuthorizer delegate
+	adminViaSessionBearer                // a gwo_ session bearer
+)
+
+// adminCaller is how the caller of an admin request was
+// authenticated; the sign-in code route reads it.
+type adminCaller struct {
+	via adminCallerVia
+	// tokenRole is the role of the boot or dev token (via token).
+	tokenRole adminRole
+	// sessionBearer is the gwo_ bearer (via session bearer).
+	sessionBearer string
+}
+
+type adminCallerCtxKey struct{}
+
+func adminCallerFrom(ctx context.Context) adminCaller {
+	c, _ := ctx.Value(adminCallerCtxKey{}).(adminCaller)
+	return c
+}
+
+// adminCallerOf names how AdminMiddleware authenticated a request from
+// its outcome. A delegate that accepted the boot or dev token itself
+// counts as that token.
+func (g *Gateway) adminCallerOf(outcome string, viaSession bool, bearer string) adminCaller {
+	switch {
+	case viaSession:
+		return adminCaller{via: adminViaCookie}
+	case outcome == "ok_session_bearer":
+		return adminCaller{via: adminViaSessionBearer, sessionBearer: bearer}
+	case outcome == "ok_bearer" || outcome == "ok_delegate":
+		if r, _, st := g.authenticateAdminToken(bearer, true); st == 0 && (r == adminRoleAdmin || r == adminRoleDev) {
+			return adminCaller{via: adminViaToken, tokenRole: r}
+		}
+		if outcome == "ok_delegate" {
+			return adminCaller{via: adminViaDelegate}
+		}
+	}
+	return adminCaller{}
 }
 
 type createAdminSessionCodeOut struct {
@@ -289,20 +344,32 @@ func registerAdminSessionCodeRoutes(api huma.API, g *Gateway) {
 		OperationID: "createAdminSessionCode",
 		Method:      http.MethodPost,
 		Path:        "/admin/sessions/code",
-		Summary:     "Mint a one-time code (60 s, single use) that signs a browser in to the admin UI with the caller's role (gwag login --web). Needs a bearer: a session cookie alone is refused. Dev or admin.",
+		Summary:     "Mint a one-time code (60 s, single use) that signs a browser in to the admin UI (gwag login --web). Needs the admin or dev token, or an SSO bearer (gwo_); a session cookie or a credential the AdminAuthorizer delegate checks is refused. Dev or admin.",
 	}, func(ctx context.Context, _ *struct{}) (*createAdminSessionCodeOut, error) {
 		role, ok := adminRoleFromContext(ctx)
-		if !ok || adminViaSession(ctx) {
+		caller := adminCallerFrom(ctx)
+		if !ok || caller.via == adminViaCookie {
 			return nil, huma.Error403Forbidden("a sign-in code needs a bearer (admin or dev token); a session cookie cannot mint one")
 		}
 		if role != adminRoleAdmin && role != adminRoleDev {
 			return nil, huma.Error403Forbidden("a sign-in code needs the dev or admin role")
 		}
-		subject, _ := ctx.Value(adminSubjectCtxKey{}).(string)
-		if subject == "" {
-			subject = "token:" + role.String()
+		var c adminSessionCode
+		switch caller.via {
+		case adminViaToken:
+			// The token's own role, fixed like the token.
+			role = caller.tokenRole
+			c = adminSessionCode{Subject: "token:" + role.String(), Role: role.String()}
+		case adminViaSessionBearer:
+			sc, err := g.ssoSessionCode(ctx, caller.sessionBearer, role)
+			if err != nil {
+				return nil, err
+			}
+			c = sc
+		default:
+			return nil, huma.Error403Forbidden("sign-in codes need the admin or dev token or an SSO login; this credential is checked per request by the delegate")
 		}
-		code, err := g.mintAdminSessionCode(ctx, role, subject)
+		code, err := g.mintAdminSessionCode(ctx, c)
 		if err != nil {
 			switch {
 			case errors.Is(err, errAdminSessionsLevel):
@@ -315,8 +382,22 @@ func registerAdminSessionCodeRoutes(api huma.API, g *Gateway) {
 			return nil, err
 		}
 		out := &createAdminSessionCodeOut{}
-		out.Body.Code, out.Body.Role, out.Body.Subject = code, role.String(), subject
+		out.Body.Code, out.Body.Role, out.Body.Subject = code, role.String(), sanitizeSubject(c.Subject)
 		out.Body.ExpiresInSeconds = int(adminSessionCodeTTL.Seconds())
 		return out, nil
 	})
+}
+
+// ssoSessionCode is the code for a gwo_ caller: it redeems as an SSO
+// session (email and groups, no role), so the SSO rules give the
+// browser its role per request, as for a browser SSO sign-in. A bearer
+// the gateway cannot read as gw/oidc's (another authenticator) is
+// refused.
+func (g *Gateway) ssoSessionCode(ctx context.Context, bearer string, role adminRole) (adminSessionCode, error) {
+	v := strings.TrimPrefix(bearer, AdminSessionBearerPrefix)
+	p, ok := adminsession.Check(ctx, g, adminsession.PurposeCLIBearer, v, time.Now())
+	if !ok {
+		return adminSessionCode{}, huma.Error403Forbidden("this SSO bearer cannot be turned into a browser session; sign the browser in at /auth/login")
+	}
+	return adminSessionCode{Subject: p.Email, Role: role.String(), SSO: true, Groups: p.Groups}, nil
 }
