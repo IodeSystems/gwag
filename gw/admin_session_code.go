@@ -47,6 +47,9 @@ const (
 	adminSessionCodeTTL = 60 * time.Second
 	// maxAdminSessionCodes caps the codes waiting to be redeemed.
 	maxAdminSessionCodes = 64
+	// maxAdminSessionCodesPerSubject caps them per subject, so one
+	// token cannot fill the table for everyone else.
+	maxAdminSessionCodesPerSubject = 4
 	// adminSessionCodePrefix starts the store id of a web code; the
 	// SSO CLI codes use "cli.", so neither redeems as the other.
 	adminSessionCodePrefix = "web."
@@ -68,25 +71,37 @@ type adminSessionCode struct {
 // errAdminSessionCodesFull: maxAdminSessionCodes are waiting.
 var errAdminSessionCodesFull = fmt.Errorf("too many sign-in codes waiting (%d); retry in a minute", maxAdminSessionCodes)
 
+// errAdminSessionCodesSubjectFull: the subject has
+// maxAdminSessionCodesPerSubject waiting.
+var errAdminSessionCodesSubjectFull = fmt.Errorf("too many sign-in codes waiting for this credential (%d); redeem one or retry in a minute", maxAdminSessionCodesPerSubject)
+
 func adminSessionCodeID(code string) string {
 	sum := sha256.Sum256([]byte("gwag-web-code\x00" + code))
 	return adminSessionCodePrefix + hex.EncodeToString(sum[:])
 }
 
 // mintAdminSessionCode stores a one-time code for c and returns it.
-func (g *Gateway) mintAdminSessionCode(ctx context.Context, c adminSessionCode) (string, error) {
-	if _, ok := adminSessionRole(AdminSessionRole(c.Role)); !ok || c.Subject == "" {
+func (g *Gateway) mintAdminSessionCode(ctx context.Context, c0 adminSessionCode) (string, error) {
+	if _, ok := adminSessionRole(AdminSessionRole(c0.Role)); !ok || c0.Subject == "" {
 		return "", errors.New("sign-in code: role must be admin or dev")
 	}
 	code := adminsession.RandomString()
-	v, _ := json.Marshal(c)
+	v, _ := json.Marshal(c0)
 	id, exp := adminSessionCodeID(code), time.Now().Add(adminSessionCodeTTL).UnixMilli()
 	err := g.editAdminLoginCodes(ctx, func(c adminExpiring) (bool, error) {
-		n := 0
-		for k := range c {
-			if strings.HasPrefix(k, adminSessionCodePrefix) {
-				n++
+		n, mine := 0, 0
+		for k, e := range c {
+			if !strings.HasPrefix(k, adminSessionCodePrefix) {
+				continue
 			}
+			n++
+			var o adminSessionCode
+			if json.Unmarshal(e.Value, &o) == nil && o.Subject == c0.Subject {
+				mine++
+			}
+		}
+		if mine >= maxAdminSessionCodesPerSubject {
+			return false, errAdminSessionCodesSubjectFull
 		}
 		if n >= maxAdminSessionCodes {
 			return false, errAdminSessionCodesFull
@@ -376,7 +391,7 @@ func registerAdminSessionCodeRoutes(api huma.API, g *Gateway) {
 				return nil, huma.Error409Conflict(err.Error())
 			case errors.Is(err, errAdminSessionsStarting), errors.Is(err, errAdminLoginCodeConflict):
 				return nil, huma.Error503ServiceUnavailable(err.Error())
-			case errors.Is(err, errAdminSessionCodesFull):
+			case errors.Is(err, errAdminSessionCodesFull), errors.Is(err, errAdminSessionCodesSubjectFull):
 				return nil, huma.Error429TooManyRequests(err.Error())
 			}
 			return nil, err

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -263,13 +264,34 @@ func TestAdminSessionCodeRevokeAndLogout(t *testing.T) {
 	}
 }
 
+// One subject holds at most maxAdminSessionCodesPerSubject codes, so
+// the dev token cannot block the admin token's codes.
 func TestAdminSessionCodeCap(t *testing.T) {
 	h := newCodeHarness(t)
-	for range maxAdminSessionCodes {
-		h.mintCode(h.g.AdminTokenHex())
+	for range maxAdminSessionCodesPerSubject {
+		h.mintCode(h.g.DevTokenHex())
 	}
-	if rec := h.mint(h.g.AdminTokenHex(), nil); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("mint past the cap: %d %s", rec.Code, rec.Body)
+	if rec := h.mint(h.g.DevTokenHex(), nil); rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "this credential") {
+		t.Errorf("dev mint past the per-subject cap: %d %s", rec.Code, rec.Body)
+	}
+	code, _, _ := h.mintCode(h.g.AdminTokenHex())
+	// Redeeming one frees a place.
+	h.redeem(code)
+	h.mintCode(h.g.AdminTokenHex())
+}
+
+// The table holds at most maxAdminSessionCodes, whatever the subjects.
+func TestAdminSessionCodeGlobalCap(t *testing.T) {
+	h := newCodeHarness(t)
+	ctx := context.Background()
+	for i := range maxAdminSessionCodes {
+		c := adminSessionCode{Subject: fmt.Sprintf("user-%d", i), Role: "admin"}
+		if _, err := h.g.mintAdminSessionCode(ctx, c); err != nil {
+			t.Fatalf("mint %d: %v", i, err)
+		}
+	}
+	if rec := h.mint(h.g.AdminTokenHex(), nil); rec.Code != http.StatusTooManyRequests || strings.Contains(rec.Body.String(), "this credential") {
+		t.Errorf("mint past the global cap: %d %s", rec.Code, rec.Body)
 	}
 }
 

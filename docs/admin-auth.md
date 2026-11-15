@@ -166,7 +166,9 @@ The code:
   table of one-time codes it shares with `gwag login --sso`: memory
   standalone, the `gwag-admin-sessions` bucket in a cluster (spent by
   compare-and-set, so a code minted on one node redeems once, on any
-  node). At most 64 codes wait at a time; more is 429.
+  node). At most 64 codes wait at a time, and at most 4 per subject
+  (`token:admin`, `token:dev`, an email), so one token cannot block
+  the others; more is 429.
 - needs the admin token, the dev token or a `gwo_` SSO bearer
   (`gwag login --sso`). The admin token gives an admin session, the
   dev token a dev session; a dev bearer cannot mint an admin session.
