@@ -67,6 +67,7 @@ func newHarness(t *testing.T, edit func(*Config)) *harness {
 	t.Cleanup(h.gw.Close)
 	h.mux = http.NewServeMux()
 	sso.Mount(h.mux, h.gw)
+	h.gw.MountAdminSessions(h.mux)
 	adminMux, _, err := h.gw.AdminHumaRouter()
 	if err != nil {
 		t.Fatal(err)
@@ -785,4 +786,56 @@ func TestSSOLogoutEndsOnlyThatSession(t *testing.T) {
 	if got := h.roleWith(t, &http.Cookie{Name: SessionCookie, Value: noID}); got != "anonymous" {
 		t.Errorf("session without id: role %q", got)
 	}
+}
+
+// With SSO on, a session redeemed from a sign-in code (gwag login
+// --web) shares the cookie: /auth/whoami reports it, /auth/logout ends
+// it, and it lasts --sso-session-ttl.
+func TestTokenSessionWithSSO(t *testing.T) {
+	h := newHarness(t, func(c *Config) { c.SessionTTL = 2 * time.Hour })
+	rec := h.admin(http.MethodPost, "/api/admin/sessions/code", "", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+h.gw.DevTokenHex())
+	})
+	var minted struct{ Code string }
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &minted) != nil || minted.Code == "" {
+		t.Fatalf("mint: %d %s", rec.Code, rec.Body)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/auth/session", strings.NewReader(`{"code":"`+minted.Code+`"}`))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec = h.serve(r)
+	c := findCookie(rec, SessionCookie)
+	if rec.Code != http.StatusOK || c == nil || c.MaxAge != 7200 {
+		t.Fatalf("redeem: %d %+v %s", rec.Code, c, rec.Body)
+	}
+	if got := h.roleWith(t, c); got != "dev" {
+		t.Errorf("role %q, want dev", got)
+	}
+	if _, ok := h.sso.AdminSession(withCookie(c)); ok {
+		t.Error("SSO read a token session as its own")
+	}
+	wr := httptest.NewRequest(http.MethodGet, "/auth/whoami", nil)
+	wr.AddCookie(c)
+	var who struct {
+		SSO, Authenticated bool
+		Email, Role, Via   string
+	}
+	_ = json.Unmarshal(h.serve(wr).Body.Bytes(), &who)
+	if !who.SSO || !who.Authenticated || who.Email != "token:dev" || who.Role != "dev" || who.Via != "token" {
+		t.Errorf("whoami %+v", who)
+	}
+	lr := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	lr.AddCookie(c)
+	lr.Header.Set("Sec-Fetch-Site", "same-origin")
+	if rec := h.serve(lr); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout: %d", rec.Code)
+	}
+	if got := h.roleWith(t, c); got != "anonymous" {
+		t.Errorf("after logout role %q", got)
+	}
+}
+
+func withCookie(c *http.Cookie) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(c)
+	return r
 }

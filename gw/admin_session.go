@@ -9,6 +9,10 @@ import (
 
 // Admin browser sessions.
 //
+// Sessions redeemed from a sign-in code (gwag login --web,
+// admin_session_code.go) need no authenticator: the gateway reads them
+// itself.
+//
 // A browser holds a session cookie instead of a bearer. The gateway
 // does not know how the cookie was minted: an AdminSessionAuthenticator
 // (gw/oidc is one) reads it and names the subject and role. The
@@ -112,11 +116,18 @@ func adminSessionRole(r AdminSessionRole) (adminRole, bool) {
 // non-empty when a valid session came on a request the CSRF rule
 // does not accept; the request must then fail, not fall back to
 // anonymous.
+//
+// A session redeemed from a sign-in code (admin_session_code.go) is
+// read first, with or without an authenticator; anything else goes to
+// the authenticator.
 func (g *Gateway) adminSessionOf(r *http.Request) (role adminRole, subject string, found bool, refused string) {
-	if r == nil || g.cfg.adminSession == nil {
+	if r == nil {
 		return adminRoleAnonymous, "", false, ""
 	}
-	s, ok := g.cfg.adminSession.AdminSession(r)
+	s, ok := g.tokenSessionOf(r)
+	if !ok && g.cfg.adminSession != nil {
+		s, ok = g.cfg.adminSession.AdminSession(r)
+	}
 	if !ok {
 		return adminRoleAnonymous, "", false, ""
 	}

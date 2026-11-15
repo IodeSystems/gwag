@@ -134,6 +134,7 @@ var adminDevWriteOps = map[string]bool{
 	"deleteExternalDependent": true,
 	"reviewExternalDependent": true,
 	"dismissNotification":     true,
+	"createAdminSessionCode":  true,
 	"mcpSchemaSearch":         true,
 	"mcpSchemaExpand":         true,
 }

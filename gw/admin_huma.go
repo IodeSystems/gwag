@@ -50,6 +50,7 @@ func (g *Gateway) AdminHumaRouter() (*http.ServeMux, []byte, error) {
 
 	registerAdminRoleRoutes(api, g)
 	registerAdminSessionRoutes(api, g)
+	registerAdminSessionCodeRoutes(api, g)
 	registerUsageEdges(api, g, cp)
 	registerInstanceDrain(api, g)
 	registerServiceProfiles(api, g)

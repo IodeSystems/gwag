@@ -7,6 +7,7 @@ schema {
 type AdminMutationNamespace {
   addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
   clearSwitchover: admin_SwitchoverView
+  createAdminSessionCode: admin_CreateAdminSessionCodeOutBody
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteCost(
@@ -141,6 +142,7 @@ type AdminQueryNamespace {
 type AdminStableMutationNamespace {
   addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
   clearSwitchover: admin_SwitchoverView
+  createAdminSessionCode: admin_CreateAdminSessionCodeOutBody
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteCost(
@@ -271,6 +273,7 @@ type AdminStableQueryNamespace {
 type AdminV1MutationNamespace {
   addServiceProfile(body: admin_ServiceProfileInBodyInput!): admin_AddServiceProfileOutBody
   clearSwitchover: admin_SwitchoverView
+  createAdminSessionCode: admin_CreateAdminSessionCodeOutBody
   createAppKey(body: admin_CreateAppKeyInBodyInput!): admin_CreateAppKeyOutBody
   createSystemKey(body: admin_CreateSystemKeyInBodyInput!): admin_CreateAppKeyOutBody
   deleteCost(
@@ -658,6 +661,22 @@ input admin_CostInBodyInput {
   operation: String!
   service: String!
   units: Int!
+}
+
+type admin_CreateAdminSessionCodeOutBody {
+  """One-time code. Open http://HOST/#code=CODE in the browser; the admin UI redeems it at POST /auth/session."""
+  code: String!
+  expiresInSeconds: Long!
+  """Role the browser session gets: the caller's."""
+  role: admin_CreateAdminSessionCodeOutBodyRole!
+  """Subject the session is recorded under: token:admin, token:dev, or the caller's subject."""
+  subject: String!
+}
+
+"""Role the browser session gets: the caller's."""
+enum admin_CreateAdminSessionCodeOutBodyRole {
+  admin
+  dev
 }
 
 input admin_CreateAppKeyInBodyInput {
@@ -1606,7 +1625,7 @@ input admin_ReviewExternalDependentInBodyInput {
 }
 
 input admin_RevokeAdminSessionsInBodyInput {
-  """Email the sessions belong to, or * for every subject."""
+  """Subject the sessions belong to (an SSO email, token:admin, token:dev), or * for every subject."""
   subject: String!
 }
 

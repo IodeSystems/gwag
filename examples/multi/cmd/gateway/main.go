@@ -345,6 +345,9 @@ func main() {
 	if sso != nil {
 		sso.Mount(mux, gw)
 	}
+	// /auth/session (gwag login --web); /auth/whoami and /auth/logout
+	// too when SSO is off.
+	gw.MountAdminSessions(mux)
 	if pmux := gw.PprofMux(); pmux != nil {
 		// Bearer-gated. pprof leaks goroutine + heap state; never serve it
 		// without auth.

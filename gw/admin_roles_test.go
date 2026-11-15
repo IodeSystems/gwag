@@ -133,6 +133,7 @@ var rolesMatrix = []roleCase{
 	{"mcpQuery", "POST", "/admin/mcp/query", `{"query":"{ __typename }"}`, adminRoleAdmin},
 	{"rotateDevToken", "POST", "/admin/dev-token/rotate", "", adminRoleAdmin},
 	{"revokeAdminSessions", "POST", "/admin/sessions/revoke", `{"subject":"x@example.com"}`, adminRoleAdmin},
+	{"createAdminSessionCode", "POST", "/admin/sessions/code", "", adminRoleDev},
 	{"listAppKeys", "GET", "/admin/app-keys", "", adminRoleAdmin},
 	{"listReplayDiffs", "GET", "/admin/replay/diffs", "", adminRoleAdmin},
 	{"getSwitchover", "GET", "/admin/switchover", "", adminRoleDev},

@@ -95,6 +95,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 			status         int
 			sessionFound   bool
 			sessionRefusal string
+			viaSession     bool
 		)
 		if bearer == "" {
 			role, subject, sessionFound, sessionRefusal = g.adminSessionOf(r)
@@ -110,6 +111,7 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 			return
 		case sessionFound:
 			outcome = "ok_session"
+			viaSession = true
 		default:
 			role, subject, outcome, status = g.authenticateAdminSubject(r.Context(), bearer, r.Method, r.URL.Path, r.RemoteAddr, need > adminRoleAnonymous)
 		}
@@ -125,6 +127,9 @@ func (g *Gateway) AdminMiddleware(next http.Handler) http.Handler {
 		switch status {
 		case 0:
 			ctx := withAdminSubject(withAdminRole(r.Context(), role), subject)
+			if viaSession {
+				ctx = context.WithValue(ctx, adminViaSessionCtxKey{}, true)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case http.StatusUnauthorized:
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)

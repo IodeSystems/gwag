@@ -23,6 +23,7 @@
 //	sso, err := oidc.New(cfg)
 //	g := gateway.New(gateway.WithAdminSession(sso), ...)
 //	sso.Mount(mux, g)                       // /auth/login, /auth/callback, /auth/logout, /auth/whoami, /auth/cli, /auth/cli/token
+//	g.MountAdminSessions(mux)               // /auth/session (gwag login --web)
 //	g.AddOpenAPIBytes(adminSpec, gateway.As("admin"), gateway.To(...),
 //		gateway.ForwardHeaders(gateway.AdminForwardHeaders...))
 //
@@ -181,6 +182,10 @@ func (s *SSO) Mount(mux *http.ServeMux, store Store) {
 	mux.HandleFunc("GET /auth/cli", s.CLILogin)
 	mux.HandleFunc("POST /auth/cli/token", s.CLIToken)
 }
+
+// AdminSessionTTL implements gateway.AdminSessionTTLer: sessions
+// redeemed from a sign-in code last as long as SSO sessions.
+func (s *SSO) AdminSessionTTL() time.Duration { return s.cfg.SessionTTL }
 
 func (s *SSO) storeOf() Store {
 	if b := s.store.Load(); b != nil {
@@ -579,7 +584,7 @@ func (s *SSO) verifySession(ctx context.Context, purpose, value string) (session
 // logout), that bearer ends; a header needs no same-origin check.
 func (s *SSO) Logout(w http.ResponseWriter, r *http.Request) {
 	if bearer := bearerOf(r); strings.HasPrefix(bearer, gateway.AdminSessionBearerPrefix) {
-		s.endSession(w, r, adminsession.PurposeCLIBearer, strings.TrimPrefix(bearer, gateway.AdminSessionBearerPrefix))
+		s.endSession(w, r, strings.TrimPrefix(bearer, gateway.AdminSessionBearerPrefix), adminsession.PurposeCLIBearer)
 		return
 	}
 	if r.Header.Get("Sec-Fetch-Site") != "same-origin" {
@@ -592,19 +597,27 @@ func (s *SSO) Logout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.endSession(w, r, adminsession.PurposeSSO, c.Value)
+	// The cookie may also hold a session redeemed from a sign-in code
+	// (gwag login --web); logout ends either.
+	s.endSession(w, r, c.Value, adminsession.PurposeSSO, adminsession.PurposeToken)
 }
 
-// endSession puts a valid session on the denylist. An invalid one is
-// already refused; nothing to do.
-func (s *SSO) endSession(w http.ResponseWriter, r *http.Request, purpose, value string) {
-	sp, ok := s.verifySession(r.Context(), purpose, value)
-	if ok {
-		if err := s.storeOf().DenyAdminSession(r.Context(), sp.ID, time.Unix(sp.Exp, 0)); err != nil {
-			slog.Warn("sso: logout could not end the session on the server", "email", sp.Email, "err", err)
-			http.Error(w, "the session could not be ended on the gateway; retry, or ask an admin to revoke it", http.StatusServiceUnavailable)
-			return
-		}
+// endSession puts a valid session on the denylist, the first of
+// purposes it passes under. An invalid one is already refused; nothing
+// to do.
+func (s *SSO) endSession(w http.ResponseWriter, r *http.Request, value string, purposes ...string) {
+	st := s.storeOf()
+	if st == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	sp, found, err := adminsession.End(r.Context(), st, value, s.now(), purposes...)
+	if err != nil {
+		slog.Warn("sso: logout could not end the session on the server", "email", sp.Email, "err", err)
+		http.Error(w, "the session could not be ended on the gateway; retry, or ask an admin to revoke it", http.StatusServiceUnavailable)
+		return
+	}
+	if found {
 		slog.Info("sso: signed out", "email", sp.Email)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -640,6 +653,9 @@ func (s *SSO) WhoAmI(w http.ResponseWriter, r *http.Request) {
 		out.Error = "sso unavailable"
 	} else if sess, ok := s.AdminSession(r); ok {
 		out.Authenticated, out.Email, out.Role, out.Via = true, sess.Subject, string(sess.Role), "sso"
+	} else if p, ok := adminsession.TokenSession(r, s.storeOf(), s.now()); ok {
+		// Redeemed from a sign-in code (gwag login --web).
+		out.Authenticated, out.Email, out.Role, out.Via = true, p.Email, p.Role, "token"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

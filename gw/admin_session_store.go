@@ -534,7 +534,7 @@ func (g *Gateway) saveLocalRevocationsLocked(rev *adminSessionRevocations) error
 
 type revokeAdminSessionsIn struct {
 	Body struct {
-		Subject string `json:"subject" minLength:"1" doc:"Email the sessions belong to, or * for every subject."`
+		Subject string `json:"subject" minLength:"1" doc:"Subject the sessions belong to (an SSO email, token:admin, token:dev), or * for every subject."`
 	}
 }
 
@@ -550,7 +550,7 @@ func registerAdminSessionRoutes(api huma.API, g *Gateway) {
 		OperationID: "revokeAdminSessions",
 		Method:      http.MethodPost,
 		Path:        "/admin/sessions/revoke",
-		Summary:     "End every SSO session of a subject (an email; * for everyone) issued until 30 s from now (allowance for clock skew between nodes), on every node. Their next request is anonymous; signing in works again after the 30 s. Admin only.",
+		Summary:     "End every admin session of a subject (an SSO email, token:admin or token:dev for gwag login --web sessions; * for everyone) issued until 30 s from now (allowance for clock skew between nodes), on every node. Their next request is anonymous; signing in works again after the 30 s. Admin only.",
 	}, func(ctx context.Context, in *revokeAdminSessionsIn) (*revokeAdminSessionsOut, error) {
 		nb, err := g.RevokeAdminSessions(ctx, in.Body.Subject)
 		if err != nil {

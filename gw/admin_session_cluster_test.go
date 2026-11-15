@@ -232,3 +232,75 @@ func TestAdminSessionCLIAcrossNodes(t *testing.T) {
 		t.Errorf("logged-out bearer on B: %d, want 401", rec.Code)
 	}
 }
+
+// gwag login --web across nodes, without SSO: a code minted on A
+// redeems on B, the cookie passes on A, and the code is spent on both.
+func TestAdminSessionCodeAcrossNodes(t *testing.T) {
+	a, b := gateway.SharedClusterPair(t, nil, nil)
+	mux := func(g *gateway.Gateway) *http.ServeMux {
+		m := http.NewServeMux()
+		adminMux, _, err := g.AdminHumaRouter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Handle("/api/admin/", http.StripPrefix("/api", g.AdminMiddleware(adminMux)))
+		g.MountAdminSessions(m)
+		return m
+	}
+	muxA, muxB := mux(a), mux(b)
+	serve := func(m *http.ServeMux, r *http.Request) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		m.ServeHTTP(rec, r)
+		return rec
+	}
+	ctx := context.Background()
+	deadline := time.Now().Add(10 * time.Second)
+	for _, g := range []*gateway.Gateway{a, b} {
+		for {
+			if _, err := g.AdminSessionKey(ctx); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("session key not ready")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/admin/sessions/code", nil)
+	r.Header.Set("Authorization", "Bearer "+a.DevTokenHex())
+	rec := serve(muxA, r)
+	var minted struct{ Code, Role string }
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &minted) != nil || minted.Code == "" || minted.Role != "dev" {
+		t.Fatalf("mint on A: %d %s", rec.Code, rec.Body)
+	}
+	redeem := func(m *http.ServeMux) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/auth/session", strings.NewReader(`{"code":"`+minted.Code+`"}`))
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		return serve(m, r)
+	}
+	rec = redeem(muxB)
+	var sess *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == oidc.SessionCookie && c.Value != "" {
+			sess = c
+		}
+	}
+	if rec.Code != http.StatusOK || sess == nil {
+		t.Fatalf("redeem on B: %d %s", rec.Code, rec.Body)
+	}
+	for name, m := range map[string]*http.ServeMux{"A": muxA, "B": muxB} {
+		r := httptest.NewRequest(http.MethodGet, "/api/admin/whoami", nil)
+		r.AddCookie(sess)
+		var out struct{ Role string }
+		_ = json.Unmarshal(serve(m, r).Body.Bytes(), &out)
+		if out.Role != "dev" {
+			t.Errorf("cookie from B on %s: role %q, want dev", name, out.Role)
+		}
+	}
+	for name, m := range map[string]*http.ServeMux{"A": muxA, "B": muxB} {
+		if rec := redeem(m); rec.Code != http.StatusUnauthorized {
+			t.Errorf("second redeem on %s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+}

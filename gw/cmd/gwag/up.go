@@ -271,6 +271,7 @@ func upCmd(args []string) int {
 		sso.Mount(mux, gw)
 		log.Printf("sso: sign-in at /auth/login with %s", ssoFlags.Issuer)
 	}
+	gw.MountAdminSessions(mux)
 	if pmux := gw.PprofMux(); pmux != nil {
 		mux.Handle("/debug/pprof/", gw.AdminMiddleware(pmux))
 		log.Printf("pprof enabled at /debug/pprof (admin bearer required)")
