@@ -110,7 +110,6 @@ func TestLoginWebFlags(t *testing.T) {
 		"with --sso":      {"--web", "--sso"},
 		"with --gateway":  {"--web", "--gateway", "x:1"},
 		"with --primary":  {"--web", "--primary"},
-		"--web-url alone": {"--web-url", "http://x:1", "--gateway", "x:1"},
 		"--context alone": {"--context", "a", "--gateway", "x:1"},
 		"no logins":       {"--web"},
 		"unknown context": {"--web", "--context", "nope"},

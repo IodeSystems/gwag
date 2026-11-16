@@ -76,12 +76,12 @@ Everything after `--` goes to `gwag up`. The service is named `gwag`;
 
 | Command | Does |
 | --- | --- |
-| `install [--exec PATH] [--data-dir DIR] [--env K=V]... [--enable] [--start] [-- UP-FLAGS]` | Write the unit (overwrites on reinstall), reload systemd. `--enable` starts it at login, `--start` (re)starts it now. |
+| `install [--exec PATH] [--data-dir DIR] [--public-url URL] [--env K=V]... [--enable] [--start] [-- UP-FLAGS]` | Write the unit (overwrites on reinstall), reload systemd. `--enable` starts it at login, `--start` (re)starts it now. `--public-url` is the base URL browsers use to reach the gateway (`http://192.168.1.76:8080`); it is kept in `<data-dir>/public-url` (not in the unit), a reinstall without the flag keeps it, `--public-url ""` clears it, and `status` prints it. |
 | `uninstall` | Stop, disable, remove the unit. The data dir stays; the command prints where. |
 | `start`, `stop`, `restart`, `status` | `systemctl --user` / `launchctl`. |
 | `logs [-f]` | Last 200 lines from `journalctl --user -u NAME`, or the log file on macOS. `-f` follows. |
-| `login` | Save a credentials context named after the service in `~/.config/gwag/credentials.json`: the daemon's admin address and the token from `<data-dir>/admin-token`. Then `gwag ctl ... --context NAME`. |
-| `login --web [--web-url URL] [--no-browser]` | Sign the admin UI in a browser in with the token from `<data-dir>/admin-token`: prints a one-time URL (60 s) and opens it. Saves no context. `--web-url` sets the URL base when the browser runs on another host. See [admin-auth.md](./admin-auth.md#browser-sign-in-from-the-cli-gwag-login---web). |
+| `login` | Save a credentials context named after the service in `~/.config/gwag/credentials.json`: the daemon's admin address and the token from `<data-dir>/admin-token`, plus the public URL as `web_url`. Then `gwag ctl ... --context NAME`. |
+| `login --web [--web-url URL] [--no-browser]` | Sign the admin UI in a browser in with the token from `<data-dir>/admin-token`: prints a one-time URL (60 s) and opens it. Saves no context. The URL base is `--web-url`, else the service's public URL, else its address. See [admin-auth.md](./admin-auth.md#browser-sign-in-from-the-cli-gwag-login---web). |
 
 State and files:
 

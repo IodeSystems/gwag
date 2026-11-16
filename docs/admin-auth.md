@@ -148,6 +148,10 @@ gwag login --web                         # the current login
 gwag login --web --context staging       # another login
 gwag login --web --no-browser --web-url http://192.168.1.76:8080
 gwag service login --web                 # a gateway run by gwag service
+
+gwag use staging --web-url http://192.168.1.76:8080   # save it in the login
+gwag use staging --web-url ""                         # clear it
+gwag service install --public-url http://192.168.1.76:8080   # for a service
 ```
 
 The CLI signs a browser in to the admin UI with its own bearer. It
@@ -159,8 +163,16 @@ changes no credentials. SSO is not needed.
    service's `--addr`.
 2. It prints `http://HOST/#code=CODE` and opens it in a browser, unless
    `--no-browser`. The URL is always printed, for a browser on another
-   host. HOST is the login's endpoint; `--web-url` replaces it (the
-   endpoint is often `127.0.0.1`, which another host cannot reach).
+   host. HOST is, in order: `--web-url`, the login's `web_url`, the
+   login's endpoint (often `127.0.0.1`, which another host cannot
+   reach). Set `web_url` once with `gwag use NAME --web-url URL` (only
+   that field changes; `""` clears it) or `gwag login --name N ...
+   --web-url URL` without `--web` (kept on later logins without the
+   flag). `gwag service install --public-url URL` stores the URL in
+   `<data-dir>/public-url`; `gwag service login` writes it into its
+   context as `web_url`, `gwag service login --web` uses it, and
+   `gwag service status` shows it. It changes only the printed link,
+   not SSO redirects.
 3. The UI removes the fragment from the address bar and asks first:
    the link signs this browser in as whoever ran `gwag login --web`,
    so continue only if you ran it just now. If the browser is signed in

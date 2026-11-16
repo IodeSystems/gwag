@@ -54,6 +54,9 @@ type loginEntry struct {
 	Gateway  string `json:"gateway,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
 	Bearer   string `json:"bearer,omitempty"`
+	// WebURL is the base of the gwag login --web sign-in link when the
+	// browser reaches the gateway at another address than Endpoint.
+	WebURL string `json:"web_url,omitempty"`
 }
 
 type credentials struct {
@@ -233,18 +236,20 @@ func loginCmd(args []string) int {
 	sso := fs.Bool("sso", false, "Sign in through the gateway's SSO in a browser and save the bearer it issues (instead of --token)")
 	noBrowser := fs.Bool("no-browser", false, "With --sso or --web: print the sign-in URL, do not open a browser")
 	web := fs.Bool("web", false, "Sign the admin UI in a browser in with the current (or --context) login's bearer: prints a one-time URL (60 s). Changes no credentials")
-	webURL := fs.String("web-url", "", "With --web: base of the printed URL (e.g. http://192.168.1.76:8080) when the browser reaches the gateway at another address than the login's endpoint")
+	webURL := fs.String("web-url", "", "Base of the --web sign-in URL (e.g. http://192.168.1.76:8080) when the browser reaches the gateway at another address than the login's endpoint. With --web: this run only. Without --web: saved in the login as web_url")
 	ctxName := fs.String("context", "", "With --web: the login to use (default: --name, else the current one)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag login --name N --gateway HOST:PORT [--endpoint URL] [--token HEX] [--primary]")
 		fmt.Fprintln(fs.Output(), "       gwag login --sso [--no-browser] [--name N] [--gateway HOST:PORT] [--endpoint URL]")
 		fmt.Fprintln(fs.Output(), "       gwag login --web [--context N] [--web-url URL] [--no-browser] [--global]")
+		fmt.Fprintln(fs.Output(), "       gwag login --name N ... --web-url URL   (saves web_url in the login)")
 		fmt.Fprintln(fs.Output(), "  Adds or updates a login in .gw/credentials.json. The first login")
 		fmt.Fprintln(fs.Output(), "  added is auto-primary; subsequent logins inherit primary=false")
 		fmt.Fprintln(fs.Output(), "  unless --primary is passed. Use 'gwag use NAME' to switch later.")
 		fmt.Fprintln(fs.Output(), "  --sso without --gateway updates the named login, else the current one.")
 		fmt.Fprintln(fs.Output(), "  --web opens the admin UI signed in with the login's role; the URL is")
-		fmt.Fprintln(fs.Output(), "  always printed, for a browser on another host.")
+		fmt.Fprintln(fs.Output(), "  always printed, for a browser on another host. The URL base is --web-url,")
+		fmt.Fprintln(fs.Output(), "  else the login's web_url, else its endpoint.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -263,9 +268,15 @@ func loginCmd(args []string) int {
 		}
 		return loginWebCmd(lookup, *global, *webURL, !*noBrowser)
 	}
-	if *webURL != "" || *ctxName != "" {
-		fmt.Fprintln(os.Stderr, "--web-url and --context need --web")
+	if *ctxName != "" {
+		fmt.Fprintln(os.Stderr, "--context needs --web")
 		return 2
+	}
+	if *webURL != "" {
+		if _, err := webSignInURL(*webURL, ""); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
 	}
 	path, err := credentialsPath(*global)
 	if err != nil {
@@ -332,6 +343,15 @@ func loginCmd(args []string) int {
 		Gateway:  *gw,
 		Endpoint: ep,
 		Bearer:   bearer,
+		WebURL:   *webURL,
+	}
+	if entry.WebURL == "" {
+		// An update keeps the saved web_url unless --web-url replaces it.
+		for _, x := range creds.Logins {
+			if x.Name == *name {
+				entry.WebURL = x.WebURL
+			}
+		}
 	}
 	if entry.Primary {
 		// Demote any other login that was marked primary.
@@ -355,6 +375,9 @@ func loginCmd(args []string) int {
 	fmt.Printf("  gateway:  %s\n", entry.Gateway)
 	fmt.Printf("  endpoint: %s\n", entry.Endpoint)
 	fmt.Printf("  primary:  %v\n", entry.Primary)
+	if entry.WebURL != "" {
+		fmt.Printf("  web-url:  %s\n", entry.WebURL)
+	}
 	if signedIn != nil {
 		fmt.Printf("  email:    %s\n", signedIn.Email)
 		fmt.Printf("  role:     %s\n", signedIn.Role)
@@ -401,7 +424,7 @@ func loginWebCmd(name string, global bool, webURL string, browser bool) int {
 		fmt.Fprintf(os.Stderr, "login %q has no endpoint; set it with gwag login --name %s --endpoint URL\n", e.Name, e.Name)
 		return 2
 	}
-	if err := webLogin(context.Background(), e.Endpoint, e.Bearer, webURL, browser, os.Stdout); err != nil {
+	if err := webLogin(context.Background(), e.Endpoint, e.Bearer, webBase(webURL, e.WebURL), browser, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "web login: %v\n", err)
 		return 1
 	}
@@ -498,10 +521,13 @@ func logoutCmd(args []string) int {
 
 func useCmd(args []string) int {
 	fs := flag.NewFlagSet("use", flag.ContinueOnError)
+	webURL := fs.String("web-url", "", "Set the login's web_url, the base of the gwag login --web sign-in URL (e.g. http://192.168.1.76:8080); \"\" clears it. Changes nothing else, not even primary")
 	global := fs.Bool("global", false, "Operate on the global ~/.config/gwag/credentials.json instead of the project-local .gw/")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag use NAME [--global]")
+		fmt.Fprintln(fs.Output(), "       gwag use NAME --web-url URL [--global]")
 		fmt.Fprintln(fs.Output(), "  Promotes NAME to primary; demotes every other login.")
+		fmt.Fprintln(fs.Output(), "  With --web-url it only sets (or, with \"\", clears) the login's web_url.")
 		fs.PrintDefaults()
 	}
 	flags, positionals := splitFlagsAndPositionals(args)
@@ -523,7 +549,28 @@ func useCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "load credentials: %v\n", err)
 		return 1
 	}
-	if !creds.setPrimary(target) {
+	webSet := false
+	fs.Visit(func(f *flag.Flag) { webSet = webSet || f.Name == "web-url" })
+	msg := "primary: " + target
+	if webSet {
+		if *webURL != "" {
+			if _, err := webSignInURL(*webURL, ""); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 2
+			}
+		}
+		found := false
+		for i := range creds.Logins {
+			if creds.Logins[i].Name == target {
+				creds.Logins[i].WebURL, found = *webURL, true
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "no login named %q\n", target)
+			return 1
+		}
+		msg = fmt.Sprintf("web-url of %s: %q", target, *webURL)
+	} else if !creds.setPrimary(target) {
 		fmt.Fprintf(os.Stderr, "no login named %q\n", target)
 		return 1
 	}
@@ -531,7 +578,7 @@ func useCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "save credentials: %v\n", err)
 		return 1
 	}
-	fmt.Printf("primary: %s\n", target)
+	fmt.Println(msg)
 	return 0
 }
 

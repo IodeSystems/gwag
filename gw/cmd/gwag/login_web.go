@@ -52,6 +52,15 @@ func webLogin(ctx context.Context, endpoint, bearer, base string, browser bool, 
 	return nil
 }
 
+// webBase picks the sign-in URL base: the --web-url flag, else the
+// context's web_url; empty means the endpoint.
+func webBase(flagURL, ctxURL string) string {
+	if flagURL != "" {
+		return flagURL
+	}
+	return ctxURL
+}
+
 // webSignInURL is base/#code=code. base must be an http(s) URL with a
 // host; its path, query and fragment are dropped (the UI is at /).
 func webSignInURL(base, code string) (string, error) {

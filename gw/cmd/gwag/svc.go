@@ -23,16 +23,21 @@ import (
 
 const svcUsage = `Usage: gwag service <verb> [--name NAME]
 
-  install [--exec PATH] [--data-dir DIR] [--env K=V]... [--enable] [--start] [-- UP-FLAGS...]
+  install [--exec PATH] [--data-dir DIR] [--public-url URL] [--env K=V]... [--enable] [--start] [-- UP-FLAGS...]
             write the unit (systemd user unit / LaunchAgent); args after -- go to gwag up
+            --public-url: where browsers reach the gateway (http://HOST:PORT); stored in
+            <data-dir>/public-url, used by login as the context's web_url and by login --web
+            ("" clears; a reinstall without the flag keeps it)
   uninstall stop, disable, remove the unit; the data dir stays
   start | stop | restart | status
   logs [-f] last 200 lines (journalctl --user / the log file); -f follows
   login [--data-dir DIR] [--primary]
             save a credentials context named NAME for this service's admin address
+            (with the service's public URL as web_url)
   login --web [--data-dir DIR] [--web-url URL] [--no-browser]
             sign the admin UI in a browser in with this service's admin token
-            (prints a one-time URL, 60 s; saves no context)
+            (prints a one-time URL, 60 s; saves no context); the URL base is
+            --web-url, else the service's public URL, else its address
 
 NAME defaults to "gwag".`
 
@@ -197,6 +202,7 @@ func (e *svcEnv) install(args []string) error {
 	dataDir := fs.String("data-dir", "", "state directory (default $XDG_DATA_HOME/gwag/NAME or ~/.local/share/gwag/NAME)")
 	var envs multiFlag
 	fs.Var(&envs, "env", "KEY=VALUE for the service (repeatable)")
+	publicURL := fs.String("public-url", "", "base URL browsers use to reach the gateway (e.g. http://192.168.1.76:8080); login --web and the login context use it; \"\" clears")
 	enable := fs.Bool("enable", false, "enable at login")
 	start := fs.Bool("start", false, "start (or restart) now")
 	if err := e.parse(fs, name, own); err != nil {
@@ -204,6 +210,13 @@ func (e *svcEnv) install(args []string) error {
 	}
 	if err := e.refuseRoot(); err != nil {
 		return err
+	}
+	publicSet := false
+	fs.Visit(func(f *flag.Flag) { publicSet = publicSet || f.Name == "public-url" })
+	if *publicURL != "" {
+		if _, err := webSignInURL(*publicURL, ""); err != nil {
+			return fmt.Errorf("--public-url: %w", err)
+		}
 	}
 	for _, kv := range envs {
 		if k, _, ok := strings.Cut(kv, "="); !ok || k == "" {
@@ -238,6 +251,11 @@ func (e *svcEnv) install(args []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if publicSet {
+		if err := writePublicURL(dir, *publicURL); err != nil {
+			return err
+		}
+	}
 	// --data-dir is carried in the unit once; drop it from the passthrough.
 	up = stripFlag(up, "--data-dir")
 	u := svcUnit{Name: *name, Exec: bin, DataDir: dir, Args: up, Env: envs, StopTimeout: svcStopTimeout(up)}
@@ -259,6 +277,9 @@ func (e *svcEnv) install(args []string) error {
 		return err
 	}
 	fmt.Fprintf(e.out, "wrote %s\n  exec     %s\n  data-dir %s\n  up       %s\n", path, bin, dir, strings.Join(u.upArgs()[1:], " "))
+	if p := readPublicURL(dir); p != "" {
+		fmt.Fprintf(e.out, "  public-url %s\n", p)
+	}
 
 	if e.darwin() {
 		fmt.Fprintf(e.out, "  logs     %s\n", e.logPath(*name))
@@ -299,6 +320,29 @@ func (e *svcEnv) install(args []string) error {
 		fmt.Fprintln(e.out, "started")
 	}
 	return nil
+}
+
+const svcPublicURLFile = "public-url"
+
+// readPublicURL is the service's stored public URL, "" when unset.
+func readPublicURL(dataDir string) string {
+	b, err := os.ReadFile(filepath.Join(dataDir, svcPublicURLFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// writePublicURL stores u in the data dir; "" removes it.
+func writePublicURL(dataDir, u string) error {
+	p := filepath.Join(dataDir, svcPublicURLFile)
+	if u == "" {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeFileAtomic(p, []byte(u+"\n"), 0o644)
 }
 
 // stripFlag removes "--name value" and "--name=value".
@@ -351,13 +395,21 @@ func (e *svcEnv) control(verb string, args []string) error {
 	if err := e.parse(fs, name, args); err != nil {
 		return err
 	}
+	var err error
 	if e.darwin() {
 		if err := e.refuseRoot(); err != nil {
 			return err
 		}
-		return e.launchdCtl(verb, *name)
+		err = e.launchdCtl(verb, *name)
+	} else {
+		err = e.systemctl(verb, svcUnit{Name: *name}.unitFileName())
 	}
-	return e.systemctl(verb, svcUnit{Name: *name}.unitFileName())
+	if verb == "status" {
+		if p := readPublicURL(e.installedDataDir(*name)); p != "" {
+			fmt.Fprintf(e.out, "public-url: %s\n", p)
+		}
+	}
+	return err
 }
 
 func (e *svcEnv) logs(args []string) error {
@@ -573,7 +625,7 @@ func (e *svcEnv) login(args []string) error {
 		if wl == nil {
 			wl = webLogin
 		}
-		return wl(context.Background(), "http://"+listenHost(httpAddr), tok, *webURL, !*noBrowser, e.out)
+		return wl(context.Background(), "http://"+listenHost(httpAddr), tok, webBase(*webURL, readPublicURL(dir)), !*noBrowser, e.out)
 	}
 	path, err := credentialsPath(true)
 	if err != nil {
@@ -589,6 +641,13 @@ func (e *svcEnv) login(args []string) error {
 		Gateway:  listenHost(cpAddr),
 		Endpoint: "http://" + listenHost(httpAddr),
 		Bearer:   tok,
+		WebURL:   readPublicURL(dir),
+	}
+	if entry.WebURL == "" {
+		// Keep a web_url set by hand (gwag use --web-url).
+		if old, ok := creds.resolve(*name); ok && old.Name == *name {
+			entry.WebURL = old.WebURL
+		}
 	}
 	if entry.Primary {
 		for i := range creds.Logins {
@@ -601,7 +660,11 @@ func (e *svcEnv) login(args []string) error {
 	if err := saveCredentialsAt(path, creds); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "login %q in %s\n  gateway:  %s\n  endpoint: %s\n  primary:  %v\n  bearer:   persisted\nuse it: gwag ctl services list --context %s\n",
-		*name, path, entry.Gateway, entry.Endpoint, entry.Primary, *name)
+	webLine := ""
+	if entry.WebURL != "" {
+		webLine = "  web-url:  " + entry.WebURL + "\n"
+	}
+	fmt.Fprintf(e.out, "login %q in %s\n  gateway:  %s\n  endpoint: %s\n  primary:  %v\n  bearer:   persisted\n%suse it: gwag ctl services list --context %s\n",
+		*name, path, entry.Gateway, entry.Endpoint, entry.Primary, webLine, *name)
 	return nil
 }
