@@ -198,6 +198,95 @@ func TestAddMCP_SSE_ToolsSurfaceAsMutations(t *testing.T) {
 	}
 }
 
+// mcpStdioTarget returns the command line for the stdio test server.
+// It is a `go run` of the testdata helper in gw/testdata/mcpstdio,
+// which exposes the same echo/greet tools as the HTTP and SSE
+// in-process servers.
+func mcpStdioTarget(t *testing.T) string {
+	t.Helper()
+	// go run compiles and launches the helper as a subprocess.
+	// AddMCP splits the target on whitespace into argv.
+	return "go run ./testdata/mcpstdio"
+}
+
+// TestAddMCP_Stdio_ToolsSurfaceAsMutations pins that AddMCP over the
+// stdio transport introspects the upstream (spawning a subprocess) and
+// exposes each tool as a GraphQL Mutation.
+func TestAddMCP_Stdio_ToolsSurfaceAsMutations(t *testing.T) {
+	target := mcpStdioTarget(t)
+	gw := New(WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(gw.Close)
+	if err := gw.AddMCP(MCPStdio, target, As("tools")); err != nil {
+		t.Fatalf("AddMCP(stdio): %v", err)
+	}
+	srv := httptest.NewServer(gw.SchemaHandler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/schema/graphql")
+	if err != nil {
+		t.Fatalf("schema GET: %v", err)
+	}
+	defer resp.Body.Close()
+	sdl, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{"type Mutation", "echo", "greet", "message: String"} {
+		if !strings.Contains(string(sdl), want) {
+			t.Errorf("SDL missing %q; got:\n%s", want, sdl)
+		}
+	}
+}
+
+// TestAddMCP_Stdio_DispatchToolCall runs a tool end-to-end over the
+// stdio transport: GraphQL mutation → mcpDispatcher → tools/call →
+// result conversion. It mirrors TestAddMCP_DispatchToolCall (streamable-HTTP)
+// over the stdio transport, proving the round-trip works over a
+// subprocess as well as over a network connection.
+func TestAddMCP_Stdio_DispatchToolCall(t *testing.T) {
+	target := mcpStdioTarget(t)
+	gw := New(WithoutMetrics(), WithoutBackpressure())
+	t.Cleanup(gw.Close)
+	if err := gw.AddMCP(MCPStdio, target, As("tools")); err != nil {
+		t.Fatalf("AddMCP(stdio): %v", err)
+	}
+	srv := httptest.NewServer(gw.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"query":"mutation { tools { echo(message:\"hello\") } }"}`
+	resp, err := http.Post(srv.URL+"/graphql", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct {
+			Tools struct {
+				Echo any `json:"echo"`
+			} `json:"tools"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	if len(out.Errors) > 0 {
+		t.Fatalf("graphql errors: %v", out.Errors)
+	}
+	result, ok := out.Data.Tools.Echo.(map[string]any)
+	if !ok {
+		t.Fatalf("echo result not an object: %T %v", out.Data.Tools.Echo, out.Data.Tools.Echo)
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("result has no content blocks: %v", result)
+	}
+	first, _ := content[0].(map[string]any)
+	if first["text"] != "echo: hello" {
+		t.Errorf("echo text = %v; want %q", first["text"], "echo: hello")
+	}
+}
+
 // TestAddMCP_SSE_DispatchToolCall runs a tool end-to-end over the SSE
 // transport: GraphQL mutation → mcpDispatcher → tools/call → result
 // conversion. It mirrors TestAddMCP_DispatchToolCall (streamable-HTTP)
