@@ -226,3 +226,64 @@ func TestLegacyNullArgs_Lite(t *testing.T) {
 		}
 	}
 }
+
+// TestCompat_GatScalarOutput: gat dispatchers return decoded JSON that
+// graphql-go serializes, so graphql-go v3.1.0's strict built-in scalar
+// output applies on the lite path: a value the type cannot hold
+// without loss is a field error (v2.1.1: truncated or null, no error).
+var gatScalarOutputWant = map[string]string{
+	"Int/2":   `{"data":{"o":{"out":{"i":2,"s":null,"b":null}}}}`,
+	"Int/2.0": `{"data":{"o":{"out":{"i":2,"s":null,"b":null}}}}`,
+	// v3: field error (v2.1.1: 2, no error).
+	"Int/2.5": `{"data":{"o":{"out":{"i":null,"s":null,"b":null}}},"errors":[{"message":"Int cannot represent non-integer value: 2.5","locations":[{"line":1,"column":13}],"path":["o","out","i"]}]}`,
+	// v3: field error (v2.1.1: null, no error).
+	"Int/3e9": `{"data":{"o":{"out":{"i":null,"s":null,"b":null}}},"errors":[{"message":"Int cannot represent non 32-bit signed integer value: 3000000000","locations":[{"line":1,"column":13}],"path":["o","out","i"]}]}`,
+	// Lossless: serialized.
+	"String/num":  `{"data":{"o":{"out":{"i":null,"s":"5","b":null}}}}`,
+	"Boolean/str": `{"data":{"o":{"out":{"i":null,"s":null,"b":true}}}}`,
+}
+
+func TestCompat_GatScalarOutput(t *testing.T) {
+	var mu sync.Mutex
+	reply := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	spec := `{"openapi":"3.0.0","info":{"title":"o","version":"1"},
+ "paths":{"/o":{"get":{"operationId":"out","responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Out"}}}}}}}},
+ "components":{"schemas":{"Out":{"type":"object","properties":{"i":{"type":"integer"},"s":{"type":"string"},"b":{"type":"boolean"}}}}}}`
+	doc, err := openapi3.NewLoader().LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := ir.IngestOpenAPI(doc)
+	svc.Namespace, svc.Version = "o", "v1"
+	ir.PopulateSchemaIDs(svc)
+	g, err := gat.New(gat.ServiceRegistration{Service: svc, BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	if err := gat.RegisterHTTP(mux, g, "/"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, reply string }{
+		{"Int/2", `{"i":2}`}, {"Int/2.0", `{"i":2.0}`}, {"Int/2.5", `{"i":2.5}`}, {"Int/3e9", `{"i":3000000000}`},
+		{"String/num", `{"s":5}`}, {"Boolean/str", `{"b":"true"}`},
+	} {
+		mu.Lock()
+		reply = c.reply
+		mu.Unlock()
+		req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ o { out { i s b } } }"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if got := strings.TrimSpace(rr.Body.String()); got != gatScalarOutputWant[c.name] {
+			t.Errorf("%s:\n  got  %s\n  want %s", c.name, got, gatScalarOutputWant[c.name])
+		}
+	}
+}
