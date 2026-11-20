@@ -367,6 +367,9 @@ type config struct {
 	// lossyInputCoercion: WithLossyInputCoercion.
 	lossyInputCoercion bool
 
+	// legacyNullArgs: WithLegacyNullArgs.
+	legacyNullArgs bool
+
 	// openAPIVersion: WithOpenAPIVersion ("", "3.0" or "3.1").
 	openAPIVersion string
 
@@ -946,6 +949,24 @@ func WithConnectErrorCodes() Option {
 // Stability: experimental
 func WithLegacyErrorCodes() Option {
 	return func(cfg *config) { cfg.legacyErrorCodes = true }
+}
+
+// WithLegacyNullArgs drops null arguments before every dispatch, as
+// graphql-go v2 did: a null variable or literal, at the top level or as
+// an input-object field, reaches the upstream as absent. Default off:
+// graphql-go v3 passes a null on, so an OpenAPI JSON body, MCP tool
+// arguments and downstream GraphQL variables carry null. Proto fields
+// and OpenAPI path and query params treat null as unset either way.
+// A downstream GraphQL service gets the client's query and variables
+// as sent, so this option does not change what it receives. CLI:
+// --legacy-null-args.
+//
+// For upstreams that refuse an explicit null where they accepted an
+// absent field.
+//
+// Stability: experimental
+func WithLegacyNullArgs() Option {
+	return func(cfg *config) { cfg.legacyNullArgs = true }
 }
 
 // WithLossyInputCoercion restores graphql-go v2's lossy coercion of

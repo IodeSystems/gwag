@@ -248,3 +248,36 @@ var (
 		"Float/3e9":    `error="" | http=200 args={"n":3000000000}`,
 	}
 )
+
+// With WithLegacyNullArgs: the v2.1.1 values for OpenAPI and MCP (a
+// null literal now acts as a null variable). A GraphQL upstream gets
+// the client's query and variables as sent, so its table is the
+// default one.
+var (
+	compatOpenAPINullWantLegacy = map[string]string{
+		"query/null":               `error="" | http=200 GET /q body=`,
+		"query/absent":             `error="" | http=200 GET /q body=`,
+		"query/literal-null":       `error="" | http=200 GET /q body=`,
+		"query/value":              `error="" | http=200 GET /q?s=a body=`,
+		"path/null":                `error="Variable \"$v\" of required type \"String!\" was not provided." | http=200 upstream not called body=`,
+		"path/absent":              `error="Variable \"$v\" of required type \"String!\" was not provided." | http=200 upstream not called body=`,
+		"body-field/null":          `error="" | http=200 POST /b body={}`,
+		"body-field/absent":        `error="" | http=200 POST /b body={}`,
+		"body-field/literal-null":  `error="" | http=200 POST /b body={}`,
+		"body-field/value":         `error="" | http=200 POST /b body={"name":"a"}`,
+		"body-nested-field/null":   `error="" | http=200 POST /b body={"nested":{}}`,
+		"body-nested-field/absent": `error="" | http=200 POST /b body={"nested":{}}`,
+		"body-nested-object/null":  `error="" | http=200 POST /b body={}`,
+		"body/null":                `error="" | http=200 POST /b body=`,
+		"body/absent":              `error="" | http=200 POST /b body=`,
+		"body-int/null":            `error="" | http=200 POST /b body={}`,
+	}
+	compatGraphQLNullWantLegacy = compatGraphQLNullWant
+	compatMCPNullWantLegacy     = map[string]string{
+		"string/null":         `error="" | http=200 args=null`,
+		"string/absent":       `error="" | http=200 args=null`,
+		"string/literal-null": `error="" | http=200 args=null`,
+		"string/value":        `error="" | http=200 args={"s":"a"}`,
+		"number/null":         `error="" | http=200 args=null`,
+	}
+)

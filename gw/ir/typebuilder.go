@@ -135,6 +135,8 @@ type IRTypeBuilderOptions struct {
 	// wrapError is RuntimeOptions.WrapError, carried to the resolvers
 	// the runtime renderer builds with this builder.
 	wrapError func(error) error
+	// legacyNullArgs is RuntimeOptions.LegacyNullArgs.
+	legacyNullArgs bool
 }
 
 // IRTypeBuilder produces graphql.{Object,InputObject,Enum,Union,Scalar}

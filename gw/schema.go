@@ -111,6 +111,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 		UploadType:         UploadScalar(),
 		AnnotationSink:     annotations,
 		WrapError:          wrapError,
+		LegacyNullArgs:     g.cfg.legacyNullArgs,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime render: %w", err)

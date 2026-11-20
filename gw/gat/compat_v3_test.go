@@ -31,9 +31,17 @@ const compatSpec = `{
         {"name": "f", "in": "query", "schema": {"type": "number"}}
       ],
       "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Res"}}}}}
+    }},
+    "/b": {"post": {
+      "operationId": "bdy",
+      "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Body"}}}},
+      "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Res"}}}}}
     }}
   },
-  "components": {"schemas": {"Res": {"type": "object", "properties": {"id": {"type": "string"}}}}}
+  "components": {"schemas": {
+    "Res": {"type": "object", "properties": {"id": {"type": "string"}}},
+    "Body": {"type": "object", "properties": {"name": {"type": "string"}, "n": {"type": "integer"}}}
+  }}
 }`
 
 // compatGat serves compatSpec through the gat lite path (gwag serve
@@ -43,14 +51,17 @@ type compatGat struct {
 	g    *gat.Gateway
 	mu   sync.Mutex
 	last string
+	body string
 }
 
 func newCompatGat(t *testing.T, opts ...func(*gat.Gateway)) *compatGat {
 	t.Helper()
 	f := &compatGat{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.last = r.Method + " " + r.URL.RequestURI()
+		f.body = string(b)
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"x"}`)
@@ -191,5 +202,27 @@ func TestAllowLossyInputCoercion_WS(t *testing.T) {
 				t.Fatalf("strict: %s %s", m.Type, m.Payload)
 			}
 		})
+	}
+}
+
+// TestLegacyNullArgs_Lite: on the gat lite path a null JSON body field
+// is forwarded by default and dropped with LegacyNullArgs (set after
+// New built the schema, as gwag serve does).
+func TestLegacyNullArgs_Lite(t *testing.T) {
+	const q = `mutation($v: String){ t { bdy(body: {name: $v, n: 1}){ id } } }`
+	for _, c := range []struct {
+		legacy bool
+		want   string
+	}{{false, `{"n":1,"name":null}`}, {true, `{"n":1}`}} {
+		f := newCompatGat(t, func(g *gat.Gateway) { g.LegacyNullArgs(c.legacy) })
+		if msg, _ := f.call(t, q, `{"v":null}`); msg != "" {
+			t.Fatalf("legacy=%v: %s", c.legacy, msg)
+		}
+		f.mu.Lock()
+		got := f.body
+		f.mu.Unlock()
+		if got != c.want {
+			t.Errorf("legacy=%v: body %s, want %s", c.legacy, got, c.want)
+		}
 	}
 }

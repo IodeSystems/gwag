@@ -95,6 +95,9 @@ type Gateway struct {
 	// RegisterHuma on the empty-gateway path). Input stays lenient either way.
 	longAsNumber bool
 
+	// legacyNullArgs drops null args before dispatch (LegacyNullArgs).
+	legacyNullArgs bool
+
 	// emptyNilSlices (default true) makes required output list fields render
 	// non-null (`[T!]!`) and coerces nil Go slices to `[]` at dispatch, so an
 	// empty/absent slice serializes as `[]` rather than null — clients never
@@ -233,6 +236,28 @@ func New(regs ...ServiceRegistration) (*Gateway, error) {
 // Returns g for chaining; a no-op once built. Input is lenient (number or string) either way.
 func (g *Gateway) LongAsNumber(b bool) *Gateway {
 	g.longAsNumber = b
+	return g
+}
+
+// LegacyNullArgs drops null arguments before every dispatch, as
+// graphql-go v2 did (ir.DropNullArgs): a null top-level argument or
+// input-object field reaches the upstream as absent. Default off: an
+// OpenAPI JSON body gets the null; proto fields and OpenAPI path and
+// query params treat null as unset either way. On a gateway New
+// already built from registrations it rebuilds the schema (and panics
+// if that fails). Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) LegacyNullArgs(b bool) *Gateway {
+	if g.legacyNullArgs == b {
+		return g
+	}
+	g.legacyNullArgs = b
+	if g.built {
+		if err := g.build(); err != nil {
+			panic("gat: LegacyNullArgs: " + err.Error())
+		}
+	}
 	return g
 }
 
@@ -412,6 +437,7 @@ func (g *Gateway) build() error {
 		NonNullRequiredLists: g.emptyNilSlices,
 		Directives:           []*graphql.Directive{exportDirective},
 		VersionedOnly:        g.versionedOnly,
+		LegacyNullArgs:       g.legacyNullArgs,
 	})
 	if err != nil {
 		return fmt.Errorf("gat: build schema: %w", err)

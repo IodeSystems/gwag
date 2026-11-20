@@ -48,6 +48,19 @@ type compatNullCase struct {
 // upstream request carry this note.
 const compatNullV3 = "graphql-go v3: null variable reaches resolvers as present nil"
 
+// compatNullModes runs the null tables with the default (null
+// forwarded) and with WithLegacyNullArgs (null dropped before
+// dispatch, the v2.1.1 view), against the *Legacy want maps. The proto
+// table has one mode: proto treats null as unset either way.
+var compatNullModes = []struct {
+	name   string
+	opts   []Option
+	legacy bool
+}{
+	{"default", nil, false},
+	{"legacy", []Option{WithLegacyNullArgs()}, true},
+}
+
 func TestCompat_NullVariable_Proto(t *testing.T) {
 	f := newGRPCE2EFixture(t)
 	q := `query($v: String){ greeter { hello(name: $v) { greeting } } }`
@@ -73,90 +86,105 @@ func TestCompat_NullVariable_Proto(t *testing.T) {
 }
 
 func TestCompat_NullVariable_OpenAPI(t *testing.T) {
-	f := newCompatOpenAPI(t)
-	cases := []compatNullCase{
-		// query param
-		{"query/null", `query($v: String){ t { qry(s: $v){ id } } }`, `{"v":null}`, compatNullV3},
-		{"query/absent", `query($v: String){ t { qry(s: $v){ id } } }`, `{}`, ""},
-		{"query/literal-null", `{ t { qry(s: null){ id } } }`, ``, compatNullV3},
-		{"query/value", `query($v: String){ t { qry(s: $v){ id } } }`, `{"v":"a"}`, ""},
-		// path param (String!, so null is rejected before dispatch)
-		{"path/null", `query($v: String!){ t { pth(id: $v){ id } } }`, `{"v":null}`, ""},
-		{"path/absent", `query($v: String!){ t { pth(id: $v){ id } } }`, `{}`, ""},
-		// JSON body field
-		{"body-field/null", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{"v":null}`, compatNullV3},
-		{"body-field/absent", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{}`, ""},
-		{"body-field/literal-null", `mutation { t { bdy(body:{name: null}){ id } } }`, ``, compatNullV3},
-		{"body-field/value", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{"v":"a"}`, ""},
-		// nested body field
-		{"body-nested-field/null", `mutation($v: String){ t { bdy(body:{nested:{x: $v}}){ id } } }`, `{"v":null}`, compatNullV3},
-		{"body-nested-field/absent", `mutation($v: String){ t { bdy(body:{nested:{x: $v}}){ id } } }`, `{}`, ""},
-		// nested object variable null
-		{"body-nested-object/null", `mutation($v: t_BodyNestedInput){ t { bdy(body:{nested: $v}){ id } } }`, `{"v":null}`, compatNullV3},
-		// whole body null
-		{"body/null", `mutation($v: t_BodyInput){ t { bdy(body: $v){ id } } }`, `{"v":null}`, compatNullV3},
-		{"body/absent", `mutation($v: t_BodyInput){ t { bdy(body: $v){ id } } }`, `{}`, ""},
-		// Int field null
-		{"body-int/null", `mutation($v: Int){ t { bdy(body:{count: $v}){ id } } }`, `{"v":null}`, compatNullV3},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f.reset()
-			status, body := compatPost(t, f.h, c.query, c.vars)
-			req, rb := f.seen()
-			if req == "" {
-				req = "upstream not called"
+	for _, m := range compatNullModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatOpenAPI(t, m.opts...)
+			want := compatPick(m.legacy, compatOpenAPINullWant, compatOpenAPINullWantLegacy)
+			cases := []compatNullCase{
+				// query param
+				{"query/null", `query($v: String){ t { qry(s: $v){ id } } }`, `{"v":null}`, compatNullV3},
+				{"query/absent", `query($v: String){ t { qry(s: $v){ id } } }`, `{}`, ""},
+				{"query/literal-null", `{ t { qry(s: null){ id } } }`, ``, compatNullV3},
+				{"query/value", `query($v: String){ t { qry(s: $v){ id } } }`, `{"v":"a"}`, ""},
+				// path param (String!, so null is rejected before dispatch)
+				{"path/null", `query($v: String!){ t { pth(id: $v){ id } } }`, `{"v":null}`, ""},
+				{"path/absent", `query($v: String!){ t { pth(id: $v){ id } } }`, `{}`, ""},
+				// JSON body field
+				{"body-field/null", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{"v":null}`, compatNullV3},
+				{"body-field/absent", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{}`, ""},
+				{"body-field/literal-null", `mutation { t { bdy(body:{name: null}){ id } } }`, ``, compatNullV3},
+				{"body-field/value", `mutation($v: String){ t { bdy(body:{name: $v}){ id } } }`, `{"v":"a"}`, ""},
+				// nested body field
+				{"body-nested-field/null", `mutation($v: String){ t { bdy(body:{nested:{x: $v}}){ id } } }`, `{"v":null}`, compatNullV3},
+				{"body-nested-field/absent", `mutation($v: String){ t { bdy(body:{nested:{x: $v}}){ id } } }`, `{}`, ""},
+				// nested object variable null
+				{"body-nested-object/null", `mutation($v: t_BodyNestedInput){ t { bdy(body:{nested: $v}){ id } } }`, `{"v":null}`, compatNullV3},
+				// whole body null
+				{"body/null", `mutation($v: t_BodyInput){ t { bdy(body: $v){ id } } }`, `{"v":null}`, compatNullV3},
+				{"body/absent", `mutation($v: t_BodyInput){ t { bdy(body: $v){ id } } }`, `{}`, ""},
+				// Int field null
+				{"body-int/null", `mutation($v: Int){ t { bdy(body:{count: $v}){ id } } }`, `{"v":null}`, compatNullV3},
 			}
-			compatCheck(t, compatOpenAPINullWant, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s body=%s", status, req, rb)))
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					f.reset()
+					status, body := compatPost(t, f.h, c.query, c.vars)
+					req, rb := f.seen()
+					if req == "" {
+						req = "upstream not called"
+					}
+					compatCheck(t, want, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s body=%s", status, req, rb)))
+				})
+			}
 		})
 	}
 }
 
 func TestCompat_NullVariable_GraphQL(t *testing.T) {
-	f := newCompatGraphQL(t)
-	cases := []compatNullCase{
-		{"scalar/null", `query($v: String){ g { echo(s: $v) } }`, `{"v":null}`, compatNullV3},
-		{"scalar/absent", `query($v: String){ g { echo(s: $v) } }`, `{}`, ""},
-		{"scalar/literal-null", `{ g { echo(s: null) } }`, ``, compatNullV3},
-		{"scalar/value", `query($v: String){ g { echo(s: $v) } }`, `{"v":"a"}`, ""},
-		{"input-field/null", `query($v: String){ g { echo(inp:{a: $v}) } }`, `{"v":null}`, compatNullV3},
-		{"input-field/absent", `query($v: String){ g { echo(inp:{a: $v}) } }`, `{}`, ""},
-		{"input-nested-field/null", `query($v: String){ g { echo(inp:{sub:{a: $v}}) } }`, `{"v":null}`, compatNullV3},
-		{"input-object/null", `query($v: g_In){ g { echo(inp: $v) } }`, `{"v":null}`, compatNullV3},
-		{"input-object/absent", `query($v: g_In){ g { echo(inp: $v) } }`, `{}`, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f.reset()
-			status, body := compatPost(t, f.h, c.query, c.vars)
-			vars, q := f.seen()
-			seen := "upstream not called"
-			if q != "" {
-				seen = fmt.Sprintf("upstream vars=%s query=%s", vars, compatFlat(q))
+	for _, m := range compatNullModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatGraphQL(t, m.opts...)
+			want := compatPick(m.legacy, compatGraphQLNullWant, compatGraphQLNullWantLegacy)
+			cases := []compatNullCase{
+				{"scalar/null", `query($v: String){ g { echo(s: $v) } }`, `{"v":null}`, compatNullV3},
+				{"scalar/absent", `query($v: String){ g { echo(s: $v) } }`, `{}`, ""},
+				{"scalar/literal-null", `{ g { echo(s: null) } }`, ``, compatNullV3},
+				{"scalar/value", `query($v: String){ g { echo(s: $v) } }`, `{"v":"a"}`, ""},
+				{"input-field/null", `query($v: String){ g { echo(inp:{a: $v}) } }`, `{"v":null}`, compatNullV3},
+				{"input-field/absent", `query($v: String){ g { echo(inp:{a: $v}) } }`, `{}`, ""},
+				{"input-nested-field/null", `query($v: String){ g { echo(inp:{sub:{a: $v}}) } }`, `{"v":null}`, compatNullV3},
+				{"input-object/null", `query($v: g_In){ g { echo(inp: $v) } }`, `{"v":null}`, compatNullV3},
+				{"input-object/absent", `query($v: g_In){ g { echo(inp: $v) } }`, `{}`, ""},
 			}
-			compatCheck(t, compatGraphQLNullWant, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, seen)))
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					f.reset()
+					status, body := compatPost(t, f.h, c.query, c.vars)
+					vars, q := f.seen()
+					seen := "upstream not called"
+					if q != "" {
+						seen = fmt.Sprintf("upstream vars=%s query=%s", vars, compatFlat(q))
+					}
+					compatCheck(t, want, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, seen)))
+				})
+			}
 		})
 	}
 }
 
 func TestCompat_NullVariable_MCP(t *testing.T) {
-	f := newCompatMCP(t)
-	cases := []compatNullCase{
-		{"string/null", `mutation($v: String){ m { probe(s: $v) } }`, `{"v":null}`, compatNullV3},
-		{"string/absent", `mutation($v: String){ m { probe(s: $v) } }`, `{}`, ""},
-		{"string/literal-null", `mutation { m { probe(s: null) } }`, ``, compatNullV3},
-		{"string/value", `mutation($v: String){ m { probe(s: $v) } }`, `{"v":"a"}`, ""},
-		{"number/null", `mutation($v: Float){ m { probe(n: $v) } }`, `{"v":null}`, compatNullV3},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f.reset()
-			status, body := compatPost(t, f.h, c.query, c.vars)
-			args := f.seen()
-			if args == "" {
-				args = "upstream not called"
+	for _, m := range compatNullModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatMCP(t, m.opts...)
+			want := compatPick(m.legacy, compatMCPNullWant, compatMCPNullWantLegacy)
+			cases := []compatNullCase{
+				{"string/null", `mutation($v: String){ m { probe(s: $v) } }`, `{"v":null}`, compatNullV3},
+				{"string/absent", `mutation($v: String){ m { probe(s: $v) } }`, `{}`, ""},
+				{"string/literal-null", `mutation { m { probe(s: null) } }`, ``, compatNullV3},
+				{"string/value", `mutation($v: String){ m { probe(s: $v) } }`, `{"v":"a"}`, ""},
+				{"number/null", `mutation($v: Float){ m { probe(n: $v) } }`, `{"v":null}`, compatNullV3},
 			}
-			compatCheck(t, compatMCPNullWant, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d args=%s", status, args)))
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					f.reset()
+					status, body := compatPost(t, f.h, c.query, c.vars)
+					args := f.seen()
+					if args == "" {
+						args = "upstream not called"
+					}
+					compatCheck(t, want, c.name, compatNote(compatErrs(body), fmt.Sprintf("http=%d args=%s", status, args)))
+				})
+			}
 		})
 	}
 }

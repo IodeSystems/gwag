@@ -12,6 +12,8 @@ func TestInputFlags(t *testing.T) {
 	}{
 		{nil, 0},
 		{[]string{"--allow-lossy-coercion-of-inputs"}, 1},
+		{[]string{"--legacy-null-args"}, 1},
+		{[]string{"--allow-lossy-coercion-of-inputs", "--legacy-null-args"}, 2},
 	} {
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
 		f := addInputFlags(fs)
