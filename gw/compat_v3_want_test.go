@@ -133,7 +133,8 @@ var (
 		// v2.1.1 behaviour; expected to change in graphql-go v3: bool into Float is rejected
 		"Float/true": "error=\"\" | http=200 GET /q?f=1",
 		"Float/1e2":  "error=\"\" | http=200 GET /q?f=100",
-		"Float/3e9":  "error=\"\" | http=200 GET /q?f=3e%2B09",
+		// Fixed (was 3e%2B09): numbers reach upstreams without exponent form.
+		"Float/3e9": "error=\"\" | http=200 GET /q?f=3000000000",
 	}
 
 	compatScalarMCPWant = map[string]string{

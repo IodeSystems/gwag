@@ -14,6 +14,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/paramfmt"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -151,7 +152,7 @@ func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any,
 		if !ok {
 			continue
 		}
-		strVal := fmt.Sprintf("%v", v)
+		strVal, _ := paramfmt.String(v)
 		switch p.In {
 		case "path":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p.Name+"}", url.PathEscape(strVal))
@@ -161,7 +162,8 @@ func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any,
 			// arrays), not one "[a b]" string.
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
-					queryArgs.Add(p.Name, fmt.Sprintf("%v", e))
+					es, _ := paramfmt.String(e)
+					queryArgs.Add(p.Name, es)
 				}
 			} else {
 				queryArgs.Add(p.Name, strVal)

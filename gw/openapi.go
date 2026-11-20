@@ -21,6 +21,7 @@ import (
 	"github.com/IodeSystems/graphql-go/v2"
 	"github.com/IodeSystems/graphql-go/v2/language/ast"
 
+	"github.com/iodesystems/gwag/v2/gw/internal/paramfmt"
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
@@ -778,7 +779,7 @@ func buildOpenAPIRequest(
 		if !ok {
 			continue
 		}
-		strVal := fmt.Sprintf("%v", v)
+		strVal, _ := paramfmt.String(v)
 		switch p.In {
 		case "path":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p.Name+"}", url.PathEscape(strVal))
@@ -788,7 +789,8 @@ func buildOpenAPIRequest(
 			// arrays), not one "[a b]" string.
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
-					queryArgs.Add(p.Name, fmt.Sprintf("%v", e))
+					es, _ := paramfmt.String(e)
+					queryArgs.Add(p.Name, es)
 				}
 			} else {
 				queryArgs.Add(p.Name, strVal)
@@ -1023,13 +1025,15 @@ func buildMultipartBody(ctx context.Context, op *openapi3.Operation, gqlArgs map
 						return nil, "", opened, err
 					}
 				default:
-					if err := mw.WriteField(name, fmt.Sprintf("%v", ev)); err != nil {
+					evs, _ := paramfmt.String(ev)
+					if err := mw.WriteField(name, evs); err != nil {
 						return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: write field %q: %s", name, err.Error()))
 					}
 				}
 			}
 		default:
-			if err := mw.WriteField(name, fmt.Sprintf("%v", x)); err != nil {
+			xs, _ := paramfmt.String(x)
+			if err := mw.WriteField(name, xs); err != nil {
 				return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: write field %q: %s", name, err.Error()))
 			}
 		}
