@@ -557,6 +557,22 @@ Default input behaviour:
   `gwag ctl schema diff` and `snapshot` refuse it. Omit the braces:
   `type Foo`.
 
+Output from upstreams:
+
+- On the gat lite path (`gwag serve --openapi | --proto`, gat
+  embedders) and for proto subscriptions and union / interface
+  results, graphql-go serializes the value: a value a built-in scalar
+  cannot hold without loss is a field error on that field (`2.5` or
+  `3000000000` for `Int`). It was truncated or `null` on graphql-go
+  v2. A lossless value is converted (`5` for `String` → `"5"`). gwag's OpenAPI, downstream-GraphQL and proto
+  dispatchers write the upstream bytes as sent, so these paths do not
+  check the type.
+- An OpenAPI `integer` without `format` is `Int`, a 32-bit signed
+  number. A spec that returns epoch milliseconds, large IDs or other
+  values beyond ±2147483647 must say `format: int64` (it maps to
+  `Long`, a decimal string by default), or the value is a field error
+  on the paths above.
+
 ## WebSocket upgrade caps
 
 `gw.Handler()` accepts graphql-transport-ws upgrades for subscriptions.

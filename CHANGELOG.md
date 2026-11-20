@@ -183,6 +183,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Migration
 - graphql-go v3: library code that passes graphql-go types to gwag (`ir.RenderGraphQLRuntime`, `ir.StandardScalars`, `ir.PrintSchemaSDL`, `ir.IRTypeBuilder`, gat `SetSchema`, ...) imports `github.com/IodeSystems/graphql-go/v3`. A custom `Dispatcher` that returns a nil map for an object now gives `null`.
+- Upstreams that return values a built-in scalar cannot hold: on the gat lite path (`gwag serve --openapi | --proto`) and for proto subscriptions and union / interface results this is now a field error (graphql-go v3.1.0 strict scalar output; it was truncated or null). An OpenAPI `integer` without `format` maps to `Int` (32-bit signed): a spec that returns epoch milliseconds, large IDs or other values beyond ±2147483647 needs `format: int64` (`Long`). Docs: [`docs/operations.md`](./docs/operations.md#input-coercion-and-null-arguments).
 - Clients that send `null` for an `@skip(if:)` / `@include(if:)` variable on a field below an OpenAPI or proto op get an error (it meant false). Send a boolean, or omit the variable to use its default.
 - Clients that send `2.5`, `"2.5"` or booleans for `Int` / `Float` / `ID` variables get a request error. Fix the client, or run with `--allow-lossy-coercion-of-inputs` (`WithLossyInputCoercion()`).
 - Upstreams that refuse an explicit `null` in an OpenAPI JSON body or MCP tool argument: run with `--legacy-null-args` (`WithLegacyNullArgs()`). Clients that sent `null` for a non-null argument to get its default must omit the variable.
