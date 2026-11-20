@@ -544,11 +544,23 @@ func (b *IRTypeBuilder) enumFor(t *Type) *graphql.Enum {
 		return e
 	}
 	values := graphql.EnumValueConfigMap{}
-	for _, v := range t.Enum {
-		name := b.naming.EnumValueName(v.Name)
-		values[name] = &graphql.EnumValueConfig{
+	names := make([]string, len(t.Enum))
+	for i, v := range t.Enum {
+		names[i] = b.naming.EnumValueName(v.Name)
+	}
+	// A value that is not a valid GraphQL enum name ("a-b", "1st",
+	// "true") gets a valid one; its runtime Value (the wire value)
+	// stays, so input coercion and output serialization still speak
+	// the upstream spelling.
+	gqlNames := GraphQLEnumValueNames(names)
+	for i, v := range t.Enum {
+		desc := v.Description
+		if gqlNames[i] != names[i] && desc == "" {
+			desc = "Upstream value: " + strconv.Quote(v.Name)
+		}
+		values[gqlNames[i]] = &graphql.EnumValueConfig{
 			Value:             b.naming.EnumValueValue(v),
-			Description:       v.Description,
+			Description:       desc,
 			DeprecationReason: v.Deprecated,
 		}
 	}

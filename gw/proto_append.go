@@ -11,6 +11,8 @@ import (
 	"github.com/IodeSystems/graphql-go/v3/language/ast"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/iodesystems/gwag/v2/gw/ir"
 )
 
 // appendProtoMessage walks `msg` in lockstep with `selSet` (the local
@@ -232,7 +234,7 @@ func appendProtoLeaf(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect
 		if ev == nil {
 			return strconv.AppendInt(dst, int64(v.Enum()), 10)
 		}
-		return appendJSONString(dst, string(ev.Name()))
+		return appendJSONString(dst, ir.ProtoEnumValueGraphQLName(ev))
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return appendProtoObject(dst, v.Message(), sel, more, fc)
 	}
@@ -268,7 +270,7 @@ func appendProtoDefault(dst []byte, fd protoreflect.FieldDescriptor) []byte {
 		// Default enum value is the value with number 0.
 		ev := fd.Enum().Values().ByNumber(0)
 		if ev != nil {
-			return appendJSONString(dst, string(ev.Name()))
+			return appendJSONString(dst, ir.ProtoEnumValueGraphQLName(ev))
 		}
 		return append(dst, '0')
 	}

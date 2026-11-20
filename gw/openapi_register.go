@@ -70,6 +70,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 		if !isLatest && svc.Version != "" {
 			typePrefix = svc.Namespace + "_" + svc.Version + "_"
 		}
+		enums := ir.EnumRenames(svc)
 		for _, op := range svc.Operations {
 			openAPIOp, _ := op.Origin.(*openapi3.Operation)
 			if openAPIOp == nil {
@@ -89,6 +90,7 @@ func (g *Gateway) registerOpenAPIDispatchersLocked(svcs []*ir.Service) error {
 			core.svc = svc
 			core.irOp = op
 			core.typePrefix = typePrefix
+			core.enums = enums
 			var dispatcher ir.Dispatcher = backpressureMiddleware(openAPIBackpressureConfig(src, core.label, metrics, bp))(core)
 			if chain != nil {
 				if md, ok := inputDescs[op.SchemaID]; ok {

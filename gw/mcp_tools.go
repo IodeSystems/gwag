@@ -565,9 +565,19 @@ func expandTypePtr(t *ir.Type) *schemaExpandType {
 			Deprecated:  f.Deprecated,
 		})
 	}
-	for _, e := range t.Enum {
+	// The corpus describes the GraphQL schema, so enum values carry
+	// their GraphQL names (a-b → a_b), not the upstream spelling.
+	var gqlNames []string
+	if len(t.Enum) > 0 {
+		names := make([]string, len(t.Enum))
+		for i, e := range t.Enum {
+			names[i] = e.Name
+		}
+		gqlNames = ir.GraphQLEnumValueNames(names)
+	}
+	for i, e := range t.Enum {
 		out.EnumValues = append(out.EnumValues, schemaExpandEnumValue{
-			Name:        e.Name,
+			Name:        gqlNames[i],
 			Description: e.Description,
 			Deprecated:  e.Deprecated,
 		})

@@ -44,6 +44,9 @@ type openAPIDispatcher struct {
 	svc        *ir.Service
 	irOp       *ir.Operation
 	typePrefix string
+	// enums is ir.EnumRenames(svc): upstream enum values whose GraphQL
+	// name differs. Nil when none does.
+	enums map[string]map[string]string
 }
 
 func newOpenAPIDispatcher(src *openAPISource, op *openapi3.Operation, method, pathTemplate string, headers []headerInjector, metrics Metrics, bp BackpressureOptions, validation string) *openAPIDispatcher {
@@ -231,7 +234,7 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 		}
 	}
 
-	walker := openAPIWalker{svc: d.svc, prefix: d.typePrefix}
+	walker := openAPIWalker{svc: d.svc, prefix: d.typePrefix, enums: d.enums}
 	var sel *ast.SelectionSet
 	var more []*ast.SelectionSet
 	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {

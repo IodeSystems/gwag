@@ -31,6 +31,9 @@ type openAPIWalker struct {
 	fieldCollector
 	svc    *ir.Service
 	prefix string // "<ns>_" or "<ns>_<vN>_" — matches renderer naming
+	// enums maps an enum's upstream values to the GraphQL names that
+	// differ from them (ir.EnumRenames). Nil in the common case.
+	enums map[string]map[string]string
 }
 
 // appendValue walks JSON `raw` in lockstep with the selection,
@@ -71,7 +74,7 @@ func (w openAPIWalker) appendValue(dst []byte, raw json.RawMessage, sel *ast.Sel
 		}
 		return w.appendObject(dst, raw, sel, more, w.resolveType(outRef))
 	case '[':
-		if sel == nil && len(more) == 0 {
+		if sel == nil && len(more) == 0 && w.enumNames(outRef) == nil {
 			return append(dst, raw...), nil
 		}
 		if outRef != nil && outRef.IsList() {
@@ -80,9 +83,35 @@ func (w openAPIWalker) appendValue(dst []byte, raw json.RawMessage, sel *ast.Sel
 			return w.appendList(dst, raw, sel, more, &outRef.List.Elem)
 		}
 		return w.appendList(dst, raw, sel, more, outRef)
+	case '"':
+		if names := w.enumNames(outRef); names != nil {
+			var s string
+			if json.Unmarshal(raw, &s) == nil {
+				if name, ok := names[s]; ok {
+					return appendJSONString(dst, name), nil
+				}
+			}
+		}
+		return append(dst, raw...), nil
 	default:
 		return append(dst, raw...), nil
 	}
+}
+
+// enumNames returns the upstream-value → GraphQL-name map of the enum
+// ref names (through list wrappers), or nil when that enum keeps every
+// upstream value as its GraphQL name.
+func (w openAPIWalker) enumNames(ref *ir.TypeRef) map[string]string {
+	if w.enums == nil {
+		return nil
+	}
+	for ref != nil && ref.IsList() {
+		ref = &ref.List.Elem
+	}
+	if ref == nil || ref.Named == "" {
+		return nil
+	}
+	return w.enums[ref.Named]
 }
 
 // appendObject projects a single JSON object. `t` may be nil when

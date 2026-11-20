@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -59,16 +58,15 @@ var (
 		"value":  `{"data":{"t":{"pth":{"id":"x"}}}} | upstream=GET /p/a`,
 	}
 
-	// (c) v3.1.0: an enum value named true / false / null fails the
-	// schema build. Registration returns nil, and every request to the
-	// gateway then answers the build error (v2.1.1: the enum had a
-	// value named "true"). A name that is not a GraphQL name ("a-b")
-	// fails the same way on v2.1.1 too.
+	// (c) v3.1.0 rejects an enum value named true / false / null; a
+	// name that is not a GraphQL name ("a-b") was rejected on v2.1.1
+	// too. Either used to fail the schema build for the whole gateway.
+	// gwag now renames them (TRUE, a_b); the wire value is unchanged.
 	compatEnumWant = map[string]string{
-		`openapi ["true","false","null"]`: `err=<nil> | graphql.NewSchema: Enum type T cannot include value: V.`,
-		`openapi ["yes","no"]`:            `err=<nil> | {"data":{"__type":{"enumValues":[{"name":"yes"},{"name":"no"}]}}}`,
-		`openapi ["a-b"]`:                 `err=<nil> | graphql.NewSchema: Names must match /^[_a-zA-Z][_a-zA-Z0-9]*$/ but "a-b" does not.`,
-		"proto true/false/null":           `err=<nil> | graphql.NewSchema: Enum type En_V1_E cannot include value: V.`,
+		`openapi ["true","false","null"]`: `err=<nil> | {"data":{"__type":{"enumValues":[{"name":"FALSE"},{"name":"NULL"},{"name":"TRUE"}]}}}`,
+		`openapi ["yes","no"]`:            `err=<nil> | {"data":{"__type":{"enumValues":[{"name":"no"},{"name":"yes"}]}}}`,
+		`openapi ["a-b"]`:                 `err=<nil> | {"data":{"__type":{"enumValues":[{"name":"a_b"}]}}}`,
+		"proto true/false/null":           `err=<nil> | {"data":{"__type":{"enumValues":[{"name":"FALSE"},{"name":"NULL"},{"name":"TRUE"}]}}}`,
 	}
 )
 
@@ -205,22 +203,14 @@ func TestCompat_EnumReservedNames(t *testing.T) {
 		t.Cleanup(gw.Close)
 		err := gw.AddOpenAPIBytes([]byte(strings.ReplaceAll(spec, "ENUM", e)), To("http://127.0.0.1:1"), As("e"))
 		_, body := compatPost(t, gw.Handler(), `{ __type(name: "e_Color") { enumValues { name } } }`, "")
-		compatCheck(t, compatEnumWant, "openapi "+e, compatEnumNorm(fmt.Sprintf("err=%v | %s", err, body)))
+		compatCheck(t, compatEnumWant, "openapi "+e, fmt.Sprintf("err=%v | %s", err, sortedEnumValues(t, body)))
 	}
 	p := `syntax = "proto3"; package en.v1; service S { rpc Get(R) returns (R); } enum E { true = 0; false = 1; null = 2; } message R { E e = 1; }`
 	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t")))
 	t.Cleanup(gw.Close)
 	err := gw.AddProtoBytes("en.proto", []byte(p), To(&compatNumsConn{}), As("en"))
-	_, body := compatPost(t, gw.Handler(), `{ __typename }`, "")
-	compatCheck(t, compatEnumWant, "proto true/false/null", compatEnumNorm(fmt.Sprintf("err=%v | %s", err, body)))
-}
-
-// compatEnumNorm trims the body and masks which enum and which reserved
-// value the build error names (map order picks them).
-func compatEnumNorm(s string) string {
-	s = strings.TrimSpace(s)
-	s = regexp.MustCompile(`cannot include value: (true|false|null)\.`).ReplaceAllString(s, "cannot include value: V.")
-	return regexp.MustCompile(`Enum type e_\w+ `).ReplaceAllString(s, "Enum type T ")
+	_, body := compatPost(t, gw.Handler(), `{ __type(name: "En_V1_E") { enumValues { name } } }`, "")
+	compatCheck(t, compatEnumWant, "proto true/false/null", fmt.Sprintf("err=%v | %s", err, sortedEnumValues(t, body)))
 }
 
 // ---- (b) null variable for a non-null argument ----
