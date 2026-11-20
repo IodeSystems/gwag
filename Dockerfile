@@ -7,7 +7,7 @@
 # both Node and Go. Stage 2 builds the binary with the UI embedded.
 # The runtime image is distroless, non-root (uid 65532), no shell.
 
-FROM golang:1.26-bookworm AS ui
+FROM golang:1.27-bookworm AS ui
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
@@ -19,7 +19,7 @@ WORKDIR /src
 COPY . .
 RUN bin/build --no-go
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

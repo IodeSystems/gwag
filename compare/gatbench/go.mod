@@ -1,6 +1,6 @@
 module github.com/iodesystems/gwag/compare/gatbench
 
-go 1.26.10
+go 1.27.0
 
 require (
 	connectrpc.com/connect v1.21.1
@@ -19,16 +19,14 @@ require (
 	github.com/agnivade/levenshtein v1.2.2 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
-	github.com/getkin/kin-openapi v0.152.0 // indirect
+	github.com/getkin/kin-openapi v0.153.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
-	github.com/oasdiff/yaml v0.1.3 // indirect
-	github.com/oasdiff/yaml3 v0.0.16 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/sosodev/duration v1.4.0 // indirect
+	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect

@@ -1,7 +1,7 @@
 # Image of the cutover example's app and traffic commands. Build from
 # the repo root (cutover.sh does):
 #   docker build -t gwag-cutover-app -f examples/cutover/Dockerfile .
-FROM golang:1.26.11-bookworm AS build
+FROM golang:1.27.4-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
