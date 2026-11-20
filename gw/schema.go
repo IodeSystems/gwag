@@ -23,9 +23,14 @@ import (
 // which subset is rendered.
 func (g *Gateway) assembleLocked() (err error) {
 	defer func(start time.Time) { g.tm.rebuild(start, err) }(time.Now())
+	// The live schema's resolvers hold the registry they were built
+	// with; on a failed build put it back, so request paths that read
+	// g.dispatchers keep matching the schema still served.
+	prev := g.dispatchers
 	g.dispatchers = ir.NewDispatchRegistry()
 	schema, annotations, err := g.buildSchemaLocked(schemaFilter{})
 	if err != nil {
+		g.dispatchers = prev
 		return err
 	}
 	g.schema.Store(schema)
@@ -60,6 +65,32 @@ func (g *Gateway) assembleLocked() (err error) {
 // Caller holds g.mu. Returns the built schema + its SDL annotation
 // index; does NOT store them.
 func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.AnnotationIndex, error) {
+	// IR is pre-baked on each slot (see bakeSlotIRLocked). Schema
+	// rebuild is now a single iteration over g.slots — no per-kind
+	// walk, no transform pass. Per-kind dispatcher registration runs
+	// first, then the render.
+	allSvcs := g.collectSlotIRLocked(filter)
+	g.registerProtoDispatchersLocked(filter)
+	if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
+		return nil, nil, err
+	}
+	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
+		return nil, nil, err
+	}
+	g.registerMCPDispatchersLocked(allSvcs)
+	var stableSnap map[string]int
+	if g.effectiveAllowedTiers().Stable {
+		stableSnap = g.stableSnapshotLocked()
+	}
+	return g.renderSchemaLocked(g.slots, allSvcs, g.dispatchers, stableSnap)
+}
+
+// renderSchemaLocked renders slots' IR (allSvcs, already filtered)
+// into a graphql.Schema whose resolvers look dispatchers up in
+// registry. It has no side effects on the gateway, so
+// checkSchemaLocked can run it over a candidate slot set with an
+// empty registry. Caller holds g.mu.
+func (g *Gateway) renderSchemaLocked(slots map[poolKey]*slot, allSvcs []*ir.Service, registry *ir.DispatchRegistry, stableSnap map[string]int) (*graphql.Schema, *ir.AnnotationIndex, error) {
 	hidesSet := map[string]bool{}
 	for _, name := range g.hiddenTypeNames() {
 		hidesSet[name] = true
@@ -71,7 +102,7 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 	// proto package don't trip graphql-go's duplicate-named-type
 	// rejection (proto FullNames are globally unique, so a single
 	// merged Types map is collision-free).
-	protoTB := newProtoIRTypeBuilder(g.slots, hidesSet, UploadScalar())
+	protoTB := newProtoIRTypeBuilder(slots, hidesSet, UploadScalar())
 
 	rootFields := graphql.Fields{}
 
@@ -79,31 +110,14 @@ func (g *Gateway) buildSchemaLocked(filter schemaFilter) (*graphql.Schema, *ir.A
 	// RenderGraphQLRuntimeFields in a single call so the multi-version
 	// fold sees every service in a namespace together (avoiding
 	// separate render calls that would each emit a `<ns>` root field
-	// and collide on merge). Per-kind dispatcher registration runs
-	// first, then service distillation, then the render.
-	// IR is pre-baked on each slot (see bakeSlotIRLocked). Schema
-	// rebuild is now a single iteration over g.slots — no per-kind
-	// walk, no transform pass.
-	allSvcs := g.collectSlotIRLocked(filter)
-	g.registerProtoDispatchersLocked(filter)
-	if err := g.registerOpenAPIDispatchersLocked(allSvcs); err != nil {
-		return nil, nil, err
-	}
-	if err := g.registerGraphQLDispatchersLocked(allSvcs); err != nil {
-		return nil, nil, err
-	}
-	g.registerMCPDispatchersLocked(allSvcs)
+	// and collide on merge).
 	long, jsonScalar := openAPISharedScalars()
-	var stableSnap map[string]int
-	if g.effectiveAllowedTiers().Stable {
-		stableSnap = g.stableSnapshotLocked()
-	}
 	annotations := ir.NewAnnotationIndex()
 	var wrapError func(error) error
 	if !g.cfg.legacyErrorCodes {
 		wrapError = connectErrorCodes
 	}
-	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, g.dispatchers, ir.RuntimeOptions{
+	queries, mutations, runtimeSubs, err := ir.RenderGraphQLRuntimeFields(allSvcs, registry, ir.RuntimeOptions{
 		SharedProtoBuilder: protoTB,
 		LongType:           long,
 		JSONType:           jsonScalar,

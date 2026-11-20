@@ -85,7 +85,10 @@ func (g *Gateway) AddGraphQL(endpoint string, opts ...ServiceOption) error {
 		g.publicNS[ns] = true
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil)
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil, func(c *slot) error {
+		c.graphql = &graphQLSource{rawIntrospection: rawIntro}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("gateway: AddGraphQL: %w", err)
 	}
@@ -156,7 +159,16 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 		httpClient = http.DefaultClient
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil)
+	var intro *introspectionSchema
+	existed, err := g.registerSlotLocked(slotKindGraphQL, key, hash, 0, 0, nil, func(c *slot) error {
+		d, err := parseIntrospectionData(rawIntro)
+		if err != nil {
+			return fmt.Errorf("parse introspection %s/%s: %w", ns, ver, err)
+		}
+		intro = d
+		c.graphql = &graphQLSource{rawIntrospection: rawIntro}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("graphql: %w", err)
 	}
@@ -175,11 +187,6 @@ func (g *Gateway) addGraphQLSourceLocked(ns, ver, endpoint string, rawIntro []by
 			httpClient: httpClient,
 		})
 		return nil
-	}
-	intro, err := parseIntrospectionData(rawIntro)
-	if err != nil {
-		delete(g.slots, key)
-		return fmt.Errorf("graphql: parse introspection %s/%s: %w", ns, ver, err)
 	}
 	src := &graphQLSource{
 		namespace:        ns,

@@ -143,13 +143,21 @@ type slot struct {
 //     descriptive error — cross-kind, schema-hash, or caps as the
 //     differentiator. vN is locked once registered.
 //
+// attach, when non-nil, sets the per-kind handle on a candidate slot
+// (only the fields bakeSlotIRLocked reads). Before a slot is created
+// or swapped, the schema is built with the candidate in place
+// (checkSchemaLocked); a candidate that fails to build is rejected and
+// the slot table is not touched, so the live schema and every other
+// service stay as they are. An error from attach rejects the same way.
+// nil skips the check (gateway-bundled slots).
+//
 // Caller holds g.mu.
-func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
+func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding, attach func(*slot) error) (existed bool, err error) {
 	if err := g.checkVersionTierAllowed(key.version); err != nil {
 		g.tm.registration(kind, "rejected")
 		return false, err
 	}
-	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings)
+	return g.registerSlotLockedSkipTierCheck(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings, attach)
 }
 
 // registerSlotLockedSkipTierCheck is the body of registerSlotLocked
@@ -158,9 +166,9 @@ func (g *Gateway) registerSlotLocked(kind slotKind, key poolKey, hash [32]byte, 
 // gateway code, not operator/user registrations, so the tier policy
 // (which exists to constrain *user* registrations) doesn't apply.
 // Caller holds g.mu.
-func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (bool, error) {
+func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding, attach func(*slot) error) (bool, error) {
 	_, had := g.slots[key]
-	existed, err := g.registerSlotInnerLocked(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings)
+	existed, err := g.registerSlotInnerLocked(kind, key, hash, maxConcurrency, maxConcurrencyPerInstance, bindings, attach)
 	switch {
 	case err != nil:
 		g.tm.registration(kind, "rejected")
@@ -174,13 +182,16 @@ func (g *Gateway) registerSlotLockedSkipTierCheck(kind slotKind, key poolKey, ha
 	return existed, err
 }
 
-func (g *Gateway) registerSlotInnerLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding) (existed bool, err error) {
+func (g *Gateway) registerSlotInnerLocked(kind slotKind, key poolKey, hash [32]byte, maxConcurrency, maxConcurrencyPerInstance int, bindings []ir.ChannelBinding, attach func(*slot) error) (existed bool, err error) {
 	if g.slots == nil {
 		g.slots = map[poolKey]*slot{}
 	}
 	s, ok := g.slots[key]
 	if !ok {
 		if err := g.checkCrossSlotBindingsLocked(key, bindings); err != nil {
+			return false, err
+		}
+		if err := g.checkCandidateLocked(kind, key, g.deprecation[key], bindings, attach); err != nil {
 			return false, err
 		}
 		g.slots[key] = &slot{
@@ -221,6 +232,9 @@ func (g *Gateway) registerSlotInnerLocked(kind slotKind, key poolKey, hash [32]b
 	// outgoing bindings (this slot's own) are skipped by the check
 	// since they're about to be replaced.
 	if err := g.checkCrossSlotBindingsLocked(key, bindings); err != nil {
+		return false, err
+	}
+	if err := g.checkCandidateLocked(kind, key, "", bindings, attach); err != nil {
 		return false, err
 	}
 	// unstable swap: evict the prior occupant — including its kind-

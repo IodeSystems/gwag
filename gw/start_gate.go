@@ -478,8 +478,9 @@ func (p *preparedBinding) kind() slotKind {
 	}
 }
 
-// admitLocked runs the gate checks of a Register: refuses a cycle,
-// and reports per binding whether it must wait. Caller holds g.mu.
+// admitLocked runs the gate checks of a Register: refuses a cycle and
+// a binding whose schema does not build (checkPreparedLocked), and
+// reports per binding whether it must wait. Caller holds g.mu.
 func (g *Gateway) admitLocked(prep []preparedBinding) ([]bool, error) {
 	edges := make([]gateEdges, 0, len(prep))
 	for _, p := range prep {
@@ -488,6 +489,9 @@ func (g *Gateway) admitLocked(prep []preparedBinding) ([]bool, error) {
 		}
 	}
 	if err := g.checkDependencyCycleLocked(edges); err != nil {
+		return nil, err
+	}
+	if err := g.checkPreparedLocked(prep); err != nil {
 		return nil, err
 	}
 	waiting := make([]bool, len(prep))

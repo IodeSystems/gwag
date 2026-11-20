@@ -2211,7 +2211,10 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 	if err != nil {
 		return fmt.Errorf("gateway: %s/%s: %w", e.namespace, e.version, err)
 	}
-	existed, err := g.registerSlotLocked(slotKindProto, key, e.hash, e.maxConcurrency, e.maxConcurrencyPerInstance, bindings)
+	existed, err := g.registerSlotLocked(slotKindProto, key, e.hash, e.maxConcurrency, e.maxConcurrencyPerInstance, bindings, func(c *slot) error {
+		c.proto = &pool{file: e.file}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}

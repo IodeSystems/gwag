@@ -100,7 +100,7 @@ func (g *Gateway) addInternalProtoSlotLocked(ns, ver string, fd protoreflect.Fil
 	if err != nil {
 		return fmt.Errorf("internalproto: %s/%s: %w", ns, canonicalVer, err)
 	}
-	existed, err := g.registerSlotLockedSkipTierCheck(slotKindInternalProto, key, hash, 0, 0, bindings)
+	existed, err := g.registerSlotLockedSkipTierCheck(slotKindInternalProto, key, hash, 0, 0, bindings, nil)
 	if err != nil {
 		return fmt.Errorf("internalproto: %w", err)
 	}

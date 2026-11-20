@@ -119,7 +119,10 @@ func (g *Gateway) addOpenAPIFromBytes(specBytes []byte, label string, opts ...Se
 		httpClient = g.cfg.openAPIHTTP
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, sc.maxConcurrency, sc.maxConcurrencyPerInstance, nil)
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, sc.maxConcurrency, sc.maxConcurrencyPerInstance, nil, func(c *slot) error {
+		c.openapi = &openAPISource{doc: doc}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("gateway: AddOpenAPI(%s): %w", label, err)
 	}
@@ -445,7 +448,23 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 		addr = "http://" + addr
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, maxConcurrency, maxConcurrencyPerInstance, nil)
+	// The spec is parsed only when the slot is created or swapped; a
+	// join to an identical slot reuses its doc.
+	var doc *openapi3.T
+	existed, err := g.registerSlotLocked(slotKindOpenAPI, key, hash, maxConcurrency, maxConcurrencyPerInstance, nil, func(c *slot) error {
+		loader := openapi3.NewLoader()
+		loader.IsExternalRefsAllowed = false
+		d, err := loader.LoadFromData(specBytes)
+		if err != nil {
+			return fmt.Errorf("parse %s/%s: %w", ns, ver, err)
+		}
+		if err := d.Validate(loader.Context); err != nil {
+			return fmt.Errorf("validate %s/%s: %w", ns, ver, err)
+		}
+		doc = d
+		c.openapi = &openAPISource{doc: d}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("openapi: %w", err)
 	}
@@ -464,17 +483,6 @@ func (g *Gateway) addOpenAPISourceLocked(ns, ver, baseURL string, specBytes []by
 			httpClient: g.cfg.openAPIHTTP,
 		}))
 		return nil
-	}
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = false
-	doc, err := loader.LoadFromData(specBytes)
-	if err != nil {
-		delete(g.slots, key)
-		return fmt.Errorf("openapi: parse %s/%s: %w", ns, ver, err)
-	}
-	if err := doc.Validate(loader.Context); err != nil {
-		delete(g.slots, key)
-		return fmt.Errorf("openapi: validate %s/%s: %w", ns, ver, err)
 	}
 	warnUnsupportedOpenAPIOps(g, ns+"/"+ver, doc)
 	src := &openAPISource{

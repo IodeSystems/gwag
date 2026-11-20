@@ -136,7 +136,10 @@ func (g *Gateway) AddMCP(transport MCPTransport, target string, opts ...ServiceO
 		g.publicNS[ns] = true
 	}
 	key := poolKey{namespace: ns, version: ver}
-	existed, err := g.registerSlotLocked(slotKindMCP, key, hash, 0, 0, nil)
+	existed, err := g.registerSlotLocked(slotKindMCP, key, hash, 0, 0, nil, func(c *slot) error {
+		c.mcp = &mcpSource{rawTools: rawTools}
+		return nil
+	})
 	if err != nil {
 		_ = cl.Close()
 		return fmt.Errorf("gateway: AddMCP: %w", err)
