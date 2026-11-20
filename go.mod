@@ -1,6 +1,6 @@
 module github.com/iodesystems/gwag/v2
 
-go 1.26.2
+go 1.27.0
 
 require (
 	connectrpc.com/connect v1.21.1
