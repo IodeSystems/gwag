@@ -403,6 +403,7 @@ See [`quota.md`](./quota.md). Default sink only.
 |---|---|---|---|
 | `schema_rebuilds_total` | counter | `result` | Gateway-wide schema rebuilds, `ok` or `error`. Default sink only. |
 | `schema_rebuild_duration_seconds` | histogram | none | Duration of those rebuilds. Default sink only. |
+| `schema_build_failures_total` | counter | none | Full schema builds that failed after the registration check let the registration in (a clash the check cannot see). Counted once per distinct error; the node logs it once and keeps serving the last schema that built. Default sink only. |
 | `registrations_total` | counter | `kind`, `outcome` | Registrations seen by this node. `kind`: `proto`, `openapi`, `graphql`, `mcp`, `internalproto`. `outcome`: `created`, `joined` (another replica of an identical schema), `swapped` (`unstable` slot replaced), `rejected`. Includes the gateway's own pub/sub slot at boot. Default sink only. |
 | `registered_services` | gauge | `kind` | Registered services on this node, internal slots excluded (scrape time). Default sink only. |
 | `cluster_peers` | gauge | none | This node plus the distinct remote cluster nodes it has a live NATS route to; 0 when not clustered (scrape time). A killed peer drops within seconds; a restarted node (new node id) replaces its old id. Read from NATS route state, not the peers KV bucket, so `/api/admin/peers` can still list a dead peer for up to its 30s TTL after the gauge drops. Default sink only. |

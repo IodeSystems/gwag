@@ -67,6 +67,7 @@ func (g *Gateway) advanceStableLocked(ns string, vN int) {
 	}
 	if cur := g.stableVN[ns]; vN > cur {
 		g.stableVN[ns] = vN
+		g.markNamesDirtyLocked(ns)
 		g.broadcastStableChanged()
 		if t := g.peers; t != nil && t.stable != nil {
 			go writeStableMonotonic(g.life, t.stable, ns, vN)
@@ -101,6 +102,7 @@ func (g *Gateway) retractStableLocked(ns string, target int) (prior int) {
 		g.stableVN = map[string]int{}
 	}
 	g.stableVN[ns] = target
+	g.markNamesDirtyLocked(ns)
 	g.broadcastStableChanged()
 	return prior
 }
@@ -131,10 +133,12 @@ func (g *Gateway) observeStableFromKVLocked(ns string, vN int) bool {
 		// rather than leave it at 0 so stableSnapshotLocked still
 		// distinguishes "never set" from "set to zero".
 		delete(g.stableVN, ns)
+		g.markNamesDirtyLocked(ns)
 		g.broadcastStableChanged()
 		return has
 	}
 	g.stableVN[ns] = vN
+	g.markNamesDirtyLocked(ns)
 	g.broadcastStableChanged()
 	return true
 }

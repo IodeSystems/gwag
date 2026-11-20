@@ -308,6 +308,7 @@ func (g *Gateway) evictSlotLocked(s *slot) {
 	s.graphql = nil
 	s.internalProto = nil
 	s.ir = nil
+	g.markNamesDirtyLocked(s.key.namespace)
 }
 
 // releaseSlotLocked drops the slot index entry. Called by per-kind
@@ -321,6 +322,7 @@ func (g *Gateway) evictSlotLocked(s *slot) {
 // stale-config triage signal isn't relevant anymore.
 func (g *Gateway) releaseSlotLocked(key poolKey) {
 	delete(g.slots, key)
+	g.markNamesDirtyLocked(key.namespace)
 	delete(g.rejectedJoins, key)
 }
 
@@ -488,6 +490,9 @@ func (g *Gateway) bakeSlotIRLocked(s *slot) {
 		ir.PopulateSchemaIDs(svc)
 	}
 	s.ir = raw
+	if g.slots[s.key] == s {
+		g.markNamesDirtyLocked(s.key.namespace)
+	}
 }
 
 // rebakeAllSlotsLocked re-bakes every slot's IR. Use(...) calls this

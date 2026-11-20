@@ -115,6 +115,7 @@ type trafficMetrics struct {
 
 	rebuilds      *prometheus.CounterVec
 	rebuildDur    prometheus.Histogram
+	buildFails    prometheus.Counter
 	registrations *prometheus.CounterVec
 
 	// sla: per-upstream TTFB, sizes and attempts (upstream_sla.go).
@@ -170,6 +171,10 @@ func newTrafficMetrics(reg *prometheus.Registry, p string, dur, self *prometheus
 		Help:    "Duration of gateway-wide schema rebuilds.",
 		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 	})
+	tm.buildFails = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: p + "_schema_build_failures_total",
+		Help: "Full schema builds that failed after the registration check passed them, counted once per distinct error (a repeat of the same error is not counted). The last good schema stays live.",
+	})
 	tm.registrations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: p + "_registrations_total",
 		Help: "Service registrations seen by this node, by slot kind (proto | openapi | graphql | mcp | internalproto) and outcome: created, joined (another replica of an identical schema), swapped (unstable slot replaced), rejected.",
@@ -195,7 +200,7 @@ func newTrafficMetrics(reg *prometheus.Registry, p string, dur, self *prometheus
 		tm.gqlErr[i] = errs.WithLabelValues(k)
 	}
 	reg.MustRegister(inflight, reqSize, respSize, tm.rejected, errs, tm.partial, tm.retries,
-		tm.timeouts, tm.ejections, tm.rebuilds, tm.rebuildDur, tm.registrations, buildInfo)
+		tm.timeouts, tm.ejections, tm.rebuilds, tm.rebuildDur, tm.buildFails, tm.registrations, buildInfo)
 	tm.sla = newSLAMetrics(reg, p)
 	return tm
 }
@@ -262,6 +267,12 @@ func (tm *trafficMetrics) rebuild(start time.Time, err error) {
 	}
 	tm.rebuilds.WithLabelValues(result).Inc()
 	tm.rebuildDur.Observe(time.Since(start).Seconds())
+}
+
+func (tm *trafficMetrics) buildFailure() {
+	if tm != nil {
+		tm.buildFails.Inc()
+	}
 }
 
 // ---------------------------------------------------------------------

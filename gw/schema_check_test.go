@@ -265,3 +265,89 @@ func (checkConn) Invoke(context.Context, string, any, any, ...grpc.CallOption) e
 func (checkConn) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Error(codes.Unimplemented, "no streams")
 }
+
+// A full build that fails after the check let a slot in (here the
+// slot is put in place directly, as a clash the check cannot see
+// would leave it) keeps the last good schema live, and logs and
+// counts the error once, not on every rebuild.
+func TestSchemaCheck_FullBuildFailureKeepsSchema(t *testing.T) {
+	gw := metricsGateway(t)
+	if err := gw.AddProtoBytes("col.proto", []byte(checkGoodProto), To(checkConn{}), As("col")); err != nil {
+		t.Fatal(err)
+	}
+	gw.Handler()
+	fd, err := compileProtoBytes("colb.proto", []byte(checkBadProto), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := poolKey{namespace: "colb", version: "v1"}
+	gw.mu.Lock()
+	s := &slot{key: bad, kind: slotKindProto, proto: &pool{file: fd}}
+	gw.slots[bad] = s
+	gw.bakeSlotIRLocked(s)
+	errs := []error{gw.assembleLocked(), gw.assembleLocked()}
+	gw.mu.Unlock()
+	for _, err := range errs {
+		if err == nil {
+			t.Fatal("full build with a clashing slot succeeded")
+		}
+	}
+	if got, want := checkQuery(t, gw, `{ col { get { a } } }`), `{"data":{"col":{"get":{"a":""}}}}`; got != want {
+		t.Fatalf("query after a failed build: %s, want %s", got, want)
+	}
+	body := scrapeBody(t, gw)
+	wantSeries(t, body, mp+`schema_build_failures_total`, "1")
+	wantSeries(t, body, mp+`schema_rebuilds_total{result="error"}`, "2")
+
+	// With the slot gone the next build succeeds and serves both.
+	gw.mu.Lock()
+	gw.releaseSlotLocked(bad)
+	gw.mu.Unlock()
+	if err := gw.AddProtoBytes("other.proto", []byte(checkOtherProto), To(checkConn{}), As("other")); err != nil {
+		t.Fatalf("registration after the slot left: %v", err)
+	}
+	if got, want := checkQuery(t, gw, `{ col { get { a } } other { get { a } } }`), `{"data":{"col":{"get":{"a":""}},"other":{"get":{"a":""}}}}`; got != want {
+		t.Fatalf("query: %s, want %s", got, want)
+	}
+	gw.mu.Lock()
+	last := gw.lastBuildErr
+	gw.mu.Unlock()
+	if last != "" {
+		t.Fatalf("lastBuildErr = %q after a good build", last)
+	}
+}
+
+// The name index follows deregistration: once the namespace that owns
+// a name leaves, another namespace may take it.
+func TestSchemaCheck_NameFreedOnRelease(t *testing.T) {
+	gw := metricsGateway(t)
+	if err := gw.AddProtoBytes("col.proto", []byte(checkGoodProto), To(checkConn{}), As("col")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.AddProtoBytes("colb.proto", []byte(checkBadProto), To(checkConn{}), As("colb")); err == nil {
+		t.Fatal("clash accepted")
+	}
+	gw.mu.Lock()
+	gw.releaseSlotLocked(poolKey{namespace: "col", version: "v1"})
+	gw.mu.Unlock()
+	if err := gw.AddProtoBytes("colb.proto", []byte(checkBadProto), To(checkConn{}), As("colb")); err != nil {
+		t.Fatalf("registration after the owner left: %v", err)
+	}
+	if got, want := checkQuery(t, gw, `{ colb { put { b } } }`), `{"data":{"colb":{"put":{"b":""}}}}`; got != want {
+		t.Fatalf("query: %s, want %s", got, want)
+	}
+}
+
+// The index covers names the gateway itself makes, not only service
+// types: namespace colV1 renders ColV1QueryNamespace, which is also
+// the container of col's v1.
+func TestSchemaCheck_ContainerNameClash(t *testing.T) {
+	gw := metricsGateway(t)
+	if err := gw.AddProtoBytes("col.proto", []byte(checkGoodProto), To(checkConn{}), As("col")); err != nil {
+		t.Fatal(err)
+	}
+	err := gw.AddProtoBytes("other.proto", []byte(checkOtherProto), To(checkConn{}), As("colV1"))
+	if err == nil || !strings.Contains(err.Error(), "ColV1QueryNamespace") {
+		t.Fatalf("err = %v, want a refusal naming ColV1QueryNamespace", err)
+	}
+}

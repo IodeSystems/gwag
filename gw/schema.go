@@ -31,8 +31,18 @@ func (g *Gateway) assembleLocked() (err error) {
 	schema, annotations, err := g.buildSchemaLocked(schemaFilter{})
 	if err != nil {
 		g.dispatchers = prev
+		// The registration check passed every slot, so this is a
+		// clash it cannot see. Keep the last good schema; log and
+		// count each distinct error once (the next rebuild with the
+		// same slots fails the same way).
+		if msg := err.Error(); msg != g.lastBuildErr {
+			g.lastBuildErr = msg
+			g.tm.buildFailure()
+			g.appKeyWarnf("schema build failed, serving the last schema that built: %v", err)
+		}
 		return err
 	}
+	g.lastBuildErr = ""
 	g.schema.Store(schema)
 	g.schemaAnnotations.Store(annotations)
 	if err := g.gql.SetSchema(schema, annotations, nil); err != nil {

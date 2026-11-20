@@ -309,6 +309,16 @@ type Gateway struct {
 	// holds g.mu.
 	rejectedJoins map[poolKey]*rejectedJoinSummary
 
+	// names indexes the gateway-global GraphQL names every namespace
+	// renders, for the registration check (schema_check.go). Caller
+	// holds g.mu.
+	names schemaNameIndex
+
+	// lastBuildErr is the error of the last failed full schema build,
+	// "" after a good one: a failure is logged and counted once.
+	// Caller holds g.mu.
+	lastBuildErr string
+
 	// channelBindingIndex aggregates channel→payload-type bindings
 	// across all slots. Rebuilt on every assembleLocked; atomic-
 	// swapped so the psPub hot path reads without g.mu.
@@ -2231,6 +2241,7 @@ func (g *Gateway) joinPoolLocked(e poolEntry) error {
 		// (registerSlotLocked uses the same key) — defensive: roll the
 		// slot back so the gateway state stays in sync.
 		delete(g.slots, key)
+		g.markNamesDirtyLocked(key.namespace)
 		return fmt.Errorf("gateway: %w", err)
 	}
 	p := &pool{
