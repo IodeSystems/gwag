@@ -364,6 +364,9 @@ type config struct {
 	// legacyErrorCodes: WithLegacyErrorCodes.
 	legacyErrorCodes bool
 
+	// lossyInputCoercion: WithLossyInputCoercion.
+	lossyInputCoercion bool
+
 	// openAPIVersion: WithOpenAPIVersion ("", "3.0" or "3.1").
 	openAPIVersion string
 
@@ -943,6 +946,25 @@ func WithConnectErrorCodes() Option {
 // Stability: experimental
 func WithLegacyErrorCodes() Option {
 	return func(cfg *config) { cfg.legacyErrorCodes = true }
+}
+
+// WithLossyInputCoercion restores graphql-go v2's lossy coercion of
+// client variables for the built-in Int, Float and ID scalars: 2.5 → 2
+// and true → 1 for Int, true → 1 for Float, 2.5 → "2.5" and true →
+// "true" for ID. Default off: graphql-go v3 rejects such a variable
+// (`Variable "$v" got invalid value 2.5.`) and accepts only values that
+// convert with no loss ("2" or 2.0 for Int, numeric strings for Float,
+// integral numbers for ID). Literals in the query text stay strict
+// either way. Applies to every execution path: HTTP (and batches),
+// graphql-transport-ws, the gRPC / Connect ingress and the MCP query
+// tool. CLI: --allow-lossy-coercion-of-inputs.
+//
+// For clients that send 2.5 or booleans for Int and relied on v2
+// truncating them.
+//
+// Stability: experimental
+func WithLossyInputCoercion() Option {
+	return func(cfg *config) { cfg.lossyInputCoercion = true }
 }
 
 // WithOpenAPIVersion sets the OpenAPI version SchemaOpenAPIHandler

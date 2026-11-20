@@ -187,3 +187,64 @@ var (
 		"nested/absent": `http=200 {"data":{"g":{}}}`,
 	}
 )
+
+// With WithLossyInputCoercion: the v2.1.1 values, except where gwag or
+// v3 fixed number formatting (ID 3e9, OpenAPI Float 3e9).
+var (
+	compatScalarGraphQLWantLossy = map[string]string{
+		"Int/2":        `error="" | http=200 upstream vars={"v":2}`,
+		"Int/2.0":      `error="" | http=200 upstream vars={"v":2}`,
+		"Int/2.5":      `error="" | http=200 upstream vars={"v":2}`,
+		"Int/str2":     `error="" | http=200 upstream vars={"v":2}`,
+		"Int/str2.5":   `error="" | http=200 upstream vars={"v":2}`,
+		"Int/true":     `error="" | http=200 upstream vars={"v":1}`,
+		"Int/1e2":      `error="" | http=200 upstream vars={"v":100}`,
+		"Int/3e9":      `error="Variable \"$v\" got invalid value 3000000000." | http=200 upstream not called`,
+		"Float/2":      `error="" | http=200 upstream vars={"v":2}`,
+		"Float/2.0":    `error="" | http=200 upstream vars={"v":2}`,
+		"Float/2.5":    `error="" | http=200 upstream vars={"v":2.5}`,
+		"Float/str2":   `error="" | http=200 upstream vars={"v":2}`,
+		"Float/str2.5": `error="" | http=200 upstream vars={"v":2.5}`,
+		"Float/true":   `error="" | http=200 upstream vars={"v":1}`,
+		"Float/1e2":    `error="" | http=200 upstream vars={"v":100}`,
+		"Float/3e9":    `error="" | http=200 upstream vars={"v":3000000000}`,
+		"ID/2":         `error="" | http=200 upstream vars={"v":"2"}`,
+		"ID/2.0":       `error="" | http=200 upstream vars={"v":"2"}`,
+		"ID/2.5":       `error="" | http=200 upstream vars={"v":"2.5"}`,
+		"ID/str2":      `error="" | http=200 upstream vars={"v":"2"}`,
+		"ID/str2.5":    `error="" | http=200 upstream vars={"v":"2.5"}`,
+		"ID/true":      `error="" | http=200 upstream vars={"v":"true"}`,
+		"ID/1e2":       `error="" | http=200 upstream vars={"v":"100"}`,
+		"ID/3e9":       `error="" | http=200 upstream vars={"v":"3000000000"}`,
+	}
+
+	compatScalarOpenAPIWantLossy = map[string]string{
+		"Int/2":        `error="" | http=200 GET /q?i=2`,
+		"Int/2.0":      `error="" | http=200 GET /q?i=2`,
+		"Int/2.5":      `error="" | http=200 GET /q?i=2`,
+		"Int/str2":     `error="" | http=200 GET /q?i=2`,
+		"Int/str2.5":   `error="" | http=200 GET /q?i=2`,
+		"Int/true":     `error="" | http=200 GET /q?i=1`,
+		"Int/1e2":      `error="" | http=200 GET /q?i=100`,
+		"Int/3e9":      `error="Variable \"$v\" got invalid value 3000000000." | http=200 upstream not called`,
+		"Float/2":      `error="" | http=200 GET /q?f=2`,
+		"Float/2.0":    `error="" | http=200 GET /q?f=2`,
+		"Float/2.5":    `error="" | http=200 GET /q?f=2.5`,
+		"Float/str2":   `error="" | http=200 GET /q?f=2`,
+		"Float/str2.5": `error="" | http=200 GET /q?f=2.5`,
+		"Float/true":   `error="" | http=200 GET /q?f=1`,
+		"Float/1e2":    `error="" | http=200 GET /q?f=100`,
+		"Float/3e9":    `error="" | http=200 GET /q?f=3000000000`,
+	}
+
+	compatScalarMCPWantLossy = map[string]string{
+		"Float/2":      `error="" | http=200 args={"n":2}`,
+		"Float/2.0":    `error="" | http=200 args={"n":2}`,
+		"Float/2.5":    `error="" | http=200 args={"n":2.5}`,
+		"Float/str2":   `error="" | http=200 args={"n":2}`,
+		"Float/str2.5": `error="" | http=200 args={"n":2.5}`,
+		"Float/true":   `error="" | http=200 args={"n":1}`,
+		"Float/1e2":    `error="" | http=200 args={"n":100}`,
+		"Float/3e9":    `error="" | http=200 args={"n":3000000000}`,
+	}
+)

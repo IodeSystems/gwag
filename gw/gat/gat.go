@@ -164,6 +164,7 @@ type Gateway struct {
 	parsers         map[string]contentParser
 	stringVariables bool
 	echoComplete    bool
+	lossyInput      bool
 	outcomeObs      OutcomeObserver
 
 	// gRPC ingress (grpc_routes.go): the PreCall hook, and the host
@@ -756,11 +757,11 @@ func (r execResult) recycle() {
 // (staging.go), merged into one response.
 func (g *Gateway) run(ctx context.Context, snap *snapshot, p plannedRequest, operationName string, variables map[string]any) execResult {
 	if p.pr.Plan == nil || len(p.pr.Errors) > 0 {
-		return execute(ctx, snap, p, operationName, variables)
+		return g.execute(ctx, snap, p, operationName, variables)
 	}
 	st := g.exports.stagesFor(snap.schema, p.query, operationName)
 	if st == nil {
-		return execute(ctx, snap, p, operationName, variables)
+		return g.execute(ctx, snap, p, operationName, variables)
 	}
 	if st.err != nil {
 		return execResult{payload: appendCodedError(nil, st.err.Error(), "EXPORT_DEPENDENCY")}
@@ -780,7 +781,7 @@ func (g *Gateway) run(ctx context.Context, snap *snapshot, p plannedRequest, ope
 			}
 		}
 		sp := plannedRequest{query: stage.query, pr: snap.plans.Get(snap.schema, stage.query, operationName)}
-		res := execute(ctx, snap, sp, operationName, vars)
+		res := g.execute(ctx, snap, sp, operationName, vars)
 		payloads = append(payloads, append([]byte(nil), res.payload...))
 		if len(stage.exports) > 0 {
 			collectExports(stage.exports, res.payload, exported)
@@ -791,7 +792,7 @@ func (g *Gateway) run(ctx context.Context, snap *snapshot, p plannedRequest, ope
 }
 
 // execute runs a planned request and returns its response JSON.
-func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationName string, variables map[string]any) (res execResult) {
+func (g *Gateway) execute(ctx context.Context, snap *snapshot, p plannedRequest, operationName string, variables map[string]any) (res execResult) {
 	pr := p.pr
 	switch {
 	case len(pr.Errors) > 0:
@@ -815,10 +816,11 @@ func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationNam
 		// map[string]any result tree and the final Encode.
 		buf := graphqlBufPool.Get().(*[]byte)
 		body, errs := graphql.ExecutePlanAppend(pr.Plan, graphql.ExecuteParams{
-			Schema:        *snap.schema,
-			OperationName: operationName,
-			Args:          args,
-			Context:       ctx,
+			Schema:                  *snap.schema,
+			OperationName:           operationName,
+			Args:                    args,
+			Context:                 ctx,
+			AllowLossyInputCoercion: g.lossyInput,
 		}, (*buf)[:0])
 		if len(errs) > 0 {
 			// Spec-level failures (variable coercion and friends) that
@@ -837,11 +839,12 @@ func execute(ctx context.Context, snap *snapshot, p plannedRequest, operationNam
 		// the full parse-and-execute path rather than serving an
 		// empty body.
 		res.payload, _ = json.Marshal(graphql.Do(graphql.Params{
-			Schema:         *snap.schema,
-			RequestString:  p.query,
-			VariableValues: variables,
-			OperationName:  operationName,
-			Context:        ctx,
+			Schema:                  *snap.schema,
+			RequestString:           p.query,
+			VariableValues:          variables,
+			OperationName:           operationName,
+			Context:                 ctx,
+			AllowLossyInputCoercion: g.lossyInput,
 		}))
 	}
 	return res

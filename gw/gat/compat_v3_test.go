@@ -1,6 +1,7 @@
 package gat_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,7 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/iodesystems/gwag/v2/gw/gat"
@@ -115,6 +119,76 @@ func TestCompat_GatOpenAPIParams(t *testing.T) {
 			msg, got := f.call(t, c.query, c.vars)
 			if msg != "" || got != c.want {
 				t.Fatalf("error=%q upstream=%q, want %q", msg, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAllowLossyInputCoercion_Lite: gat's AllowLossyInputCoercion on
+// the lite path (gwag serve --openapi): Int 2.5 is rejected by
+// default and truncated to 2 with it.
+func TestAllowLossyInputCoercion_Lite(t *testing.T) {
+	const q = `query($v: Int){ t { qry(i: $v){ id } } }`
+	strict := newCompatGat(t)
+	if msg, got := strict.call(t, q, `{"v":2.5}`); !strings.HasPrefix(msg, `Variable "$v" got invalid value 2.5.`) || got != "" {
+		t.Fatalf("strict: error=%q upstream=%q", msg, got)
+	}
+	lossy := newCompatGat(t, func(g *gat.Gateway) { g.AllowLossyInputCoercion(true) })
+	if msg, got := lossy.call(t, q, `{"v":2.5}`); msg != "" || got != "GET /q?i=2" {
+		t.Fatalf("lossy: error=%q upstream=%q", msg, got)
+	}
+}
+
+type lossyNInput struct {
+	N int32 `query:"n"`
+}
+
+type lossyNEvent struct {
+	N int32 `json:"n"`
+}
+
+// TestAllowLossyInputCoercion_WS: graphql-transport-ws subscriptions
+// get the same coercion: Int 2.5 is an error frame by default and n=2
+// with AllowLossyInputCoercion.
+func TestAllowLossyInputCoercion_WS(t *testing.T) {
+	for _, lossy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "strict", true: "lossy"}[lossy], func(t *testing.T) {
+			mux := http.NewServeMux()
+			api := humago.New(mux, huma.DefaultConfig("Demo", "1.0.0"))
+			g := mustNewGat(t).AllowLossyInputCoercion(lossy)
+			gat.Register(api, g, huma.Operation{OperationID: "getProject", Method: http.MethodGet, Path: "/projects/{id}"},
+				func(ctx context.Context, in *getProjectInput) (*getProjectOutput, error) {
+					return &getProjectOutput{Body: project{ID: in.ID}}, nil
+				})
+			gat.Subscribe(api, g, huma.Operation{OperationID: "echoN"},
+				func(ctx context.Context, in *lossyNInput) (<-chan *lossyNEvent, error) {
+					out := make(chan *lossyNEvent, 1)
+					out <- &lossyNEvent{N: in.N}
+					close(out)
+					return out, nil
+				})
+			if err := gat.RegisterHuma(api, g, "/api"); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn := dialGraphQLWS(t, ctx, srv.URL+"/api/graphql", "")
+			p, _ := json.Marshal(map[string]any{
+				"query":     `subscription($v: Int){ Demo_echoN(n: $v) { n } }`,
+				"variables": map[string]any{"v": 2.5},
+			})
+			wsSend(t, ctx, conn, wsMsg{ID: "1", Type: "subscribe", Payload: p})
+			m := wsRecv(t, ctx, conn)
+			if lossy {
+				if m.Type != "next" || !strings.Contains(string(m.Payload), `"n":2`) {
+					t.Fatalf("lossy: %s %s", m.Type, m.Payload)
+				}
+				return
+			}
+			if m.Type != "error" || !strings.Contains(string(m.Payload), `got invalid value 2.5`) {
+				t.Fatalf("strict: %s %s", m.Type, m.Payload)
 			}
 		})
 	}

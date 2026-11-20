@@ -97,6 +97,7 @@ func main() {
 	signerSecret := flag.String("signer-secret", "", "Hex-encoded bearer for the gRPC SignSubscriptionToken RPC; admin token also works as fallback")
 	environment := flag.String("environment", "", "Environment name this gateway belongs to (e.g. dev, staging, prod); a label shown by the admin API and UI")
 	callerIDPublic := flag.Bool("caller-id-public", false, "Take the caller id from the X-Caller-Id header (gRPC: caller-id metadata). Forgeable; dev and demos only. Feeds usage edges and the dependency graph.")
+	lossyInputs := flag.Bool("allow-lossy-coercion-of-inputs", false, "Accept lossy client variables for Int, Float and ID as graphql-go v2 did (2.5 -> 2, true -> 1 for Int). Default: rejected")
 	pprofEnable := flag.Bool("pprof", false, "Expose net/http/pprof under /debug/pprof behind AdminMiddleware. Off by default — pprof leaks goroutine and heap state, never make it public.")
 	publicServices := flag.String("public-services", "", "Admin readers without a token see these services: \"all\", or a comma-separated list of namespaces. Empty = only services that register with public=true. Admin visibility only; calls through the gateway are not affected.")
 	adminDataDir := flag.String("admin-data-dir", "", "Directory under which the gateway persists its boot admin token (empty → in-memory only). Set this to a writable path so a worked example (e.g. cmd/mcp-demo) can read <dir>/admin-token without scraping logs. Implicitly set when --nats-data is.")
@@ -209,6 +210,9 @@ func main() {
 	}
 	if *pprofEnable {
 		gwOpts = append(gwOpts, gateway.WithPprof())
+	}
+	if *lossyInputs {
+		gwOpts = append(gwOpts, gateway.WithLossyInputCoercion())
 	}
 	if *environment != "" {
 		gwOpts = append(gwOpts, gateway.WithEnvironment(*environment))

@@ -112,6 +112,20 @@ func (g *Gateway) AcceptStringVariables(b bool) *Gateway {
 	return g
 }
 
+// AllowLossyInputCoercion restores graphql-go v2's lossy coercion of
+// client variables for the built-in Int, Float and ID scalars: 2.5 → 2
+// and true → 1 for Int, true → 1 for Float, 2.5 → "2.5" and true →
+// "true" for ID. Default off: such values are a variable error;
+// lossless ones ("2" or 2.0 for Int) are accepted either way. Literals
+// in the query text stay strict. Applies to HTTP, batches, @export stages and
+// graphql-transport-ws. Returns g for chaining.
+//
+// Stability: experimental
+func (g *Gateway) AllowLossyInputCoercion(b bool) *Gateway {
+	g.lossyInput = b
+	return g
+}
+
 // EchoComplete makes graphql-transport-ws answer a client's `complete`
 // with a `complete` of its own once the subscription has stopped
 // (default off: the protocol has the server send nothing). For hosts

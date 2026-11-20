@@ -187,11 +187,12 @@ func (g *Gateway) runGraphQLSubscription(ctx context.Context, id string, p wsSub
 	// Loaded per subscription, not per connection: a long-lived
 	// connection's new subscriptions see a replaced schema.
 	results := graphql.Subscribe(graphql.Params{
-		Schema:         *g.snap.Load().schema,
-		RequestString:  p.Query,
-		VariableValues: p.Variables,
-		OperationName:  p.OperationName,
-		Context:        ctx,
+		Schema:                  *g.snap.Load().schema,
+		RequestString:           p.Query,
+		VariableValues:          p.Variables,
+		OperationName:           p.OperationName,
+		Context:                 ctx,
+		AllowLossyInputCoercion: g.lossyInput,
 	})
 	for res := range results {
 		if ctx.Err() != nil {

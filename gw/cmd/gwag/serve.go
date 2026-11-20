@@ -50,6 +50,7 @@ func serveCmd(args []string) int {
 	mcpInclude := &stringListValue{}
 	fs.Var(mcpInclude, "mcp-include", "MCP allowlist glob (repeatable). Implies --mcp.")
 	srFlags := addSchemaRegistryFlags(fs)
+	inFlags := addInputFlags(fs)
 	fs.Usage = func() {
 		out := fs.Output()
 		fmt.Fprintln(out, "Usage: gwag serve {--openapi PATH --to URL | --proto PATH --to HOST:PORT | --graphql URL} [flags]")
@@ -108,9 +109,9 @@ func serveCmd(args []string) int {
 			protoPath:   *protoPath,
 			target:      *target,
 		}
-		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values, srFlags, srOpt, shut)
+		return serveFullGateway(src, *addr, *namespace, *version, mcpOn, mcpInclude.values, srFlags, srOpt, inFlags, shut)
 	}
-	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version, shut)
+	return serveGat(*openapiPath, *protoPath, *target, *addr, *prefix, *namespace, *version, inFlags, shut)
 }
 
 // fullGatewaySource carries exactly one source (graphqlURL, openapiPath,
@@ -127,8 +128,8 @@ type fullGatewaySource struct {
 // subscription proxy) wrapping one upstream of any supported kind.
 // /mcp is optional via --mcp. No NATS, no admin UI, no cluster — those
 // ride on `gwag up`.
-func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, srFlags *schemaRegistryFlags, srOpt gateway.Option, shut gateway.ShutdownOptions) int {
-	gwOpts := []gateway.Option{}
+func serveFullGateway(src fullGatewaySource, addr, namespace, version string, enableMCP bool, mcpIncludes []string, srFlags *schemaRegistryFlags, srOpt gateway.Option, inFlags *inputFlags, shut gateway.ShutdownOptions) int {
+	gwOpts := inFlags.options()
 	if srOpt != nil {
 		gwOpts = append(gwOpts, srOpt)
 	}
@@ -203,7 +204,7 @@ func fullGatewayMux(gw *gateway.Gateway, enableMCP bool) *http.ServeMux {
 
 // serveGat is the lite path used by --openapi / --proto: embedded gat
 // translator, no metrics, no admin.
-func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version string, shut gateway.ShutdownOptions) int {
+func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version string, inFlags *inputFlags, shut gateway.ShutdownOptions) int {
 	var (
 		regs []gat.ServiceRegistration
 		err  error
@@ -232,6 +233,7 @@ func serveGat(openapiPath, protoPath, target, addr, prefix, namespace, version s
 		fmt.Fprintf(os.Stderr, "gwag serve: build gateway: %v\n", err)
 		return 1
 	}
+	inFlags.applyGat(g)
 
 	mux := http.NewServeMux()
 	if err := gat.RegisterHTTP(mux, g, prefix); err != nil {

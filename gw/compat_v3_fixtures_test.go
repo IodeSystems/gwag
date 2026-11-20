@@ -122,7 +122,7 @@ type compatOpenAPI struct {
 	reply string // response JSON; default {"id":"x"}
 }
 
-func newCompatOpenAPI(t *testing.T) *compatOpenAPI {
+func newCompatOpenAPI(t *testing.T, opts ...Option) *compatOpenAPI {
 	t.Helper()
 	f := &compatOpenAPI{reply: `{"id":"x"}`}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +136,7 @@ func newCompatOpenAPI(t *testing.T) *compatOpenAPI {
 		_, _ = w.Write([]byte(reply))
 	}))
 	t.Cleanup(srv.Close)
-	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t")))
+	gw := New(append([]Option{WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t"))}, opts...)...)
 	t.Cleanup(gw.Close)
 	if err := gw.AddOpenAPIBytes([]byte(compatOpenAPISpec), To(srv.URL), As("t")); err != nil {
 		t.Fatalf("AddOpenAPIBytes: %v", err)
@@ -197,7 +197,7 @@ type compatGraphQL struct {
 	data string // "data" JSON the upstream returns
 }
 
-func newCompatGraphQL(t *testing.T) *compatGraphQL {
+func newCompatGraphQL(t *testing.T, opts ...Option) *compatGraphQL {
 	t.Helper()
 	f := &compatGraphQL{data: `{"echo":"ok"}`}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +220,7 @@ func newCompatGraphQL(t *testing.T) *compatGraphQL {
 		_, _ = w.Write([]byte(`{"data":` + data + `}`))
 	}))
 	t.Cleanup(srv.Close)
-	gw := New(WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t")))
+	gw := New(append([]Option{WithoutMetrics(), WithoutBackpressure(), WithAdminToken([]byte("t"))}, opts...)...)
 	t.Cleanup(gw.Close)
 	if err := gw.AddGraphQL(srv.URL, As("g")); err != nil {
 		t.Fatalf("AddGraphQL: %v", err)
@@ -251,7 +251,7 @@ type compatMCP struct {
 	args string // JSON of the arguments the tool received; "" = not called
 }
 
-func newCompatMCP(t *testing.T) *compatMCP {
+func newCompatMCP(t *testing.T, opts ...Option) *compatMCP {
 	t.Helper()
 	f := &compatMCP{}
 	s := mcpserver.NewMCPServer("compat-mcp", "1.0.0", mcpserver.WithToolCapabilities(false))
@@ -270,7 +270,7 @@ func newCompatMCP(t *testing.T) *compatMCP {
 	)
 	srv := servertest.NewTestStreamableHTTPServer(s)
 	t.Cleanup(srv.Close)
-	gw := New(WithoutMetrics(), WithoutBackpressure())
+	gw := New(append([]Option{WithoutMetrics(), WithoutBackpressure()}, opts...)...)
 	t.Cleanup(gw.Close)
 	if err := gw.AddMCP(MCPHTTP, srv.URL, As("m")); err != nil {
 		t.Fatalf("AddMCP: %v", err)

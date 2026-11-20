@@ -89,6 +89,7 @@ func upCmd(args []string) int {
 	mirrorTLSCA := fs.String("mirror-tls-ca", "", "CA that signs both sides' --mirror-tls-cert")
 	adminTokenFile := fs.String("admin-token-file", "", "Read the admin bearer token (hex) from this file instead of generating one in the data dir. Env GWAG_ADMIN_TOKEN works the same when the flag is empty. Use it to hand every node of a deployment one platform-managed secret")
 	srFlags := addSchemaRegistryFlags(fs)
+	inFlags := addInputFlags(fs)
 	ssoFlags := oidc.RegisterFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: gwag up [flags]")
@@ -182,6 +183,7 @@ func upCmd(args []string) int {
 	if *insecureSubscribe {
 		gwOpts = append(gwOpts, gateway.WithoutSubscriptionAuth())
 	}
+	gwOpts = append(gwOpts, inFlags.options()...)
 	if *autoFinalize {
 		gwOpts = append(gwOpts, gateway.WithClusterAutoFinalize())
 	}

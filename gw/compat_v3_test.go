@@ -181,60 +181,91 @@ var compatScalarValues = []struct{ name, json, v3 string }{
 	{"3e9", `3000000000`, "v3: ID is \"3000000000\" (v2.1.1: \"3e+09\"); Int still rejects it"},
 }
 
+// compatCoercionModes runs each scalar table twice: the default (lossy
+// variables rejected) against the plain want map, and
+// WithLossyInputCoercion (the v2.1.1 coercion) against the *Lossy map.
+var compatCoercionModes = []struct {
+	name  string
+	opts  []Option
+	lossy bool
+}{
+	{"strict", nil, false},
+	{"lossy", []Option{WithLossyInputCoercion()}, true},
+}
+
+func compatPick(lossy bool, strict, lossyWant map[string]string) map[string]string {
+	if lossy {
+		return lossyWant
+	}
+	return strict
+}
+
 func TestCompat_ScalarVariable_GraphQLUpstream(t *testing.T) {
-	f := newCompatGraphQL(t)
-	for _, typ := range []struct{ gql, arg string }{{"Int", "i"}, {"Float", "f"}, {"ID", "id"}} {
-		for _, v := range compatScalarValues {
-			name := typ.gql + "/" + v.name
-			t.Run(name, func(t *testing.T) {
-				// v3: see compatScalarValues[].v3
-				f.reset()
-				q := fmt.Sprintf(`query($v: %s){ g { echo(%s: $v) } }`, typ.gql, typ.arg)
-				status, body := compatPost(t, f.h, q, `{"v":`+v.json+`}`)
-				vars, up := f.seen()
-				seen := "upstream not called"
-				if up != "" {
-					seen = "upstream vars=" + vars
+	for _, m := range compatCoercionModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatGraphQL(t, m.opts...)
+			want := compatPick(m.lossy, compatScalarGraphQLWant, compatScalarGraphQLWantLossy)
+			for _, typ := range []struct{ gql, arg string }{{"Int", "i"}, {"Float", "f"}, {"ID", "id"}} {
+				for _, v := range compatScalarValues {
+					name := typ.gql + "/" + v.name
+					t.Run(name, func(t *testing.T) {
+						f.reset()
+						q := fmt.Sprintf(`query($v: %s){ g { echo(%s: $v) } }`, typ.gql, typ.arg)
+						status, body := compatPost(t, f.h, q, `{"v":`+v.json+`}`)
+						vars, up := f.seen()
+						seen := "upstream not called"
+						if up != "" {
+							seen = "upstream vars=" + vars
+						}
+						compatCheck(t, want, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, seen)))
+					})
 				}
-				compatCheck(t, compatScalarGraphQLWant, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, seen)))
-			})
-		}
+			}
+		})
 	}
 }
 
 func TestCompat_ScalarVariable_OpenAPIUpstream(t *testing.T) {
-	f := newCompatOpenAPI(t)
-	for _, typ := range []struct{ gql, arg string }{{"Int", "i"}, {"Float", "f"}} {
-		for _, v := range compatScalarValues {
-			name := typ.gql + "/" + v.name
-			t.Run(name, func(t *testing.T) {
-				// v3: see compatScalarValues[].v3
-				f.reset()
-				q := fmt.Sprintf(`query($v: %s){ t { qry(%s: $v){ id } } }`, typ.gql, typ.arg)
-				status, body := compatPost(t, f.h, q, `{"v":`+v.json+`}`)
-				req, _ := f.seen()
-				if req == "" {
-					req = "upstream not called"
+	for _, m := range compatCoercionModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatOpenAPI(t, m.opts...)
+			want := compatPick(m.lossy, compatScalarOpenAPIWant, compatScalarOpenAPIWantLossy)
+			for _, typ := range []struct{ gql, arg string }{{"Int", "i"}, {"Float", "f"}} {
+				for _, v := range compatScalarValues {
+					name := typ.gql + "/" + v.name
+					t.Run(name, func(t *testing.T) {
+						f.reset()
+						q := fmt.Sprintf(`query($v: %s){ t { qry(%s: $v){ id } } }`, typ.gql, typ.arg)
+						status, body := compatPost(t, f.h, q, `{"v":`+v.json+`}`)
+						req, _ := f.seen()
+						if req == "" {
+							req = "upstream not called"
+						}
+						compatCheck(t, want, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, req)))
+					})
 				}
-				compatCheck(t, compatScalarOpenAPIWant, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d %s", status, req)))
-			})
-		}
+			}
+		})
 	}
 }
 
 func TestCompat_ScalarVariable_MCPUpstream(t *testing.T) {
-	f := newCompatMCP(t)
-	for _, v := range compatScalarValues {
-		name := "Float/" + v.name
-		t.Run(name, func(t *testing.T) {
-			// v3: see compatScalarValues[].v3
-			f.reset()
-			status, body := compatPost(t, f.h, `mutation($v: Float){ m { probe(n: $v) } }`, `{"v":`+v.json+`}`)
-			args := f.seen()
-			if args == "" {
-				args = "upstream not called"
+	for _, m := range compatCoercionModes {
+		t.Run(m.name, func(t *testing.T) {
+			f := newCompatMCP(t, m.opts...)
+			want := compatPick(m.lossy, compatScalarMCPWant, compatScalarMCPWantLossy)
+			for _, v := range compatScalarValues {
+				name := "Float/" + v.name
+				t.Run(name, func(t *testing.T) {
+					f.reset()
+					status, body := compatPost(t, f.h, `mutation($v: Float){ m { probe(n: $v) } }`, `{"v":`+v.json+`}`)
+					args := f.seen()
+					if args == "" {
+						args = "upstream not called"
+					}
+					compatCheck(t, want, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d args=%s", status, args)))
+				})
 			}
-			compatCheck(t, compatScalarMCPWant, name, compatNote(compatErrs(body), fmt.Sprintf("http=%d args=%s", status, args)))
 		})
 	}
 }

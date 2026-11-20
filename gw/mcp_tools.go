@@ -648,11 +648,12 @@ func (g *Gateway) mcpQuery(ctx context.Context, in mcpQueryInput) (*mcpResponseW
 		return nil, fmt.Errorf("mcp: gateway has no schema yet (no services registered)")
 	}
 	result := graphql.Do(graphql.Params{
-		Schema:         *schema,
-		RequestString:  in.Query,
-		VariableValues: in.Variables,
-		OperationName:  in.OperationName,
-		Context:        ctx,
+		Schema:                  *schema,
+		RequestString:           in.Query,
+		VariableValues:          in.Variables,
+		OperationName:           in.OperationName,
+		Context:                 ctx,
+		AllowLossyInputCoercion: g.cfg.lossyInputCoercion,
 	})
 	return &mcpResponseWithEvents{
 		Response: result,

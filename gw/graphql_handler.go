@@ -34,6 +34,7 @@ func (g *Gateway) newGraphQLIngress() *gat.Gateway {
 		// cache's MaxOperationsRule.
 		MaxOperations(cfg.maxOperations).
 		AcceptStringVariables(true).
+		AllowLossyInputCoercion(cfg.lossyInputCoercion).
 		// gwag has always answered a client's complete with one.
 		EchoComplete(true).
 		PreRequest(g.graphqlPreRequest).

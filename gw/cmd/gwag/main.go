@@ -227,6 +227,7 @@ func runGateway() {
 	mcpEnable := flag.Bool("mcp", false, "Mount the outbound MCP server at /mcp (exposes the gateway surface as MCP tools, admin-bearer gated)")
 	mcpUpstreams := &stringListValue{}
 	flag.Var(mcpUpstreams, "mcp-upstream", "Ingest a downstream MCP server's tools — NS:TRANSPORT:TARGET (transport = stdio|http|sse; repeatable)")
+	inFlags := addInputFlags(flag.CommandLine)
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: gwag [--addr :8080] [--control-plane :50090] [--proto PATH=[NS@]ADDR ...]")
 		fmt.Fprintln(flag.CommandLine.Output(), "            [--openapi SPEC=[NS@]URL ...] [--graphql [NS@]URL ...]")
@@ -254,6 +255,7 @@ func runGateway() {
 	if *requireAppKeys {
 		gwOpts = append(gwOpts, gateway.WithRequireAppKeys())
 	}
+	gwOpts = append(gwOpts, inFlags.options()...)
 	gw := gateway.New(gwOpts...)
 	for _, p := range protos {
 		opts := []gateway.ServiceOption{gateway.To(p.addr)}
