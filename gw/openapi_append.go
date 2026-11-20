@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
 )

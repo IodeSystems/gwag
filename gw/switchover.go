@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

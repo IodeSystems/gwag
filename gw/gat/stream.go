@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
 	"github.com/danielgtaylor/huma/v2"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"

@@ -22,7 +22,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 
 	"github.com/iodesystems/gwag/v2/gw/controlclient"
 )

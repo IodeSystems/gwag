@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	connectrpc.com/connect v1.21.1
-	github.com/IodeSystems/graphql-go/v2 v2.1.1
+	github.com/IodeSystems/graphql-go/v3 v3.1.0
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/danielgtaylor/huma/v2 v2.41.0

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 )
 
 // graphqlBodyBufPool keeps a per-request body buffer alive across
@@ -30,7 +30,7 @@ const graphqlBodyBufPoolMax = 64 << 10
 // Vendored from github.com/graphql-go/handler@v0.2.4 — the upstream
 // module imports the original graphql-go/graphql, which is no longer
 // the path used by our local fork (renamed to
-// github.com/IodeSystems/graphql-go/v2). We use a vanishingly small
+// github.com/IodeSystems/graphql-go/v3). We use a vanishingly small
 // surface of that module (GraphiQL UI render + an HTTP request
 // parser); pulling the bits in-tree drops a dep + sidesteps the type
 // mismatch between handler's `graphql.Schema` and the fork's.

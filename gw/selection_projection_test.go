@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 )
 
 // A GraphQL response holds exactly the fields the query selected

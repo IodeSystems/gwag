@@ -6,21 +6,20 @@ import (
 )
 
 // TestCompat_SDLEmptyBraces pins how `gwag ctl schema diff` / snapshot
-// parse SDL with empty definition bodies on graphql-go v2.1.1.
+// parse SDL with empty definition bodies.
 //
-// v2.1.1 behaviour; expected to change in graphql-go v3: `type Foo {}`
-// is a syntax error. Flip the "{}" entries when v3 lands. The brace-less
-// `type Foo` form is already an error on v2.1.1 (this parser requires
-// braces on an object definition).
+// v3: graphql-go v3 follows the spec: `type Foo {}` is a syntax error
+// and the brace-less `type Foo` parses. On v2.1.1 it was the other way
+// round.
 func TestCompat_SDLEmptyBraces(t *testing.T) {
 	cases := []struct{ name, sdl, want string }{
-		{"object-empty-braces", "type Foo {}", "parse=ok canon=ok"},
-		{"input-empty-braces", "input Foo {}", "parse=ok canon=ok"},
-		{"interface-empty-braces", "interface Foo {}", "parse=ok canon=ok"},
-		{"enum-empty-braces", "enum Foo {}", "parse=ok canon=ok"},
-		{"object-no-braces", "type Foo", "parse=error canon=error"},
+		{"object-empty-braces", "type Foo {}", "parse=error canon=error"},
+		{"input-empty-braces", "input Foo {}", "parse=error canon=error"},
+		{"interface-empty-braces", "interface Foo {}", "parse=error canon=error"},
+		{"enum-empty-braces", "enum Foo {}", "parse=error canon=error"},
+		{"object-no-braces", "type Foo", "parse=ok canon=ok"},
 		{"object-one-field", "type Foo { a: Int }", "parse=ok canon=ok"},
-		{"query-empty-braces-with-others", "type Query { a: Int }\ntype Foo {}\n", "parse=ok canon=ok"},
+		{"query-empty-braces-with-others", "type Query { a: Int }\ntype Foo {}\n", "parse=error canon=error"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

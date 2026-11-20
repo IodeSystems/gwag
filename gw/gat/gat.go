@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getkin/kin-openapi/openapi3"
 

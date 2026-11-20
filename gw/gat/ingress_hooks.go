@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 )
 
 // Ingress hooks let a host put its own request handling around gat's

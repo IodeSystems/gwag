@@ -22,10 +22,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
-	"github.com/IodeSystems/graphql-go/v2/language/source"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
+	"github.com/IodeSystems/graphql-go/v3/language/source"
 )
 
 // exportDirective is declared on the schema so documents using it

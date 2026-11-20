@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
 )
 
 // graphQLMirror is the per-source AST helper used by graphQLDispatcher

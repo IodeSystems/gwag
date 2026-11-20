@@ -40,7 +40,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

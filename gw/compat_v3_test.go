@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// TestCompat_* pin graphql-go v2.1.1 behaviour through the real gateway
-// ahead of the move to graphql-go v3. Each observation is what the
-// upstream actually received (or what the client got back). Expected
-// values are plain strings in the *Want maps; when v3 changes a
-// behaviour, flip the entry and keep the v3 note as the record.
+// TestCompat_* pin graphql-go behaviour through the real gateway. They
+// recorded v2.1.1 (c5a2bb15) and were flipped case by case to v3.1.0;
+// each flipped entry in the *Want maps carries a "v3:" comment with the
+// v2.1.1 value. Each observation is what the upstream actually received
+// (or what the client got back).
 //
 // A missing map entry fails with "GOT|name|value" so new cases can be
 // pinned by copying the observed value. The per-case v3 notes live as
@@ -42,12 +42,11 @@ type compatNullCase struct {
 	v3    string // v3 note, "" when no change expected
 }
 
-// "v2.1.1 behaviour; expected to change in graphql-go v3: a null
-// variable reaches resolvers as a present nil (args[key] exists with a
-// nil value) instead of being dropped from args." Cases where the
-// absent-vs-null difference is observable in the upstream request carry
-// this note.
-const compatNullV3 = "v2.1.1 behaviour; expected to change in graphql-go v3: null variable reaches resolvers as present nil"
+// graphql-go v3: a null variable reaches resolvers as a present nil
+// (args[key] exists with a nil value); v2.1.1 dropped it from args.
+// Cases where the absent-vs-null difference is observable in the
+// upstream request carry this note.
+const compatNullV3 = "graphql-go v3: null variable reaches resolvers as present nil"
 
 func TestCompat_NullVariable_Proto(t *testing.T) {
 	f := newGRPCE2EFixture(t)
@@ -168,18 +167,18 @@ func TestCompat_NullVariable_MCP(t *testing.T) {
 
 // compatScalarValues are the JSON literals sent as the variable.
 //
-// v3 notes (lossless variable coercion): "2" into Int is accepted,
-// 2.5 / true into Int is rejected. Rows without a note are not expected
-// to change.
+// v3 notes: graphql-go v3.1.0 accepts lossless variable values ("2",
+// 2.0, 1e2 for Int) and rejects lossy ones (2.5, "2.5", true for Int;
+// true for Float; 2.5, true for ID). Rows without a note did not change.
 var compatScalarValues = []struct{ name, json, v3 string }{
 	{"2", `2`, ""},
-	{"2.0", `2.0`, "v2.1.1 behaviour; expected to change in graphql-go v3: lossless coercion decides whether 2.0 stays an Int"},
-	{"2.5", `2.5`, "v2.1.1 behaviour; expected to change in graphql-go v3: 2.5 into Int is rejected (lossless coercion)"},
-	{"str2", `"2"`, "v2.1.1 behaviour; expected to change in graphql-go v3: \"2\" into Int is accepted"},
-	{"str2.5", `"2.5"`, "v2.1.1 behaviour; expected to change in graphql-go v3: \"2.5\" into Int is rejected"},
-	{"true", `true`, "v2.1.1 behaviour; expected to change in graphql-go v3: bool into Int is rejected"},
+	{"2.0", `2.0`, ""},
+	{"2.5", `2.5`, "v3: rejected for Int and ID (v2.1.1: 2 / \"2.5\")"},
+	{"str2", `"2"`, ""},
+	{"str2.5", `"2.5"`, "v3: rejected for Int (v2.1.1: 2)"},
+	{"true", `true`, "v3: rejected for Int, Float and ID (v2.1.1: 1 / \"true\")"},
 	{"1e2", `1e2`, ""},
-	{"3e9", `3000000000`, "v2.1.1 behaviour; expected to change in graphql-go v3: out-of-int32-range Int handling"},
+	{"3e9", `3000000000`, "v3: ID is \"3000000000\" (v2.1.1: \"3e+09\"); Int still rejects it"},
 }
 
 func TestCompat_ScalarVariable_GraphQLUpstream(t *testing.T) {
@@ -244,9 +243,9 @@ func TestCompat_ScalarVariable_MCPUpstream(t *testing.T) {
 // 3. Nil-map / null object results.
 // ---------------------------------------------------------------------
 
-// v2.1.1 behaviour; expected to change in graphql-go v3: a nil map
-// result for an object field resolves to null (instead of an object
-// whose fields resolve as nil).
+// graphql-go v3 resolves a nil map for an object field as null. These
+// upstream paths assemble the result themselves, so the output did not
+// change from v2.1.1.
 func TestCompat_NullObjectResult_GraphQLUpstream(t *testing.T) {
 	f := newCompatGraphQL(t)
 	cases := []struct{ name, data, query string }{
@@ -271,7 +270,7 @@ func TestCompat_NullObjectResult_GraphQLUpstream(t *testing.T) {
 	}
 }
 
-// v2.1.1 behaviour; expected to change in graphql-go v3: nil map -> null.
+// Unchanged on graphql-go v3 (see TestCompat_NullObjectResult_GraphQLUpstream).
 func TestCompat_NullObjectResult_OpenAPIUpstream(t *testing.T) {
 	f := newCompatOpenAPI(t)
 	q := `{ t { obj { name inner { x } innerNN { x } } } }`

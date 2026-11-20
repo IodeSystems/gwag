@@ -39,8 +39,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
 
 	greeterv1 "github.com/iodesystems/gwag/v2/examples/multi/gen/greeter/v1"
 	"github.com/iodesystems/gwag/v2/gw/ir"

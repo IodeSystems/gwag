@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"

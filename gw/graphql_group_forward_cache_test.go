@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
 )
 
 // graphqlGroupDispatcher caches its printed upstream query per

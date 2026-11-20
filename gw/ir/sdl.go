@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/IodeSystems/graphql-go/v2"
+	"github.com/IodeSystems/graphql-go/v3"
 )
 
 // IntrospectionQuery is the canonical GraphQL introspection query —

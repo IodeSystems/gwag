@@ -3,9 +3,9 @@ package gat
 import (
 	"sync"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
-	"github.com/IodeSystems/graphql-go/v2/language/source"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
+	"github.com/IodeSystems/graphql-go/v3/language/source"
 
 	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 )

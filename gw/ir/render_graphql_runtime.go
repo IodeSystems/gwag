@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
 )
 
 // RuntimeOptions configures RenderGraphQLRuntime.

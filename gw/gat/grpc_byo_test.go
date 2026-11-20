@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	graphql "github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
+	graphql "github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
 	"github.com/getkin/kin-openapi/openapi3"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"

@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
 
 	"github.com/iodesystems/gwag/v2/gw/internal/paramfmt"
 	"github.com/iodesystems/gwag/v2/gw/ir"

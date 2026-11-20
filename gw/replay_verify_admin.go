@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
-	"github.com/IodeSystems/graphql-go/v2/language/parser"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
+	"github.com/IodeSystems/graphql-go/v3/language/parser"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/IodeSystems/graphql-go/v2"
-	"github.com/IodeSystems/graphql-go/v2/language/ast"
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/language/ast"
 )
 
 // maxSafeInteger is JavaScript's Number.MAX_SAFE_INTEGER (2^53 - 1): the largest

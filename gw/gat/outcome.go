@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/IodeSystems/graphql-go/v2/gqlerrors"
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
 
 	"github.com/iodesystems/gwag/v2/gw/internal/gqlguard"
 )
