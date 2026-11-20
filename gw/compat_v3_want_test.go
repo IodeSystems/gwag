@@ -167,3 +167,23 @@ var (
 		"innerNN-missing": `http=200 {"data":{"t":{"obj":{"name":null,"inner":null,"innerNN":null}}}}`,
 	}
 )
+
+var (
+	// graphql-go v3.1.1: a null `if` variable is an error (v3.1.0 and
+	// v2.1.1: treated as false, so @skip did not skip).
+	compatSkipOpenAPIWant = map[string]string{
+		"root/null":   `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":40}]}]}`,
+		"root/absent": `http=200 {"data":{}}`,
+		// Below an OpenAPI op the selection is projected by gwag
+		// (gw/selection_collect.go directiveIf), not graphql-go: a null
+		// `if` is still false here, no error. Differs from graphql-go.
+		"nested/null":   `http=200 {"data":{"t":{"qry":{}}}}`,
+		"nested/absent": `http=200 {"data":{"t":{"qry":{"id":"x"}}}}`,
+	}
+	compatSkipGraphQLWant = map[string]string{
+		"root/null":     `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":40}]}]}`,
+		"root/absent":   `http=200 {"data":{}}`,
+		"nested/null":   `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":47}],"path":["g"]}]}`,
+		"nested/absent": `http=200 {"data":{"g":{}}}`,
+	}
+)
