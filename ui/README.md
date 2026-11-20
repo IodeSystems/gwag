@@ -155,8 +155,11 @@ choices are kept in `localStorage` (`gwag.ui.themePreset`,
 
 ## Auth
 
-The gateway logs `admin token = …` and `dev token = …` at boot. The UI
-works in three states:
+`gwag login --web` (or `gwag service login --web`) signs a browser in
+without a token. To paste one instead: `gwag up` prints the admin and
+dev tokens at boot when stderr is a terminal; otherwise read them from
+the `admin-token` and `dev-token` files in its data dir. The UI works in
+three states:
 
 - **No token.** Public view: the Graph and Status pages show services
   marked public. The app bar has "Sign in" (and "Sign in with SSO" when

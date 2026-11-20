@@ -135,7 +135,8 @@ echo "== 5. gateway view"
 for ns in orders pynotify tsnotify; do
   check "gwag ctl services list shows $ns" wait_for 10 has_service "$ns"
 done
-ADMIN="$(sed -n 's/.*admin token = \([0-9a-f]*\).*/\1/p' "$WORK/gateway.log" | head -n1)"
+# The gateway logs token values only to a terminal; read the file.
+ADMIN="$(cat "$(find "$WORK/gw/.gw" -name admin-token | head -n1)")"
 curl -sf -H "Authorization: Bearer $ADMIN" "http://127.0.0.1:$HTTP/api/admin/services" >"$WORK/admin-services.json"
 check "admin API lists each listener's Subscribes" python3 - "$WORK/admin-services.json" <<'EOF'
 import json, sys
