@@ -427,6 +427,9 @@ func typeRef(t graphql.Type) string {
 }
 
 func formatDefault(v any) string {
+	if v == graphql.ExplicitNull {
+		return "null"
+	}
 	switch x := v.(type) {
 	case string:
 		return quoteString(x)

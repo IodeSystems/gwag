@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -52,9 +53,9 @@ type enumType struct {
 }
 
 func parseSchemaModel(sdl string) (*schemaModel, error) {
-	doc, err := parser.Parse(parser.ParseParams{Source: source.NewSource(&source.Source{Body: []byte(sdl)})})
+	doc, err := parseSDL(sdl)
 	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+		return nil, err
 	}
 	m := &schemaModel{
 		objects: map[string]*objectType{},
@@ -117,9 +118,29 @@ func typeNodeString(t ast.Type) string {
 	return ""
 }
 
+// emptyBodyRE finds a definition with an empty body, `type Foo {}`.
+var emptyBodyRE = regexp.MustCompile(`\{\s*\}`)
+
+// parseSDL parses an SDL document for schema diff / snapshot. A parse
+// error on SDL with empty braces says how to fix it: graphql-go v3
+// follows the spec, which has no `{}` body.
+func parseSDL(sdl string) (*ast.Document, error) {
+	doc, err := parser.Parse(parser.ParseParams{Source: source.NewSource(&source.Source{Body: []byte(sdl)})})
+	if err != nil {
+		if emptyBodyRE.MatchString(sdl) {
+			return nil, fmt.Errorf("parse: %w\nhint: empty braces are invalid SDL; omit them (`type Foo {}` -> `type Foo`)", err)
+		}
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	return doc, nil
+}
+
 func valueNodeString(v ast.Value) string {
 	if v == nil {
 		return ""
+	}
+	if _, ok := v.(*ast.NullValue); ok {
+		return "null"
 	}
 	if s, ok := v.GetValue().(string); ok {
 		return s

@@ -14,9 +14,7 @@ import (
 	"strings"
 
 	"github.com/IodeSystems/graphql-go/v3/language/ast"
-	"github.com/IodeSystems/graphql-go/v3/language/parser"
 	"github.com/IodeSystems/graphql-go/v3/language/printer"
-	"github.com/IodeSystems/graphql-go/v3/language/source"
 	"github.com/bufbuild/protocompile"
 	"go.yaml.in/yaml/v3"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -208,9 +206,9 @@ func canonJSON(v any) (string, error) {
 }
 
 func canonGraphQL(sdl string) (string, error) {
-	doc, err := parser.Parse(parser.ParseParams{Source: source.NewSource(&source.Source{Body: []byte(sdl)})})
+	doc, err := parseSDL(sdl)
 	if err != nil {
-		return "", fmt.Errorf("parse: %w", err)
+		return "", err
 	}
 	sortArgs := func(a []*ast.InputValueDefinition) {
 		sort.SliceStable(a, func(i, j int) bool { return a[i].Name.Value < a[j].Name.Value })
