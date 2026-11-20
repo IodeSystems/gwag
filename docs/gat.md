@@ -745,6 +745,8 @@ g.ParseContentType("multipart/form-data", 32<<20, parseUpload)
 g.AcceptStringVariables(true)              // "variables": "{\"id\":1}"
 g.UsePlanCache(cache)                      // your *graphql.PlanCache and its rules
 g.EchoComplete(true)                       // answer a client's graphql-ws complete
+g.AllowLossyInputCoercion(true)            // graphql-go v2 coercion of Int/Float/ID variables
+g.LegacyNullArgs(true)                     // drop null args before dispatch, as on graphql-go v2
 ```
 
 - `PreRequest` runs for every HTTP request (not WebSocket upgrades)
@@ -765,6 +767,9 @@ g.EchoComplete(true)                       // answer a client's graphql-ws compl
   builds from `MaxOperations`, `MaxDepth` and `DisableIntrospection`.
 - `EchoComplete` sends `complete` back after a client completes a
   subscription. Off by default; the protocol has the server stay silent.
+- `AllowLossyInputCoercion` and `LegacyNullArgs` restore graphql-go v2
+  input behaviour; see
+  [operations: input coercion and null arguments](./operations.md#input-coercion-and-null-arguments).
 
 ### gRPC routes you supply
 

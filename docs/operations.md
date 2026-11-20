@@ -518,6 +518,37 @@ an upstream 409 was `INVALID_ARGUMENT`. `gateway.WithLegacyErrorCodes()`
 restores that output. It is for migration and is removed in v3.
 `WithConnectErrorCodes()` is deprecated and does nothing.
 
+## Input coercion and null arguments
+
+gwag runs on graphql-go v3, which follows the spec for client input.
+Two options restore the graphql-go v2 behaviour for clients or
+upstreams that depend on it. Both are off by default.
+
+| Option | Flag (`gwag up`, `gwag serve`, flag-mode `gwag`) | gat | Effect |
+|---|---|---|---|
+| `WithLossyInputCoercion()` | `--allow-lossy-coercion-of-inputs` | `AllowLossyInputCoercion(true)` | Variables for `Int`, `Float` and `ID` coerce with loss: `2.5` → `2` and `true` → `1` for `Int`, `true` → `1` for `Float`, `2.5` → `"2.5"` and `true` → `"true"` for `ID`. |
+| `WithLegacyNullArgs()` | `--legacy-null-args` | `LegacyNullArgs(true)` | A null argument, or a null field of an input object, is dropped before dispatch: the upstream sees it as absent. |
+
+Default input behaviour:
+
+- Variables that convert with no loss are accepted: `"2"`, `2.0` and
+  `1e2` for `Int`; numeric strings for `Float`; integral numbers for
+  `ID`. Lossy ones are a request error
+  (`Variable "$v" got invalid value 2.5.`). Literals in the query text
+  are strict either way.
+- `null` is a literal, and a null variable reaches the dispatcher as
+  null. Proto fields and OpenAPI path and query parameters treat null
+  as unset (no field, no parameter). An OpenAPI JSON body field and an
+  MCP tool argument are sent as `null`. A downstream GraphQL service
+  gets the client's query and variables as sent, with or without
+  `WithLegacyNullArgs`; an absent variable is not sent.
+- A null variable for a non-null argument is a field error; the
+  variable's default is not used. `WithLegacyNullArgs` does not change
+  this: the check runs before dispatch.
+- SDL with an empty body (`type Foo {}`) does not parse, so
+  `gwag ctl schema diff` and `snapshot` refuse it. Omit the braces:
+  `type Foo`.
+
 ## WebSocket upgrade caps
 
 `gw.Handler()` accepts graphql-transport-ws upgrades for subscriptions.
