@@ -4,8 +4,8 @@ version = "0.0.0"
 description = "Confluent's own Python serializer and deserializer, for ../test.sh to check gwag's Schema Registry framing against."
 requires-python = ">=3.12"
 dependencies = [
-    "confluent-kafka[protobuf,schemaregistry]==2.16.1",
-    "grpcio-tools==1.85.1",
+    "confluent-kafka[protobuf,schemaregistry]==2.16.2",
+    "grpcio-tools==1.85.3",
 ]
 
 [tool.uv]
