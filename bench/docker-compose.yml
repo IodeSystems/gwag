@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:13.3.1
     container_name: bench-grafana
     network_mode: host
     environment:
