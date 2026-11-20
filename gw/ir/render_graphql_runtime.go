@@ -885,6 +885,9 @@ func newRuntimeTypeBuilder(svc *Service, opts RuntimeOptions, isLatest bool) (*I
 			InterfaceName: func(s string) string { return prefix + s },
 			ScalarName:    func(s string) string { return prefix + s },
 			FieldName:     identityName,
+			// JSON Schema enums are strings: the tool gets the value,
+			// not the default ordinal Number.
+			EnumValueValue: func(v EnumValue) any { return v.Name },
 		}
 		return NewIRTypeBuilder(svc, naming, IRTypeBuilderOptions{
 			intScalars:              opts.intScalars,
