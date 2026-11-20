@@ -17,7 +17,7 @@
 
 services:
   prometheus:
-    image: prom/prometheus:v3.6.0
+    image: prom/prometheus:v3.16.0
     container_name: bench-prometheus
     network_mode: host
     volumes:
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:13.3.1
     container_name: bench-grafana
     network_mode: host
     environment:
