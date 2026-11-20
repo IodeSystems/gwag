@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -337,5 +338,43 @@ func TestAddMCP_SSE_DispatchToolCall(t *testing.T) {
 	first, _ := content[0].(map[string]any)
 	if first["text"] != "echo: hello" {
 		t.Errorf("echo text = %v; want %q", first["text"], "echo: hello")
+	}
+}
+
+// TestAddMCP_RefusesCrossOriginRedirect pins GO-2026-6911: an MCP
+// upstream that answers with a 3xx to another host must not make the
+// gateway send a request there. mcp-go v1.6.0's default client only
+// follows same-origin redirects; this guards against a regression in
+// that default or a custom client in newMCPClient without the policy.
+func TestAddMCP_RefusesCrossOriginRedirect(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		transport MCPTransport
+		path      string
+	}{
+		{"http", MCPHTTP, "/mcp"},
+		{"sse", MCPSSE, "/sse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(other.Close)
+			front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+			}))
+			t.Cleanup(front.Close)
+
+			gw := New(WithoutMetrics(), WithoutBackpressure())
+			t.Cleanup(gw.Close)
+			if err := gw.AddMCP(tc.transport, front.URL+tc.path, As("redir")); err == nil {
+				t.Fatal("AddMCP should fail when the upstream redirects to another origin")
+			}
+			if n := hits.Load(); n != 0 {
+				t.Fatalf("redirect target got %d request(s); want 0", n)
+			}
+		})
 	}
 }

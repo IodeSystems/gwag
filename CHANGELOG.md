@@ -164,6 +164,7 @@ changes on MINOR, drops on MAJOR.
 - `/debug/pprof` (`WithPprof`, `--pprof`) under `AdminMiddleware` answered GETs with no token: GETs passed as public reads. `WithPprof` now registers `/debug/pprof/*` as a destructive read, so it needs the admin token (dev gets 403).
 - Anonymous admin reads no longer expose every service, owner contacts, instance addresses, external-dependent declarations, peers, injectors or the MCP config. Before, any client that could reach `/api/admin/*` or the `admin` GraphQL fields read all of it.
 - Admin token and dev token comparisons are constant time; both run on every check.
+- GO-2026-6911: `AddMCP` over `MCPHTTP` / `MCPSSE` followed a 3xx from the MCP upstream to any host and scheme. mcp-go is now v1.6.0, whose default client follows same-origin redirects only and ignores an SSE `endpoint` event that names another origin. govulncheck still lists the advisory: it has no fixed version.
 
 ### Migration
 - SSO in a cluster needs feature level 2. A cluster upgraded from a binary with levels 0-1 stays at level 1 and refuses SSO sign-in (`/auth/login` 503 naming the level) until `gwag cluster finalize` runs, after every node runs this version. A new cluster starts at 2.
