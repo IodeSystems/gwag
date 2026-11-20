@@ -256,7 +256,7 @@ function Flow({
   const { fitView } = useReactFlow();
   const shape = nodes.map((n) => n.id).join('|');
   useEffect(() => {
-    const t = setTimeout(() => void fitView({ padding: 0.15, duration: 200 }), 0);
+    const t = setTimeout(() => void fitView({ padding: '7%', duration: 200 }), 0);
     return () => clearTimeout(t);
   }, [shape, fitView]);
 
@@ -277,7 +277,7 @@ function Flow({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        colorMode={theme.palette.mode}
+        forceColorMode={theme.palette.mode}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
