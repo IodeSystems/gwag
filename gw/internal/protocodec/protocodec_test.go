@@ -227,3 +227,45 @@ func TestBytesBase64(t *testing.T) {
 		t.Error("invalid base64 accepted")
 	}
 }
+
+// TestNullArgsUnset: a null (nil) value leaves the field unset at every
+// level, for gat and gwag options alike. Proto3 has no null; a null
+// variable means the same as an absent one.
+func TestNullArgsUnset(t *testing.T) {
+	md := testMessage(t)
+	args := map[string]any{
+		"userId": nil,
+		"blob":   nil,
+		"color":  nil,
+		"tags":   []any{"a", nil, "b"},
+		"inner":  map[string]any{"blob": nil},
+		"count":  nil,
+		"ratio":  nil,
+	}
+	for name, o := range map[string]Options{"gat": {}, "gwag": gwagOpts} {
+		msg := dynamicpb.NewMessage(md)
+		if err := o.ArgsToMessage(args, msg); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, f := range []protoreflect.Name{"user_id", "blob", "color", "count", "ratio"} {
+			if msg.Has(md.Fields().ByName(f)) {
+				t.Fatalf("%s: null %s was set", name, f)
+			}
+		}
+		tags := msg.Get(md.Fields().ByName("tags")).List()
+		if tags.Len() != 2 || tags.Get(0).String() != "a" || tags.Get(1).String() != "b" {
+			t.Fatalf("%s: tags = %v, want [a b] (null item skipped)", name, tags)
+		}
+		inner := msg.Get(md.Fields().ByName("inner")).Message()
+		if inner.Has(inner.Descriptor().Fields().ByName("blob")) {
+			t.Fatalf("%s: null inner.blob was set", name)
+		}
+		msg = dynamicpb.NewMessage(md)
+		if err := o.ArgsToMessage(map[string]any{"inner": nil, "tags": nil}, msg); err != nil {
+			t.Fatalf("%s: null message / list: %v", name, err)
+		}
+		if msg.Has(md.Fields().ByName("inner")) || msg.Has(md.Fields().ByName("tags")) {
+			t.Fatalf("%s: null message / list was set", name)
+		}
+	}
+}

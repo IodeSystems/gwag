@@ -105,14 +105,16 @@ func LowerCamel(s string) string {
 // no lowerCamel key is also looked up by its proto name: the GraphQL
 // renderer names top-level proto op arguments after the proto field
 // (payload_type), not lowerCamel. Unknown args are ignored; type
-// mismatches return errors.
+// mismatches return errors. A null (nil) value leaves the field unset:
+// proto3 has no null, so a null variable means the same as an absent
+// one.
 func (o Options) ArgsToMessage(args map[string]any, msg *dynamicpb.Message) error {
 	for _, info := range FieldInfos(msg.Descriptor()) {
 		v, ok := args[info.JSONKey]
 		if !ok {
 			v, ok = args[string(info.FD.Name())]
 		}
-		if !ok {
+		if !ok || v == nil {
 			continue
 		}
 		if o.SkipArg != nil && o.SkipArg(v) {
@@ -127,7 +129,12 @@ func (o Options) ArgsToMessage(args map[string]any, msg *dynamicpb.Message) erro
 
 // SetField writes one GraphQL-canonical value into fd on msg. A list
 // field takes []any and appends to whatever the field already holds.
+// nil leaves the field as it is; a nil list item or map value is
+// skipped (a proto list or map cannot hold null).
 func (o Options) SetField(msg *dynamicpb.Message, fd protoreflect.FieldDescriptor, v any) error {
+	if v == nil {
+		return nil
+	}
 	if fd.IsMap() {
 		entries, ok := v.(map[string]any)
 		if !ok {
@@ -135,6 +142,9 @@ func (o Options) SetField(msg *dynamicpb.Message, fd protoreflect.FieldDescripto
 		}
 		mp := msg.Mutable(fd).Map()
 		for k, item := range entries {
+			if item == nil {
+				continue
+			}
 			key, err := mapKey(fd.MapKey(), k)
 			if err != nil {
 				return err
@@ -154,6 +164,9 @@ func (o Options) SetField(msg *dynamicpb.Message, fd protoreflect.FieldDescripto
 		}
 		list := msg.Mutable(fd).List()
 		for _, item := range items {
+			if item == nil {
+				continue
+			}
 			elem, err := o.toProtoScalar(fd, item)
 			if err != nil {
 				return err

@@ -135,3 +135,24 @@ func TestOpenAPIValidator_NothingToCheck(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestOpenAPIValidator_Null: null args, null list items and null body
+// fields pass; null is not a base64 string.
+func TestOpenAPIValidator_Null(t *testing.T) {
+	v := NewOpenAPIValidator(validateOp(t, "/checked"), "checked")
+	args := map[string]any{
+		"tag": []any{nil, "aGk="},
+		"body": map[string]any{
+			"extra": nil,
+			"node":  map[string]any{"sig": nil, "next": nil},
+			"named": map[string]any{"k": nil},
+			"maybe": nil, "either": nil, "plain": nil,
+		},
+	}
+	if err := v.Validate(args, ValidationStrict); err != nil {
+		t.Errorf("nested nulls: %v", err)
+	}
+	if err := v.Validate(map[string]any{"tag": nil, "body": nil}, ValidationStrict); err != nil {
+		t.Errorf("top-level nulls: %v", err)
+	}
+}

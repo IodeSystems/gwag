@@ -775,11 +775,12 @@ func buildOpenAPIRequest(
 			continue
 		}
 		p := paramRef.Value
-		v, ok := gqlArgs[p.Name]
+		// A null argument sends no parameter, as an absent one.
+		v := gqlArgs[p.Name]
+		strVal, ok := paramfmt.String(v)
 		if !ok {
 			continue
 		}
-		strVal, _ := paramfmt.String(v)
 		switch p.In {
 		case "path":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p.Name+"}", url.PathEscape(strVal))
@@ -789,8 +790,9 @@ func buildOpenAPIRequest(
 			// arrays), not one "[a b]" string.
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
-					es, _ := paramfmt.String(e)
-					queryArgs.Add(p.Name, es)
+					if es, ok := paramfmt.String(e); ok {
+						queryArgs.Add(p.Name, es)
+					}
 				}
 			} else {
 				queryArgs.Add(p.Name, strVal)
@@ -1025,7 +1027,10 @@ func buildMultipartBody(ctx context.Context, op *openapi3.Operation, gqlArgs map
 						return nil, "", opened, err
 					}
 				default:
-					evs, _ := paramfmt.String(ev)
+					evs, ok := paramfmt.String(ev)
+					if !ok {
+						continue
+					}
 					if err := mw.WriteField(name, evs); err != nil {
 						return nil, "", opened, Reject(CodeInternal, fmt.Sprintf("openapi multipart: write field %q: %s", name, err.Error()))
 					}

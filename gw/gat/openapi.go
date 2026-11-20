@@ -148,11 +148,12 @@ func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any,
 			continue
 		}
 		p := paramRef.Value
-		v, ok := args[p.Name]
+		// A null argument sends no parameter, as an absent one.
+		v := args[p.Name]
+		strVal, ok := paramfmt.String(v)
 		if !ok {
 			continue
 		}
-		strVal, _ := paramfmt.String(v)
 		switch p.In {
 		case "path":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+p.Name+"}", url.PathEscape(strVal))
@@ -162,8 +163,9 @@ func (d *openAPIDispatcher) newRequest(ctx context.Context, args map[string]any,
 			// arrays), not one "[a b]" string.
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
-					es, _ := paramfmt.String(e)
-					queryArgs.Add(p.Name, es)
+					if es, ok := paramfmt.String(e); ok {
+						queryArgs.Add(p.Name, es)
+					}
 				}
 			} else {
 				queryArgs.Add(p.Name, strVal)
