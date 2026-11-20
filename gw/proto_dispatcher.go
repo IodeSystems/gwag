@@ -303,6 +303,7 @@ func (d *protoDispatcher) DispatchAppend(ctx context.Context, args map[string]an
 	var sel *ast.SelectionSet
 	var more []*ast.SelectionSet
 	var fc fieldCollector
+	var collectErr error
 	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {
 		sel = info.FieldASTs[0].SelectionSet
 		// A field selected more than once ({ op { a } op { b } })
@@ -312,9 +313,14 @@ func (d *protoDispatcher) DispatchAppend(ctx context.Context, args map[string]an
 				more = append(more, f.SelectionSet)
 			}
 		}
-		fc = fieldCollector{frags: info.Fragments, vars: info.VariableValues}
+		fc = newFieldCollector(info, &collectErr)
 	}
-	return appendProtoObject(dst, respMsg, sel, more, fc), nil
+	start := len(dst)
+	out := appendProtoObject(dst, respMsg, sel, more, fc)
+	if collectErr != nil {
+		return dst[:start], collectErr
+	}
+	return out, nil
 }
 
 var _ ir.AppendDispatcher = (*protoDispatcher)(nil)

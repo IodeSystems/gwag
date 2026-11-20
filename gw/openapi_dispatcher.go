@@ -235,6 +235,7 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 	}
 
 	walker := openAPIWalker{svc: d.svc, prefix: d.typePrefix, enums: d.enums}
+	var collectErr error
 	var sel *ast.SelectionSet
 	var more []*ast.SelectionSet
 	if info := graphQLForwardInfoFrom(ctx); info != nil && len(info.FieldASTs) > 0 {
@@ -246,14 +247,18 @@ func (d *openAPIDispatcher) DispatchAppend(ctx context.Context, args map[string]
 				more = append(more, f.SelectionSet)
 			}
 		}
-		walker.frags = info.Fragments
-		walker.vars = info.VariableValues
+		walker.fieldCollector = newFieldCollector(info, &collectErr)
 	}
 	var outRef *ir.TypeRef
 	if d.irOp != nil {
 		outRef = d.irOp.Output
 	}
-	return walker.appendValue(dst, json.RawMessage(respBytes), sel, more, outRef)
+	n := len(dst)
+	out, err := walker.appendValue(dst, json.RawMessage(respBytes), sel, more, outRef)
+	if collectErr != nil {
+		return dst[:n], collectErr
+	}
+	return out, err
 }
 
 var _ ir.AppendDispatcher = (*openAPIDispatcher)(nil)

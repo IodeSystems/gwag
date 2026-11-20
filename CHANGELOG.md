@@ -117,7 +117,7 @@ changes on MINOR, drops on MAJOR.
 - graphql-go v3.1.1 (was v2.1.1; import path `github.com/IodeSystems/graphql-go/v3`). Client-visible changes:
   - Variables for `Int`, `Float`, `ID`: lossless values are accepted (`"2"`, `2.0` for `Int`; numeric strings for `Float`; integral numbers for `ID`, `3000000000` → `"3000000000"`); lossy ones are a request error (`2.5`, `"2.5"`, `true` for `Int`; `true` for `Float`; `2.5`, `true` for `ID`). Literals stay strict.
   - `null` is a literal, and a null variable reaches dispatch. Proto fields and OpenAPI path / query params treat it as unset (as before); an OpenAPI JSON body field and an MCP tool argument are sent as `null` (were dropped). An absent variable is no longer sent to a downstream GraphQL service as `null`.
-  - A null variable for a non-null argument is a field error; the variable's default is no longer used. A null variable for `@skip(if:)` / `@include(if:)` is an error at the root and a field error below it, except below an OpenAPI or proto op, where gwag evaluates the directive and still takes null as false.
+  - A null variable for a non-null argument is a field error; the variable's default is no longer used. A null variable for `@skip(if:)` / `@include(if:)` is an error at the root and a field error below it. Below an OpenAPI or proto op gwag evaluates the directive itself and answers the same error on the op field, with the op's path (graphql-go nulls the nearest parent; gwag nulls the op even when the directive is deeper).
   - The gat lite path (`gwag serve --openapi | --proto`, gat embedders): an upstream value a built-in scalar cannot hold without loss (`2.5` or `3000000000` for `Int`) is a field error; it was truncated or null. gwag's OpenAPI, GraphQL and proto dispatchers write upstream values as sent, unchanged.
   - An enum value named `true`, `false` or `null` is not a valid GraphQL enum value; gwag renames it to `TRUE`, `FALSE`, `NULL` (see Fixed).
   - SDL: `PrintSchemaSDL` prints a `= null` default (`graphql.ExplicitNull`) as `null`; `gwag ctl schema diff` reads it as `null` (was `<nil>`). `type Foo {}` no longer parses; diff and snapshot say to omit the braces.
@@ -183,6 +183,7 @@ changes on MINOR, drops on MAJOR.
 
 ### Migration
 - graphql-go v3: library code that passes graphql-go types to gwag (`ir.RenderGraphQLRuntime`, `ir.StandardScalars`, `ir.PrintSchemaSDL`, `ir.IRTypeBuilder`, gat `SetSchema`, ...) imports `github.com/IodeSystems/graphql-go/v3`. A custom `Dispatcher` that returns a nil map for an object now gives `null`.
+- Clients that send `null` for an `@skip(if:)` / `@include(if:)` variable on a field below an OpenAPI or proto op get an error (it meant false). Send a boolean, or omit the variable to use its default.
 - Clients that send `2.5`, `"2.5"` or booleans for `Int` / `Float` / `ID` variables get a request error. Fix the client, or run with `--allow-lossy-coercion-of-inputs` (`WithLossyInputCoercion()`).
 - Upstreams that refuse an explicit `null` in an OpenAPI JSON body or MCP tool argument: run with `--legacy-null-args` (`WithLegacyNullArgs()`). Clients that sent `null` for a non-null argument to get its default must omit the variable.
 - SDL files for `gwag ctl schema diff` / `snapshot` with `type Foo {}` (and `input`, `interface`, `enum`): drop the braces.

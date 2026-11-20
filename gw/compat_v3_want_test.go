@@ -174,11 +174,24 @@ var (
 	compatSkipOpenAPIWant = map[string]string{
 		"root/null":   `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":40}]}]}`,
 		"root/absent": `http=200 {"data":{}}`,
-		// Below an OpenAPI op the selection is projected by gwag
-		// (gw/selection_collect.go directiveIf), not graphql-go: a null
-		// `if` is still false here, no error. Differs from graphql-go.
-		"nested/null":   `http=200 {"data":{"t":{"qry":{}}}}`,
+		// Below an OpenAPI op gwag projects the selection
+		// (gw/selection_collect.go directiveIf) and reports a null `if`
+		// as graphql-go does: a field error on the op, at the variable.
+		// (Until this release: null was false, no error.)
+		"nested/null":   `http=200 {"data":{"t":{"qry":null}},"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":54}],"path":["t","qry"]}]}`,
 		"nested/absent": `http=200 {"data":{"t":{"qry":{"id":"x"}}}}`,
+		// Through a fragment spread, and with aliases: the path is the
+		// op field's response path.
+		"nested-fragment/null": `http=200 {"data":{"t":{"qry":null}},"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":84}],"path":["t","qry"]}]}`,
+		"aliased/null":         `http=200 {"data":{"x":{"y":null}},"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":60}],"path":["x","y"]}]}`,
+		"nested/false":         `http=200 {"data":{"t":{"qry":{}}}}`,
+	}
+	compatSkipProtoWant = map[string]string{
+		"root/null":     `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":42}]}]}`,
+		"root/absent":   `http=200 {"data":{}}`,
+		"nested/null":   `http=200 {"data":{"col":{"get":null}},"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":55}],"path":["col","get"]}]}`,
+		"nested/absent": `http=200 {"data":{"col":{"get":{"a":""}}}}`,
+		"nested/false":  `http=200 {"data":{"col":{"get":{}}}}`,
 	}
 	compatSkipGraphQLWant = map[string]string{
 		"root/null":     `http=200 {"data":null,"errors":[{"message":"Argument \"if\" of non-null type \"Boolean!\" must not be null.","locations":[{"line":1,"column":40}]}]}`,

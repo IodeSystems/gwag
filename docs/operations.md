@@ -545,6 +545,14 @@ Default input behaviour:
 - A null variable for a non-null argument is a field error; the
   variable's default is not used. `WithLegacyNullArgs` does not change
   this: the check runs before dispatch.
+- A null variable for `@skip(if:)` / `@include(if:)` is an error:
+  `Argument "if" of non-null type "Boolean!" must not be null.` On a
+  field at the root it is a request error (`data: null`); below it, a
+  field error on the parent with its path. Below an OpenAPI or proto
+  op, gwag evaluates the directive itself and reports the error on the
+  op field (with the op's path), also when the directive is deeper in
+  the op's selection; graphql-go would null only the nearest parent.
+  An omitted variable takes its default.
 - SDL with an empty body (`type Foo {}`) does not parse, so
   `gwag ctl schema diff` and `snapshot` refuse it. Omit the braces:
   `type Foo`.

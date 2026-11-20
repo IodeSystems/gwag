@@ -4,6 +4,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
+
 	"github.com/iodesystems/gwag/v2/gw/gat"
 )
 
@@ -48,8 +50,14 @@ func (e *connectCodedError) Extensions() map[string]any {
 // connectErrorCodes is the ir.RuntimeOptions.WrapError gwag installs
 // by default (WithLegacyErrorCodes turns it off). A Reject error is reshaped; an error
 // that carries other extensions (a downstream GraphQL error, a
-// subscription auth failure) keeps them.
+// subscription auth failure) keeps them. A located GraphQL error
+// (*gqlerrors.Error: a null @skip / @include `if` below an op) passes
+// as is, so graphql-go keeps its locations and path.
 func connectErrorCodes(err error) error {
+	var located *gqlerrors.Error
+	if errors.As(err, &located) {
+		return located
+	}
 	var rej *rejection
 	if !errors.As(err, &rej) {
 		if _, ok := err.(interface{ Extensions() map[string]any }); ok {

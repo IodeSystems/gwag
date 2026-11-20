@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"github.com/IodeSystems/graphql-go/v3"
+	"github.com/IodeSystems/graphql-go/v3/gqlerrors"
 	"github.com/IodeSystems/graphql-go/v3/language/ast"
 
 	"github.com/iodesystems/gwag/v2/gw/ir"
@@ -53,6 +55,29 @@ type collectedField struct {
 type fieldCollector struct {
 	frags map[string]ast.Definition
 	vars  map[string]any
+
+	// errp, when set, receives the first @skip / @include whose `if`
+	// variable is null, as graphql-go reports it: `Argument "if" of
+	// non-null type "Boolean!" must not be null.` at the variable,
+	// with the op field's path. Set by newFieldCollector only when a
+	// variable is null, so the common case carries no pointer.
+	errp *error
+	info *graphql.ResolveInfo
+}
+
+// newFieldCollector builds the collector for an op's sub-selection
+// from its ResolveInfo. errp is the caller's error slot; it is used
+// only when some variable is null, and the caller returns *errp (when
+// set) instead of the projected value.
+func newFieldCollector(info *graphql.ResolveInfo, errp *error) fieldCollector {
+	fc := fieldCollector{frags: info.Fragments, vars: info.VariableValues}
+	for _, v := range info.VariableValues {
+		if v == nil {
+			fc.errp, fc.info = errp, info
+			break
+		}
+	}
+	return fc
 }
 
 // fragmentGate decides whether a fragment's type condition applies to
@@ -176,10 +201,65 @@ func (c fieldCollector) directiveIf(d *ast.Directive) bool {
 			return v.Value
 		case *ast.Variable:
 			if v.Name != nil {
-				b, _ := c.vars[v.Name.Value].(bool)
+				val, present := c.vars[v.Name.Value]
+				if present && val == nil && c.errp != nil && *c.errp == nil {
+					const msg = `Argument "if" of non-null type "Boolean!" must not be null.`
+					*c.errp = gqlerrors.NewErrorWithPath(msg, []ast.Node{v}, msg, nil, nil, opFieldPath(c.info), nil)
+				}
+				b, _ := val.(bool)
 				return b
 			}
 		}
 	}
 	return false
+}
+
+// opFieldPath is the response path of the op field info resolves: the
+// response keys from the operation root down to info.FieldASTs[0],
+// found by pointer in the operation's selections (fragments
+// included). An op sits below namespace objects only, never in a list,
+// so the path has no indexes. Nil when the field is not found. Used
+// only to report an error, so the walk's cost does not matter.
+func opFieldPath(info *graphql.ResolveInfo) []any {
+	if info == nil || len(info.FieldASTs) == 0 {
+		return nil
+	}
+	op, ok := info.Operation.(*ast.OperationDefinition)
+	if !ok {
+		return nil
+	}
+	target := info.FieldASTs[0]
+	var find func(sel *ast.SelectionSet, path []any, depth int) []any
+	find = func(sel *ast.SelectionSet, path []any, depth int) []any {
+		if sel == nil || depth > 64 {
+			return nil
+		}
+		for _, s := range sel.Selections {
+			switch n := s.(type) {
+			case *ast.Field:
+				p := append(path[:len(path):len(path)], selectionResponseKey(n))
+				if n == target {
+					return p
+				}
+				if r := find(n.SelectionSet, p, depth+1); r != nil {
+					return r
+				}
+			case *ast.InlineFragment:
+				if r := find(n.SelectionSet, path, depth+1); r != nil {
+					return r
+				}
+			case *ast.FragmentSpread:
+				if n.Name == nil {
+					continue
+				}
+				if f, ok := info.Fragments[n.Name.Value].(*ast.FragmentDefinition); ok {
+					if r := find(f.SelectionSet, path, depth+1); r != nil {
+						return r
+					}
+				}
+			}
+		}
+		return nil
+	}
+	return find(op.SelectionSet, nil, 0)
 }
